@@ -21,8 +21,8 @@ txt格式（可以导入mdb,mysql,mssql 等各种数据库）
 
  客户已经涉及很多领域，包括 电子商务、门户、杀毒、网游、广告、旅游、流量分析、站点供应商及各领域公司和企业
  
-微信公众号  qqzeng-ip 
-IP地址数据库 QQ群 312598982
+微信公众号  qqzeng-ip      
+IP地址数据库 QQ群 312598982  
  
 演示  http://qqzeng.com/ip    
 购买  http://zengxiangzhan.taobao.com   
