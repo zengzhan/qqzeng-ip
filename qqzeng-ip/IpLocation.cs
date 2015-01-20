@@ -8,8 +8,8 @@ namespace qqzengip
     //###################################################################################
     //#
     //#  最新IP地址数据库 qqzeng-ip-db.dat
-    //#
-    //# 2015 qqzeng.com  采用二分逼近查找 性能提升很大
+    //#	 样例说明：http://zengxiangzhan.cnblogs.com/p/qqzengipdb-dat.html
+    //#  2015 qqzeng.com  采用二分逼近查找 性能提升很大
     //#
     //###################################################################################
     public class IpLocation
