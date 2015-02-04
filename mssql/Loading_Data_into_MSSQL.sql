@@ -1,5 +1,25 @@
 --附 MSSQL导入方法:
 
+--创建 新版表 增加 大洲 国家英文名称 国家简码 经度 纬度
+CREATE TABLE [dbo].[ip](
+ [ip_start] [varchar](50) NULL,
+ [ip_end] [varchar](50) NULL,
+ [ip_start_num] [bigint] NULL,
+ [ip_end_num] [bigint] NULL,
+ [continent] [varchar](50) NULL,
+ [country] [varchar](50) NULL,
+ [province] [varchar](50) NULL,
+ [city] [varchar](50) NULL,
+ [district] [varchar](50) NULL,
+ [isp] [varchar](50) NULL,
+ [area_code] [varchar](50) NULL,
+ [country_english] [varchar](50) NULL,
+ [country_code] [varchar](50) NULL,
+ [longitude] [varchar](50) NULL,
+ [latitude] [varchar](50) NULL
+)
+
+
 
 --创建表
 CREATE TABLE [dbo].[ip](

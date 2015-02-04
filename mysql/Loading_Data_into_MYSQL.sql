@@ -1,5 +1,40 @@
 --附 MySql导入方法:
 
+--创建 新版表 增加 大洲 国家英文名称 国家简码 经度 纬度
+
+CREATE TABLE `ip`.`ip` (
+`ip_start` VARCHAR(45) NULL,
+`ip_end` VARCHAR(45) NULL,
+`ip_start_num` BIGINT NULL,
+`ip_end_num` BIGINT NULL,
+`continent` VARCHAR(45) NULL,
+`country` VARCHAR(45) NULL,
+`province` VARCHAR(45) NULL,
+`city` VARCHAR(45) NULL,
+`district` VARCHAR(45) NULL,
+`isp` VARCHAR(45) NULL,
+`area_code` VARCHAR(45) NULL,
+`country_english` VARCHAR(45) NULL,
+`country_code` VARCHAR(45) NULL,
+`longitude` VARCHAR(45) NULL,
+`latitude` VARCHAR(45) NULL
+);
+
+
+--导入数据库
+LOAD DATA LOCAL INFILE 'G:\IP数据库\ip.txt'
+INTO TABLE ip
+FIELDS TERMINATED BY '|'
+LINES TERMINATED BY '\n'
+(ip_start, ip_end, ip_start_num,ip_end_num,continent,country,province,city,district,isp,area_code,country_english,country_code,longitude,latitude);
+
+
+
+
+
+
+
+
 
 --创建表
 CREATE TABLE `ip`.`ip` (
