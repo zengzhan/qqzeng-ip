@@ -124,6 +124,33 @@ namespace qqzengIP
             return (uint)data[endIpOff] + (((uint)data[1 + endIpOff]) << 8) + (((uint)data[2 + endIpOff]) << 16) + (((uint)data[3 + endIpOff]) << 24);
         }
 
+		
+		/// <summary>
+        /// 【新版】获取国家 以及其他字段信息 全球版  国内精华版 国外版 
+        /// </summary>
+        /// <param name="endIpOff">结束ip位置</param>
+        /// <param name="countryFlag">模式</param>
+        /// <param name="local">返回 省市区 运营商 经纬度 等</param>
+        /// <returns>国家</returns>
+        private string GetCountry(uint endIpOff, int countryFlag, out string local)
+        {
+            string country = string.Empty;
+            uint offset = endIpOff + 4;
+            country = GetFlagStr(ref offset, ref countryFlag, ref endIpOff);
+            if (countryFlag == 1)
+            {
+                local = GetFlagStr(ref offset, ref countryFlag, ref endIpOff);
+            }
+            else
+            {
+                offset = endIpOff + 8;
+                local = GetFlagStr(ref offset, ref countryFlag, ref endIpOff);
+            }
+            return country;
+        }
+		
+		
+		
         /// <summary>
         /// 获取国家
         /// </summary>
@@ -155,6 +182,7 @@ namespace qqzengIP
             }
             return country;
         }
+		
 
         private string GetFlagStr(ref uint offset, ref int countryFlag, ref uint endIpOff)
         {
