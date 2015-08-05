@@ -3,7 +3,7 @@ using System.Text;
 using System.IO;
 using System.Net;
 using System.Collections.Generic;
-namespace qqzeng_dat
+namespace qqzeng_ip_dat
 {
 
     /*
@@ -42,7 +42,7 @@ namespace qqzeng_dat
 
     对比：相比其他dat更简洁更高效
 
-    创建：qqzeng-ip 于 2015-08-01
+    创建：qqzeng-ip 于 2015-08-05
 
     */
 
@@ -238,8 +238,7 @@ namespace qqzeng_dat
     */
 }
 
-
-  public class PrefixIndex
+   public class PrefixIndex
     {
         public uint prefix { get; set; }
         public long start_index { get; set; }
