@@ -38,7 +38,7 @@ namespace qqzeng_dat
 
     压缩：原版txt为15M,生成这种dat结构为2.45M 
 
-    性能：普通电脑测试,解析100万ip耗时2.012439秒,1千万耗时21.10258秒,好点的电脑测试会更高效
+    性能：普通电脑测试,解析100万ip耗时2.012439秒,1千万耗时18.10258秒,好点的电脑测试会更高效
 
     对比：相比其他dat更简洁更高效
 
@@ -95,9 +95,10 @@ namespace qqzeng_dat
 
         }
 
-        public static uint IpToInt(string ip)
+        public static uint IpToInt(string ip,out uint prefix)
         {
             byte[] bytes = IPAddress.Parse(ip).GetAddressBytes();
+            prefix = (uint)bytes[0];
             return (uint)bytes[3] + (((uint)bytes[2]) << 8) + (((uint)bytes[1]) << 16) + (((uint)bytes[0]) << 24);
         }
 
@@ -113,7 +114,8 @@ namespace qqzeng_dat
         /// <returns>亚洲|中国|香港|九龙|油尖旺|新世界电讯|810200|Hong Kong|HK|114.17495|22.327115</returns>
         public string Query(string ip)
         {
-            uint intIP = IpToInt(ip);
+            uint ip_prefix_value;
+            uint intIP = IpToInt(ip,out ip_prefix_value);
             uint high = 0;
             uint low = 0;
             uint startIp = 0;
@@ -121,7 +123,7 @@ namespace qqzeng_dat
             uint local_offset = 0;
             uint local_length = 0;
 
-            uint ip_prefix_value = uint.Parse(ip.Split('.')[0]);
+           
             if (prefixDict.ContainsKey(ip_prefix_value))
             {
                 low = (uint)prefixDict[ip_prefix_value].start_index;
@@ -152,14 +154,19 @@ namespace qqzeng_dat
         public uint BinarySearch(uint low, uint high, uint k)
         {
             uint M = 0;
-            while (low <= high && high>0)
+            while (low <= high )
             {
                 uint mid = (low + high) / 2;
 
                 uint endipNum = GetEndIp(mid);
                 if (endipNum >= k)
                 {
-                    M = mid; //mid有可能是解
+                   
+                    M = mid; 
+                    if (mid == 0)
+                    {
+                        break;   //防止溢出
+                    }
                     high = mid - 1;
                 }
                 else
@@ -230,3 +237,11 @@ namespace qqzeng_dat
    --> result="亚洲|中国|香港|九龙|油尖旺|新世界电讯|810200|Hong Kong|HK|114.17495|22.327115"
     */
 }
+
+
+  public class PrefixIndex
+    {
+        public uint prefix { get; set; }
+        public long start_index { get; set; }
+        public long end_index { get; set; }
+    }
