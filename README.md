@@ -25,6 +25,6 @@ txt格式（可以导入mdb,mysql,mssql 等各种数据库）
 IP地址数据库 QQ群 312598982  
  
 演示  http://qqzeng.com/ip    
-购买  http://zengxiangzhan.taobao.com   
+购买  https://item.taobao.com/item.htm?id=43710941384   
 
  
