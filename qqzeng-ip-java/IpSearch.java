@@ -6,7 +6,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
-
+/**
+ * 最新一代文件结构 高性能解析IP数据库 qqzeng-ip.dat
+ * 编码：UTF8 字节序：Little-Endian
+ * For detailed information and guide: http://qqzeng.com/
+ * @author qqzeng-ip 于 2015-08-01
+ */
 public class IpSearch {
 
 	private static IpSearch instance = null;
