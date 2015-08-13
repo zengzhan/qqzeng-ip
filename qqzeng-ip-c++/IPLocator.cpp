@@ -20,13 +20,12 @@ using std::cerr;
 using std::endl;
 using std::ios;
 prefix_map c1;
-
 /**
- * 最新一代文件结构 高性能解析IP数据库 qqzeng-ip.dat
- * 编码：UTF8 字节序：Little-Endian
- * For detailed information and guide: http://qqzeng.com/
- * @author qqzeng-ip 于 2015-08-01
- */
+* 最新一代文件结构 高性能解析IP数据库 qqzeng-ip.dat
+* 编码：UTF8 字节序：Little-Endian
+* For detailed information and guide: http://qqzeng.com/
+* @author qqzeng-ip 于 2015-08-01
+*/
 IPSearch::IPSearch()
 {
 	FILE *file = NULL;
@@ -182,11 +181,37 @@ string ws2s(const string s)
 
 
 
-string IPSearch::longToIp(uint adr) {
-	char buf[256];
+string IPSearch::longToIp(uint ip)
+{
+	unsigned char val[4];
+	char *p = (char *)&ip;
+	for (int i = 3; i >= 0; --i)
+	{
+		unsigned char v = p[i];
+		val[3 - i] = v;
+	}
+
+	char ip_string[32];
+	memset((char *)ip_string, 0x00, sizeof(ip_string));
+
+	for (int i = 0; i < 4; ++i)
+	{
+		if (i == 0)
+		{
+			sprintf_s(ip_string, "%s%u", ip_string, val[i]);
+		}
+		else
+		{
+			sprintf_s(ip_string, "%s.%u", ip_string, val[i]);
+		}
+	}
+
+	return string(ip_string);
+
+	/*char buf[256];
 	sprintf_s(buf, "%d.%d.%d.%d", adr >> 24, (adr >> 16) & 0xff, (adr >> 8) & 0xff, adr & 0xff);
 	string ipstr(buf);
-	return ipstr;
+	return ipstr;*/
 
 }
 
@@ -194,55 +219,61 @@ string IPSearch::longToIp(uint adr) {
 uint IPSearch::ipToLong(const char * ip, uint &prefix)
 {
 
+
+	unsigned int result = 0;
+	char *pResult = (char *)&result;
+	size_t index = 3;
+	char *p = (char *)ip;
+	char *pBegin = p;
+	char *pEnd = p;
+	while (true)
+	{
+		if (!*p)
+		{
+			char s[16];
+			memset(s, 0x00, sizeof(s));
+			memcpy(s, pBegin, p - pBegin);
+			int val = atoi(s);
+			pResult[index] = val;
+			break;
+		}
+
+		if (*p != '.')
+		{
+			++p;
+			continue;
+		}
+
+		pEnd = p;
+		char s[16];
+		memset(s, 0x00, sizeof(s));
+		memcpy(s, pBegin, pEnd - pBegin);
+		int val = atoi(s);
+
+		pResult[index] = val;
+		if (index == 3)
+		{
+			prefix = val;
+		}
+		--index;
+		if (index < 0)
+		{
+			break;
+		}
+
+		pBegin = p + 1;
+		pEnd = p + 1;
+
+		++p;
+	}
+
+	return result;
+
 	/*int a, b, c, d;
 	sscanf_s(ip, "%u.%u.%u.%u", &a, &b, &c, &d);
 	prefix = (BYTE)a;
 	return ((BYTE)a << 24) | ((BYTE)b << 16) | ((BYTE)c << 8) | (BYTE)d;
-*/
-
-	int a, b, c, d;
-	int iLen;
-	int len;
-	int abcdIndex = 0;
-	iLen = strlen(ip);
-	char ips[3];
-	memset(ips, '\0', 3);
-
-	int ipsCnt = 0;
-	for (int i = 0; i < iLen; i++)
-	{
-		if ('.' == ip[i])
-		{
-			if (0 == abcdIndex)
-			{
-				abcdIndex = 1;
-				a = atoi(ips);
-			}
-			else if (1 == abcdIndex)
-			{
-				abcdIndex = 2;
-				b = atoi(ips);
-			}
-			else if (2 == abcdIndex)
-			{
-				abcdIndex = 3;
-				c = atoi(ips);
-			}
-
-			ipsCnt = 0;
-			memset(ips, '\0', 3);
-		}
-		else
-		{
-			ips[ipsCnt] = ip[i];
-			ipsCnt++;
-		}
-	}
-	d = atoi(ips);
-
-	prefix = (BYTE)a;
-	return ((BYTE)a << 24) | ((BYTE)b << 16) | ((BYTE)c << 8) | (BYTE)d;
-
+	*/
 }
 
 uint IPSearch::ReadInt32(byte *buf, int pos)
@@ -258,11 +289,14 @@ uint IPSearch::ReadInt24(byte *buf, int pos)
 	return retInt;
 }
 
+
+
 int main(int argc, char **argv)
 {
 	IPSearch finder = IPSearch();
     const char *ip = ipstr.c_str();
-    string local = finder.Query(ip);
+	string local = finder.Query(ip);
+	string gbkLocal = ws2s(local);
 	cout << ipstr + "->" + ws2s(local) << endl;
     //113.70.39.14->亚洲|中国|广东|佛山|禅城|电信|440604|China|CN|113.1228|23.00842
 	getchar();
