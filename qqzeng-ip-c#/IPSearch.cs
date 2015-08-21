@@ -38,7 +38,7 @@ namespace qqzeng_ip_dat
 
     压缩：原版txt为15M,生成这种dat结构为2.45M 
 
-    性能：解析100万ip耗时0.551秒
+    性能：解析100万ip耗时0.423秒
 
     对比：相比其他dat更简洁更高效
 
@@ -219,11 +219,6 @@ namespace qqzeng_ip_dat
         /// <summary>
         /// 字节转整形 小节序 
         /// </summary>
-        /// <param name="a"></param>
-        /// <param name="b"></param>
-        /// <param name="c"></param>
-        /// <param name="d"></param>
-        /// <returns></returns>
         private uint BytesToLong(byte a, byte b, byte c, byte d)
         {
             return ((uint)a << 0) | ((uint)b << 8) | ((uint)c << 16) | ((uint)d << 24);
