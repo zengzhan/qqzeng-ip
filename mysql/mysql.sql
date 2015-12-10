@@ -1,6 +1,8 @@
 --附 MySql导入方法:
 
---创建 新版表 增加 大洲 国家英文名称 国家简码 经度 纬度
+--创建 IP地址数据库表 
+
+--字段 ip段 数字段 大洲 国家 省份 城市 县区 运营商 区划代码 国家英文名称 国家简码 经度 纬度
 
 CREATE TABLE `ip`.`ip` (
 `ip_start` VARCHAR(45) NULL,
@@ -29,26 +31,6 @@ LINES TERMINATED BY '\n'
 (ip_start, ip_end, ip_start_num,ip_end_num,continent,country,province,city,district,isp,area_code,country_english,country_code,longitude,latitude);
 
 
-
-
-
-
-
-
-
---创建表
-CREATE TABLE `ip`.`ip` (
-`StartIp` VARCHAR(45) NULL,
-`EndIp` VARCHAR(45) NULL,
-`StartIpNum` BIGINT NULL,
-`EndIpNum` BIGINT NULL,
-`Country` VARCHAR(45) NULL,
-`Province` VARCHAR(45) NULL,
-`City` VARCHAR(45) NULL,
-`District` VARCHAR(45) NULL,
-`ISP` VARCHAR(45) NULL,
-`AreaCode` VARCHAR(45) NULL
-);
 
 
 --导入数据库
