@@ -1,6 +1,9 @@
 --附 MSSQL导入方法:
 
---创建 新版表 增加 大洲 国家英文名称 国家简码 经度 纬度
+--创建 最新IP地址数据库表 
+
+--字段 ip段 数字段 大洲 国家 省份 城市 县区 运营商 区划代码 国家英文名称 国家简码 经度 纬度
+
 CREATE TABLE [dbo].[ip](
  [ip_start] [varchar](50) NULL,
  [ip_end] [varchar](50) NULL,
@@ -21,19 +24,6 @@ CREATE TABLE [dbo].[ip](
 
 
 
---创建表
-CREATE TABLE [dbo].[ip](
- [Start] [varchar](50) NULL,
- [End] [varchar](50) NULL,
- [StartNum] [bigint] NULL,
- [EndNum] [bigint] NULL,
- [Country] [varchar](50) NULL,
- [Province] [varchar](50) NULL,
- [City] [varchar](50) NULL,
- [District] [varchar](50) NULL,
- [Isp] [varchar](50) NULL,
- [Code] [int] NULL 
-)
 
 
 --导入数据库
