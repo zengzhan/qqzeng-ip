@@ -23,6 +23,7 @@ CREATE TABLE `ip`.`ip` (
 );
 
 
+
 --导入数据库
 LOAD DATA LOCAL INFILE 'G:\IP数据库\ip.txt'
 INTO TABLE ip
@@ -41,7 +42,6 @@ SELECT * FROM ip WHERE INET_ATON('219.232.57.199') BETWEEN ip_start_num AND ip_e
 
 --mysql乱码如何解决？
 
- 
 
 --解决：
 
@@ -54,3 +54,4 @@ SELECT * FROM ip WHERE INET_ATON('219.232.57.199') BETWEEN ip_start_num AND ip_e
 --如：
 
 …… into table test character set utf8 fields……
+
