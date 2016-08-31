@@ -18,7 +18,8 @@ CREATE TABLE `areas``.`areas` (
 `Jianpin` VARCHAR(45) NULL,
 `FirstChar` VARCHAR(45) NULL,
 `lng` VARCHAR(45) NULL,
-`Lat` VARCHAR(45) NULL
+`Lat` VARCHAR(45) NULL,
+`Remark` VARCHAR(45) NULL
 );
 
 
@@ -28,7 +29,8 @@ LOAD DATA LOCAL INFILE 'G:\areas.txt'
 INTO TABLE areas
 FIELDS TERMINATED BY '\t'
 LINES TERMINATED BY '\n'
-(ID,ParentId,Name,MergerName,ShortName,MergerShortName,LevelType,CityCode,ZipCode,Pinyin,Jianpin,FirstChar,lng,Lat);
+(ID,ParentId,Name,MergerName,ShortName,MergerShortName,LevelType,CityCode,ZipCode,Pinyin,Jianpin,FirstChar,lng,Lat,Remark);
 
 
+--xls 全选复制到txt
 --默认 txt为中文编码  导入时 请转为utf-8编码 以免乱码 
