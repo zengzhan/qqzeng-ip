@@ -18,7 +18,8 @@ CREATE TABLE [dbo].[areas](
 	[Jianpin] [NVARCHAR](50) NULL,
 	[FirstChar] [NVARCHAR](50) NULL,
 	[Lng] [NVARCHAR](50) NULL,
-	[Lat] [NVARCHAR](50) NULL
+	[Lat] [NVARCHAR](50) NULL,
+	[Remark] [NVARCHAR](50) NULL
 ) 
 
 
