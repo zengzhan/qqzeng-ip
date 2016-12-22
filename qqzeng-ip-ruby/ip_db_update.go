@@ -1,7 +1,7 @@
 // zhouziqing / 233355@gmail.com
 // 2016/12/21
 
-package imapmq
+package imap
 
 import (
 	"io/ioutil"
@@ -16,37 +16,53 @@ import (
 	"github.com/mholt/archiver"
 )
 
+type IpDatUpdatedFunc func(dat_version string)
+
 type IpDatMailboxUpdater struct {
-	client *imap_client.Client
-	mbox   *imap.MailboxStatus
-	quit   chan bool
+	quit            chan bool
+	updatedCallback IpDatUpdatedFunc
+	username        string
+	password        string
+	mailserver      string
 }
 
-func NewIpDatMailboxUpdater(server, username, password string) (*IpDatMailboxUpdater, error) {
+func NewIpDatMailboxUpdater(server, username, password string, updatedCallback IpDatUpdatedFunc) (*IpDatMailboxUpdater, error) {
 	// Connect to server
 	c, err := imap_client.DialTLS(server+":993", nil)
 	if err != nil {
 		return nil, err
 	}
+	defer c.Close()
 
 	// Login
 	if err := c.Login(username, password); err != nil {
 		return nil, err
 	}
+	defer c.Logout()
 
-	// Select INBOX
-	mbox, err := c.Select("INBOX", false)
-	if err != nil {
-		return nil, err
-	}
+	// 恢复标记 for debug
+	//if _, err := c.Select("INBOX", false); err != nil {
+	//	panic(err)
+	//}
+	//search := &imap.SearchCriteria{
+	//	From: "qqzeng-ip",
+	//}
+	//seq, err := c.Search(search)
+	//if err != nil {
+	//	panic(err)
+	//}
+	//seqset := new(imap.SeqSet)
+	//seqset.AddNum(seq...)
+	//
+	//c.Store(seqset, "-FLAGS", imap.AnsweredFlag, nil)
 
-	return &IpDatMailboxUpdater{client: c, mbox: mbox}, nil
+	return &IpDatMailboxUpdater{mailserver: server, username: username, password: password, updatedCallback: updatedCallback}, nil
 }
 
 const tmpFilePath = "./tmp/"
 const ipDatFilePath = "./lib/zengip.dat"
 
-func (u *IpDatMailboxUpdater) parse(bean imap.Literal) {
+func (s *IpDatMailboxUpdater) parse(bean imap.Literal) {
 	msg, err := email.ParseMessage(bean)
 	if err != nil {
 		panic(err)
@@ -56,21 +72,22 @@ func (u *IpDatMailboxUpdater) parse(bean imap.Literal) {
 			os.Mkdir(tmpFilePath, 0711)
 		}
 		_, contentDisposition, _ := part.Header.ContentDisposition()
-		attrFileName := contentDisposition["filename"]
-		rarFilePath := tmpFilePath + attrFileName
-		unrarpath := rarFilePath[0 : len(rarFilePath)-len(filepath.Ext(rarFilePath))]
+		attrFilename := contentDisposition["filename"]
+		attrBaseFilename := attrFilename[0 : len(attrFilename)-len(filepath.Ext(attrFilename))]
+		rarFilePath := tmpFilePath + attrFilename
+		unrarPath := tmpFilePath + attrBaseFilename
 
 		err := ioutil.WriteFile(rarFilePath, part.Body, 0711)
 		if err != nil {
 			panic(err)
 		}
 
-		err = archiver.Rar.Open(rarFilePath, unrarpath)
+		err = archiver.Rar.Open(rarFilePath, unrarPath)
 		if err != nil {
 			panic(err)
 		}
 
-		b, err := ioutil.ReadFile(unrarpath + "/qqzeng-ip-utf8.dat")
+		b, err := ioutil.ReadFile(unrarPath + "/qqzeng-ip-utf8.dat")
 		if err != nil {
 			panic(err)
 		}
@@ -80,23 +97,48 @@ func (u *IpDatMailboxUpdater) parse(bean imap.Literal) {
 			panic(err)
 		}
 
-		os.Remove(rarFilePath)
-		os.RemoveAll(unrarpath)
+		err = os.Remove(rarFilePath)
+		if err != nil {
+			panic(err)
+		}
+
+		err = os.RemoveAll(unrarPath)
+		if err != nil {
+			panic(err)
+		}
+
+		s.updatedCallback(attrBaseFilename)
 	}
 }
 
 func (s *IpDatMailboxUpdater) Close() {
 	s.quit <- true
-	s.client.LoggedOut()
-	s.client.Close()
 }
 
 func (s *IpDatMailboxUpdater) fetch() {
+	// Connect to server
+	c, err := imap_client.DialTLS(s.mailserver+":993", nil)
+	if err != nil {
+		return
+	}
+	defer c.Close()
+
+	// Login
+	if err := c.Login(s.username, s.password); err != nil {
+		return
+	}
+	defer c.Logout()
+
+	// Select INBOX
+	if _, err := c.Select("INBOX", false); err != nil {
+		panic(err)
+	}
+
 	search := &imap.SearchCriteria{
 		Unanswered: true,
 		From:       "qqzeng-ip",
 	}
-	seq, err := s.client.Search(search)
+	seq, err := c.Search(search)
 	if err != nil {
 		panic(err)
 	}
@@ -109,18 +151,18 @@ func (s *IpDatMailboxUpdater) fetch() {
 	seqset := new(imap.SeqSet)
 	seqset.AddNum(seq...)
 
-	ch := make(chan *imap.Message, 10)
-	go func() {
-		if err := s.client.Fetch(seqset, []string{imap.EnvelopeMsgAttr}, ch); err != nil {
-			panic(err)
-		}
-	}()
-
 	// 添加回复标记
-	err = s.client.Store(seqset, "+FLAGS", imap.AnsweredFlag, nil)
+	err = c.Store(seqset, "+FLAGS", imap.AnsweredFlag, nil)
 	if err != nil {
 		panic(err)
 	}
+
+	ch := make(chan *imap.Message, 10)
+	go func() {
+		if err := c.Fetch(seqset, []string{imap.EnvelopeMsgAttr}, ch); err != nil {
+			panic(err)
+		}
+	}()
 
 	// 选取最新版
 	var latestMsgTime time.Time
@@ -137,7 +179,7 @@ func (s *IpDatMailboxUpdater) fetch() {
 	seqset.AddNum(latestMsg.SeqNum)
 	msg := make(chan *imap.Message)
 	go func() {
-		if err := s.client.Fetch(seqset, []string{"body[]"}, msg); err != nil {
+		if err := c.Fetch(seqset, []string{"BODY[]"}, msg); err != nil {
 			panic(err)
 		}
 	}()
@@ -148,19 +190,6 @@ func (s *IpDatMailboxUpdater) fetch() {
 }
 
 func (s *IpDatMailboxUpdater) Run() {
-	// 恢复标记 for debug
-	//search := &imap.SearchCriteria{
-	//	From: "qqzeng-ip",
-	//}
-	//seq, err := s.client.Search(search)
-	//if err != nil {
-	//	panic(err)
-	//}
-	//seqset := new(imap.SeqSet)
-	//seqset.AddNum(seq...)
-	//
-	//s.client.Store(seqset, "-FLAGS", imap.AnsweredFlag, nil)
-
 	go func() {
 		for {
 			select {
