@@ -1,7 +1,7 @@
 //名称：手机号码归属地查询 dat高效率查询
 //压缩：原版txt为18M,生成这种dat结构为2.88M 
 //性能：每秒解析180w号段或者号码,简洁高效
-//创建：qqzeng-ip 于 2018-5-21
+//创建：qqzeng-ip 于 2017-5-21
 
 using System;
 using System.Collections.Generic;
