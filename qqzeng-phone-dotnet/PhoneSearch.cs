@@ -10,9 +10,9 @@ using System.IO;
 using System.Text;
 namespace qqzeng_phone_dat
 {
-    public class PhoneSearch
+     public class PhoneSearch
     {
-
+       
         private Dictionary<uint, PrefixIndex> prefixDict;
         private byte[] indexBuffer;
         private byte[] data;
@@ -40,7 +40,7 @@ namespace qqzeng_phone_dat
             prefixStartOffset = BytesToLong(data[8], data[9], data[10], data[11]);
             prefixEndOffset = BytesToLong(data[12], data[13], data[14], data[15]);
 
-
+          
 
             phoneCount = (lastPhoneOffset - firstPhoneOffset) / 8 + 1; //索引区块每组 8字节          
             prefixCount = (prefixEndOffset - prefixStartOffset) / 9 + 1; //前缀区块每组 9字节
@@ -60,9 +60,9 @@ namespace qqzeng_phone_dat
 
         }
 
-        public static uint PhoneToInt(string phone, out uint prefix)
-        {
-            prefix = Convert.ToUInt32(phone.Substring(0, 3));
+        public static uint PhoneToInt(string phone,out uint prefix)
+        {           
+            prefix = Convert.ToUInt32(phone.Substring(0,3));
             return Convert.ToUInt32(phone.Substring(0, 7)); ;
         }
 
@@ -77,11 +77,11 @@ namespace qqzeng_phone_dat
             uint intPhone = PhoneToInt(phone, out phone_prefix_value);
             uint high = 0;
             uint low = 0;
-
+          
             uint local_offset = 0;
             uint local_length = 0;
 
-
+           
             if (prefixDict.ContainsKey(phone_prefix_value))
             {
                 low = (uint)prefixDict[phone_prefix_value].start_index;
@@ -92,41 +92,51 @@ namespace qqzeng_phone_dat
                 return "";
             }
 
-            uint my_index = low == high ? low : BinarySearch(low, high, intPhone);
-
-            GetIndex(my_index, out local_offset, out local_length);
-
-            return GetLocal(local_offset, local_length);
-
+            if (low == high)
+            {
+                GetIndex(low, out local_offset, out local_length);
+                return GetLocal(local_offset, local_length);
+            }
+            else
+            {
+                int my_index = BinarySearch(low, high, intPhone);
+                if (my_index!=-1)
+                {
+                    GetIndex((uint)my_index, out local_offset, out local_length);
+                    return GetLocal(local_offset, local_length);
+                }
+                else
+                {
+                    return "";
+                }
+            }
+            
+          
+           
 
         }
         /// <summary>
         /// 二分算法
         /// </summary>
-        public uint BinarySearch(uint low, uint high, uint k)
+        public int BinarySearch(uint low, uint high, uint key)
         {
-            uint M = 0;
-            while (low <= high)
+            uint mid = (low + high) / 2;
+            if (low > high)
+                return -1;
+            else
             {
-                uint mid = (low + high) / 2;
-
                 uint phoneNum = GetIntPhone(mid);
-
-                if (phoneNum >= k)
-                {
-
-                    M = mid;
-                    if (mid == 0)
-                    {
-                        break;   //防止溢出
-                    }
-                    high = mid - 1;
-                }
+                if (phoneNum == key)
+                    return (int)mid;
+                else if (phoneNum > key)
+                    return BinarySearch( low, mid - 1, key);
                 else
-                    low = mid + 1;
+                    return BinarySearch(mid + 1, high, key);
             }
-            return M;
         }
+
+
+
         /// <summary>
         /// 在索引区解析
         /// </summary>
@@ -141,7 +151,7 @@ namespace qqzeng_phone_dat
             local_offset = (uint)data[4 + left_offset] + (((uint)data[5 + left_offset]) << 8) + (((uint)data[6 + left_offset]) << 16);
             local_length = (uint)data[7 + left_offset];
         }
-
+     
 
         /// <summary>
         /// 返回归属地信息
@@ -153,9 +163,9 @@ namespace qqzeng_phone_dat
         {
             byte[] buf = new byte[local_length];
             Array.Copy(data, local_offset, buf, 0, local_length);
-            return Encoding.UTF8.GetString(buf, 0, (int)local_length);
-
-            // return Encoding.GetEncoding("GB2312").GetString(buf, 0, (int)local_length);
+             return Encoding.UTF8.GetString(buf, 0, (int)local_length); 
+          
+           // return Encoding.GetEncoding("GB2312").GetString(buf, 0, (int)local_length);
 
         }
 
@@ -174,10 +184,6 @@ namespace qqzeng_phone_dat
         {
             return ((uint)a << 0) | ((uint)b << 8) | ((uint)c << 16) | ((uint)d << 24);
         }
-
-
-
-    }
 
     /*
     （调用例子）：
