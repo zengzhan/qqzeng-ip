@@ -16,13 +16,22 @@ CREATE TABLE `phone``.`phone` (
 );
 
 
---导入数据库
-LOAD DATA LOCAL INFILE 'G:\phone.txt'
+#导入txt到mysql
+LOAD DATA LOCAL INFILE 'c:\phone.txt'
 INTO TABLE phone
 FIELDS TERMINATED BY '\t'
 LINES TERMINATED BY '\n'
 (pref, phone, province,city,isp,post_code,city_code,area_code);
 
+
+#导入csv到mysql
+load data local infile 'c:/phone.csv'
+into table  phone
+fields terminated by ',' 
+optionally enclosed by '"'
+escaped by '"' 
+lines terminated by '\r\n'
+(pref, phone, province,city,isp,post_code,city_code,area_code);
 
 
 --默认 txt为中文编码  导入时 请转为utf-8编码 以免乱码 
