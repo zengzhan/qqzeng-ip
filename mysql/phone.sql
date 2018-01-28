@@ -2,7 +2,7 @@
 
 --创建表 最新手机号段归属地数据库
 
---字段：前三位 号段 省份 城市 运营商  邮编 区号 行政区划编码 类型
+--字段：前三位 号段 省份 城市 运营商类型  邮编 区号 行政区划编码
 
 CREATE TABLE `phone``.`phone` (
 `pref`  VARCHAR(45) NULL,
@@ -12,8 +12,7 @@ CREATE TABLE `phone``.`phone` (
 `isp` VARCHAR(45) NULL,
 `post_code` VARCHAR(45) NULL,
 `city_code` VARCHAR(45) NULL,
-`area_code` VARCHAR(45) NULL,
-`types` VARCHAR(45) NULL
+`area_code` VARCHAR(45) NULL
 );
 
 
@@ -22,7 +21,7 @@ LOAD DATA LOCAL INFILE 'G:\phone.txt'
 INTO TABLE phone
 FIELDS TERMINATED BY '\t'
 LINES TERMINATED BY '\n'
-(pref, phone, province,city,isp,post_code,city_code,area_code,types);
+(pref, phone, province,city,isp,post_code,city_code,area_code);
 
 
 
