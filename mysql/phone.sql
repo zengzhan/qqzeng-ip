@@ -43,4 +43,11 @@ LINES TERMINATED BY '\n'
 …… into table test character set utf8 fields……
 
 
+The used command is not allowed with this MySQL version
+[mysqld]        #服务端配置  
+local-infle = 1  
+  
+[mysql]         #客户端配置  
+local-infile = 1  
+
 
