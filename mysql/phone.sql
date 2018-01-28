@@ -17,10 +17,10 @@ CREATE TABLE `phone``.`phone` (
 
 
 #导入txt到mysql
-LOAD DATA LOCAL INFILE 'c:\phone.txt'
-INTO TABLE phone
-FIELDS TERMINATED BY '\t'
-LINES TERMINATED BY '\n'
+load data local infile 'c:/phone.txt'
+into table phone
+fields terminated by '\t'
+lines terminated by '\r\n'
 (pref, phone, province,city,isp,post_code,city_code,area_code);
 
 
