@@ -1,3 +1,10 @@
+//名称：手机号码归属地查询 dat高效率查询  内存优化版
+//压缩：原版txt为22M,生成这种dat结构为2.66M 
+//性能：每秒解析300万+号段或者号码,简洁高效 
+//环境：CPU i7-7700K +内存16GB
+//创建：qqzeng-ip 于 2018-4-5
+
+
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -6,8 +13,6 @@ using System.Threading;
 
 namespace qqzeng_phone_dat
 {
-
-    // 性能：每秒解析300w+
 
     public class PhoneSearchFast
     {
