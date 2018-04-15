@@ -3,7 +3,7 @@ using System.IO;
 using System.Text;
 using System.Threading;
 
-namespace qqzeng_ip_dat
+namespace build_qqzeng_dat
 {
 
     /*
@@ -14,7 +14,7 @@ namespace qqzeng_ip_dat
 
     返回多个字段信息（如：亚洲|中国|香港|九龙|油尖旺|新世界电讯|810200|Hong Kong|HK|114.17495|22.327115）
     
-    ------------------------ 文件结构 2.0 -------------------------
+    ------------------------ 文件结构 2.0  -------------------------
 
     //文件头    16字节(4-4-4-4)
     [索引区第一条流位置][索引区最后一条流位置][前缀区第一条的流位置][前缀区最后一条的流位置] 
@@ -44,7 +44,7 @@ namespace qqzeng_ip_dat
 
     创建：qqzeng-ip 于 2015-08-01 
     
-    优化：qqzeng-ip 于 2018-04-08
+    优化：qqzeng-ip 于 2018-04-08 
 
     */
 
@@ -66,9 +66,9 @@ namespace qqzeng_ip_dat
         private string[] addrArr;
         private byte[] data;
 
-               
+
         /// <summary>
-        /// 初始化二进制 qqzeng-ip-ultimate.dat 数据
+        /// 初始化二进制 qqzeng-ip-utf8.dat 数据
         /// </summary>
         private void LoadDat()
         {
@@ -85,19 +85,30 @@ namespace qqzeng_ip_dat
             long ipCount = (lastStartIpOffset - firstStartIpOffset) / 12 + 1; //索引区块每组 12字节     //ip段数量      
             long prefixCount = (prefixEndOffset - prefixStartOffset) / 9 + 1; //前缀区块每组 9字节 //前缀数量
 
-            prefmap = new long[prefixCount, 2];
+            prefmap = new long[256, 2];
 
             //初始化前缀对应索引区区间
             byte[] indexBuffer = new byte[prefixCount * 9];
             Buffer.BlockCopy(data, (int)prefixStartOffset, indexBuffer, 0, (int)prefixCount * 9);
-
+            int m = 0;
             for (var k = 0; k < prefixCount; k++)
             {
                 int i = k * 9;
-                long start_index = BytesToLong(indexBuffer[i + 1], indexBuffer[i + 2], indexBuffer[i + 3], indexBuffer[i + 4]);
-                long end_index = BytesToLong(indexBuffer[i + 5], indexBuffer[i + 6], indexBuffer[i + 7], indexBuffer[i + 8]);
-
-                prefmap[k, 0] = start_index; prefmap[k, 1] = end_index;
+                int n = indexBuffer[i];
+                prefmap[n, 0] = BytesToLong(indexBuffer[i + 1], indexBuffer[i + 2], indexBuffer[i + 3], indexBuffer[i + 4]);
+                prefmap[n, 1] = BytesToLong(indexBuffer[i + 5], indexBuffer[i + 6], indexBuffer[i + 7], indexBuffer[i + 8]);
+                if (m < n)
+                {
+                    for (; m < n; m++)
+                    {
+                        prefmap[m, 0] = 0; prefmap[m, 1] = 0;
+                    }
+                    m++;
+                }
+                else
+                {
+                    m++;
+                }
             }
 
             //初始化 索引区间
@@ -157,6 +168,10 @@ namespace qqzeng_ip_dat
         {
             long val = IpToInt(ip, out long pref);
             long low = prefmap[pref, 0], high = prefmap[pref, 1];
+            if (high == 0)
+            {
+                return "";
+            }
             long cur = low == high ? low : BinarySearch(low, high, val);
             if (ipmap[cur, 0] <= val && ipmap[cur, 1] >= val)
             {
@@ -307,4 +322,3 @@ namespace qqzeng_ip_dat
    --> result="亚洲|中国|香港|九龙|油尖旺|新世界电讯|810200|Hong Kong|HK|114.17495|22.327115"
     */
 }
-
