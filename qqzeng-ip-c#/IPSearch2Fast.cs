@@ -3,7 +3,7 @@ using System.IO;
 using System.Text;
 using System.Threading;
 
-namespace build_qqzeng_dat
+namespace qqzeng_ip_dat
 {
 
     /*
