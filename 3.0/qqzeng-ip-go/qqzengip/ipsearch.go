@@ -1,6 +1,8 @@
-package ipsearch
+package qqzengip
 
-import (
+
+import (	
+	
 	"io/ioutil"
 	"log"
 	"strconv"
@@ -8,18 +10,18 @@ import (
 )
 
 
-type ipSearch struct {
-	data        []byte
-	prefStart   []uint32
-	prefEnd     []uint32
+type IpSearch struct {	
+	prefStart   [256]uint32
+	prefEnd     [256]uint32
 	endArr      []uint32
 	addrArr     []string
 
 }
 
-var ips *ipSearch = nil
+var ips *IpSearch = nil
 
-func New() (ipSearch, error) {
+
+func Location() (IpSearch, error) {
 	if ips == nil {
 		var err error
 		ips, err = loadIpDat()
@@ -31,22 +33,22 @@ func New() (ipSearch, error) {
 	return *ips, nil
 }
 
-func loadIpDat() (*ipSearch, error) {
+func loadIpDat() (*IpSearch, error) {
 
-	p := ipSearch{}
-	data, err := ioutil.ReadFile("qqzeng-ip-3.0-ultimate.dat")
+	p := IpSearch{}
+	data, err := ioutil.ReadFile("./qqzeng-ip-3.0-ultimate.dat")
 	if err != nil {
 		log.Fatal(err)
 	}
-	p.data = data
 	
 	for  k := 0; k < 256; k++ {
-		i:= k * 8 + 4		
+		i:= k * 8 + 4			
 		p.prefStart[k] =  ReadLittleEndian32(data[i], data[i + 1], data[i + 2], data[i + 3])
 		p.prefEnd[k] =  ReadLittleEndian32(data[i + 4], data[i + 5], data[i + 6], data[i + 7])
 	}
 
 	RecordSize:=int(ReadLittleEndian32(data[0], data[1], data[2], data[3]))
+
 	p.endArr= make([]uint32, RecordSize)
 	p.addrArr=make([]string, RecordSize)
 	for  i := 0; i < RecordSize; i++ {
@@ -61,7 +63,7 @@ func loadIpDat() (*ipSearch, error) {
 	return &p, nil
 }
 
-func (p ipSearch) Get(ip string) string {
+func (p IpSearch) Get(ip string) string {
 	ips := strings.Split(ip, ".")
 	x, _ := strconv.Atoi(ips[0])
 	prefix := uint32(x)
@@ -69,18 +71,14 @@ func (p ipSearch) Get(ip string) string {
 
 	low := p.prefStart[prefix]
 	high:=p.prefEnd[prefix]
-	var cur uint32
-	if (low ==high ) {
-		cur=low
-		} else {
-		cur=p.binarySearch(low, high, intIP)
-	} 
+	var cur uint32	
+	if (low ==high ) { cur=low } else {	cur=p.binarySearch(low, high, intIP) } 
 	return p.addrArr[cur];
 
 }
 
 // 二分逼近算法
-func (p ipSearch) binarySearch(low uint32, high uint32, k uint32) uint32 {
+func (p IpSearch) binarySearch(low uint32, high uint32, k uint32) uint32 {
 	var M uint32 = 0
 	for low <= high {
 		mid := (low + high) / 2
