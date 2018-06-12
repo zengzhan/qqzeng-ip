@@ -11,4 +11,11 @@ func main() {
         fmt.Println(ipfinder.Get("114.114.114.114"))
         fmt.Println(ipfinder.Get("255.255.255.255"))
     }
+	
+	
+	//ipsearch2.go
+	ipFinder := qqzengip.GetInstance()
+	fmt.Println(ipFinder.Get("8.8.8.8"))
+	fmt.Println(ipFinder.Get("114.114.114.114"))
+	fmt.Println(ipFinder.Get("255.255.255.255"))
 }
