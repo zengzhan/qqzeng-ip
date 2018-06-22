@@ -168,7 +168,7 @@ int main(int argc, char **argv)
 		return -1;
 	}	
 
-	char *ip = "58.62.92.106";
+	char *ip = "8.8.8.8";
 	char *local = geoip_query(finder, ip);
 	printf("%s\n",local);
 
