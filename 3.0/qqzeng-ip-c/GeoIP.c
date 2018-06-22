@@ -8,7 +8,6 @@ char *IP_FILENAME = "qqzeng-ip-3.0-ultimate.dat";
 //环境：CPU i7-7700K + DDR2400 16G + win10 X64 (Release)
 //创建：qqzeng-ip 于 2018-06-21  
 
-
 geo_ip *geoip_instance()
 {
 	geo_ip *ret = (geo_ip *)malloc(sizeof(geo_ip));
@@ -175,6 +174,5 @@ int main(int argc, char **argv)
 	system("pause");
 	return 0;
 }
-
 
 
