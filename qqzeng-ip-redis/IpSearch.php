@@ -18,6 +18,11 @@ $area_info = $result[$k];
 
 list($start,$end,$startnum,$endnum,$continent,$country,$province, $city, $district,$isp,$areacode,$en,$cc,$lng,$lat) = explode("|", $area_info);
 
+// 国内精华版 或者 国外拓展版 开启这段
+// if($ipnum<$startnum){
+// return 'none';
+// }
+
 $arr =array(
 			'code'=>0,
 				'data'=> array( 
