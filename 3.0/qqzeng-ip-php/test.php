@@ -2,8 +2,15 @@
 header('Content-Type: text/json;charset=utf-8"');
 include_once("IpSearch.php");
 
+//旧版 
+//$reader = new IpSearch('qqzeng-ip-3.0-ultimate.dat');
+$reader = IpSearch::getInstance();
+
 $client_ip='8.8.8.8';
-$reader = new IpSearch('qqzeng-ip-3.0-ultimate.dat');
+
+for	($i=0;$i<1000;$i++){
+	$area_info = $reader->get($client_ip);
+}
 
 $area_info = $reader->get($client_ip);
 
