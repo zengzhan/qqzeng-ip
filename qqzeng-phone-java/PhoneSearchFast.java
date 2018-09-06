@@ -8,7 +8,7 @@ import java.util.*;
 //编码：utf-8
 //性能：每秒解析300万+
 //环境：CPU i7-7700K + DDR2400 16G + win10 X64 (Release)
-//创建：qqzeng-ip 于 2018-08-05  
+//创建：qqzeng-ip 于 2018-09-06  
 
 public class PhoneSearchFast {
 
@@ -23,7 +23,7 @@ public class PhoneSearchFast {
 	private PhoneSearchFast() {
 		Path path = Paths.get("C:\\Users\\qqzeng-phone.dat");
 
-		byte[] data = null;
+byte[] data = null;
 		try {
 			data = Files.readAllBytes(path);
 		} catch (IOException e) {
@@ -53,7 +53,7 @@ public class PhoneSearchFast {
 		for (int k = 0; k < PrefSize; k++)
 		{
 			int i = k * 9 + 16;
-			int n = data[i]& 0xFF;
+			int n =data[i]& 0xFF;
 			prefmap[n][0] = BytesToLong(data[i + 1], data[i + 2], data[i + 3], data[i + 4]);
 			prefmap[n][1] = BytesToLong(data[i + 5], data[i + 6], data[i + 7], data[i + 8]);
 			if (m < n)
@@ -77,9 +77,10 @@ public class PhoneSearchFast {
 		{
 			int p = 16 + (int)PrefSize * 9 + (i * 7);
 			phoneArr[i] = BytesToLong(data[p], data[1 + p], data[2 + p], data[3 + p]);
-			phonemap[i][0] = data[4 + p]& 0xFF + ((data[5 + p]) << 8);
-			phonemap[i][1] = data[6 + p]& 0xFF;
+			phonemap[i][0] =BytesToLong(data[4 + p],data[5 + p],(byte)0,(byte)0); 
+			phonemap[i][1] =BytesToLong(data[6 + p],(byte)0,(byte)0,(byte)0); 
 		}
+
 
 
 
@@ -119,7 +120,7 @@ public class PhoneSearchFast {
 	private int BinarySearch(int low, int high, long k) {
 		int M = 0;
 		while (low <= high) {
-			int mid = (low + high) / 2;
+			int mid = (low + high)  >> 1;
 
 			long phoneNum  = phoneArr[mid];
 			if (phoneNum >= k) {
