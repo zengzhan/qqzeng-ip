@@ -2,26 +2,59 @@
 
 -- 创建表 最新行政区划数据库
 
--- 字段 区划ID-父ID-全称-全称聚合-简称-简称聚合-级别-区号-邮编-拼音-简拼-首字母-经度-纬度-行政区-功能区
+-- 字段 
+--区划ID
+--父ID
+--级别
+--全称
+--简称	
+--ID路径（110000,110100,110105）
+--省份全称
+--城市全称
+--县区全称
+--省份简称
+--城市简称
+--县区简称
+--省份拼音
+--城市拼音
+--县区拼音
+--拼音
+--简拼
+--首拼
+--区号
+--邮编
+--经度
+--纬度
+--是否行政区
+--类型（县级市|地级市|经济开发区|高新区|新区）
 
-create table `zengip`.`areas` (
-    `ID` varchar(45) null,
-    `ParentId` varchar(45) null,
-    `Name` varchar(45) null,
-    `MergerName` varchar(200) null,
-    `ShortName` varchar(45) null,
-    `MergerShortName` varchar(200) null,
-    `LevelType` varchar(45) null,
-    `CityCode` varchar(45) null,
-    `ZipCode` varchar(45) null,
-    `Pinyin` varchar(45) null,
-    `Jianpin` varchar(45) null,
-    `FirstChar` varchar(45) null,
-    `lng` varchar(45) null,
-    `Lat` varchar(45) null,
-    `Remark1` varchar(45) null,
-    `Remark2` varchar(45) null
-);
+
+CREATE TABLE `areas` (
+  `ID` varchar(45) DEFAULT NULL,
+  `ParentId` varchar(45) DEFAULT NULL,
+  `LevelType` varchar(45) DEFAULT NULL,
+  `Name` varchar(45) DEFAULT NULL,
+  `ShortName` varchar(45) DEFAULT NULL,
+  `ParentPath` varchar(200) DEFAULT NULL,
+  `Province` varchar(200) DEFAULT NULL,
+  `City` varchar(200) DEFAULT NULL,
+  `District` varchar(200) DEFAULT NULL,
+  `ProvinceShortName` varchar(200) DEFAULT NULL,
+  `CityShortName` varchar(200) DEFAULT NULL,
+  `DistrictShortName` varchar(200) DEFAULT NULL,
+  `ProvincePinyin` varchar(200) DEFAULT NULL,
+  `CityPinyin` varchar(200) DEFAULT NULL,
+  `DistrictPinyin` varchar(200) DEFAULT NULL,
+  `CityCode` varchar(45) DEFAULT NULL,
+  `ZipCode` varchar(45) DEFAULT NULL,
+  `Pinyin` varchar(45) DEFAULT NULL,
+  `Jianpin` varchar(45) DEFAULT NULL,
+  `FirstChar` varchar(45) DEFAULT NULL,
+  `lng` varchar(45) DEFAULT NULL,
+  `Lat` varchar(45) DEFAULT NULL,
+  `Remark1` varchar(45) DEFAULT NULL,
+  `Remark2` varchar(45) DEFAULT NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 
 
@@ -31,7 +64,7 @@ load data local infile 'C:\ProgramData\MySQL\MySQL Server 8.0\Uploads\areas.txt'
 into table areas
 fields terminated by '\t'  -- '|'
 lines terminated by '\n'
-(ID,ParentId,Name,MergerName,ShortName,MergerShortName,LevelType,CityCode,ZipCode,Pinyin,Jianpin,FirstChar,lng,Lat,Remark1,Remark2);
+(ID,ParentId,LevelType,Name,ShortName,ParentPath,Province,City,District,ProvinceShortName,CityShortName,DistrictShortName,ProvincePinyin,CityPinyin,DistrictPinyin,Pinyin,Jianpin,FirstChar,CityCode,ZipCode, lng,Lat,Remark1,Remark2);
 
 
 -- Error Code: 1148. The used command is not allowed with this MySQL version
