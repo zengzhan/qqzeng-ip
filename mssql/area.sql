@@ -44,7 +44,7 @@ GO
 
 --导入数据库   txt 中文编码
 BULK INSERT dbo.[areas]
-FROM 'G:\IP数据库\areas.txt' 
+FROM 'G:\db\areas.txt' 
 WITH (
     FIELDTERMINATOR = '\t',
     ROWTERMINATOR = '\n'
