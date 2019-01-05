@@ -35,4 +35,12 @@ echo '数量：'.$redis->zCount('qqzengip', "-inf", "+inf").'<br>';
 $result=$redis->zRangeByScore('qqzengip', 4294967295, 4294967295, array('limit' => array(0, 1)));
 echo '版本：'.$result[0];
 $redis->close();
+
+// 注意：
+// 32 bits ip2long(): -2147483648 ~ 214748364764
+// 64 bits ip2long(): 0 ~ 42949672945 
+// intval在32bits/64 bits最大值是不同的
+// if (($lngIP=ip2long($strIP)) < 0){ $lngIP += 4294967296 ;}  //  ADD 2^32 
+// 官网推荐 echo sprintf("%u", ip2long('192.168.1.2'));
+
 ?>
