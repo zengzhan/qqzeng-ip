@@ -28,13 +28,16 @@ class PhoneSearch {
         //内容数组
         $descOffset = 16 + $PrefSize * 9 + $RecordSize * 7;
         fseek( $this->fp, $descOffset);
+       
         $this->addrArr =explode('&',fread( $this->fp,  $descLength));
     
+      
 
         //运营商数组
         $ispOffset = 16 + $PrefSize * 9 + $RecordSize * 7 + $descLength;
         fseek( $this->fp, $ispOffset);
         $this->ispArr =explode('&',fread( $this->fp,  $ispLength));
+
 
 
         //前缀区
@@ -69,10 +72,15 @@ class PhoneSearch {
         for ($i = 0; $i < $RecordSize; $i++)
         {
             $p = 16 + $PrefSize * 9 + ($i * 7);
+
             $this->phoneArr[$i] = $this->BytesToLong($data[$p], $data[1 + $p], $data[2 + $p], $data[3 + $p]);
-            $this->phonemap[$i][0] = ord($data[4 + $p])& 0xFF + (ord($data[5 + $p]) << 8);
-            $this->phonemap[$i][1] = ord($data[6 + $p])& 0xFF;
+            $this->phonemap[$i][0] =$this->BytesToLong2($data[4 + $p],$data[5 + $p]);
+
+            $this->phonemap[$i][1] = ord($data[6 + $p])<<0;
+
+
         }
+
       
 
     }
@@ -97,7 +105,6 @@ class PhoneSearch {
 		$cur = $low == $high ? $low : $this->BinarySearch($low, $high, $val);
 		if ($cur != -1)
 		{
-
 			return $this->addrArr[$this->phonemap[$cur][0]].'|'.$this->ispArr[$this->phonemap[$cur][1]];
 		}
 		else
@@ -113,7 +120,7 @@ class PhoneSearch {
 		else
 		{
 			$mid = ($low + $high)>>1;
-			$phoneNum = $this->phoneArr[$mid]; 
+            $phoneNum = $this->phoneArr[$mid];            
 			if ($phoneNum == $k) return (int)$mid;
 			else if ($phoneNum > $k) return $this->BinarySearch($low, $mid - 1, $k);
 			else return $this->BinarySearch($mid + 1, $high, $k);
@@ -125,11 +132,22 @@ class PhoneSearch {
     function BytesToLong($a, $b, $c, $d) {
         $iplong = (ord($a) << 0) | (ord($b) << 8) | (ord($c) << 16) | (ord($d) << 24);
         if ($iplong < 0) {
+           
             $iplong+= 4294967296;//负数时
         };
         return $iplong;
     }
     
+
+    function BytesToLong2($a, $b) {
+        $iplong = (ord($a) << 0) | (ord($b) << 8) ;
+        if ($iplong < 0) {
+           
+            $iplong+= 4294967296;//负数时
+        };
+        return $iplong;
+    }
+
 }
  
 ?>
