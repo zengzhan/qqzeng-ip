@@ -63,25 +63,16 @@ class PhoneSearch {
                 $m++;
             }
         }
+ 
        
-      
-       
-
-
         //索引区
         for ($i = 0; $i < $RecordSize; $i++)
         {
             $p = 16 + $PrefSize * 9 + ($i * 7);
-
             $this->phoneArr[$i] = $this->BytesToLong($data[$p], $data[1 + $p], $data[2 + $p], $data[3 + $p]);
             $this->phonemap[$i][0] =$this->BytesToLong2($data[4 + $p],$data[5 + $p]);
-
             $this->phonemap[$i][1] = ord($data[6 + $p])<<0;
-
-
-        }
-
-      
+        }      
 
     }
 
