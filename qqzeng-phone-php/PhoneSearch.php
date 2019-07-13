@@ -1,7 +1,7 @@
 <?php
 /* 
 PHP Version 5.3+
-qqzeng-phone.dat 2018-08-06
+qqzeng-phone.dat 2019-07-13
 */
 class PhoneSearch {
 
@@ -108,19 +108,18 @@ class PhoneSearch {
     }
 
     function BinarySearch($low, $high, $k) {
-        $M = 0;
-        while ($low <= $high) {
-            $mid = floor(($low + $high) / 2);
-            $phoneNum = $this->phoneArr[$mid];           
-            if ($phoneNum >= $k) {
-                $M = $mid;
-                if ($mid == 0) {
-                    break;
-                }
-                $high = $mid - 1;
-            } else $low = $mid + 1;
-        }
-        return $M;
+	
+	   if ($low > $high)	 {	 return -1;	 }
+		else
+		{
+			$mid = ($low + $high)>>1;
+			$phoneNum = $this->phoneArr[$mid]; 
+			if ($phoneNum == $k) return (int)$mid;
+			else if ($phoneNum > $k) return $this->BinarySearch($low, $mid - 1, $k);
+			else return $this->BinarySearch($mid + 1, $high, $k);
+		}
+
+
     }
    
     function BytesToLong($a, $b, $c, $d) {
