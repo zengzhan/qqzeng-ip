@@ -53,3 +53,29 @@ WITH (
 
 --查询
 SELECT  * FROM dbo.areas 
+
+
+--省市区街道乡镇 四级 旗舰版
+CREATE TABLE [dbo].[areasTown](
+	[AreaId] [int] IDENTITY(1,1) NOT NULL,
+	[ID] [int] NULL,				--行政区划编码
+	[ParentId] [int] NULL,			--父子级联
+	[LevelType] [int] NULL,			--级别
+	[Name] [nvarchar](50) NULL,		--名称
+	[ParentPath] [nvarchar](50) NULL,--组合路径
+	[Province] [nvarchar](50) NULL,	--省份
+	[City] [nvarchar](50) NULL,		--城市
+	[District] [nvarchar](50) NULL,	--县区
+	[Town] [nvarchar](50) NULL,		--街道/乡镇
+	[Pinyin] [nvarchar](200) NULL,	--拼音
+	[Jianpin] [nvarchar](50) NULL,	--简拼
+	[FirstChar] [nvarchar](50) NULL,--首字母
+	[CityCode] [nvarchar](50) NULL,	--区号
+	[ZipCode] [nvarchar](50) NULL,	--邮编
+	[Lng] [nvarchar](50) NULL,		--经度
+	[Lat] [nvarchar](50) NULL,		--纬度
+ )
+ 
+ 
+ 
+
