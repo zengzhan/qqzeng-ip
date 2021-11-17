@@ -142,7 +142,8 @@ namespace qqzeng_ip_dat
             long val = IpToInt(ip, out long pref);
             long low = prefmap[pref, 0], high = prefmap[pref, 1];
             long cur = low == high ? low : BinarySearch(low, high, val);
-            return addrArr[cur];
+            // cur==-1 相当找不到数据
+            return cur>-1? addrArr[cur]: "||||||||||";
         }
 
 
@@ -154,7 +155,7 @@ namespace qqzeng_ip_dat
         // 二分逼近 O(logN)
         private long BinarySearch(long low, long high, long k)
         {
-            long M = 0, mid = 0;
+            long M = -1, mid = 0;
             while (low <= high)
             {
                 mid = (low + high) / 2;
