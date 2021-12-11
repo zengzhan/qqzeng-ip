@@ -92,8 +92,8 @@ class PhoneSearch {
         if(!$this->fp) return [];
         $pref= (int)(substr($phone,0, 3));
         $val = (int)(substr($phone,0,7));
-        $low = $this->prefmap[$pref][0];
-        $high = $this->prefmap[$pref][1];
+        $low = $this->prefmap[$pref][0]??0;
+        $high = $this->prefmap[$pref][1]??0;
         $this->getPhoneArr($low,$high);
 		if ($high == 0 || !$this->phoneArr) {
 			return [];
@@ -102,7 +102,7 @@ class PhoneSearch {
 		if ($cur != -1) {
 			$info = $this->readInfo($cur);
 			$results = $this->addrArr[$info['add_mid']].'|'.$this->ispArr[$info['isp_mid']];
-			list($province, $city, $isp,$postcode,$citycode,$areacode) = explode("|", $results);
+			list($province, $city,$areacode,$citycode, $postcode,$isp) = explode("|", $results);
 			return compact('province', 'city', 'isp', 'citycode' ,'postcode', 'areacode');
 		} else {
 			return [];
