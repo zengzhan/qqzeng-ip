@@ -45,7 +45,7 @@ class IpSearch {
         $endIp = 0;
         $local_offset = 0;
         $local_length = 0;
-        $prefix = explode('.', $ip_address) [0];
+        $prefix = explode('.', $ip_address) [0];  // php5.4 版本以下 数组不支持直接引用 需要这样  $arr=explode('.', $ip_address); $prefix=$arr[0];
         $ipNum = $this->ip2uint($ip_address);
         if (array_key_exists($prefix, $this->prefix_array))     
         {
