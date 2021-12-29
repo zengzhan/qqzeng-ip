@@ -1,0 +1,16 @@
+{application, geoip,
+ [{description, "An OTP application"},
+  {vsn, "cat from VERSION"},
+  {registered, []},
+  {mod, {geoip_app, []}},
+  {applications,
+   [kernel,
+    stdlib
+   ]},
+  {env,[]},
+  {modules, []},
+
+  {licenses, ["Apache 2.0"]},
+  {links, []}
+ ]}.
+

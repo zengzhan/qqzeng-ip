@@ -1,8 +1,19 @@
 #include "GeoIP.h"
 #include "string.h"
 #include <stdlib.h>
+#include <stdio.h>
 char *IP_FILENAME = "qqzeng-ip-3.0-ultimate.dat";
-
+// supported gcc compiler
+#if defined(__GNUC__)
+errno_t fopen_s(FILE **f, const char *name, const char *mode) {
+    errno_t ret = 0;
+    *f = fopen(name, mode);
+    /* Can't be sure about 1-to-1 mapping of errno and MS' errno_t */
+    if (!*f)
+        ret = 2;
+    return ret;
+}
+#endif
 //编码：utf-8
 //性能：C语言性能之王 每秒解析1680万+ip
 //环境：CPU i7-7700K + DDR2400 16G + win10 X64 (Release)
@@ -156,22 +167,5 @@ uint32_t geoip_read_int24(geo_ip *p, uint8_t *buf, int pos)
 	uint32_t result;
 	result = (uint32_t)((buf[pos + 2] << 16 & 0x00ff0000) | (buf[pos + 1] << 8 & 0xff00) | (buf[pos] & 0xff));
 	return result;
-}
-
-int main(int argc, char **argv)
-{
-	geo_ip *finder = geoip_instance();
-	if (!finder)
-	{
-		printf("the IPSearch instance is null!");
-		return -1;
-	}	
-
-	char *ip = "8.8.8.8";
-	char *local = geoip_query(finder, ip);
-	printf("%s\n",local);
-
-	system("pause");
-	return 0;
 }
 
