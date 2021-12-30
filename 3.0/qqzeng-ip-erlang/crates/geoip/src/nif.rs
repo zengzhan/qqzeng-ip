@@ -22,6 +22,8 @@
 // Created : 2021-12-29T02:32:05+00:00
 //-------------------------------------------------------------------
 
+use rustler::types::tuple::make_tuple;
+use rustler::Atom;
 use std::{
     borrow::Cow,
     sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
@@ -112,6 +114,23 @@ fn query<'a>(
     let rs = resource.read();
     match rs.query(&ip) {
         Ok(rs) => Ok((ok(), rs).encode(env)),
+        Err(e) => Ok((error(), e).encode(env)),
+    }
+}
+#[rustler::nif]
+fn query_friendly<'a>(
+    env: Env<'a>,
+    resource: ResourceArc<NifgeoipResource>,
+    ip: LazyBinary<'a>,
+) -> NifResult<Term<'a>> {
+    let rs = resource.read();
+    match rs.query(&ip) {
+        Ok(rs) => {
+            let terms: Vec<_> = rs.split('|').map(|x|x.encode(env)).collect();
+            let mut rs: Vec<Term> = vec![Atom::from_str(env,"GeoIPRes").unwrap().encode(env)];
+            rs.extend(terms);
+            let rs = make_tuple(env, rs.as_ref()).encode(env);
+            Ok((ok(), rs).encode(env))},
         Err(e) => Ok((error(), e).encode(env)),
     }
 }

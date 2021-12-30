@@ -1,16 +1,11 @@
-{application, geoip,
+{application,
+ geoip,
  [{description, "A erlang version qqzeng-ip for 3.0"},
   {vsn, "0.1.0"},
   {registered, []},
   {mod, {geoip_app, []}},
-  {applications,
-   [kernel,
-    stdlib
-   ]},
-  {env,[]},
+  {applications, [kernel, stdlib]},
+  {env, []},
   {modules, []},
-
   {licenses, ["Apache 2.0"]},
-  {links, []}
- ]}.
-
+  {links, []}]}.

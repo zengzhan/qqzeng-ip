@@ -30,4 +30,4 @@ mod atoms;
 mod nif;
 mod options;
 // define nif api
-rustler::init!("geoip_nif", [nif::new, nif::query,], load = nif::on_load);
+rustler::init!("geoip_nif", [nif::new, nif::query,nif::query_friendly,], load = nif::on_load);

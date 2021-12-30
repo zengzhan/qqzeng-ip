@@ -7,7 +7,7 @@
 %%% you may not use this file except in compliance with the License.
 %%% You may obtain a copy of the License at
 %%%
-%%%       https://www.apache.org/licenses/LICENSE-2.0
+%%%       https//www.apache.org/licenses/LICENSE-2.0
 %%%
 %%% Unless required by applicable law or agreed to in writing, software
 %%% distributed under the License is distributed on an "AS IS" BASIS,
@@ -19,23 +19,16 @@
 %%% @doc
 %%%
 %%% @end
-%%% Created : 2021-12-29T02:29:40+00:00
+%%% Created  2021-12-30T090847+0000
 %%%-------------------------------------------------------------------
-
--module(geoip_test).
 
 -author("yangcancai").
 
--include_lib("eunit/include/eunit.hrl").
+-ifndef(H_geoip).
 
-succeed() ->
-    ok.
+-define(H_geoip, true).
 
-succeeding_test() ->
-    succeed().
+-record( 'GeoIPRes' , { continent = << >> , country = << >> , province = << >> , city = << >> , district = << >> ,
+  isp = << >> , area_code = << >> , country_english = << >> , country_code = << >> , longitude = << >> , latitude = << >> } ) .
 
-succeeding_fun_test_() ->
-    fun() -> succeed() end.
-
-succeeding_simple_test_() ->
-    ?_test(succeed()).
+-endif.
