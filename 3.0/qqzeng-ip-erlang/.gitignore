@@ -21,3 +21,4 @@ src/*.gen
 rebar.config.gen
 target
 *.dat
+priv/*.so
