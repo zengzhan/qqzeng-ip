@@ -22,3 +22,4 @@ rebar.config.gen
 target
 *.dat
 priv/*.so
+libpath
