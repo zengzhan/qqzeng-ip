@@ -22,9 +22,32 @@
 // Created : 2021-12-29T02:56:42+00:00
 //-------------------------------------------------------------------
 extern crate cc;
-
+use std::env;
+use std::process::Command;
 fn main() {
-    cc::Build::new()
-        .file("../qqzeng-ip-c/GeoIP.c")
-        .compile("libgeoip.a");
+    println!("cargo:return-if-changed=build.rs");
+    let dev = env::var("CC_LOCAL");
+    match dev {
+        Ok(_) => {
+            cc::Build::new()
+                .file("../qqzeng-ip-c/GeoIP.c")
+                .compile("libgeoip.a");
+        }
+        Err(_) => {
+            let here = env::var("CARGO_MANIFEST_DIR").unwrap();
+            let mut cmd = Command::new("sh");
+             let out =   cmd.arg("-c").arg(format!(" {}/tool.sh 3.0/qqzeng-ip-c https://github\
+            .com/yangcancai/qqzeng-ip.git", here)).output().expect("git clone qqzeng-ip-c error");
+            println!("running: {:?}", cmd);
+            let rs: Vec<&str> = out.stdout.split(|x| *x == '\n' as u8).map(|x|std::str::from_utf8
+                (x).unwrap())
+                .collect();
+            for i in rs{
+                println!("{}", i);
+            }
+            cc::Build::new()
+                .file("qqzeng-ip.git/3.0/qqzeng-ip-c/GeoIP.c")
+                .compile("libgeoip.a");
+        }
+    }
 }
