@@ -1,6 +1,0 @@
-[{application, Name, L}] = CONFIG,
-{ok, VersionBin} = file:read_file(<<"VERSION">>),
-Version = string:strip(string:strip(binary_to_list(VersionBin),both,$\n)),
-NewConfig = {application, Name, lists:keystore(vsn,1,L,{vsn, Version})},
-file:write_file("src/geoip.app.src.gen", io_lib:format("%%% auto generate ~n~p", [NewConfig])),
-NewConfig.

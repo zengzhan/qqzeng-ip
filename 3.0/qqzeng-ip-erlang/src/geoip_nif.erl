@@ -2,7 +2,7 @@
 
 %% API
 -export([
-    new/0,  %% new resource
+    new/1,  %% new resource
     query/2,
     clear/1 %% clear resource
 ]).
@@ -15,18 +15,16 @@
 
 -export_type([geoip/0]).
 
-new() ->
-    new(#{}).
 
--spec new(_Opts :: map()) -> {ok, Ref :: geoip()} | {error, Reason :: binary()}.
-new(_Opts) ->
+-spec new(File :: binary()) -> {ok, Ref :: geoip()} | {error, Reason :: binary()}.
+new(_File) ->
     not_loaded(?LINE).
 
 -spec clear(Ref :: geoip()) -> ok.
 clear(_Ref) ->
     not_loaded(?LINE).
 -spec 'query'(Ref :: geoip(), Ip:: binary()) -> binary().
-'query'(_Ref, _Msg) ->
+'query'(_Ref, _Ip) ->
     not_loaded(?LINE).
 
 %% @private

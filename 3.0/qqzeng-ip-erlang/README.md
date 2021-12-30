@@ -3,32 +3,22 @@ geoip
 
 ![CI](https://github.com/yangcancai/qqzeng-ip/actions/workflows/ci.yml/badge.svg)
 
-Required
------
-	$ rebar3 -v
-	rebar 3.14.4 on Erlang/OTP 22 Erts 10.7.2.1
+## Install(rebar3)
+[
+{dep,[
+    {'qqzeng-ip-erlang',{git_subdir, "https://github.com/yangcancai/qqzeng-ip.git", {branch, "master"},"3.0/qqzeng-ip-erlang"}}
+]}
+]
 
-Build
------
+## Where qqzeng-ip-3.0-ultimate.dat?
 
-    $ make co
-
-Eunit
------
-
-    $ make eunit
-
-Common Test
------
-
-    $ make ct
-
-Dialyzer
-----
-
-    $ make dialyzer
-
-Test(dialyzer, eunit, ct)
-----
-
-    $ make test
+### Default file and directory
+```text
+Copy it to the same level with rebar.config in local environment and where boot in production
+```
+### Set `dat_file` Env
+```erlang
+[{
+    geoip,[{dat_file, "{BIN_DIR}/qqzeng-ip-3.0-ultimate.dat"}]
+}].
+```

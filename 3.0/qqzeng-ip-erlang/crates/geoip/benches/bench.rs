@@ -15,7 +15,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-   
+
 // @doc
 //
 // @end
@@ -27,12 +27,12 @@ extern crate bencher;
 use bencher::Bencher;
 
 fn get(bench: &mut Bencher) {
-	bench.iter(|| {
-	    assert_eq!(get_word(""),"".to_string());
-	});
-    }
-fn get_word(str: &str) -> String{
-	    str.to_string()
+    bench.iter(|| {
+        assert_eq!(get_word(""), "".to_string());
+    });
+}
+fn get_word(str: &str) -> String {
+    str.to_string()
 }
 benchmark_group!(benches, get);
 benchmark_main!(benches);

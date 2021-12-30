@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 char *IP_FILENAME = "qqzeng-ip-3.0-ultimate.dat";
+
 // supported gcc compiler
 #if defined(__GNUC__)
 errno_t fopen_s(FILE **f, const char *name, const char *mode) {
@@ -19,10 +20,15 @@ errno_t fopen_s(FILE **f, const char *name, const char *mode) {
 //环境：CPU i7-7700K + DDR2400 16G + win10 X64 (Release)
 //创建：qqzeng-ip 于 2018-06-21  
 
+
 geo_ip *geoip_instance()
 {
+	return geoip_instance_file(IP_FILENAME);
+}
+geo_ip *geoip_instance_file(const char* dat_file)
+{
 	geo_ip *ret = (geo_ip *)malloc(sizeof(geo_ip));
-	if (geoip_loadDat(ret) >= 0)
+	if (geoip_loadDat(ret, dat_file) >= 0)
 	{
 		return ret;
 	}
@@ -33,15 +39,14 @@ geo_ip *geoip_instance()
 	}
 	return NULL;
 }
-
-int32_t geoip_loadDat(geo_ip *p)
+int32_t geoip_loadDat(geo_ip *p, const char* dat_file)
 {
 	FILE *file;
 	uint8_t *buffer;
 	long len = 0;
 	int k, i, j;
 	uint32_t RecordSize, offset, length;
-	errno_t err = fopen_s(&file, IP_FILENAME, "rb");
+	errno_t err = fopen_s(&file, dat_file, "rb");
 	if (err == 2)
 	{
 		printf("%s", "没有此文件或目录");

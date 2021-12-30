@@ -15,52 +15,53 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-   
+
 // @doc
 //
 // @end
 // Created : 2021-12-29T02:32:05+00:00
 //-------------------------------------------------------------------
 
-use std::{borrow::Cow, sync::{RwLock, RwLockReadGuard, RwLockWriteGuard}};
+use std::{
+    borrow::Cow,
+    sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
+};
 
-use rustler::{resource::ResourceArc};
+use rustler::resource::ResourceArc;
 use rustler::{Binary, Encoder, Env, NifResult, OwnedBinary, Term};
 
-use atoms::{ok};
-use options::NifgeoipOptions;
+use atoms::{error, ok};
 use geoip_rust::geoip::GeoIP;
 // =================================================================================================
 // resource
 // =================================================================================================
-struct Nifgeoip{
-    data: GeoIP
+struct Nifgeoip {
+    data: GeoIP,
 }
-impl Nifgeoip{
+impl Nifgeoip {
     // create
-    fn new(_: NifgeoipOptions) -> Result<Self, String>{
-        let geoip = GeoIP::new();
-        match geoip{
-            Ok(geoip) =>
-            Ok(Nifgeoip{data: geoip}),
-            Err(e) =>
-            Err(e.to_string())
+    fn new(file: &[u8]) -> Result<Self, String> {
+        let file = Nifgeoip::u8_to_string(file);
+        let file = file.as_str();
+        let geoip = GeoIP::new(file);
+        match geoip {
+            Ok(geoip) => Ok(Nifgeoip { data: geoip }),
+            Err(e) => Err(e.to_string()),
         }
     }
-    // clear
-    fn clear(&mut self) {
-        drop(self);
-    }
     // write
-    fn query<'a>(&mut self, ip: &[u8]) -> &'a str {
-       let ip = self.u8_to_string(ip);
-       self.data.query(ip.as_str())
+    fn query<'a>(&self, ip: &[u8]) -> Result<&'a str, String> {
+        let ip = Nifgeoip::u8_to_string(ip);
+        match self.data.query(ip.as_str()) {
+            Ok(str) => Ok(str),
+            Err(e) => Err(e.to_string()),
+        }
     }
-    fn u8_to_string(&self, msg: &[u8]) -> String{
+    fn u8_to_string(msg: &[u8]) -> String {
         let a = String::from_utf8_lossy(msg);
-        match a{
+        match a {
             Cow::Owned(own_msg) => own_msg,
-            Cow::Borrowed(b_msg) => b_msg.to_string()
+            Cow::Borrowed(b_msg) => b_msg.to_string(),
         }
     }
 }
@@ -93,20 +94,26 @@ pub fn on_load(env: Env, _load_info: Term) -> bool {
 // =================================================================================================
 
 #[rustler::nif]
-fn new<'a>(env: Env<'a>, opts: NifgeoipOptions) -> NifResult<Term<'a>> {
-    let rs = Nifgeoip::new(opts).map_err(|e| rustler::error::Error::Term(Box::new(e)))?;
+fn new<'a>(env: Env<'a>, file: LazyBinary<'a>) -> NifResult<Term<'a>> {
+    let rs = Nifgeoip::new(&file).map_err(|e| rustler::error::Error::Term(Box::new(e)))?;
     Ok((ok(), ResourceArc::new(NifgeoipResource::from(rs))).encode(env))
 }
 #[rustler::nif]
-fn clear<'a>(env: Env<'a>, resource: ResourceArc<NifgeoipResource>) -> NifResult<Term<'a>> {
-    resource.write().clear();
+fn clear(env: Env, resource: ResourceArc<NifgeoipResource>) -> NifResult<Term> {
+    drop(resource.write());
     Ok(ok().encode(env))
 }
 #[rustler::nif]
-fn query<'a>(env: Env<'a>, resource: ResourceArc<NifgeoipResource>, msg: LazyBinary<'a>) -> NifResult<Term<'a>> {
-    let mut rs = resource.write();
-    let rs = rs.query(&msg);
-   Ok(rs.encode(env)) 
+fn query<'a>(
+    env: Env<'a>,
+    resource: ResourceArc<NifgeoipResource>,
+    ip: LazyBinary<'a>,
+) -> NifResult<Term<'a>> {
+    let rs = resource.read();
+    match rs.query(&ip) {
+        Ok(rs) => Ok((ok(), rs).encode(env)),
+        Err(e) => Ok((error(), e).encode(env)),
+    }
 }
 // =================================================================================================
 // helpers

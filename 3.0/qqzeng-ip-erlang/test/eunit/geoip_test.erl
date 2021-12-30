@@ -1,7 +1,7 @@
 %%%-------------------------------------------------------------------
-%%% @author admin
+%%% @author yangcancai
 
-%%% Copyright (c) 2021 by admin(admin0112@gmail.com), All Rights Reserved.
+%%% Copyright (c) 2021 by yangcancai(yangcancai0112@gmail.com), All Rights Reserved.
 %%%
 %%% Licensed under the Apache License, Version 2.0 (the "License");
 %%% you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@
 
 -module(geoip_test).
 
--author("admin").
+-author("yangcancai").
 
 -include_lib("eunit/include/eunit.hrl").
 

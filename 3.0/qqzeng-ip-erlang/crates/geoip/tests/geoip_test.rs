@@ -15,7 +15,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-   
+
 // @doc
 //
 // @end
@@ -23,6 +23,6 @@
 //-------------------------------------------------------------------
 
 #[test]
-fn it_work(){
-	assert_eq!(1,1);
+fn it_work() {
+    assert_eq!(1, 1);
 }

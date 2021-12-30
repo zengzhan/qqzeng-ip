@@ -1,7 +1,7 @@
 %%%-------------------------------------------------------------------
-%%% @author admin
+%%% @author yangcancai
 
-%%% Copyright (c) 2021 by admin(admin0112@gmail.com), All Rights Reserved.
+%%% Copyright (c) 2021 by yangcancai(yangcancai0112@gmail.com), All Rights Reserved.
 %%%
 %%% Licensed under the Apache License, Version 2.0 (the "License");
 %%% you may not use this file except in compliance with the License.
@@ -24,16 +24,18 @@
 
 -module(geoip_SUITE).
 
--author("admin").
+-author("yangcancai").
 
 -include("geoip_ct.hrl").
 
 -compile(export_all).
 
 all() ->
-    [handle].
+    [query].
 
 init_per_suite(Config) ->
+    Path = get_dir(),
+    application:set_env(geoip, dat_file, filename:join(Path, "qqzeng-ip-3.0-ultimate.dat")),
     {ok, _} = application:ensure_all_started(geoip),
     new_meck(),
     Config.
@@ -50,7 +52,7 @@ end_per_testcase(_Case, _Config) ->
     ok.
 
 new_meck() ->
-    ok = meck:new(geoip, [non_strict, no_link]),
+    ok = meck:new(geoip, [passthrough,non_strict, no_link]),
     ok.
 
 expect() ->
@@ -59,7 +61,18 @@ expect() ->
 del_meck() ->
     meck:unload().
 
-handle(_Config) ->
-    expect(),
-    ?assertEqual({ok, 1}, geoip:test()),
+query(_Config) ->
+    ?assertEqual({ok,<<"|CloudFlareDNS||||APNIC|||||">>}, geoip:query(<<"1.1.1.1">>)),
+    ?assertEqual({ok,<<"|GoogleDNS||||GoogleDNS|||||">>}, geoip:query(<<"8.8.8.8">>)),
+    ?assertEqual({ok,<<"|保留|全球|旗舰版||qqzeng-ip||最新版|2021-12-01|880995|"/utf8>>}, geoip:query(<<"255.255.255.255">>)),
+    ?assertEqual({error,<<"Ip invalid">>}, geoip:query(<<"-255.255.255.255">>)),
+    ?assertEqual({error,<<"Ip invalid">>}, geoip:query(<<"256.255.255.255">>)),
+    ?assertEqual({error,<<"Ip invalid">>}, geoip:query(<<"xk256.255.255.255">>)),
+    ?assertEqual({error,<<"Ip invalid">>}, geoip:query(<<"256.255.a.255">>)),
+    ?assertEqual({error,<<"Ip invalid">>}, geoip:query(<<"25.255..255">>)),
     ok.
+
+get_dir() ->
+    {ok, Rep} = file:get_cwd(),
+    [Path, _] = string:split(Rep, "_build"),
+    Path.

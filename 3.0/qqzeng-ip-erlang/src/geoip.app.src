@@ -1,6 +1,6 @@
 {application, geoip,
- [{description, "An OTP application"},
-  {vsn, "cat from VERSION"},
+ [{description, "A erlang version qqzeng-ip for 3.0"},
+  {vsn, "0.1.0"},
   {registered, []},
   {mod, {geoip_app, []}},
   {applications,

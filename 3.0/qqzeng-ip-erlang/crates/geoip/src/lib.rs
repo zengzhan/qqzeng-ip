@@ -15,7 +15,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-   
+
 // @doc
 //
 // @end
@@ -23,18 +23,11 @@
 //-------------------------------------------------------------------
 
 extern crate core;
+extern crate geoip_rust;
 extern crate rustler;
 extern crate serde;
-extern crate geoip_rust;
 mod atoms;
-mod options;
 mod nif;
+mod options;
 // define nif api
-rustler::init!(
-    "geoip_nif",
-    [
-        nif::new,
-        nif::query,
-    ],
-    load = nif::on_load
-);
+rustler::init!("geoip_nif", [nif::new, nif::query,], load = nif::on_load);
