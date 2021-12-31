@@ -4,7 +4,7 @@
 
 ```rust
 [dependencies]
-geoip_rust = {git = "https://github.com/qqzeng-ip/qqzeng-ip.git"}
+geoip_rust = {git = "https://github.com/zengzhan/qqzeng-ip.git"}
 ```
 
 ## How to use?

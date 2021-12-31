@@ -6,7 +6,8 @@ geoip
 ## Install(rebar3)
 [
 {dep,[
-    {'qqzeng-ip-erlang',{git_subdir, "https://github.com/yangcancai/qqzeng-ip.git", {branch, "master"},"3.0/qqzeng-ip-erlang"}}
+    {'qqzeng-ip-erlang',{git_subdir, "https://github.com/zengzhan/qqzeng-ip.git", {branch, "master"},"3.
+0/qqzeng-ip-erlang"}}
 ]}
 ]
 
