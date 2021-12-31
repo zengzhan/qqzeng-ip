@@ -33,6 +33,7 @@ dependencies = [
 [[package]]
 name = "geoip_rust"
 version = "0.1.0"
+source = "git+https://github.com/yangcancai/qqzeng-ip.git#382c9701eb40169b5ba379a5adf5b96e7deaa69c"
 dependencies = [
  "anyhow",
  "cc",
