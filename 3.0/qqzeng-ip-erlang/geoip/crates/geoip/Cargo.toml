@@ -17,5 +17,5 @@ harness = false
 rustler = "0.23.0"
 serde = { version = "1.0", features = ["derive"] }
 bencher = "0.1.5"
-#geoip_rust = { path = "../../../qqzeng-ip-rust"}
+#geoip_rust = { path = "../../../../qqzeng-ip-rust"}
 geoip_rust = {git = "https://github.com/yangcancai/qqzeng-ip.git"}
