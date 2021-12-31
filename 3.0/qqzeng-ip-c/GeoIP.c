@@ -3,7 +3,9 @@
 #include <stdlib.h>
 #include <stdio.h>
 char *IP_FILENAME = "qqzeng-ip-3.0-ultimate.dat";
-
+#if defined(__linux__)
+typedef uint32_t errno_t;
+#endif
 // supported gcc compiler
 #if defined(__GNUC__)
 errno_t fopen_s(FILE **f, const char *name, const char *mode) {
