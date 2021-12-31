@@ -25,15 +25,16 @@ extern crate cc;
 use std::env;
 use std::process::Command;
 fn main() {
-    println!("cargo:return-if-changed=build.rs");
     let dev = env::var("CC_LOCAL");
     match dev {
         Ok(_) => {
+            println!("cargo:return-if-changed=../qqzeng-ip-c");
             cc::Build::new()
                 .file("../qqzeng-ip-c/GeoIP.c")
                 .compile("libgeoip.a");
         }
         Err(_) => {
+            println!("cargo:rerun-if-changed=./qqzeng-ip.git/3.0/qqzeng-ip-c");
             let here = env::var("CARGO_MANIFEST_DIR").unwrap();
             let mut cmd = Command::new("sh");
              let out =   cmd.arg("-c").arg(format!(" {}/tool.sh 3.0/qqzeng-ip-c https://github\
