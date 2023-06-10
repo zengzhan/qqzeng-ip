@@ -29,19 +29,40 @@
 
         public string Find(string ip)
         {
+            //全球旗舰版 用
+         
             var suffix = IpToInt(ip, out ushort prefix);
             var record = ReadPref(prefix);
-            if (record > nodeCount)
+            if (record >= nodeCount)
             {
                 return geoispArr[record - nodeCount];
             }
-            for (int i=15; i >=0 && record < nodeCount; i--)
+            for (int i = 15; i >= 0 && record < nodeCount; i--)
             {
                 int bit = (suffix >> i) & 1;
                 record = ReadNode(record, bit);
-
             }
             return geoispArr[record - nodeCount];
+
+         
+            // 国内精华版  国外拓展版 
+         
+            //var suffix = IpToInt(ip, out ushort prefix);
+            //var record = ReadPref(prefix);
+            //if (record == 16777215)
+            //{
+            //    return "||||||||||";
+            //}
+            //else if (record >= nodeCount)
+            //{
+            //    return geoispArr[record - nodeCount];
+            //}
+            //for (int i = 15; i >= 0 && record < nodeCount; i--)
+            //{
+            //    int bit = (suffix >> i) & 1;
+            //    record = ReadNode(record, bit);
+            //}
+            //return record == 16777215 ? "||||||||||" : geoispArr[record - nodeCount];
 
         }
 
