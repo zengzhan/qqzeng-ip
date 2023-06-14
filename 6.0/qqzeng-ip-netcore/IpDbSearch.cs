@@ -7,7 +7,8 @@
         private static byte[] data;
         private static string[] geoispArr;
         private static int nodeCount;
-
+        private static readonly int maxValue = 16777215;
+        private static readonly int endMask = 0x800000;
 
         static IpDbSearch()
         {
@@ -29,40 +30,21 @@
 
         public string Find(string ip)
         {
-            //全球旗舰版 用
-         
+          
             var suffix = IpToInt(ip, out ushort prefix);
             var record = ReadPref(prefix);
-            if (record >= nodeCount)
+            while ((record & endMask) != endMask)
             {
-                return geoispArr[record - nodeCount];
-            }
-            for (int i = 15; i >= 0 && record < nodeCount; i--)
-            {
-                int bit = (suffix >> i) & 1;
+                int bit = (suffix >> 15) & 1;
                 record = ReadNode(record, bit);
+                suffix <<= 1;
             }
-            return geoispArr[record - nodeCount];
 
-         
-            // 国内精华版  国外拓展版 
-         
-            //var suffix = IpToInt(ip, out ushort prefix);
-            //var record = ReadPref(prefix);
-            //if (record == 16777215)
-            //{
-            //    return "||||||||||";
-            //}
-            //else if (record >= nodeCount)
-            //{
-            //    return geoispArr[record - nodeCount];
-            //}
-            //for (int i = 15; i >= 0 && record < nodeCount; i--)
-            //{
-            //    int bit = (suffix >> i) & 1;
-            //    record = ReadNode(record, bit);
-            //}
-            //return record == 16777215 ? "||||||||||" : geoispArr[record - nodeCount];
+            //全球旗舰版
+            return geoispArr[record & ~endMask];  
+
+            //国内精华版  国外拓展版 
+            return record == maxValue ? "||||||||||" : geoispArr[record & ~endMask];
 
         }
 
