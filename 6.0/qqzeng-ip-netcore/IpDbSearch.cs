@@ -7,9 +7,8 @@
         private static byte[] data;
         private static string[] geoispArr;
         private static int nodeCount;
-        private static readonly int maxValue = 16777215;
         private static readonly int endMask = 0x800000;
-        private static readonly int inverseMask = ~endMask; 
+        private static readonly int complMask = ~endMask; 
 
         static IpDbSearch()
         {
@@ -41,11 +40,10 @@
                 suffix <<= 1;
             }
 
-            //全球旗舰版
-             return geoispArr[record & inverseMask];
+            //全球旗舰版  国内精华版  国外拓展版  都兼容
+             return geoispArr[record & complMask];
 
-            //国内精华版  国外拓展版 
-            // return record == maxValue ? "||||||||||" : geoispArr[record & inverseMask];
+
 
         }
 
