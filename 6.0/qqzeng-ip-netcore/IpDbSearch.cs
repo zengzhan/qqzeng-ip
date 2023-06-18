@@ -1,4 +1,5 @@
  // 6.0版本 性能 最快 超过之前所有版本  2023-06-06
+// 全球旗舰版  国内精华版  国外拓展版  都兼容
     public class IpDbSearch
     {
         private static readonly Lazy<IpDbSearch> lazy = new Lazy<IpDbSearch>(() => new IpDbSearch());
@@ -40,10 +41,7 @@
                 suffix <<= 1;
             }
 
-            //全球旗舰版  国内精华版  国外拓展版  都兼容
              return geoispArr[record & complMask];
-
-
 
         }
 
