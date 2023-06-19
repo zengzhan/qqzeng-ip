@@ -8,6 +8,7 @@
         private static byte[] data;
         private static string[] geoispArr;
         private static int nodeCount;
+        private static readonly int startIndex = 196612;
         private static readonly int endMask = 0x800000;
         private static readonly int complMask = ~endMask; 
 
@@ -22,7 +23,7 @@
             data = File.ReadAllBytes(datPath);
             nodeCount = BitConverter.ToInt32(data, 0);
 
-            var offset = 4 + 65536 * 3 + nodeCount * 6;
+            var offset = startIndex + nodeCount * 6;
 
             geoispArr = Encoding.UTF8.GetString(data, offset, data.Length - offset).Split('\t');
 
@@ -48,7 +49,7 @@
 
         private int ReadNode(int nodeNumber, int bit)
         {
-            var offset = 196612 + nodeNumber * 6 + bit * 3;
+            var offset = startIndex + nodeNumber * 6 + bit * 3;
             return data[offset] << 16 | data[offset + 1] << 8 | data[offset + 2];
         }
 
