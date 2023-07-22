@@ -8,7 +8,7 @@
         private static byte[] data;
         private static string[] geoispArr;
         private static int nodeCount;
-        private static readonly int startIndex = 196612;
+        private static readonly int startIndex = 0x30004;
         private static readonly int endMask = 0x800000;
         private static readonly int complMask = ~endMask; 
 
