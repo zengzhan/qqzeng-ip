@@ -6,6 +6,8 @@ qqzeng-ip 3.0 2018-08-18
 在Java C# 中单例会一直存在于整个应用程序的生命周期里，变量是跨页面级的，真正可以做到这个实例在应用程序生命周期中的唯一性。
 然而在PHP中，所有的变量无论是全局变量还是类的静态成员，都是页面级的，每次页面被执行时，都会重新建立新的对象，都会在页面执行完毕后被清空
 
+将这些变量缓存到内存中可以通过使用内存缓存系统来实现。在 PHP 中，有几种流行的内存缓存系统可供选择，例如 Redis 和 Memcached。
+这些缓存系统专门设计用于高速存储和检索数据，并且可以将数据存储在内存中，从而提高数据访问速度和性能。
 
 */
 
@@ -88,7 +90,7 @@ class IpSearch  {
     private function BinarySearch($low, $high, $k) {
         $M = 0;
         while ($low <= $high) {
-            $mid = floor(($low + $high) / 2);
+            $mid =($low & $high) + (($low ^ $high) >> 1);
             $endipNum = $this->endArr[$mid];           
             if ($endipNum >= $k) {
                 $M = $mid;
