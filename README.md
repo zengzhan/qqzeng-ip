@@ -29,13 +29,13 @@ IP数据库-用途：
 
 ### 最新手机号段归属地-多语言解析以及导入数据库脚本
 
-qqzeng-phone-3.0.dat    
+qqzeng-phone-4.0.dat    
 返回多个字段信息： 
 广东|深圳|518000|0755|440300|移动   
 
 编码：UTF8  字节序：Little-Endian  
-压缩：原版txt为23M,dat结构为1.8M,上一版为3.2M,文件更小！   
-性能：每秒解析1000w+,[3.0版本](https://github.com/zengzhan/qqzeng-ip/tree/master/qqzeng-phone-3.0) 比上一版2.0每秒500多万每秒,性能更快！  
+压缩：原版txt为30M,dat 4.0结构为1.09M,3.0为1.95M,2.0为3.4M,文件更小！   
+性能：每秒解析1500w+,更小更快！[3.0版本](https://github.com/zengzhan/qqzeng-ip/tree/master/qqzeng-phone-3.0) 比上一版2.0每秒500多万每秒,性能更快！  
  
  
 演示  https://www.qqzeng.com/ip
