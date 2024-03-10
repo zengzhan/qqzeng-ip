@@ -54,17 +54,20 @@
 
      public string Query(string phone)
      {
-         var prefix = Convert.ToInt32(phone.Substring(0, 3));
-         var suffix = Convert.ToInt32(phone.Substring(3, 4));
-         var offset = prefix < 0xC8 ? prefArr[prefix] : 0;
-         if (offset > 0)
-         {
-             return addrispArr[BitConverter.ToUInt16(dataArr, offset + (suffix << 1))];
-         }
-         else
-         {
-             return "不存在";
-         }
+        var prefix = Convert.ToInt32(phone.Substring(0, 3));
+        var suffix = Convert.ToInt32(phone.Substring(3, 4));
+        var offset = prefix < 0xC8 ? prefArr[prefix] : 0;
+        if (offset > 0)
+        {
+            var index = BitConverter.ToUInt16(dataArr, offset + (suffix << 1));
+            if (index > 0)
+            {
+                return addrispArr[index];
+            }
+        
+        }
+        
+        return "不存在";
 
 
      }
@@ -78,19 +81,5 @@
     （调用例子）：    
    string result = PhoneSearch5.Instance.Query("号段|号码");
    --> result="省份|城市|区号|邮编|行政区划代码|运营商"
-
-    查询 qqzeng-phone-5.0.dat 882万 ->0.289秒       每秒3051.9031141868513万次
-    查询 qqzeng-phone-5.0.dat 1134万 ->0.36秒       每秒3150万次
-    查询 qqzeng-phone-5.0.dat 1290万 ->0.424秒      每秒3042.4528301886794万次
-    查询 qqzeng-phone-5.0.dat 1536万 ->0.49秒       每秒3134.6938775510203万次
-    查询 qqzeng-phone-5.0.dat 322万 ->0.105秒       每秒3066.666666666667万次
-    查询 qqzeng-phone-5.0.dat 362万 ->0.119秒       每秒3042.016806722689万次
-    查询 qqzeng-phone-5.0.dat 888万 ->0.296秒       每秒3000万次
-    查询 qqzeng-phone-5.0.dat 982万 ->0.314秒       每秒3127.388535031847万次
-    查询 qqzeng-phone-5.0.dat 1212万 ->0.389秒      每秒3115.681233933162万次
-    查询 qqzeng-phone-5.0.dat 1288万 ->0.429秒      每秒3002.3310023310023万次
-    查询 qqzeng-phone-5.0.dat 1264万 ->0.402秒      每秒3144.278606965174万次
-    查询 qqzeng-phone-5.0.dat 470万 ->0.152秒       每秒3092.105263157895万次
-    查询 qqzeng-phone-5.0.dat 1078万 ->0.353秒      每秒3053.8243626062326万次
-    查询 qqzeng-phone-5.0.dat 1346万 ->0.432秒      每秒3115.740740740741万次
+   
     */
