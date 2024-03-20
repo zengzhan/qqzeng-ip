@@ -1,0 +1,19 @@
+[package]
+name = "geoip_rust"
+version = "0.1.0"
+edition = "2021"
+authors = ["yangcancai <yangcancai0112@gmail.com>"]
+build = "build.rs"
+description = "Rust code for qqzeng-ip"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "geoip_rust"
+crate-type = ["rlib","cdylib"]
+[dependencies]
+libc = "0.2"
+anyhow = "1.0.52"
+
+[build-dependencies]
+cc = "1.0"
