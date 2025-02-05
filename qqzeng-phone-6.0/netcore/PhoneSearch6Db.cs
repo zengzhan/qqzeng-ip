@@ -29,7 +29,7 @@ namespace qqzeng_phone_db
         /// <exception cref="InvalidDataException">文件格式异常</exception>
         public void LoadDatabase()
         {
-            var filePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "qqzeng-phone-6.db");
+            var filePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "qqzeng-phone-6.0.db");
             if (!File.Exists(filePath)) throw new FileNotFoundException("Database file not found", filePath);
             try
             {
