@@ -14,7 +14,7 @@ name = "bench"
 harness = false
 
 [dependencies]
-rustler = "0.23.0"
+rustler = "0.36.1"
 serde = { version = "1.0", features = ["derive"] }
 bencher = "0.1.5"
 #geoip_rust = { path = "../../../../qqzeng-ip-rust"}

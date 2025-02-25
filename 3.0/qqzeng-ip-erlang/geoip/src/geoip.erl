@@ -47,8 +47,7 @@ stop() ->
 ref() ->
     case catch persistent_term:get(?MODULE) of
         {'EXIT', _} ->
-            {ok, Ref} = start(),
-            Ref;
+            start();
         Ref ->
             Ref
     end.

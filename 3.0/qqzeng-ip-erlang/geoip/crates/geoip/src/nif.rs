@@ -29,7 +29,7 @@ use std::{
     sync::{RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
-use rustler::resource::ResourceArc;
+use rustler::ResourceArc;
 use rustler::{Binary, Encoder, Env, NifResult, OwnedBinary, Term};
 
 use atoms::{error, ok};
@@ -87,8 +87,7 @@ impl From<Nifgeoip> for NifgeoipResource {
 }
 
 pub fn on_load(env: Env, _load_info: Term) -> bool {
-    rustler::resource!(NifgeoipResource, env);
-    true
+    rustler::resource!(NifgeoipResource, env)
 }
 
 // =================================================================================================

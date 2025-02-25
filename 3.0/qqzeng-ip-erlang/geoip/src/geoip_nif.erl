@@ -22,7 +22,7 @@ new(_File) ->
 clear(_Ref) ->
     not_loaded(?LINE).
 
--spec query(Ref :: geoip(), Ip :: binary()) -> binary().
+-spec query(Ref :: geoip(), Ip :: binary()) -> tuple().
 query(_Ref, _Ip) ->
     not_loaded(?LINE).
 
