@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["admin <admin0112@gmail.com>"]
 license = "MIT/Apache-2.0 2021"
 build = "build.rs"
+edition = "2021"
 
 [lib]
 name = "geoip"

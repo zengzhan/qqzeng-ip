@@ -32,7 +32,7 @@ use std::{
 use rustler::ResourceArc;
 use rustler::{Binary, Encoder, Env, NifResult, OwnedBinary, Term};
 
-use atoms::{error, ok};
+use crate::atoms::{error, ok};
 use geoip_rust::geoip::GeoIP;
 // =================================================================================================
 // resource
