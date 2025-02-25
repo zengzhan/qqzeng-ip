@@ -18,7 +18,8 @@ extern "C" {
 	}geo_ip;
 
 	geo_ip* geoip_instance();
-	int32_t geoip_loadDat(geo_ip* p);
+	geo_ip* geoip_instance_file(const char* dat_file);
+	int32_t geoip_loadDat(geo_ip* p, const char * dat_file);
 	char* geoip_query(geo_ip* p, char *ip);
 	uint32_t geoip_binary_search(geo_ip* p,uint32_t low, uint32_t high, uint32_t k);
 	uint32_t geoip_ip2long(geo_ip* p,char *addr, uint32_t* prefix);
