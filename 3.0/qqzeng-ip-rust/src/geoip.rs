@@ -114,6 +114,6 @@ impl GeoIP {
 }
 impl Drop for GeoIP {
     fn drop(&mut self) {
-        unsafe { Box::from_raw(self.ctx) };
+        unsafe { let _= Box::from_raw(self.ctx); };
     }
 }
