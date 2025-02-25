@@ -37,13 +37,22 @@ fn main() {
             println!("cargo:rerun-if-changed=./qqzeng-ip.git/3.0/qqzeng-ip-c");
             let here = env::var("CARGO_MANIFEST_DIR").unwrap();
             let mut cmd = Command::new("sh");
-             let out =   cmd.arg("-c").arg(format!(" {}/tool.sh 3.0/qqzeng-ip-c https://github\
-            .com/yangcancai/qqzeng-ip.git", here)).output().expect("git clone qqzeng-ip-c error");
+            let out = cmd
+                .arg("-c")
+                .arg(format!(
+                    " {}/tool.sh 3.0/qqzeng-ip-c https://github\
+            .com/yangcancai/qqzeng-ip.git",
+                    here
+                ))
+                .output()
+                .expect("git clone qqzeng-ip-c error");
             println!("running: {:?}", cmd);
-            let rs: Vec<&str> = out.stdout.split(|x| *x == '\n' as u8).map(|x|std::str::from_utf8
-                (x).unwrap())
+            let rs: Vec<&str> = out
+                .stdout
+                .split(|x| *x == '\n' as u8)
+                .map(|x| std::str::from_utf8(x).unwrap())
                 .collect();
-            for i in rs{
+            for i in rs {
                 println!("{}", i);
             }
             cc::Build::new()

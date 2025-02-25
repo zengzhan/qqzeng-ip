@@ -27,6 +27,8 @@ pub mod geoip;
 mod raw;
 #[cfg(test)]
 mod tests {
+    use crate::geoip::GeoIPRes;
+
     use super::*;
     use anyhow::Error;
     #[test]
@@ -34,21 +36,54 @@ mod tests {
         let rs = geoip::GeoIP::new("qqzeng-ip-3.0-ultimate.dat");
         assert_eq!(rs.is_ok(), true);
         if let Ok(rs) = rs {
-            assert_eq!(rs.query("0.0.0.0").unwrap(), "|保留|||||||||");
-            assert_eq!(rs.query("0.1.1.1").unwrap(), "|保留|||||||||");
+            assert_eq!(rs.query("0.0.0.0").unwrap(), "|保留||||本机网络|||||");
+            assert_eq!(rs.query("0.1.1.1").unwrap(), "|保留||||本机网络|||||");
             assert_eq!(
                 rs.query("255.255.255.255").unwrap(),
-                "|保留|全球|旗舰版||qqzeng-ip||最新版|2021-12-01|880995|"
+                "|保留|全球|旗舰版||qqzeng-ip||最新版|1197377|2025-02-01|"
             );
             let _invalid = Error::msg("Ip invalid");
             assert!(matches!(rs.query("kkk").unwrap_err(), _invalid));
             assert!(matches!(rs.query("a.a.a.a").unwrap_err(), _invalid));
             assert!(matches!(rs.query("255.256.1.1").unwrap_err(), _invalid));
             assert!(matches!(rs.query("-1.25.1.1").unwrap_err(), _invalid));
+            assert_eq!(
+                rs.query_friendly("103.235.46.115").unwrap(),
+                GeoIPRes {
+                    continent: "亚洲",
+                    country: "中国",
+                    province: "香港",
+                    city: "",
+                    district: "",
+                    isp: "百度",
+                    area_code: "810000",
+                    country_english: "Hongkong,China",
+                    country_code: "HK",
+                    longitude: "114.1734",
+                    latitude: "22.3200"
+                }
+            );
+
+            assert_eq!(
+                rs.query_friendly("8.7.6.5").unwrap(),
+                GeoIPRes {
+                    continent: "北美洲",
+                    country: "美国",
+                    province: "加利福尼亚州",
+                    city: "",
+                    district: "",
+                    isp: "Level3",
+                    area_code: "",
+                    country_english: "United States",
+                    country_code: "US",
+                    longitude: "-119.418",
+                    latitude: "36.778"
+                }
+            );
             // query_friendly
             assert_eq!(
                 rs.query_friendly("255.255.255.255").unwrap(),
-                geoip::GeoIPRes {
+                GeoIPRes {
                     continent: "",
                     country: "保留",
                     province: "全球",
@@ -57,9 +92,9 @@ mod tests {
                     isp: "qqzeng-ip",
                     area_code: "",
                     country_english: "最新版",
-                    country_code: "2021-12-01",
-                    longitude: "880995",
-                    latitude: "",
+                    country_code: "1197377",
+                    longitude: "2025-02-01",
+                    latitude: ""
                 }
             );
         }
