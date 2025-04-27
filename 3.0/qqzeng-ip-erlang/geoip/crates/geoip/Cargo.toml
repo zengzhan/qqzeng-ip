@@ -1,0 +1,22 @@
+[package]
+name = "geoip"
+version = "0.1.0"
+authors = ["admin <admin0112@gmail.com>"]
+license = "MIT/Apache-2.0 2021"
+build = "build.rs"
+edition = "2021"
+
+[lib]
+name = "geoip"
+crate-type = ["cdylib","rlib"]
+
+[[bench]]
+name = "bench"
+harness = false
+
+[dependencies]
+rustler = "0.36.1"
+serde = { version = "1.0", features = ["derive"] }
+bencher = "0.1.5"
+#geoip_rust = { path = "../../../../qqzeng-ip-rust"}
+geoip_rust = {git = "https://github.com/yangcancai/qqzeng-ip.git"}
