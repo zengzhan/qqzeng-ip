@@ -90,11 +90,14 @@ public class PhoneSearchBest {
 	}
 
 	public static void main(String[] args) {
+		String phoneSr =  System.getProperty("user.dir");;
+		System.out.println("phoneSr==="+phoneSr);
 
-		PhoneSearchBest finder = PhoneSearchBest.getInstance();
-		String phone = "1933574";
-		String result = finder.Get(phone);
-		System.out.println(result);
+
+//		PhoneSearchBest finder = PhoneSearchBest.getInstance();
+//		String phone = "1933574";
+//		String result = finder.Get(phone);
+//		System.out.println(result);
 
 		/*
 		 * 山西|临汾|041000|0357|141000|电信
