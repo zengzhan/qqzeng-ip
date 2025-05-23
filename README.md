@@ -95,6 +95,41 @@
 
 ---
 
+# IP Search Performance Tests 🧪
+
+## Random Single Test
+
+| Method        | Mean      | Error     | StdDev    |
+|---------------|----------:|----------:|----------:|
+| IPSearch2Test | 20.349 ns | 0.0511 ns | 0.0478 ns |
+| IPSearch3Test |  8.887 ns | 0.0706 ns | 0.0661 ns |
+| IPSearch6Test |  4.637 ns | 0.0679 ns | 0.0635 ns |
+
+---
+
+## Random One Million Tests
+
+| Method        | Mean     | Error    | StdDev   | Median   |
+|---------------|---------:|---------:|---------:|---------:|
+| IPSearch2Test | 97.85 ms | 0.976 ms | 0.762 ms | 97.63 ms |
+| IPSearch3Test | 64.17 ms | 0.411 ms | 0.321 ms | 64.20 ms |
+| IPSearch6Test | 31.37 ms | 0.615 ms | 0.921 ms | 30.90 ms |
+
+---
+
+## Random Hundred Million Level Tests 🚀
+
+**IPSearch6Test Performance:**
+
+* 查询 18400万 IP -> **6.127 秒** (每秒 3003.101028 万次)
+* 查询 18200万 IP -> **5.891 秒** (每秒 3089.458496 万次)
+* 查询 9700万 IP  -> **3.037 秒** (每秒 3193.941389 万次)
+* 查询 15400万 IP -> **4.844 秒** (每秒 3179.190751 万次)
+* 查询 15700万 IP -> **4.963 秒** (每秒 3163.409228 万次)
+* 查询 13800万 IP -> **4.317 秒** (每秒 3196.664350 万次)
+* 查询 2800万 IP  -> **0.87 秒** (每秒 3218.390804 万次)
+* 查询 16000万 IP -> **4.994 秒** (每秒 3203.844613 万次)
+
 
 
 ## 手机号段归属地-多语言解析以及导入数据库脚本
