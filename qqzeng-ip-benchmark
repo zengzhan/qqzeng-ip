@@ -1,0 +1,245 @@
+IP Search Performance Tests  
+
+qqzeng-ip by 2025-06-01
+
+测试环境：
+BenchmarkDotNet v0.15.0  
+macOS Sequoia 15.5 (24F74) [Darwin 24.5.0]  
+Apple M4 Max, 1 CPU, 14 logical and 14 physical cores  
+.NET SDK 10.0.100-preview.4.25258.110  
+[Host]: .NET 10.0.0 (10.0.25.25910), Arm64 RyuJIT AdvSIMD
+
+第一部分：
+qqzeng-ip  dat/db 性能测试
+
+源数据 qqzeng-ip.txt（150M）→ 转换生成 qqzeng-ip.dat/db（约15M~20M）  
+
+项目地址：https://github.com/zengzhan/qqzeng-ip
+
+随机单个测试
+
+| Method        | Mean     | Error    | StdDev   |
+|-------------- |---------:|---------:|---------:|
+| IPSearch2Test | 29.93 ns | 0.222 ns | 0.197 ns |
+| IPSearch3Test | 17.50 ns | 0.251 ns | 0.222 ns |
+| IPSearch6Test | 10.65 ns | 0.030 ns | 0.027 ns |
+
+| Method        | Mean     | Error    | StdDev   |
+|-------------- |---------:|---------:|---------:|
+| IPSearch2Test | 29.85 ns | 0.298 ns | 0.279 ns |
+| IPSearch3Test | 17.60 ns | 0.283 ns | 0.251 ns |
+| IPSearch6Test | 10.55 ns | 0.062 ns | 0.055 ns |
+
+
+随机一百万个测试
+
+| Method        | Mean     | Error    | StdDev   |
+|-------------- |---------:|---------:|---------:|
+| IPSearch2Test | 97.85 ms | 0.976 ms | 0.762 ms |
+| IPSearch3Test | 64.17 ms | 0.411 ms | 0.321 ms |
+| IPSearch6Test | 31.37 ms | 0.615 ms | 0.921 ms |
+
+| Method        | Mean     | Error    | StdDev   |
+|-------------- |---------:|---------:|---------:|
+| IPSearch2Test | 99.57 ms | 1.157 ms | 1.026 ms |
+| IPSearch3Test | 64.42 ms | 0.133 ms | 0.118 ms |
+| IPSearch6Test | 31.25 ms | 0.088 ms | 0.078 ms |
+
+
+随机亿级测试
+
+|        方法           |        总次 |     时间 |    每秒  |
+|--------------------- |-------------|---------|----------|
+| qqzeng-ip-search-2.0 |   3900.00万 |   4.18秒 | 933.91万 |
+| qqzeng-ip-search-2.0 |  16400.00万 |  17.29秒 | 948.63万 |
+| qqzeng-ip-search-2.0 |  14300.00万 |  15.11秒 | 946.14万 |
+| qqzeng-ip-search-2.0 |  17400.00万 |  17.54秒 | 992.19万 |
+| qqzeng-ip-search-2.0 |   4200.00万 |   4.25秒 | 987.07万 |
+| qqzeng-ip-search-2.0 |  19300.00万 |  20.11秒 | 959.96万 |
+| qqzeng-ip-search-2.0 |  12600.00万 |  13.31秒 | 946.44万 |
+| qqzeng-ip-search-2.0 |    600.00万 |   0.64秒 | 944.88万 |
+
+|        方法           |        总次 |     时间 |    每秒   |
+|--------------------- |-------------|---------|----------|
+| qqzeng-ip-search-3.0 |   8800.00万 |   5.93秒 | 1483.98万 |
+| qqzeng-ip-search-3.0 |  17000.00万 |  10.95秒 | 1553.22万 |
+| qqzeng-ip-search-3.0 |  13500.00万 |   8.67秒 | 1556.73万 |
+| qqzeng-ip-search-3.0 |   6900.00万 |   4.45秒 | 1550.56万 |
+| qqzeng-ip-search-3.0 |  14700.00万 |   9.44秒 | 1557.70万 |
+| qqzeng-ip-search-3.0 |   1400.00万 |   0.91秒 | 1536.77万 |
+| qqzeng-ip-search-3.0 |  19400.00万 |  12.47秒 | 1555.61万 |
+| qqzeng-ip-search-3.0 |  19900.00万 |  12.83秒 | 1551.41万 |
+
+|        方法           |        总次 |     时间 |    每秒   |
+|--------------------- |-------------|---------|----------|
+| qqzeng-ip-search-6.0 |  10800.00万 |   3.68秒 | 2935.58万 |
+| qqzeng-ip-search-6.0 |  11600.00万 |   3.92秒 | 2960.69万 |
+| qqzeng-ip-search-6.0 |   8100.00万 |   2.67秒 | 3028.04万 |
+| qqzeng-ip-search-6.0 |  11900.00万 |   3.94秒 | 3019.54万 |
+| qqzeng-ip-search-6.0 |  17500.00万 |   5.68秒 | 3080.99万 |
+| qqzeng-ip-search-6.0 |  10300.00万 |   3.33秒 | 3094.95万 |
+| qqzeng-ip-search-6.0 |   8100.00万 |   2.63秒 | 3078.68万 |
+| qqzeng-ip-search-6.0 |  15600.00万 |   5.02秒 | 3106.33万 |
+
+IPSearch6 性能最优，单次查询最快，每秒处理能力最高
+
+
+
+第二部分：
+qqzeng-ip  xdb 性能测试
+
+源数据 qqzeng-ip.txt（126M）→ 转换生成 qqzeng-ip.xdb（23.4M）  
+
+项目地址：https://github.com/lionsoul2014/ip2region
+
+原始官方 xdb 数据查询性能（纳秒）：
+
+| Method                  | Mean        | Error    | StdDev   |
+|------------------------ |------------:|---------:|---------:|
+| CachePolicy_Content     |    45.37 ns | 0.250 ns | 0.234 ns |
+| CachePolicy_File        | 1,125.03 ns | 5.956 ns | 5.280 ns |
+| CachePolicy_VectorIndex |   811.58 ns | 6.295 ns | 5.888 ns |
+
+| Method                  | Mean        | Error    | StdDev   |
+|------------------------ |------------:|---------:|---------:|
+| CachePolicy_Content     |    45.97 ns | 0.153 ns | 0.143 ns |
+| CachePolicy_File        | 1,132.85 ns | 5.087 ns | 4.758 ns |
+| CachePolicy_VectorIndex |   778.37 ns | 4.698 ns | 3.923 ns |
+
+
+qqzeng-ip.xdb 查询性能（纳秒）：
+
+| Method                  | Mean        | Error    | StdDev   |
+|------------------------ |------------:|---------:|---------:|
+| CachePolicy_Content     |    70.23 ns | 1.104 ns | 1.033 ns |
+| CachePolicy_File        | 1,521.94 ns | 7.233 ns | 6.412 ns |
+| CachePolicy_VectorIndex | 1,139.11 ns | 2.684 ns | 2.380 ns |
+
+
+| 方法                 |        总次 |     时间 |     每秒 |
+| CachePolicy_Content  |   9100.00万 |  14.49秒 | 628.06万 |
+| CachePolicy_Content  |  16400.00万 |  25.27秒 | 649.07万 |
+| CachePolicy_Content  |  10200.00万 |  14.60秒 | 698.44万 |
+| CachePolicy_Content  |   2600.00万 |   3.79秒 | 686.92万 |
+| CachePolicy_Content  |   4400.00万 |   6.37秒 | 690.95万 |
+| CachePolicy_Content  |  11100.00万 |  15.87秒 | 699.52万 |
+| CachePolicy_Content  |  10400.00万 |  15.05秒 | 691.17万 |
+| CachePolicy_Content  |   5400.00万 |   7.80秒 | 692.40万 |
+
+| 方法                 |        总次 |     时间 |     每秒 |
+| CachePolicy_VectorIndex |    860.00万 |   9.80秒 |  87.74万 |
+| CachePolicy_VectorIndex |   1400.00万 |  15.30秒 |  91.50万 |
+| CachePolicy_VectorIndex |   1120.00万 |  12.27秒 |  91.28万 |
+| CachePolicy_VectorIndex |   1910.00万 |  20.83秒 |  91.69万 |
+| CachePolicy_VectorIndex |   1210.00万 |  13.23秒 |  91.44万 |
+| CachePolicy_VectorIndex |   1270.00万 |  13.85秒 |  91.72万 |
+| CachePolicy_VectorIndex |   1290.00万 |  14.25秒 |  90.55万 |
+| CachePolicy_VectorIndex |    950.00万 |  10.48秒 |  90.65万 |
+
+| 方法                 |        总次 |     时间 |     每秒 |
+| CachePolicy_File     |    370.00万 |   5.70秒 |  64.94万 |
+| CachePolicy_File     |    200.00万 |   2.94秒 |  67.96万 |
+| CachePolicy_File     |   1850.00万 |  27.13秒 |  68.20万 |
+| CachePolicy_File     |   1520.00万 |  22.31秒 |  68.13万 |
+| CachePolicy_File     |    760.00万 |  11.16秒 |  68.11万 |
+| CachePolicy_File     |   1430.00万 |  21.02秒 |  68.03万 |
+| CachePolicy_File     |   1720.00万 |  25.55秒 |  67.31万 |
+| CachePolicy_File     |    230.00万 |   3.45秒 |  66.71万 |
+
+Content 缓存策略性能最佳；qqzeng-ip.xdb 在保持兼容的基础上提升了查询速度
+
+
+
+第三部分：
+qqzeng-ip  mmdb 性能测试
+
+源数据 qqzeng-ip.csv（168M）→ 转换生成 qqzeng-ip.mmdb（14.9M）  
+
+项目地址：
+https://github.com/maxmind/mmdbwriter
+https://github.com/maxmind/MaxMind-DB-Reader-dotnet
+
+随机单个性能
+
+| Method | Mean     | Error     | StdDev    |
+|------- |---------:|----------:|----------:|
+| Search | 1.766 us | 0.0054 us | 0.0050 us |
+
+| Method | Mean     | Error   | StdDev  |
+|------- |---------:|--------:|--------:|
+| Search | 829.1 ns | 2.45 ns | 2.29 ns |
+
+| Method | Mean     | Error     | StdDev    |
+|------- |---------:|----------:|----------:|
+| Search | 1.410 us | 0.0048 us | 0.0042 us |
+
+| Method | Mean     | Error   | StdDev  |
+|------- |---------:|--------:|--------:|
+| Search | 668.1 ns | 2.74 ns | 2.29 ns |
+
+
+随机千万级
+
+FileAccessMode.MemoryMapped 文件映射到虚拟内存
+
+| 方法                 |        总次 |     时间 |     每秒 |
+| qqzeng-ip.mmdb       |   8000.00万 | 112.23秒 |  71.28万 |
+| qqzeng-ip.mmdb       |   5200.00万 |  72.74秒 |  71.49万 |
+| qqzeng-ip.mmdb       |   2900.00万 |  40.49秒 |  71.61万 |
+| qqzeng-ip.mmdb       |   6200.00万 |  86.56秒 |  71.62万 |
+| qqzeng-ip.mmdb       |   1500.00万 |  21.00秒 |  71.42万 |
+| qqzeng-ip.mmdb       |   6850.00万 |  95.76秒 |  71.53万 |
+| qqzeng-ip.mmdb       |   1300.00万 |  18.21秒 |  71.37万 |
+| qqzeng-ip.mmdb       |   6900.00万 |  96.99秒 |  71.14万 |
+
+FileAccessMode.Memory  文件加载到实际内存
+
+| 方法                 |        总次 |     时间 |     每秒 |
+| qqzeng-ip.mmdb       |   1040.00万 |   8.15秒 | 127.56万 |
+| qqzeng-ip.mmdb       |    540.00万 |   4.00秒 | 135.07万 |
+| qqzeng-ip.mmdb       |   1730.00万 |  12.51秒 | 138.29万 |
+| qqzeng-ip.mmdb       |   1440.00万 |  10.44秒 | 137.98万 |
+| qqzeng-ip.mmdb       |    940.00万 |   6.85秒 | 137.31万 |
+| qqzeng-ip.mmdb       |    720.00万 |   5.21秒 | 138.20万 |
+| qqzeng-ip.mmdb       |    420.00万 |   3.02秒 | 139.26万 |
+| qqzeng-ip.mmdb       |   1520.00万 |  11.01秒 | 138.06万 |
+
+mmdb 使用 Memory 模式性能显著提升，MemoryMapped 模式相对较慢但内存占用较少
+
+
+第四部分：
+
+格式 对比 差异
+
+| 数据格式 | 文件大小 | 单次查询（最快） | 每秒查询能力（最高） |
+|----------|----------|------------------|------------------------|
+| dat/db   | ~15M     | 10 ns            | 3100 万次/秒          |
+| xdb      | ~23M     | 70 ns            | 690 万次/秒           |
+| mmdb     | ~15M     | 668 ns           | 139 万次/秒           |
+
+
+| 对比               | dat/db             | xdb                | mmdb                  |
+|--------------------|--------------------|---------------------|------------------------|
+| 索引结构效率       | 高（位移+偏移表）  | 中（字节+数组）     | 较低（二进制树）       |
+| 数据访问复杂度     | 极低               | 低                  | 高（树遍历 + 解码）     |
+| 是否结构化（需解码）| 否（纯字符串）      | 否（定长字段）       | 是（复杂字段结构）      |
+| 是否序列化反序列化 | 否                 | 否                  | 是                    |
+| 是否涉及文件IO     | 否                 | 可配置              | 视模式而定             |
+| 是否为纯内存操作   | 是                 | 可选                | 可选                  |
+
+
+
+结构      | 数据结构        | 查询机制            | 查询速度      | 加载方式         | 每秒查询量
+--------- | ---------------- | ------------------- | -------------- | ---------------- | ---------------
+dat/db    | 索引 + 偏移表    | 指针偏移 + 内存查找 | 纳微秒         | 内存或 mmap      | 3000 万+
+xdb       | 向量索引 + 数据区 | 向量定位 + 字节读取 | 几十~几百纳秒  | 可配置缓存策略   | 600~900 万
+mmdb      | 前缀树 + JSON   | 树遍历 + 解码      | 几百纳秒~微秒级| 内存或映射模式   | 70~130 万
+
+
+-----------------------------------
+- dat/db：结构紧凑，纯偏移访问，极致性能优化，无结构化处理。
+- xdb：向量定位简单，查询速度快，支持缓存优化，通用性好。
+- mmdb：前缀树结构复杂，需反序列化，适用于多字段、国际化场景。
+
+
+qqzeng-ip 提供多种格式支持，满足不同平台和应用场景的性能需求 。
