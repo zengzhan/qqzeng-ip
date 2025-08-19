@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/geoip"]
+resolver = "2"  # 指定
