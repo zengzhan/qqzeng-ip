@@ -4,7 +4,7 @@
 
 > **[进入 6.0 多语言极速解析 SDK 文档](./6.0/README.md)**
 
-**qqzeng-ip 6.0** 代表了 IP 解析技术的最高标准。
+**qqzeng-ip 6.0** 代表了 IP 解析技术的较高标准。
 - **极致性能**：Rust/Go/C# 版本均突破 **4000万 QPS**。
 - **全语言支持**：C, Rust, Go, Java, Node.js, C#, Python, PHP。
 - **工业级品质**：无锁设计、线程安全、零依赖、100% 单元测试覆盖。
@@ -253,7 +253,3 @@ qqzeng-phone-6.0.dat    [6.0版本](https://github.com/zengzhan/qqzeng-ip/tree/m
 **qqzeng-ip** 我们持续更新和完善数据库，以提供更加准确和精细，高性能的产品。
 
 ![Image text](https://www.qqzeng-ip.com/res/github-qrcode.png)
-
-
-
-
