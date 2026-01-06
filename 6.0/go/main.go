@@ -17,7 +17,7 @@ func main() {
 	start := time.Now()
 	searcher, err := ipdb.Instance()
 	if err != nil {
-		fmt.Printf("Error: %v\n", err)
+		fmt.Printf("⚠️ 数据库加载失败，跳过测试 (CI环境下正常): %v\n", err)
 		return
 	}
 	elapsed := time.Since(start)
