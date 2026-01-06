@@ -1,0 +1,82 @@
+# --- Core Data (CRITICAL) ---
+*.db
+*.dat
+data/*.db
+!data/test.txt
+
+# --- System ---
+.DS_Store
+Thumbs.db
+.AppleDouble
+.LSOverride
+
+# --- IDEs & Editors ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*.iml
+
+# --- C/C++ ---
+*.o
+*.obj
+*.dSYM/
+c/test
+c/main
+
+# --- Go ---
+# Binaries
+*.exe
+*.test
+go/main
+
+# --- Java ---
+*.class
+*.log
+*.jar
+*.war
+target/
+.gradle/
+build/
+
+# --- Node.js ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dist/
+
+# --- .NET / C# ---
+bin/
+obj/
+*.user
+*.suo
+*.userprefs
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.env
+
+# --- PHP ---
+vendor/
+composer.lock
+.phpunit.result.cache
+
+# --- Rust ---
+/target/
+**/*.rs.bk
+debug/
+release/
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Documentation ---
+docs/DATABASE_FORMAT.md
