@@ -57,7 +57,7 @@
 | DAT格式            | 文件小（10几M），查询性能达纳微秒级解析。                                  |
 | TXT格式            | 一两百M，支持导入MySQL/MSSQL，便于灵活扩展处理。                           |
 
-#### [3.0 版本 (历史归档)](https://github.com/zengzhan/qqzeng-ip/tree/master/3.0)
+#### [3.0 版本 (历史归档)](https://github.com/zengzhan/qqzeng-ip/tree/master/archive/3.0)
 > ⚠️ **停止更新公告**：
 > 3.0 版本曾以极致的压缩率和千万级 QPS 性能著称。但由于全球 IP 数据库规模持续指数级增长，原有数据结构于 **2016年1月** 达到容量上限。
 > 
