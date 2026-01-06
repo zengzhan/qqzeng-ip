@@ -1,0 +1,86 @@
+name: qqzeng-ip-6.0-ci
+
+on:
+  push:
+    branches: [ "master", "main" ]
+    paths:
+      - '6.0/**'
+  pull_request:
+    branches: [ "master", "main" ]
+    paths:
+      - '6.0/**'
+
+jobs:
+  test-rust:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: 6.0/rust
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - name: Build
+        run: cargo build --release
+      - name: Run tests
+        run: cargo test --release
+
+  test-go:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: 6.0/go
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.24'
+          check-latest: true
+      - name: Test
+        run: go test -v ./...
+
+  test-node:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: 6.0/nodejs
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies
+        run: npm install
+      - name: Run test
+        run: node test.js
+
+  test-python:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: 6.0/python
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+      - name: Run test
+        run: python test.py
+
+  test-c:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: 6.0/c
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile
+        run: gcc -O3 -std=c99 -Wall -Wextra -o test main.c src/qqzeng_ip_search.c
+      - name: Run test
+        run: ./test

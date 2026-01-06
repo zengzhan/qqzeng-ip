@@ -1,7 +1,7 @@
 # qqzeng-ip 6.0 多语言极速解析 SDK
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Build Status](https://img.shields.io/badge/Build-Passing-green.svg)]()
+[![Build Status](https://github.com/zengzhan/qqzeng-ip/actions/workflows/ci.yml/badge.svg)](https://github.com/zengzhan/qqzeng-ip/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/badge/Version-6.0.0-orange.svg)]()
 
 本项目旨在打造一套**工业级、高性能、跨平台**的 IP 地址库解析 SDK。涵盖 C, Rust, Go, Java, Node.js, C#, Python, PHP 八大主流语言，均按"千万美金级"高标准实现。
