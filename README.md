@@ -253,6 +253,8 @@ qqzeng-phone-6.0.dat    [6.0版本](https://github.com/zengzhan/qqzeng-ip/tree/m
 
 ---
 
+![Image text](https://github.com/zengzhan/qqzeng-ip/blob/master/archive/qqzeng-ip-%E6%9F%A5%E8%AF%A2%E5%B7%A5%E5%85%B7/qqzeng-ip-trace-2026.webp)
+
 演示  https://www.qqzeng.com/ip
 
 统计  https://www.qqzeng.com/tongji.html
