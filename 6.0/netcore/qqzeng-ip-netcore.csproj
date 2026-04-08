@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- 开启所有的 Release 优化 -->
+    <Optimize>true</Optimize>
+    <TieredPGO>true</TieredPGO>
+    <!-- 允许使用最新的 C# 语言特性 -->
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,8 @@
+[package]
+name = "qqzeng_phone_search"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+byteorder = "1.4"
+
