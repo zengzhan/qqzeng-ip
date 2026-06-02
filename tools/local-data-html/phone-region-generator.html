@@ -241,6 +241,43 @@
       font-size: 13px;
     }
 
+    .multi-pick {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      min-height: 50px;
+      max-height: 140px;
+      overflow: auto;
+      padding: 10px;
+      border: 1px solid #c9d7e9;
+      border-radius: 12px;
+      background: #fff;
+    }
+
+    .multi-pick.empty {
+      color: var(--muted);
+      font-size: 13px;
+      align-items: center;
+    }
+
+    .pick-chip {
+      border: 1px solid #c9d7e9;
+      border-radius: 999px;
+      background: #f8fbff;
+      color: var(--ink);
+      padding: 7px 12px;
+      font-size: 13px;
+      line-height: 1;
+      cursor: pointer;
+      transition: background .15s ease, border-color .15s ease, color .15s ease;
+    }
+
+    .pick-chip.active {
+      background: linear-gradient(120deg, #155eef, #0f766e);
+      border-color: transparent;
+      color: #fff;
+    }
+
     @media (max-width: 960px) {
       .grid { grid-template-columns: 1fr; }
       .row { grid-template-columns: 1fr; }
@@ -280,17 +317,17 @@
 
         <div class="row">
           <label>省份</label>
-          <select id="provinceSelect"><option value="">全部</option></select>
+          <div id="provinceOptions" class="multi-pick"></div>
         </div>
 
         <div class="row">
           <label>城市</label>
-          <select id="citySelect"><option value="">全部</option></select>
+          <div id="cityOptions" class="multi-pick"></div>
         </div>
 
         <div class="row">
           <label>运营商</label>
-          <select id="ispSelect"><option value="">全部</option></select>
+          <div id="ispOptions" class="multi-pick"></div>
         </div>
 
         <div class="row">
@@ -398,9 +435,9 @@
     const defaultCsvPath = document.getElementById("defaultCsvPath");
     const btnLoadDefault = document.getElementById("btnLoadDefault");
 
-    const provinceSelect = document.getElementById("provinceSelect");
-    const citySelect = document.getElementById("citySelect");
-    const ispSelect = document.getElementById("ispSelect");
+    const provinceOptions = document.getElementById("provinceOptions");
+    const cityOptions = document.getElementById("cityOptions");
+    const ispOptions = document.getElementById("ispOptions");
 
     const stLoaded = document.getElementById("stLoaded");
     const stMatched = document.getElementById("stMatched");
@@ -412,24 +449,59 @@
     const summaryBody = document.getElementById("summaryBody");
     const previewBody = document.getElementById("previewBody");
 
+    state.filters = {
+      provinces: new Set(),
+      cities: new Set(),
+      isps: new Set()
+    };
+
     function setMsg(el, text, type) {
       el.textContent = text || "";
       el.className = "msg" + (type ? " " + type : "");
     }
 
-    function clearSelect(selectEl) {
-      while (selectEl.options.length > 1) {
-        selectEl.remove(1);
-      }
+    function sortZh(values) {
+      return Array.from(values).sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
     }
 
-    function addOptions(selectEl, values) {
-      values.forEach(v => {
-        const op = document.createElement("option");
-        op.value = v;
-        op.textContent = v;
-        selectEl.appendChild(op);
+    function renderMultiPick(container, values, selectedSet, emptyText, onToggle) {
+      container.innerHTML = "";
+
+      if (!values.length) {
+        container.className = "multi-pick empty";
+        container.textContent = emptyText;
+        return;
+      }
+
+      container.className = "multi-pick";
+
+      const allBtn = document.createElement("button");
+      allBtn.type = "button";
+      allBtn.className = "pick-chip" + (selectedSet.size === 0 ? " active" : "");
+      allBtn.textContent = "全部";
+      allBtn.addEventListener("click", () => onToggle("__ALL__"));
+      container.appendChild(allBtn);
+
+      values.forEach(value => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "pick-chip" + (selectedSet.has(value) ? " active" : "");
+        btn.textContent = value;
+        btn.addEventListener("click", () => onToggle(value));
+        container.appendChild(btn);
       });
+    }
+
+    function toggleSetValue(selectedSet, value) {
+      if (value === "__ALL__") {
+        selectedSet.clear();
+        return;
+      }
+      if (selectedSet.has(value)) {
+        selectedSet.delete(value);
+      } else {
+        selectedSet.add(value);
+      }
     }
 
     function toInt(v, d = 0) {
@@ -582,14 +654,14 @@
     }
 
     function applyFilters() {
-      const p = provinceSelect.value;
-      const c = citySelect.value;
-      const i = ispSelect.value;
+      const provinces = state.filters.provinces;
+      const cities = state.filters.cities;
+      const isps = state.filters.isps;
 
       state.filtered = state.rows.filter(r => {
-        if (p && r.province !== p) return false;
-        if (c && r.city !== c) return false;
-        if (i && r.isp !== i) return false;
+        if (provinces.size && !provinces.has(r.province)) return false;
+        if (cities.size && !cities.has(r.city)) return false;
+        if (isps.size && !isps.has(r.isp)) return false;
         return true;
       });
 
@@ -602,21 +674,32 @@
     }
 
     function updateCityOptions() {
-      clearSelect(citySelect);
-      const p = provinceSelect.value;
+      const provinces = state.filters.provinces;
       const cities = new Set();
       state.rows.forEach(r => {
-        if (!p || r.province === p) {
+        if (!provinces.size || provinces.has(r.province)) {
           cities.add(r.city);
         }
       });
-      addOptions(citySelect, Array.from(cities).sort((a, b) => a.localeCompare(b, "zh-Hans-CN")));
+
+      const availableCities = sortZh(cities);
+      Array.from(state.filters.cities).forEach(city => {
+        if (!cities.has(city)) state.filters.cities.delete(city);
+      });
+
+      const renderCities = () => renderMultiPick(cityOptions, availableCities, state.filters.cities, "当前省份下暂无城市可选", value => {
+        toggleSetValue(state.filters.cities, value);
+        renderCities();
+        applyFilters();
+      });
+
+      renderCities();
     }
 
     function updateOptionsFromRows() {
-      clearSelect(provinceSelect);
-      clearSelect(citySelect);
-      clearSelect(ispSelect);
+      state.filters.provinces.clear();
+      state.filters.cities.clear();
+      state.filters.isps.clear();
 
       const provinces = new Set();
       const cities = new Set();
@@ -628,9 +711,26 @@
         isps.add(r.isp);
       });
 
-      addOptions(provinceSelect, Array.from(provinces).sort((a, b) => a.localeCompare(b, "zh-Hans-CN")));
-      addOptions(citySelect, Array.from(cities).sort((a, b) => a.localeCompare(b, "zh-Hans-CN")));
-      addOptions(ispSelect, Array.from(isps).sort((a, b) => a.localeCompare(b, "zh-Hans-CN")));
+      const provinceList = sortZh(provinces);
+      const cityList = sortZh(cities);
+      const ispList = sortZh(isps);
+
+      const renderProvinces = () => renderMultiPick(provinceOptions, provinceList, state.filters.provinces, "暂无省份可选", value => {
+        toggleSetValue(state.filters.provinces, value);
+        renderProvinces();
+        updateCityOptions();
+        applyFilters();
+      });
+
+      const renderIsps = () => renderMultiPick(ispOptions, ispList, state.filters.isps, "暂无运营商可选", value => {
+        toggleSetValue(state.filters.isps, value);
+        renderIsps();
+        applyFilters();
+      });
+
+      renderProvinces();
+      renderIsps();
+      updateCityOptions();
     }
 
     function resetEmptyState() {
@@ -641,6 +741,9 @@
       stMatched.textContent = "0";
       stCapacity.textContent = "0";
       stRegions.textContent = "0";
+      provinceOptions.innerHTML = "";
+      cityOptions.innerHTML = "";
+      ispOptions.innerHTML = "";
       summaryBody.innerHTML = "";
       previewBody.innerHTML = "";
       renderSummary();
@@ -864,13 +967,6 @@
         setMsg(msgFilter, "内置号段加载失败：" + String(err.message || err), "err");
       }
     });
-
-    provinceSelect.addEventListener("change", () => {
-      updateCityOptions();
-      applyFilters();
-    });
-    citySelect.addEventListener("change", applyFilters);
-    ispSelect.addEventListener("change", applyFilters);
 
     document.getElementById("btnExportSegments").addEventListener("click", () => {
       if (!state.filtered.length) {
