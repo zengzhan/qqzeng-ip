@@ -5,4 +5,4 @@ COPY . /app
 
 EXPOSE 8010
 
-CMD ["python3", "-m", "http.server", "8010", "--bind", "0.0.0.0", "--directory", "/app"]
+CMD ["python3", "/app/tools/local-data-html/railway_static_server.py"]
