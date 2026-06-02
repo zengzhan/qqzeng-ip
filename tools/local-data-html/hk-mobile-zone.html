@@ -156,6 +156,56 @@
     .msg.warn { display: block; background: #fff6e9; color: var(--warn); border: 1px solid #f2d5a5; }
     .msg.err { display: block; background: #fdecec; color: var(--err); border: 1px solid #f5c2c7; }
 
+    .download-plan {
+      margin-top: 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px;
+      background: #f8fbff;
+      display: none;
+    }
+
+    .download-plan.show { display: block; }
+
+    .download-plan h3 {
+      margin: 0 0 8px;
+      font-size: 14px;
+    }
+
+    .download-plan p {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .download-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .download-item {
+      display: grid;
+      grid-template-columns: 1.2fr .8fr auto;
+      gap: 8px;
+      align-items: center;
+      border: 1px solid #dce7f4;
+      border-radius: 10px;
+      background: #fff;
+      padding: 8px 10px;
+      font-size: 12px;
+    }
+
+    .download-item strong { font-size: 13px; }
+
+    .download-item .meta { color: var(--muted); }
+
+    .download-item button[disabled] {
+      cursor: not-allowed;
+      opacity: .55;
+      transform: none;
+    }
+
     .table-wrap {
       overflow: auto;
       max-height: 420px;
@@ -281,6 +331,12 @@
 
         <div id="msgGenerate" class="msg"></div>
 
+        <div id="downloadPlan" class="download-plan">
+          <h3>分片下载任务</h3>
+          <p>大于等于 100 万条时，不会自动下载。请按顺序手动点击单个分片下载，避免浏览器内存压力过大。</p>
+          <div id="downloadList" class="download-list"></div>
+        </div>
+
         <div class="table-wrap">
           <table>
             <thead>
@@ -294,7 +350,7 @@
   </div>
 
   <script>
-    const state = { rows: [], filtered: [], weightedPool: [] };
+    const state = { rows: [], filtered: [], weightedPool: [], downloadPlan: null };
 
     const fileInput = document.getElementById("fileInput");
     const defaultCsvPath = document.getElementById("defaultCsvPath");
@@ -311,6 +367,8 @@
     const msgGenerate = document.getElementById("msgGenerate");
     const summaryBody = document.getElementById("summaryBody");
     const previewBody = document.getElementById("previewBody");
+    const downloadPlan = document.getElementById("downloadPlan");
+    const downloadList = document.getElementById("downloadList");
 
     function setMsg(el, text, type) {
       el.textContent = text || "";
@@ -428,6 +486,75 @@
         const tr = document.createElement("tr");
         tr.innerHTML = `<td>${i + 1}</td><td>${n}</td>`;
         previewBody.appendChild(tr);
+      });
+    }
+
+    function resetDownloadPlan() {
+      state.downloadPlan = null;
+      downloadList.innerHTML = "";
+      downloadPlan.className = "download-plan";
+    }
+
+    function buildChunkFilename(baseName, index, totalParts) {
+      const dot = baseName.lastIndexOf(".");
+      if (dot <= 0) return `${baseName}_part${index + 1}_of_${totalParts}.txt`;
+      return `${baseName.slice(0, dot)}_part${index + 1}_of_${totalParts}${baseName.slice(dot)}`;
+    }
+
+    function buildDownloadPlan(total, baseName, mode, dedup, realismFirst) {
+      const chunkSize = 200000;
+      const safeTotal = Math.max(0, total);
+      const partCount = Math.ceil(safeTotal / chunkSize);
+      const tasks = [];
+      for (let index = 0; index < partCount; index++) {
+        const count = Math.min(chunkSize, safeTotal - (index * chunkSize));
+        tasks.push({
+          index,
+          count,
+          filename: buildChunkFilename(baseName, index, partCount),
+          status: index === 0 ? "ready" : "waiting"
+        });
+      }
+      state.downloadPlan = {
+        total: safeTotal,
+        mode,
+        dedup,
+        realismFirst,
+        tasks,
+        used: dedup ? new Set() : null,
+        nextIndex: 0
+      };
+    }
+
+    function renderDownloadPlan() {
+      downloadList.innerHTML = "";
+      if (!state.downloadPlan || !state.downloadPlan.tasks.length) {
+        downloadPlan.className = "download-plan";
+        return;
+      }
+
+      downloadPlan.className = "download-plan show";
+      state.downloadPlan.tasks.forEach(task => {
+        const item = document.createElement("div");
+        item.className = "download-item";
+
+        const title = document.createElement("div");
+        title.innerHTML = `<strong>分片 ${task.index + 1}</strong><div class="meta">${task.filename}</div>`;
+
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        meta.textContent = `${formatNum(task.count)} 条 | ${task.status === "done" ? "已下载" : task.status === "running" ? "生成中" : task.status === "ready" ? "可下载" : "等待前一片完成"}`;
+
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = task.status === "done" ? "已完成" : task.status === "running" ? "生成中..." : "下载这一片";
+        button.disabled = task.status !== "ready";
+        button.addEventListener("click", () => downloadPlannedChunk(task.index));
+
+        item.appendChild(title);
+        item.appendChild(meta);
+        item.appendChild(button);
+        downloadList.appendChild(item);
       });
     }
 
@@ -586,11 +713,10 @@
       return out;
     }
 
-    async function generateNumbersForDownload(count, mode, dedup, realismFirst, onProgress) {
-      const used = dedup ? new Set() : null;
+    async function generateNumbersChunk(count, mode, dedup, realismFirst, used, onProgress) {
       const maxCap = state.filtered.reduce((a, x) => a + x.capacity, 0);
       let target = count;
-      if (dedup && target > maxCap) target = maxCap;
+      if (dedup && used && target > Math.max(0, maxCap - used.size)) target = Math.max(0, maxCap - used.size);
 
       const preview = [];
       const parts = [];
@@ -622,7 +748,7 @@
         let accepted = false;
         if (!dedup) {
           accepted = true;
-        } else if (!used.has(num)) {
+        } else if (used && !used.has(num)) {
           used.add(num);
           accepted = true;
         }
@@ -658,6 +784,39 @@
       };
     }
 
+    async function downloadPlannedChunk(index) {
+      if (!state.downloadPlan) return;
+      const task = state.downloadPlan.tasks[index];
+      if (!task || task.status !== "ready" || index !== state.downloadPlan.nextIndex) return;
+
+      task.status = "running";
+      renderDownloadPlan();
+      setMsg(msgGenerate, `正在生成第 ${index + 1} 个分片，请稍候...`, "warn");
+
+      const t0 = performance.now();
+      const result = await generateNumbersChunk(
+        task.count,
+        state.downloadPlan.mode,
+        state.downloadPlan.dedup,
+        state.downloadPlan.realismFirst,
+        state.downloadPlan.used,
+        (done, total) => setMsg(msgGenerate, `正在生成第 ${index + 1} 个分片：${formatNum(done)} / ${formatNum(total)}`, "warn")
+      );
+      const t1 = performance.now();
+
+      renderPreview(result.preview);
+      downloadBlob(task.filename, result.blob);
+
+      task.status = "done";
+      state.downloadPlan.nextIndex += 1;
+      if (state.downloadPlan.tasks[state.downloadPlan.nextIndex]) {
+        state.downloadPlan.tasks[state.downloadPlan.nextIndex].status = "ready";
+      }
+      renderDownloadPlan();
+
+      setMsg(msgGenerate, `第 ${index + 1} 个分片已下载，包含 ${formatNum(result.count)} 个号码，耗时 ${((t1 - t0) / 1000).toFixed(3)} 秒。`, "ok");
+    }
+
     function downloadText(filename, text) {
       const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
       const url = URL.createObjectURL(blob);
@@ -683,6 +842,7 @@
 
     fileInput.addEventListener("change", async (e) => {
       setMsg(msgFilter, "", "");
+      resetDownloadPlan();
       const file = e.target.files && e.target.files[0];
       if (!file) return;
       try {
@@ -694,6 +854,7 @@
     });
 
     btnLoadDefault.addEventListener("click", async () => {
+      resetDownloadPlan();
       try {
         await loadCsvByCandidates((defaultCsvPath.value || "").trim());
       } catch (err) {
@@ -710,6 +871,7 @@
 
     document.getElementById("btnGenerate").addEventListener("click", async () => {
       setMsg(msgGenerate, "", "");
+      resetDownloadPlan();
       if (!state.filtered.length) {
         setMsg(msgGenerate, "没有命中区间，请先加载数据或调整筛选条件。", "warn");
         return;
@@ -730,14 +892,14 @@
       const useChunkedDownload = requestedCount >= 1000000;
 
       if (useChunkedDownload) {
-        setMsg(msgGenerate, "数量较大，正在按顺序分块生成并准备下载，请稍候...", "warn");
+        buildDownloadPlan(requestedCount, outputName, mode, dedup, realismFirst);
+        renderDownloadPlan();
+        setMsg(msgGenerate, `数量较大，已拆分为 ${formatNum(state.downloadPlan.tasks.length)} 个分片。请按顺序手动点击单个分片下载。`, "warn");
+        renderPreview([]);
+        return;
       }
 
-      const result = useChunkedDownload
-        ? await generateNumbersForDownload(requestedCount, mode, dedup, realismFirst, (done, total) => {
-            setMsg(msgGenerate, `数量较大，正在按顺序分块生成并准备下载：${formatNum(done)} / ${formatNum(total)}`, "warn");
-          })
-        : { preview: generateNumbers(requestedCount, mode, dedup, realismFirst), blob: null };
+      const result = { preview: generateNumbers(requestedCount, mode, dedup, realismFirst), blob: null };
       const t1 = performance.now();
 
       const list = result.preview;
