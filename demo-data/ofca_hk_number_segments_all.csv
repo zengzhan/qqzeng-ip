@@ -1,0 +1,627 @@
+start,end,prefix_start4,prefix_end4,service,raw
+29399999,29999999,2939,2999,Unknown,3
+30080000,30099999,3008,3009,Access Code,Access Code 接入碼 Non-ETS 非對外電信服務 PCCW-HKT Telephone Limited and Hong Kong Telecommunications (HKT) Limited
+30100000,30179999,3010,3017,Access Code,Access Code 接入碼 Non-ETS 非對外電信服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+30180000,30189999,3018,3018,Access Code,Access Code 接入碼 Non-ETS 非對外電信服務 PCCW-HKT Telephone Limited and Hong Kong Telecommunications (HKT) Limited
+30190000,30209999,3019,3020,Access Code,Access Code 接入碼 Non-ETS 非對外電信服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+30210000,30219999,3021,3021,Access Code,Access Code 接入碼 Non-ETS 非對外電信服務 ** Spare - open for application 備用/供申請使用
+30220000,30229999,3022,3022,Access Code,Access Code 接入碼 Non-ETS 非對外電信服務 ** Spare - open for application 備用/供申請使用
+30230000,30239999,3023,3023,Access Code,Access Code 接入碼 Non-ETS 非對外電信服務 ** Spare - open for application 備用/供申請使用
+30240000,30249999,3024,3024,Access Code,Access Code 接入碼 Non-ETS 非對外電信服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+30250000,30259999,3025,3025,Access Code,Access Code 接入碼 Non-ETS 非對外電信服務 ** Spare - open for application 備用/供申請使用
+30260000,30269999,3026,3026,Access Code,Access Code 接入碼 Non-ETS 非對外電信服務 ** Spare - open for application 備用/供申請使用
+30270000,30279999,3027,3027,Access Code,Access Code 接入碼 Non-ETS 非對外電信服務 HGC Global Communications Limited 環球全域電訊有限公司
+30280000,30289999,3028,3028,Access Code,Access Code 接入碼 Non-ETS 非對外電信服務 ** Spare - open for application 備用/供申請使用
+30290000,30299999,3029,3029,Access Code,Access Code 接入碼 Non-ETS 非對外電信服務 ** Spare - open for application 備用/供申請使用
+30300000,30399999,3030,3039,Access Code,✓ Access Code 接入碼 Non-ETS 非對外電信服務 ** Reserved 預留
+30400000,30499999,3040,3049,Access Code,Access Code 接入碼 Non-ETS 非對外電信服務 ** Spare - open for application 備用/供申請使用
+30500000,30519999,3050,3051,Access Code,Access Code 接入碼 ETS 對外電信服務 HKBN Enterprise Solutions Limited 香港寬頻企業方案有限公司
+30520000,30539999,3052,3053,Access Code,Access Code 接入碼 ETS 對外電信服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+30540000,30549999,3054,3054,Access Code,Access Code 接入碼 ETS 對外電信服務 ComNet Telecom (HK) Limited 信通電話(香港)有限公司
+30550000,30559999,3055,3055,Access Code,Access Code 接入碼 ETS 對外電信服務 ** Spare - open for application 備用/供申請使用
+30560000,30569999,3056,3056,Access Code,Access Code 接入碼 ETS 對外電信服務 HGC Global Communications Limited 環球全域電訊有限公司
+30570000,30609999,3057,3060,Access Code,Access Code 接入碼 ETS 對外電信服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+30610000,30619999,3061,3061,Access Code,Access Code 接入碼 ETS 對外電信服務 HGC Global Communications Limited 環球全域電訊有限公司
+30620000,30629999,3062,3062,Access Code,Access Code 接入碼 ETS 對外電信服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+30630000,30649999,3063,3064,Access Code,Access Code 接入碼 ETS 對外電信服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+30650000,30659999,3065,3065,Access Code,Access Code 接入碼 ETS 對外電信服務 HKBN Enterprise Solutions Limited 香港寬頻企業方案有限公司
+30660000,30669999,3066,3066,Access Code,Access Code 接入碼 ETS 對外電信服務 PCCW-HKT Telephone Limited and Hong Kong Telecommunications (HKT) Limited
+30670000,30679999,3067,3067,Access Code,Access Code 接入碼 ETS 對外電信服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+30680000,30689999,3068,3068,Access Code,Access Code 接入碼 ETS 對外電信服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+30690000,30699999,3069,3069,Access Code,Access Code 接入碼 ETS 對外電信服務 HKBN Enterprise Solutions Limited 香港寬頻企業方案有限公司
+30700000,30719999,3070,3071,Access Code,Access Code 接入碼 ETS 對外電信服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+30720000,30729999,3072,3072,Access Code,Access Code 接入碼 ETS 對外電信服務 HKBN Enterprise Solutions Limited 香港寬頻企業方案有限公司
+30730000,30739999,3073,3073,Access Code,Access Code 接入碼 ETS 對外電信服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+30740000,30749999,3074,3074,Access Code,Access Code 接入碼 ETS 對外電信服務 PCCW-HKT Telephone Limited and Hong Kong Telecommunications (HKT) Limited
+30750000,30789999,3075,3078,Access Code,Access Code 接入碼 ETS 對外電信服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+30790000,30799999,3079,3079,Access Code,Access Code 接入碼 ETS 對外電信服務 PCCW-HKT Telephone Limited and Hong Kong Telecommunications (HKT) Limited
+30800000,30889999,3080,3088,Access Code,Access Code 接入碼 ETS 對外電信服務 ** Spare - open for application 備用/供申請使用
+30890000,30899999,3089,3089,Access Code,Access Code 接入碼 ETS 對外電信服務 HGC Global Communications Limited 環球全域電訊有限公司
+30900000,30999999,3090,3099,Access Code,Access Code 接入碼 ETS 對外電信服務 ** Spare - open for application 備用/供申請使用
+31000000,31099999,3100,3109,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+31100000,31199999,3110,3119,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKBN Enterprise Solutions Limited 香港寬頻企業方案有限公司
+31200000,31299999,3120,3129,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 PCCW-HKT Telephone Limited and Hong Kong Telecommunications (HKT) Limited
+31300000,31309999,3130,3130,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 ** Spare 備用
+31310000,31319999,3131,3131,Fixed Services,✓ Fixed Services 固網服務 Class One 第一類服務 ** Reserved 預留
+31320000,31399999,3132,3139,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 ** Spare 備用
+31400000,31499999,3140,3149,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 PCCW-HKT Telephone Limited and Hong Kong Telecommunications (HKT) Limited
+31500000,31699999,3150,3169,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HGC Global Communications Limited 環球全域電訊有限公司
+31700000,31799999,3170,3179,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKBN Enterprise Solutions Limited 香港寬頻企業方案有限公司
+31800000,31899999,3180,3189,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+31900000,31999999,3190,3199,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 PCCW-HKT Telephone Limited and Hong Kong Telecommunications (HKT) Limited
+34000000,34199999,3400,3419,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 PCCW-HKT Telephone Limited and Hong Kong Telecommunications (HKT) Limited
+34200000,34299999,3420,3429,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+34300000,34339999,3430,3433,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 ** Spare 備用
+34340000,34349999,3434,3434,Fixed Services,✓ Fixed Services 固網服務 Class One 第一類服務 ** Reserved 預留
+34350000,34399999,3435,3439,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 ** Spare 備用
+34400000,34499999,3440,3449,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 PCCW-HKT Telephone Limited and Hong Kong Telecommunications (HKT) Limited
+34500000,34559999,3450,3455,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 ** Spare 備用
+34560000,34569999,3456,3456,Fixed Services,✓ Fixed Services 固網服務 Class One 第一類服務 ** Reserved 預留
+34570000,34599999,3457,3459,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 ** Spare 備用
+34600000,34649999,3460,3464,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+34650000,34679999,3465,3467,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HGC Global Communications Limited 環球全域電訊有限公司
+34680000,34699999,3468,3469,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+34700000,34799999,3470,3479,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 PCCW-HKT Telephone Limited and Hong Kong Telecommunications (HKT) Limited
+34800000,34899999,3480,3489,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 SmarTone Communications Limited
+34900000,34999999,3490,3499,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+35000000,35049999,3500,3504,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 ComNet Telecom (HK) Limited 信通電話(香港)有限公司
+35050000,35099999,3505,3509,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 PCCW-HKT Telephone Limited and Hong Kong Telecommunications (HKT) Limited
+35100000,35199999,3510,3519,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 PCCW-HKT Telephone Limited and Hong Kong Telecommunications (HKT) Limited
+35200000,35299999,3520,3529,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HGC Global Communications Limited 環球全域電訊有限公司
+35300000,35349999,3530,3534,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 ** Spare 備用
+35350000,35359999,3535,3535,Fixed Services,✓ Fixed Services 固網服務 Class One 第一類服務 ** Reserved 預留
+35360000,35399999,3536,3539,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 ** Spare 備用
+35400000,35499999,3540,3549,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HGC Global Communications Limited 環球全域電訊有限公司
+35500000,35599999,3550,3559,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 PCCW-HKT Telephone Limited and Hong Kong Telecommunications (HKT) Limited
+35600000,35699999,3560,3569,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+35700000,35899999,3570,3589,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+35900000,35999999,3590,3599,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+36000000,36099999,3600,3609,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 PCCW-HKT Telephone Limited and Hong Kong Telecommunications (HKT) Limited
+36100000,36199999,3610,3619,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+36200000,36299999,3620,3629,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+36300000,36359999,3630,3635,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 ** Spare 備用
+36360000,36369999,3636,3636,Fixed Services,✓ Fixed Services 固網服務 Class One 第一類服務 ** Reserved 預留
+36370000,36399999,3637,3639,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 ** Spare 備用
+36400000,36499999,3640,3649,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+36500000,36699999,3650,3669,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 PCCW-HKT Telephone Limited and Hong Kong Telecommunications (HKT) Limited
+36700000,36799999,3670,3679,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+36800000,36849999,3680,3684,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKC Network Limited 中港網絡有限公司
+36850000,36899999,3685,3689,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 SmarTone Communications Limited
+36900000,36999999,3690,3699,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HGC Global Communications Limited 環球全域電訊有限公司
+37000000,37019999,3700,3701,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+37020000,37059999,3702,3705,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+37060000,37099999,3706,3709,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+37100000,37199999,3710,3719,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 PCCW-HKT Telephone Limited and Hong Kong Telecommunications (HKT) Limited
+37200000,37249999,3720,3724,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKBN Enterprise Solutions Limited 香港寬頻企業方案有限公司
+37250000,37259999,3725,3725,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+37260000,37269999,3726,3726,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKBN Enterprise Solutions Limited 香港寬頻企業方案有限公司
+37270000,37289999,3727,3728,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+37290000,37299999,3729,3729,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 Verizon Hong Kong Limited
+37300000,37369999,3730,3736,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 ** Spare 備用
+37370000,37379999,3737,3737,Fixed Services,✓ Fixed Services 固網服務 Class One 第一類服務 ** Reserved 預留
+37380000,37399999,3738,3739,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 ** Spare 備用
+37400000,37499999,3740,3749,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HGC Global Communications Limited 環球全域電訊有限公司
+37500000,37599999,3750,3759,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+37600000,37699999,3760,3769,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 PCCW-HKT Telephone Limited and Hong Kong Telecommunications (HKT) Limited
+37700000,37799999,3770,3779,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 ** Spare 備用
+37800000,37899999,3780,3789,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 ** Spare 備用
+37900000,37999999,3790,3799,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+38000000,38299999,3800,3829,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 ** Spare 備用
+38300000,38379999,3830,3837,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 ** Spare 備用
+38380000,38389999,3838,3838,Fixed Services,✓ Fixed Services 固網服務 Class One 第一類服務 ** Reserved 預留
+38390000,38399999,3839,3839,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 ** Spare 備用
+38400000,38409999,3840,3840,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+38410000,38429999,3841,3842,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+38430000,38439999,3843,3843,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+38440000,38449999,3844,3844,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+38450000,38459999,3845,3845,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+38460000,38469999,3846,3846,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+38470000,38489999,3847,3848,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+38490000,38499999,3849,3849,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+38500000,38519999,3850,3851,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+38520000,38529999,3852,3852,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HGC Global Communications Limited 環球全域電訊有限公司
+38530000,38539999,3853,3853,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+38540000,38559999,3854,3855,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HGC Global Communications Limited 環球全域電訊有限公司
+38560000,38569999,3856,3856,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 Verizon Hong Kong Limited
+38570000,38589999,3857,3858,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+38590000,38599999,3859,3859,Fixed Services,Fixed Services 固網服務 Class One 第一類服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+39899999,39999999,3989,3999,Unknown,8
+40400000,40409999,4040,4040,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+40410000,40499999,4041,4049,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+40600000,40699999,4060,4069,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+40930000,40969999,4093,4096,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+40970000,40999999,4097,4099,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+42000000,42099999,4200,4209,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+42200000,42399999,4220,4239,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+42400000,42419999,4240,4241,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+42420000,42429999,4242,4242,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+42430000,42469999,4243,4246,Unknown,Mobile Service 流動服務 China Telecom Global Limited 中國電信國際有限公司
+42470000,42499999,4247,4249,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+42500000,42999999,4250,4299,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+43300000,43399999,4330,4339,Unknown,Mobile Service 流動服務 ** Spare 備用
+43400000,43429999,4340,4342,Unknown,Mobile Service 流動服務 ** Spare 備用
+43430000,43439999,4343,4343,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+43440000,43499999,4344,4349,Unknown,Mobile Service 流動服務 ** Spare 備用
+43500000,43999999,4350,4399,Unknown,Mobile Service 流動服務 ** Spare 備用
+44000000,44099999,4400,4409,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+44100000,44199999,4410,4419,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+44200000,44299999,4420,4429,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+44300000,44399999,4430,4439,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+44400000,44409999,4440,4440,Unknown,Mobile Service 流動服務 Sun Mobile Limited 新移動通訊有限公司
+44410000,44429999,4441,4442,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+44430000,44439999,4443,4443,Unknown,Mobile Service 流動服務 China Telecom Global Limited 中國電信國際有限公司
+44440000,44449999,4444,4444,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+44450000,44499999,4445,4449,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+44500000,44599999,4450,4459,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+44600000,44699999,4460,4469,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+44700000,44799999,4470,4479,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+44800000,44899999,4480,4489,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+44900000,44999999,4490,4499,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+45100000,45399999,4510,4539,Unknown,Mobile Service 流動服務 ** Spare 備用
+45400000,45449999,4540,4544,Unknown,Mobile Service 流動服務 ** Spare 備用
+45450000,45459999,4545,4545,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+45460000,45499999,4546,4549,Unknown,Mobile Service 流動服務 ** Spare 備用
+45500000,45599999,4550,4559,Unknown,Mobile Service 流動服務 ** Spare 備用
+45600000,45669999,4560,4566,Unknown,Mobile Service 流動服務 ** Spare 備用
+45670000,45679999,4567,4567,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+45680000,45699999,4568,4569,Unknown,Mobile Service 流動服務 ** Spare 備用
+45700000,45999999,4570,4599,Unknown,Mobile Service 流動服務 ** Spare 備用
+46000000,46069999,4600,4606,Unknown,Mobile Service 流動服務 China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+46070000,46079999,4607,4607,Unknown,Mobile Service 流動服務 Multibyte Info Technology Limited 博元訊息科技有限公司
+46080000,46089999,4608,4608,Unknown,Mobile Service 流動服務 Sun Mobile Limited 新移動通訊有限公司
+46090000,46099999,4609,4609,Unknown,Mobile Service 流動服務 China Telecom Global Limited 中國電信國際有限公司
+46100000,46109999,4610,4610,Unknown,Mobile Service 流動服務 Sun Mobile Limited 新移動通訊有限公司
+46110000,46129999,4611,4612,Unknown,Mobile Service 流動服務 Sun Mobile Limited 新移動通訊有限公司
+46130000,46139999,4613,4613,Unknown,Mobile Service 流動服務 China Telecom Global Limited 中國電信國際有限公司
+46140000,46149999,4614,4614,Unknown,Mobile Service 流動服務 Sun Mobile Limited 新移動通訊有限公司
+46150000,46169999,4615,4616,Unknown,Mobile Service 流動服務 China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+46170000,46179999,4617,4617,Unknown,Mobile Service 流動服務 Multibyte Info Technology Limited 博元訊息科技有限公司
+46180000,46189999,4618,4618,Unknown,Mobile Service 流動服務 Multibyte Info Technology Limited 博元訊息科技有限公司
+46190000,46199999,4619,4619,Unknown,Mobile Service 流動服務 China Telecom Global Limited 中國電信國際有限公司
+46200000,46249999,4620,4624,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+46250000,46299999,4625,4629,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+46300000,46399999,4630,4639,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+46400000,46409999,4640,4640,Unknown,Mobile Service 流動服務 China Telecom Global Limited 中國電信國際有限公司
+46410000,46459999,4641,4645,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+46460000,46469999,4646,4646,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+46470000,46479999,4647,4647,Unknown,Mobile Service 流動服務 Sun Mobile Limited 新移動通訊有限公司
+46480000,46489999,4648,4648,Unknown,Mobile Service 流動服務 Multibyte Info Technology Limited 博元訊息科技有限公司
+46490000,46499999,4649,4649,Unknown,Mobile Service 流動服務 CITIC Telecom International Limited中信國際電訊有限公司
+46500000,46539999,4650,4653,Unknown,Mobile Service 流動服務 China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+46540000,46589999,4654,4658,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+46590000,46599999,4659,4659,Unknown,Mobile Service 流動服務 Multibyte Info Technology Limited 博元訊息科技有限公司
+46600000,46649999,4660,4664,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+46650000,46669999,4665,4666,Unknown,Mobile Service 流動服務 China Telecom Global Limited 中國電信國際有限公司
+46670000,46699999,4667,4669,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+46700000,46779999,4670,4677,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+46780000,46789999,4678,4678,Unknown,Mobile Service 流動服務 Sun Mobile Limited 新移動通訊有限公司
+46790000,46799999,4679,4679,Unknown,Mobile Service 流動服務 Sun Mobile Limited 新移動通訊有限公司
+46800000,46899999,4680,4689,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+46900000,46989999,4690,4698,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+46990000,46999999,4699,4699,Unknown,Mobile Service 流動服務 South China Telecommunications (H.K.) Limited 中國南方電信(香港)有限公司
+47000000,47099999,4700,4709,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+47100000,47199999,4710,4719,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+47200000,47259999,4720,4725,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+47260000,47309999,4726,4730,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+47310000,47349999,4731,4734,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+47350000,47399999,4735,4739,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+47400000,47429999,4740,4742,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+47430000,47449999,4743,4744,Unknown,Mobile Service 流動服務 China Telecom Global Limited 中國電信國際有限公司
+47450000,47469999,4745,4746,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+47470000,47479999,4747,4747,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+47480000,47489999,4748,4748,Unknown,Mobile Service 流動服務 China Telecom Global Limited 中國電信國際有限公司
+47490000,47499999,4749,4749,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+47500000,47599999,4750,4759,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+47600000,47659999,4760,4765,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+47660000,47999999,4766,4799,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+48100000,48199999,4810,4819,Unknown,Mobile Service 流動服務 ** Spare 備用
+48210000,48299999,4821,4829,Unknown,Mobile Service 流動服務 ** Spare 備用
+48600000,48699999,4860,4869,Unknown,Mobile Service 流動服務 ** Spare 備用
+48900000,48999999,4890,4899,Unknown,Mobile Service 流動服務 ** Spare 備用
+49230000,49299999,4923,4929,Unknown,Mobile Service 流動服務 ** Spare 備用
+49520000,49599999,4952,4959,Unknown,Mobile Service 流動服務 ** Spare 備用
+49800000,49899999,4980,4989,Unknown,Mobile Service 流動服務 ** Spare 備用
+52300000,52339999,5230,5233,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+52340000,52359999,5234,5235,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用 Containing Ported Number
+52360000,52379999,5236,5237,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+52380000,52399999,5238,5239,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+52400000,52499999,5240,5249,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+52500000,52519999,5250,5251,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+52520000,52529999,5252,5252,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+52530000,52579999,5253,5257,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+52580000,52599999,5258,5259,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+52600000,52699999,5260,5269,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+52700000,52799999,5270,5279,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+52800000,52809999,5280,5280,Unknown,Mobile Service 流動服務 1GLOBAL Operations (Hong Kong) Limited
+52810000,52829999,5281,5282,Unknown,Mobile Service 流動服務 Sun Mobile Limited 新移動通訊有限公司
+52830000,52839999,5283,5283,Unknown,Mobile Service 流動服務 Multibyte Info Technology Limited 博元訊息科技有限公司
+52840000,52859999,5284,5285,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+52860000,52889999,5286,5288,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+52890000,52898999,5289,5289,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+52899000,52899999,5289,5289,Unknown,Mobile Service 流動服務 HuiYinBi Telecom (Hong Kong) Limited 回音壁電信(香港)有限公司
+52900000,52999999,5290,5299,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+53000000,53099999,5300,5309,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+53100000,53199999,5310,5319,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+53200000,53299999,5320,5329,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+53300000,53399999,5330,5339,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+53400000,53499999,5340,5349,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+53500000,53529999,5350,5352,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+53530000,53539999,5353,5353,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+53540000,53589999,5354,5358,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+53590000,53599999,5359,5359,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+53600000,53699999,5360,5369,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+53700000,53799999,5370,5379,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+53800000,53899999,5380,5389,Unknown,Mobile Service 流動服務 China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+53900000,53999999,5390,5399,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+54000000,54099999,5400,5409,Unknown,Mobile Service 流動服務 Sun Mobile Limited 新移動通訊有限公司
+54100000,54199999,5410,5419,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+54200000,54299999,5420,5429,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+54300000,54399999,5430,5439,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+54400000,54499999,5440,5449,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+54500000,54539999,5450,5453,Unknown,Mobile Service 流動服務 ** Spare 備用
+54540000,54549999,5454,5454,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+54550000,54599999,5455,5459,Unknown,Mobile Service 流動服務 ** Spare 備用
+54600000,54699999,5460,5469,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+54700000,54799999,5470,5479,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+54800000,54899999,5480,5489,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+54900000,54999999,5490,5499,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+55000000,55099999,5500,5509,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+55100000,55199999,5510,5519,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+55200000,55299999,5520,5529,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+55300000,55399999,5530,5539,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+55400000,55489999,5540,5548,Unknown,Mobile Service 流動服務 Sun Mobile Limited 新移動通訊有限公司
+55490000,55519999,5549,5551,Unknown,Mobile Service 流動服務 Government use
+55520000,55549999,5552,5554,Unknown,Mobile Service 流動服務 ** Spare 備用
+55550000,55559999,5555,5555,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+55560000,55599999,5556,5559,Unknown,Mobile Service 流動服務 ** Spare 備用
+55600000,55699999,5560,5569,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+55700000,55799999,5570,5579,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+55800000,55899999,5580,5589,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+55900000,55999999,5590,5599,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+56000000,56099999,5600,5609,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+56100000,56199999,5610,5619,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+56200000,56299999,5620,5629,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+56300000,56399999,5630,5639,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+56400000,56499999,5640,5649,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+56500000,56559999,5650,5655,Unknown,Mobile Service 流動服務 ** Spare 備用
+56560000,56569999,5656,5656,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+56570000,56599999,5657,5659,Unknown,Mobile Service 流動服務 ** Spare 備用
+56600000,56699999,5660,5669,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+56700000,56779999,5670,5677,Unknown,Mobile Service 流動服務 ** Spare 備用
+56780000,56789999,5678,5678,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+56790000,56799999,5679,5679,Unknown,Mobile Service 流動服務 ** Spare 備用
+56800000,56899999,5680,5689,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+56900000,56999999,5690,5699,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+57000000,57019999,5700,5701,Unknown,Mobile Service 流動服務 Multibyte Info Technology Limited 博元訊息科技有限公司
+57020000,57039999,5702,5703,Unknown,Mobile Service 流動服務 Sun Mobile Limited 新移動通訊有限公司
+57040000,57059999,5704,5705,Unknown,Mobile Service 流動服務 Multibyte Info Technology Limited 博元訊息科技有限公司
+57060000,57069999,5706,5706,Unknown,Mobile Service 流動服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+57070000,57089999,5707,5708,Unknown,Mobile Service 流動服務 China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+57090000,57099999,5709,5709,Unknown,Mobile Service 流動服務 CITIC Telecom International Limited中信國際電訊有限公司
+57100000,57179999,5710,5717,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+57180000,57199999,5718,5719,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用 Containing Ported Number
+57200000,57299999,5720,5729,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+57300000,57369999,5730,5736,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+57370000,57399999,5737,5739,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+57400000,57449999,5740,5744,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+57450000,57469999,5745,5746,Unknown,Mobile Service 流動服務 Multibyte Info Technology Limited 博元訊息科技有限公司
+57470000,57489999,5747,5748,Unknown,Mobile Service 流動服務 Multibyte Info Technology Limited 博元訊息科技有限公司
+57490000,57499999,5749,5749,Unknown,Mobile Service 流動服務 China Telecom Global Limited 中國電信國際有限公司
+57500000,57569999,5750,5756,Unknown,Mobile Service 流動服務 ** Spare 備用
+57570000,57579999,5757,5757,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+57580000,57599999,5758,5759,Unknown,Mobile Service 流動服務 ** Spare 備用
+57600000,57679999,5760,5767,Unknown,Mobile Service 流動服務 China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+57680000,57699999,5768,5769,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用 Containing Ported Number
+57700000,57799999,5770,5779,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+57800000,57899999,5780,5789,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+57900000,57999999,5790,5799,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+58000000,58009999,5800,5800,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 ** Spare - open for application 備用/供申請使用
+58010000,58019999,5801,5801,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 Deltapath Limited
+58020000,58022999,5802,5802,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 PowerTech Worldcom Limited 環宇網絡通訊有限公司
+58023000,58023999,5802,5802,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 ** Spare - open for application 備用/供申請使用
+58024000,58025999,5802,5802,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 PowerTech Worldcom Limited 環宇網絡通訊有限公司
+58026000,58029999,5802,5802,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 ** Spare - open for application 備用/供申請使用
+58030000,58039999,5803,5803,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 VOXBONE NV
+58040000,58040099,5804,5804,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 ZONE Limited
+58040100,58041999,5804,5804,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 ** Spare - open for application 備用/供申請使用
+58042000,58044999,5804,5804,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 ZONE Limited
+58045000,58045999,5804,5804,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 ** Spare - open for application 備用/供申請使用
+58046000,58046099,5804,5804,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 ZONE Limited
+58046100,58046999,5804,5804,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 ** Spare - open for application 備用/供申請使用
+58047000,58048999,5804,5804,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 ** Spare - open for application 備用/供申請使用
+58049000,58049399,5804,5804,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 ZONE Limited
+58049400,58049599,5804,5804,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 ** Spare - open for application 備用/供申請使用
+58049600,58049999,5804,5804,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 ZONE Limited
+58050000,58059999,5805,5805,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 China Mobile International Limited 中國移動國際有限公司
+58060000,58069999,5806,5806,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 VOXBONE NV
+58070000,58079999,5807,5807,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 HGC Global Communications Limited 環球全域電訊有限公司
+58080000,58089999,5808,5808,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 VOXBONE NV
+58090000,58099999,5809,5809,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 DIDWW HK Limited
+58100000,58109999,5810,5810,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 ** Spare - open for application 備用/供申請使用
+58110000,58119999,5811,5811,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 ** Spare - open for application 備用/供申請使用
+58120000,58129999,5812,5812,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 ** Spare - open for application 備用/供申請使用
+58130000,58139999,5813,5813,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+58140000,58149999,5814,5814,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+58150000,58159999,5815,5815,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+58160000,58169999,5816,5816,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+58170000,58179999,5817,5817,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+58180000,58189999,5818,5818,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+58190000,58199999,5819,5819,Fixed Services,Fixed Services 固網服務 Class Two 第二類服務 VOXBONE NV
+59899999,59999999,5989,5999,Unknown,8
+61900000,61999999,6190,6199,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+62000000,62099999,6200,6209,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+62100000,62199999,6210,6219,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+62200000,62299999,6220,6229,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+62300000,62399999,6230,6239,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+62400000,62439999,6240,6243,Unknown,Mobile Service 流動服務 China Telecom Global Limited 中國電信國際有限公司
+62440000,62499999,6244,6249,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用 Containing Ported Number
+62500000,62599999,6250,6259,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+62600000,62609999,6260,6260,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+62610000,62619999,6261,6261,Unknown,Mobile Service 流動服務 Webbing Hong Kong Limited
+62620000,62629999,6262,6262,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+62630000,62679999,6263,6267,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+62680000,62689999,6268,6268,Unknown,Mobile Service 流動服務 Multibyte Info Technology Limited 博元訊息科技有限公司
+62690000,62699999,6269,6269,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+62700000,62799999,6270,6279,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+62800000,62899999,6280,6289,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+62900000,62999999,6290,6299,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+63000000,63099999,6300,6309,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+63100000,63199999,6310,6319,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+63200000,63299999,6320,6329,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+63300000,63399999,6330,6339,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+63400000,63499999,6340,6349,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+63500000,63599999,6350,6359,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+63600000,63609999,6360,6360,Unknown,Mobile Service 流動服務 Sun Mobile Limited 新移動通訊有限公司
+63610000,63619999,6361,6361,Unknown,Mobile Service 流動服務 China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+63620000,63629999,6362,6362,Unknown,Mobile Service 流動服務 China Telecom Global Limited 中國電信國際有限公司
+63630000,63639999,6363,6363,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+63640000,63689999,6364,6368,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+63690000,63699999,6369,6369,Unknown,Mobile Service 流動服務 Multibyte Info Technology Limited 博元訊息科技有限公司
+63700000,63799999,6370,6379,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+63800000,63899999,6380,6389,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+63900000,63999999,6390,6399,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+64000000,64099999,6400,6409,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+64100000,64199999,6410,6419,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+64200000,64299999,6420,6429,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+64300000,64399999,6430,6439,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+64400000,64499999,6440,6449,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+64500000,64511999,6450,6451,Unknown,Mobile Service 流動服務 CITIC Telecom International Limited中信國際電訊有限公司
+64512000,64519999,6451,6451,Unknown,Mobile Service 流動服務 CITIC Telecom International Limited中信國際電訊有限公司
+64520000,64529999,6452,6452,Unknown,Mobile Service 流動服務 CITIC Telecom International Limited中信國際電訊有限公司
+64530000,64599999,6453,6459,Unknown,Mobile Service 流動服務 CITIC Telecom International Limited中信國際電訊有限公司
+64600000,64699999,6460,6469,Unknown,✓ Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+64700000,64799999,6470,6479,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+64800000,64899999,6480,6489,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+64900000,64999999,6490,6499,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+65000000,65099999,6500,6509,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+65100000,65199999,6510,6519,Unknown,Mobile Service 流動服務 China-Hongkong Telecom Limited 中港通電訊有限公司
+65200000,65299999,6520,6529,Unknown,Mobile Service 流動服務 China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+65300000,65399999,6530,6539,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+65400000,65499999,6540,6549,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+65500000,65599999,6550,6559,Unknown,Mobile Service 流動服務 China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+65600000,65699999,6560,6569,Unknown,✓ Mobile Service 流動服務 China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+65700000,65799999,6570,6579,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+65800000,65899999,6580,6589,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+65900000,65999999,6590,6599,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+66000000,66099999,6600,6609,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+66100000,66199999,6610,6619,Unknown,Mobile Service 流動服務 China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+66200000,66299999,6620,6629,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+66300000,66399999,6630,6639,Unknown,Mobile Service 流動服務 China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+66400000,66499999,6640,6649,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+66500000,66599999,6650,6659,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+66600000,66639999,6660,6663,Unknown,Mobile Service 流動服務 China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+66640000,66659999,6664,6665,Unknown,Mobile Service 流動服務 China Telecom Global Limited 中國電信國際有限公司
+66660000,66669999,6666,6666,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+66670000,66699999,6667,6669,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+66700000,66799999,6670,6679,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+66800000,66899999,6680,6689,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+66900000,66999999,6690,6699,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+67000000,67099999,6700,6709,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+67100000,67199999,6710,6719,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+67200000,67299999,6720,6729,Unknown,Mobile Service 流動服務 China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+67300000,67399999,6730,6739,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+67400000,67499999,6740,6749,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+67500000,67599999,6750,6759,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+67600000,67699999,6760,6769,Unknown,✓ Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+67700000,67799999,6770,6779,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+67800000,67859999,6780,6785,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+67860000,67889999,6786,6788,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+67890000,67899999,6789,6789,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+67900000,67999999,6790,6799,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+68000000,68099999,6800,6809,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+68100000,68199999,6810,6819,Unknown,Mobile Service 流動服務 China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+68200000,68299999,6820,6829,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+68300000,68399999,6830,6839,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用 Containing Ported Number
+69899999,69999999,6989,6999,Unknown,8
+71119000,71119999,7111,7111,Unknown,Paging Service 傳呼服務 Telecom Digital Data Limited 電訊數碼信息有限公司
+71120000,71122999,7112,7112,Unknown,Paging Service 傳呼服務 ** Spare 備用
+71123000,71123999,7112,7112,Unknown,Paging Service 傳呼服務 Telecom Digital Data Limited 電訊數碼信息有限公司
+71124000,71127999,7112,7112,Unknown,Paging Service 傳呼服務 ** Spare 備用
+71128000,71128999,7112,7112,Unknown,Paging Service 傳呼服務 Telecom Digital Data Limited 電訊數碼信息有限公司
+71129000,71129999,7112,7112,Unknown,Paging Service 傳呼服務 ** Spare 備用
+71130000,71159999,7113,7115,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+71160000,71160999,7116,7116,Unknown,Paging Service 傳呼服務 Telecom Digital Data Limited 電訊數碼信息有限公司
+71161000,71161999,7116,7116,Unknown,Paging Service 傳呼服務 Telecom Digital Data Limited 電訊數碼信息有限公司
+71162000,71162999,7116,7116,Unknown,Paging Service 傳呼服務 Telecom Digital Data Limited 電訊數碼信息有限公司
+71163000,71163999,7116,7116,Unknown,Paging Service 傳呼服務 Telecom Digital Data Limited 電訊數碼信息有限公司
+71164000,71164999,7116,7116,Unknown,Paging Service 傳呼服務 ** Spare 備用
+71165000,71165999,7116,7116,Unknown,Paging Service 傳呼服務 ** Spare - open for application 備用/供申請使用
+71166000,71166999,7116,7116,Unknown,Paging Service 傳呼服務 Telecom Digital Data Limited 電訊數碼信息有限公司
+71167000,71167999,7116,7116,Unknown,Paging Service 傳呼服務 ** Spare 備用
+71168000,71168999,7116,7116,Unknown,Paging Service 傳呼服務 Telecom Digital Data Limited 電訊數碼信息有限公司
+71169000,71169999,7116,7116,Unknown,Paging Service 傳呼服務 ** Spare 備用
+71170000,71689999,7117,7168,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+71690000,71699999,7169,7169,Unknown,Paging Service 傳呼服務 ** Spare - open for application 備用/供申請使用
+71700000,71709999,7170,7170,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+71710000,71719999,7171,7171,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+71720000,72219999,7172,7221,Unknown,Mobile Service 流動服務 ** Spare 備用
+72220000,72229999,7222,7222,Unknown,Paging Service 傳呼服務 Telecom Digital Data Limited 電訊數碼信息有限公司
+72230000,72249999,7223,7224,Unknown,Mobile Service 流動服務 ** Spare 備用
+72250000,72259999,7225,7225,Unknown,Paging Service 傳呼服務 Telecom Digital Data Limited 電訊數碼信息有限公司
+72260000,72379999,7226,7237,Unknown,Mobile Service 流動服務 ** Spare 備用
+72380000,72389999,7238,7238,Unknown,Paging Service 傳呼服務 Telecom Digital Data Limited 電訊數碼信息有限公司
+72390000,72719999,7239,7271,Unknown,Mobile Service 流動服務 ** Spare 備用
+72720000,72729999,7272,7272,Unknown,✓ Paging Service 傳呼服務 Telecom Digital Data Limited 電訊數碼信息有限公司
+72730000,72879999,7273,7287,Unknown,Mobile Service 流動服務 ** Spare 備用
+72880000,72889999,7288,7288,Unknown,Paging Service 傳呼服務 Telecom Digital Data Limited 電訊數碼信息有限公司
+72890000,72909999,7289,7290,Unknown,Mobile Service 流動服務 ** Spare 備用
+72910000,72919999,7291,7291,Unknown,Paging Service 傳呼服務 ** Spare - open for application 備用/供申請使用
+72920000,72929999,7292,7292,Unknown,Mobile Service 流動服務 ** Spare 備用
+72930000,72939999,7293,7293,Unknown,Paging Service 傳呼服務 ** Spare - open for application 備用/供申請使用
+72940000,73049999,7294,7304,Unknown,Mobile Service 流動服務 ** Spare 備用
+73050000,73059999,7305,7305,Unknown,Paging Service 傳呼服務 Telecom Digital Data Limited 電訊數碼信息有限公司
+73060000,73069999,7306,7306,Unknown,Paging Service 傳呼服務 Telecom Digital Data Limited 電訊數碼信息有限公司
+73070000,73079999,7307,7307,Unknown,Mobile Service 流動服務 ** Spare 備用
+73080000,73089999,7308,7308,Unknown,Paging Service 傳呼服務 Telecom Digital Data Limited 電訊數碼信息有限公司
+73090000,73209999,7309,7320,Unknown,Mobile Service 流動服務 ** Spare 備用
+73210000,73219999,7321,7321,Unknown,Paging Service 傳呼服務 Telecom Digital Data Limited 電訊數碼信息有限公司
+81000000,81099999,8100,8109,Personal Number,Personal Number Service 個人號碼服務 PCCW-HKT Telephone Limited and Hong Kong Telecommunications (HKT) Limited
+81100000,81199999,8110,8119,Personal Number,Personal Number Service 個人號碼服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+81200000,81299999,8120,8129,Personal Number,Personal Number Service 個人號碼服務 HGC Global Communications Limited 環球全域電訊有限公司
+81300000,81399999,8130,8139,Personal Number,Personal Number Service 個人號碼服務 HKBN Enterprise Solutions Limited 香港寬頻企業方案有限公司
+81400000,81499999,8140,8149,Personal Number,Personal Number Service 個人號碼服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+81500000,81599999,8150,8159,Unknown,Mobile Service 流動服務 ** Spare 備用
+81600000,81671999,8160,8167,Personal Number,Personal Number Service 個人號碼服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+81672000,81672999,8167,8167,Unknown,Mobile Service 流動服務 ** Spare 備用
+81673000,81699999,8167,8169,Personal Number,Personal Number Service 個人號碼服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+81700000,81799999,8170,8179,Personal Number,Personal Number Service 個人號碼服務 HGC Global Communications Limited 環球全域電訊有限公司
+81800000,81809999,8180,8180,Unknown,Mobile Service 流動服務 ** Spare 備用
+81810000,81819999,8181,8181,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+81820000,81899999,8182,8189,Unknown,Mobile Service 流動服務 ** Spare 備用
+81900000,81999999,8190,8199,Personal Number,Personal Number Service 個人號碼服務 HGC Global Communications Limited 環球全域電訊有限公司
+82000000,82099999,8200,8209,Personal Number,Personal Number Service 個人號碼服務 PCCW-HKT Telephone Limited and Hong Kong Telecommunications (HKT) Limited
+82100000,82199999,8210,8219,Personal Number,Personal Number Service 個人號碼服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+82200000,82299999,8220,8229,Personal Number,Personal Number Service 個人號碼服務 HKBN Enterprise Solutions HK Limited 香港寬頻企業方案香港有限公司
+82300000,82399999,8230,8239,Personal Number,Personal Number Service 個人號碼服務 HKBN Enterprise Solutions Limited 香港寬頻企業方案有限公司
+82400000,82499999,8240,8249,Unknown,Mobile Service 流動服務 ** Spare 備用
+82500000,82599999,8250,8259,Unknown,Mobile Service 流動服務 ** Spare 備用
+82600000,82678999,8260,8267,Personal Number,Personal Number Service 個人號碼服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+82679000,82679999,8267,8267,Unknown,Mobile Service 流動服務 ** Spare 備用
+82680000,82699999,8268,8269,Personal Number,Personal Number Service 個人號碼服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+82700000,82749999,8270,8274,Unknown,Mobile Service 流動服務 ** Spare 備用
+82750000,82799999,8275,8279,Unknown,Mobile Service 流動服務 ** Spare 備用
+82800000,82819999,8280,8281,Unknown,Mobile Service 流動服務 ** Spare 備用
+82820000,82829999,8282,8282,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+82830000,82899999,8283,8289,Unknown,Mobile Service 流動服務 ** Spare 備用
+82900000,82999999,8290,8299,Unknown,Mobile Service 流動服務 ** Spare 備用
+83000000,83099999,8300,8309,Personal Number,Personal Number Service 個人號碼服務 PCCW-HKT Telephone Limited and Hong Kong Telecommunications (HKT) Limited
+83100000,83199999,8310,8319,Unknown,Mobile Service 流動服務 ** Spare 備用
+83200000,83200999,8320,8320,Personal Number,Personal Number Service 個人號碼服務 ComNet Telecom (HK) Limited 信通電話(香港)有限公司
+83201000,83209999,8320,8320,Unknown,Mobile Service 流動服務 ** Spare 備用
+83210000,83249999,8321,8324,Unknown,Mobile Service 流動服務 ** Spare 備用
+83250000,83289999,8325,8328,Unknown,Mobile Service 流動服務 ** Spare 備用
+83290000,83299999,8329,8329,Personal Number,Personal Number Service 個人號碼服務 SmarTone Communications Limited
+83300000,83399999,8330,8339,Personal Number,Personal Number Service 個人號碼服務 HKBN Enterprise Solutions Limited 香港寬頻企業方案有限公司
+83400000,83499999,8340,8349,Personal Number,Personal Number Service 個人號碼服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+83500000,83599999,8350,8359,Unknown,Mobile Service 流動服務 ** Spare 備用
+83600000,83699999,8360,8369,Unknown,Mobile Service 流動服務 ** Spare 備用
+83700000,83705999,8370,8370,Personal Number,Personal Number Service 個人號碼服務 Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+83706000,83709999,8370,8370,Unknown,Mobile Service 流動服務 ** Spare 備用
+83710000,83799999,8371,8379,Unknown,Mobile Service 流動服務 ** Spare 備用
+83800000,83829999,8380,8382,Unknown,Mobile Service 流動服務 ** Spare 備用
+83830000,83839999,8383,8383,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+83840000,83899999,8384,8389,Unknown,Mobile Service 流動服務 ** Spare 備用
+83900000,83999999,8390,8399,Unknown,Mobile Service 流動服務 ** Spare 備用
+84000000,84099999,8400,8409,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+84100000,84199999,8410,8419,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+84200000,84299999,8420,8429,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+84300000,84399999,8430,8439,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+84400000,84429999,8440,8442,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+84430000,84799999,8443,8479,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+84800000,84809999,8480,8480,Unknown,Mobile Service 流動服務 China Telecom Global Limited 中國電信國際有限公司
+84810000,84819999,8481,8481,Unknown,Mobile Service 流動服務 Sun Mobile Limited 新移動通訊有限公司
+84820000,84829999,8482,8482,Unknown,Mobile Service 流動服務 Sun Mobile Limited 新移動通訊有限公司
+84830000,84839999,8483,8483,Unknown,Mobile Service 流動服務 China Telecom Global Limited 中國電信國際有限公司
+84840000,84849999,8484,8484,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+89899999,89999999,8989,8999,Unknown,8
+90100000,90199999,9010,9019,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+90200000,90299999,9020,9029,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+90300000,90399999,9030,9039,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+90400000,90499999,9040,9049,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+90500000,90599999,9050,9059,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+90600000,90699999,9060,9069,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+90700000,90799999,9070,9079,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+90800000,90899999,9080,9089,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+90900000,90999999,9090,9099,Unknown,✓ Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+91000000,91099999,9100,9109,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+91200000,91299999,9120,9129,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+91300000,91399999,9130,9139,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+91400000,91499999,9140,9149,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+91500000,91599999,9150,9159,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+91600000,91699999,9160,9169,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+91700000,91799999,9170,9179,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+91800000,91899999,9180,9189,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+91900000,91999999,9190,9199,Unknown,✓ Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+92000000,92099999,9200,9209,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+92100000,92199999,9210,9219,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+92200000,92299999,9220,9229,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+92300000,92399999,9230,9239,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+92400000,92499999,9240,9249,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+92500000,92599999,9250,9259,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+92600000,92699999,9260,9269,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+92700000,92799999,9270,9279,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+92800000,92899999,9280,9289,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+92900000,92909999,9290,9290,Unknown,Mobile Service 流動服務 Multibyte Info Technology Limited 博元訊息科技有限公司
+92910000,92919999,9291,9291,Unknown,Mobile Service 流動服務 Sun Mobile Limited 新移動通訊有限公司
+92920000,92929999,9292,9292,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+92930000,92999999,9293,9299,Unknown,Mobile Service 流動服務 China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+93000000,93099999,9300,9309,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+93100000,93199999,9310,9319,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+93200000,93299999,9320,9329,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+93300000,93399999,9330,9339,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+93400000,93499999,9340,9349,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+93500000,93599999,9350,9359,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+93600000,93699999,9360,9369,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+93700000,93799999,9370,9379,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+93800000,93899999,9380,9389,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+93900000,93919999,9390,9391,Unknown,Mobile Service 流動服務 Sun Mobile Limited 新移動通訊有限公司
+93920000,93929999,9392,9392,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+93930000,93939999,9393,9393,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+93940000,93999999,9394,9399,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+94000000,94099999,9400,9409,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+94100000,94199999,9410,9419,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+94200000,94299999,9420,9429,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+94300000,94399999,9430,9439,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+94400000,94499999,9440,9449,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+94500000,94599999,9450,9459,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+94600000,94699999,9460,9469,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+94700000,94799999,9470,9479,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+94800000,94899999,9480,9489,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+94900000,94999999,9490,9499,Unknown,✓ Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+95000000,95099999,9500,9509,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+95100000,95199999,9510,9519,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+95200000,95299999,9520,9529,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+95300000,95399999,9530,9539,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+95400000,95499999,9540,9549,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+95500000,95599999,9550,9559,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+95600000,95699999,9560,9569,Unknown,Mobile Service 流動服務 China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+95700000,95799999,9570,9579,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+95800000,95899999,9580,9589,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+95900000,95949999,9590,9594,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+95950000,95959999,9595,9595,Unknown,✓ Mobile Service 流動服務 ** Reserved 預留
+95960000,95979999,9596,9597,Unknown,Mobile Service 流動服務 China Telecom Global Limited 中國電信國際有限公司
+95980000,95999999,9598,9599,Unknown,Mobile Service 流動服務 ** Spare - open for application 備用/供申請使用
+96000000,96099999,9600,9609,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+96100000,96199999,9610,9619,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+96200000,96299999,9620,9629,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+96300000,96399999,9630,9639,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+96400000,96499999,9640,9649,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+96500000,96599999,9650,9659,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+96600000,96699999,9660,9669,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+96700000,96799999,9670,9679,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+96800000,96899999,9680,9689,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+96900000,96999999,9690,9699,Unknown,✓ Mobile Service 流動服務 China-Hongkong Telecom Limited 中港通電訊有限公司
+97000000,97099999,9700,9709,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+97100000,97199999,9710,9719,Unknown,Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+97200000,97299999,9720,9729,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+97300000,97399999,9730,9739,Unknown,Mobile Service 流動服務 SmarTone Mobile Communications Limited 數碼通電訊有限公司
+97400000,97499999,9740,9749,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+97500000,97599999,9750,9759,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+97600000,97699999,9760,9769,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+97700000,97799999,9770,9779,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+97800000,97899999,9780,9789,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+97900000,97999999,9790,9799,Unknown,✓ Mobile Service 流動服務 China Mobile Hong Kong Company Limited 中國移動香港有限公司
+98000000,98099999,9800,9809,Unknown,Mobile Service 流動服務 Hong Kong Telecommunications (HKT) Limited
+98100000,98199999,9810,9819,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+98200000,98299999,9820,9829,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司
+98300000,98399999,9830,9839,Unknown,Mobile Service 流動服務 Hutchison Telephone Company Limited 和記電話有限公司

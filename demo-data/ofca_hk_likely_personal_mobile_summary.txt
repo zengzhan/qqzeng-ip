@@ -1,0 +1,153 @@
+Likely personal mobile segments from OFCA numbering plan
+total_ranges=294
+
+By first digit:
+4xxxxxxx	57
+5xxxxxxx	68
+6xxxxxxx	74
+8xxxxxxx	9
+9xxxxxxx	86
+
+Top operator hints:
+71	Hong Kong Telecommunications (HKT) Limited
+58	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+52	Hutchison Telephone Company Limited 和記電話有限公司
+30	SmarTone Mobile Communications Limited 數碼通電訊有限公司
+17	Sun Mobile Limited 新移動通訊有限公司
+16	China Telecom Global Limited 中國電信國際有限公司
+16	China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+13	Multibyte Info Technology Limited 博元訊息科技有限公司
+6	CITIC Telecom International Limited中信國際電訊有限公司
+2	✓  China Mobile Hong Kong Company Limited 中國移動香港有限公司
+2	✓  Hong Kong Telecommunications (HKT) Limited
+1	South China Telecommunications (H.K.) Limited 中國南方電信(香港)有限公司
+1	1GLOBAL Operations (Hong Kong) Limited
+1	HuiYinBi Telecom (Hong Kong) Limited 回音壁電信(香港)有限公司
+1	Government use
+1	Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+1	Webbing Hong Kong Limited
+1	✓  SmarTone Mobile Communications Limited 數碼通電訊有限公司
+1	China-Hongkong Telecom Limited 中港通電訊有限公司
+1	✓  China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+
+Top prefix ranges:
+40930000-40969999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+42430000-42469999	China Telecom Global Limited 中國電信國際有限公司
+44000000-44099999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+44100000-44199999	Hong Kong Telecommunications (HKT) Limited
+44200000-44299999	Hutchison Telephone Company Limited 和記電話有限公司
+44300000-44399999	Hong Kong Telecommunications (HKT) Limited
+44400000-44409999	Sun Mobile Limited 新移動通訊有限公司
+44410000-44429999	Hutchison Telephone Company Limited 和記電話有限公司
+44430000-44439999	China Telecom Global Limited 中國電信國際有限公司
+44450000-44499999	Hong Kong Telecommunications (HKT) Limited
+44500000-44599999	Hutchison Telephone Company Limited 和記電話有限公司
+44600000-44699999	Hutchison Telephone Company Limited 和記電話有限公司
+44700000-44799999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+44800000-44899999	Hutchison Telephone Company Limited 和記電話有限公司
+44900000-44999999	Hutchison Telephone Company Limited 和記電話有限公司
+46000000-46069999	China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+46070000-46079999	Multibyte Info Technology Limited 博元訊息科技有限公司
+46080000-46089999	Sun Mobile Limited 新移動通訊有限公司
+46090000-46099999	China Telecom Global Limited 中國電信國際有限公司
+46100000-46109999	Sun Mobile Limited 新移動通訊有限公司
+46110000-46129999	Sun Mobile Limited 新移動通訊有限公司
+46130000-46139999	China Telecom Global Limited 中國電信國際有限公司
+46140000-46149999	Sun Mobile Limited 新移動通訊有限公司
+46150000-46169999	China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+46170000-46179999	Multibyte Info Technology Limited 博元訊息科技有限公司
+46180000-46189999	Multibyte Info Technology Limited 博元訊息科技有限公司
+46190000-46199999	China Telecom Global Limited 中國電信國際有限公司
+46200000-46249999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+46250000-46299999	SmarTone Mobile Communications Limited 數碼通電訊有限公司
+46300000-46399999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+46400000-46409999	China Telecom Global Limited 中國電信國際有限公司
+46410000-46459999	SmarTone Mobile Communications Limited 數碼通電訊有限公司
+46470000-46479999	Sun Mobile Limited 新移動通訊有限公司
+46480000-46489999	Multibyte Info Technology Limited 博元訊息科技有限公司
+46490000-46499999	CITIC Telecom International Limited中信國際電訊有限公司
+46500000-46539999	China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+46540000-46589999	Hong Kong Telecommunications (HKT) Limited
+46590000-46599999	Multibyte Info Technology Limited 博元訊息科技有限公司
+46600000-46649999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+46650000-46669999	China Telecom Global Limited 中國電信國際有限公司
+46700000-46779999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+46780000-46789999	Sun Mobile Limited 新移動通訊有限公司
+46790000-46799999	Sun Mobile Limited 新移動通訊有限公司
+46800000-46899999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+46900000-46989999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+46990000-46999999	South China Telecommunications (H.K.) Limited 中國南方電信(香港)有限公司
+47000000-47099999	Hutchison Telephone Company Limited 和記電話有限公司
+47100000-47199999	Hutchison Telephone Company Limited 和記電話有限公司
+47200000-47259999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+47260000-47309999	Hutchison Telephone Company Limited 和記電話有限公司
+47310000-47349999	SmarTone Mobile Communications Limited 數碼通電訊有限公司
+47350000-47399999	SmarTone Mobile Communications Limited 數碼通電訊有限公司
+47400000-47429999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+47430000-47449999	China Telecom Global Limited 中國電信國際有限公司
+47480000-47489999	China Telecom Global Limited 中國電信國際有限公司
+47500000-47599999	Hutchison Telephone Company Limited 和記電話有限公司
+47600000-47659999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+52300000-52339999	Hong Kong Telecommunications (HKT) Limited
+52360000-52379999	SmarTone Mobile Communications Limited 數碼通電訊有限公司
+52380000-52399999	SmarTone Mobile Communications Limited 數碼通電訊有限公司
+52400000-52499999	Hong Kong Telecommunications (HKT) Limited
+52530000-52579999	SmarTone Mobile Communications Limited 數碼通電訊有限公司
+52600000-52699999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+52700000-52799999	Hong Kong Telecommunications (HKT) Limited
+52800000-52809999	1GLOBAL Operations (Hong Kong) Limited
+52810000-52829999	Sun Mobile Limited 新移動通訊有限公司
+52830000-52839999	Multibyte Info Technology Limited 博元訊息科技有限公司
+52840000-52859999	SmarTone Mobile Communications Limited 數碼通電訊有限公司
+52860000-52889999	SmarTone Mobile Communications Limited 數碼通電訊有限公司
+52899000-52899999	HuiYinBi Telecom (Hong Kong) Limited 回音壁電信(香港)有限公司
+52900000-52999999	Hong Kong Telecommunications (HKT) Limited
+53000000-53099999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+53100000-53199999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+53200000-53299999	Hong Kong Telecommunications (HKT) Limited
+53300000-53399999	Hutchison Telephone Company Limited 和記電話有限公司
+53400000-53499999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+53540000-53589999	Hutchison Telephone Company Limited 和記電話有限公司
+53600000-53699999	Hong Kong Telecommunications (HKT) Limited
+53700000-53799999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+53800000-53899999	China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+53900000-53999999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+54000000-54099999	Sun Mobile Limited 新移動通訊有限公司
+54100000-54199999	Hong Kong Telecommunications (HKT) Limited
+54200000-54299999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+54300000-54399999	Hong Kong Telecommunications (HKT) Limited
+54400000-54499999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+54600000-54699999	Hutchison Telephone Company Limited 和記電話有限公司
+54700000-54799999	Hong Kong Telecommunications (HKT) Limited
+54800000-54899999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+54900000-54999999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+55000000-55099999	SmarTone Mobile Communications Limited 數碼通電訊有限公司
+55100000-55199999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+55200000-55299999	Hong Kong Telecommunications (HKT) Limited
+55300000-55399999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+55400000-55489999	Sun Mobile Limited 新移動通訊有限公司
+55490000-55519999	Government use
+55600000-55699999	Hutchison Telephone Company Limited 和記電話有限公司
+55700000-55799999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+55800000-55899999	Hong Kong Telecommunications (HKT) Limited
+55900000-55999999	SmarTone Mobile Communications Limited 數碼通電訊有限公司
+56000000-56099999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+56100000-56199999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+56200000-56299999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+56300000-56399999	Hutchison Telephone Company Limited 和記電話有限公司
+56400000-56499999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+56600000-56699999	Hutchison Telephone Company Limited 和記電話有限公司
+56800000-56899999	Hong Kong Telecommunications (HKT) Limited
+56900000-56999999	Hutchison Telephone Company Limited 和記電話有限公司
+57000000-57019999	Multibyte Info Technology Limited 博元訊息科技有限公司
+57020000-57039999	Sun Mobile Limited 新移動通訊有限公司
+57040000-57059999	Multibyte Info Technology Limited 博元訊息科技有限公司
+57060000-57069999	Hong Kong Broadband Network Limited 香港寬頻網絡有限公司
+57070000-57089999	China Unicom (Hong Kong) Operations Limited 中國聯通(香港)運營有限公司
+57090000-57099999	CITIC Telecom International Limited中信國際電訊有限公司
+57100000-57179999	Hong Kong Telecommunications (HKT) Limited
+57200000-57299999	SmarTone Mobile Communications Limited 數碼通電訊有限公司
+57300000-57369999	China Mobile Hong Kong Company Limited 中國移動香港有限公司
+57400000-57449999	SmarTone Mobile Communications Limited 數碼通電訊有限公司
+57450000-57469999	Multibyte Info Technology Limited 博元訊息科技有限公司
+57470000-57489999	Multibyte Info Technology Limited 博元訊息科技有限公司

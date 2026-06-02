@@ -1,0 +1,601 @@
+prefix_start4,prefix_end4,service
+2939,2999,Unknown
+3008,3009,Access Code
+3010,3017,Access Code
+3018,3018,Access Code
+3019,3020,Access Code
+3021,3021,Access Code
+3022,3022,Access Code
+3023,3023,Access Code
+3024,3024,Access Code
+3025,3025,Access Code
+3026,3026,Access Code
+3027,3027,Access Code
+3028,3028,Access Code
+3029,3029,Access Code
+3030,3039,Access Code
+3040,3049,Access Code
+3050,3051,Access Code
+3052,3053,Access Code
+3054,3054,Access Code
+3055,3055,Access Code
+3056,3056,Access Code
+3057,3060,Access Code
+3061,3061,Access Code
+3062,3062,Access Code
+3063,3064,Access Code
+3065,3065,Access Code
+3066,3066,Access Code
+3067,3067,Access Code
+3068,3068,Access Code
+3069,3069,Access Code
+3070,3071,Access Code
+3072,3072,Access Code
+3073,3073,Access Code
+3074,3074,Access Code
+3075,3078,Access Code
+3079,3079,Access Code
+3080,3088,Access Code
+3089,3089,Access Code
+3090,3099,Access Code
+3100,3109,Fixed Services
+3110,3119,Fixed Services
+3120,3129,Fixed Services
+3130,3130,Fixed Services
+3131,3131,Fixed Services
+3132,3139,Fixed Services
+3140,3149,Fixed Services
+3150,3169,Fixed Services
+3170,3179,Fixed Services
+3180,3189,Fixed Services
+3190,3199,Fixed Services
+3400,3419,Fixed Services
+3420,3429,Fixed Services
+3430,3433,Fixed Services
+3434,3434,Fixed Services
+3435,3439,Fixed Services
+3440,3449,Fixed Services
+3450,3455,Fixed Services
+3456,3456,Fixed Services
+3457,3459,Fixed Services
+3460,3464,Fixed Services
+3465,3467,Fixed Services
+3468,3469,Fixed Services
+3470,3479,Fixed Services
+3480,3489,Fixed Services
+3490,3499,Fixed Services
+3500,3504,Fixed Services
+3505,3509,Fixed Services
+3510,3519,Fixed Services
+3520,3529,Fixed Services
+3530,3534,Fixed Services
+3535,3535,Fixed Services
+3536,3539,Fixed Services
+3540,3549,Fixed Services
+3550,3559,Fixed Services
+3560,3569,Fixed Services
+3570,3589,Fixed Services
+3590,3599,Fixed Services
+3600,3609,Fixed Services
+3610,3619,Fixed Services
+3620,3629,Fixed Services
+3630,3635,Fixed Services
+3636,3636,Fixed Services
+3637,3639,Fixed Services
+3640,3649,Fixed Services
+3650,3669,Fixed Services
+3670,3679,Fixed Services
+3680,3684,Fixed Services
+3685,3689,Fixed Services
+3690,3699,Fixed Services
+3700,3701,Fixed Services
+3702,3705,Fixed Services
+3706,3709,Fixed Services
+3710,3719,Fixed Services
+3720,3724,Fixed Services
+3725,3725,Fixed Services
+3726,3726,Fixed Services
+3727,3728,Fixed Services
+3729,3729,Fixed Services
+3730,3736,Fixed Services
+3737,3737,Fixed Services
+3738,3739,Fixed Services
+3740,3749,Fixed Services
+3750,3759,Fixed Services
+3760,3769,Fixed Services
+3770,3779,Fixed Services
+3780,3789,Fixed Services
+3790,3799,Fixed Services
+3800,3829,Fixed Services
+3830,3837,Fixed Services
+3838,3838,Fixed Services
+3839,3839,Fixed Services
+3840,3840,Fixed Services
+3841,3842,Fixed Services
+3843,3843,Fixed Services
+3844,3844,Fixed Services
+3845,3845,Fixed Services
+3846,3846,Fixed Services
+3847,3848,Fixed Services
+3849,3849,Fixed Services
+3850,3851,Fixed Services
+3852,3852,Fixed Services
+3853,3853,Fixed Services
+3854,3855,Fixed Services
+3856,3856,Fixed Services
+3857,3858,Fixed Services
+3859,3859,Fixed Services
+3989,3999,Unknown
+4040,4040,Unknown
+4041,4049,Unknown
+4060,4069,Unknown
+4093,4096,Unknown
+4097,4099,Unknown
+4200,4209,Unknown
+4220,4239,Unknown
+4240,4241,Unknown
+4242,4242,Unknown
+4243,4246,Unknown
+4247,4249,Unknown
+4250,4299,Unknown
+4330,4339,Unknown
+4340,4342,Unknown
+4343,4343,Unknown
+4344,4349,Unknown
+4350,4399,Unknown
+4400,4409,Unknown
+4410,4419,Unknown
+4420,4429,Unknown
+4430,4439,Unknown
+4440,4440,Unknown
+4441,4442,Unknown
+4443,4443,Unknown
+4444,4444,Unknown
+4445,4449,Unknown
+4450,4459,Unknown
+4460,4469,Unknown
+4470,4479,Unknown
+4480,4489,Unknown
+4490,4499,Unknown
+4510,4539,Unknown
+4540,4544,Unknown
+4545,4545,Unknown
+4546,4549,Unknown
+4550,4559,Unknown
+4560,4566,Unknown
+4567,4567,Unknown
+4568,4569,Unknown
+4570,4599,Unknown
+4600,4606,Unknown
+4607,4607,Unknown
+4608,4608,Unknown
+4609,4609,Unknown
+4610,4610,Unknown
+4611,4612,Unknown
+4613,4613,Unknown
+4614,4614,Unknown
+4615,4616,Unknown
+4617,4617,Unknown
+4618,4618,Unknown
+4619,4619,Unknown
+4620,4624,Unknown
+4625,4629,Unknown
+4630,4639,Unknown
+4640,4640,Unknown
+4641,4645,Unknown
+4646,4646,Unknown
+4647,4647,Unknown
+4648,4648,Unknown
+4649,4649,Unknown
+4650,4653,Unknown
+4654,4658,Unknown
+4659,4659,Unknown
+4660,4664,Unknown
+4665,4666,Unknown
+4667,4669,Unknown
+4670,4677,Unknown
+4678,4678,Unknown
+4679,4679,Unknown
+4680,4689,Unknown
+4690,4698,Unknown
+4699,4699,Unknown
+4700,4709,Unknown
+4710,4719,Unknown
+4720,4725,Unknown
+4726,4730,Unknown
+4731,4734,Unknown
+4735,4739,Unknown
+4740,4742,Unknown
+4743,4744,Unknown
+4745,4746,Unknown
+4747,4747,Unknown
+4748,4748,Unknown
+4749,4749,Unknown
+4750,4759,Unknown
+4760,4765,Unknown
+4766,4799,Unknown
+4810,4819,Unknown
+4821,4829,Unknown
+4860,4869,Unknown
+4890,4899,Unknown
+4923,4929,Unknown
+4952,4959,Unknown
+4980,4989,Unknown
+5230,5233,Unknown
+5234,5235,Unknown
+5236,5237,Unknown
+5238,5239,Unknown
+5240,5249,Unknown
+5250,5251,Unknown
+5252,5252,Unknown
+5253,5257,Unknown
+5258,5259,Unknown
+5260,5269,Unknown
+5270,5279,Unknown
+5280,5280,Unknown
+5281,5282,Unknown
+5283,5283,Unknown
+5284,5285,Unknown
+5286,5288,Unknown
+5289,5289,Unknown
+5290,5299,Unknown
+5300,5309,Unknown
+5310,5319,Unknown
+5320,5329,Unknown
+5330,5339,Unknown
+5340,5349,Unknown
+5350,5352,Unknown
+5353,5353,Unknown
+5354,5358,Unknown
+5359,5359,Unknown
+5360,5369,Unknown
+5370,5379,Unknown
+5380,5389,Unknown
+5390,5399,Unknown
+5400,5409,Unknown
+5410,5419,Unknown
+5420,5429,Unknown
+5430,5439,Unknown
+5440,5449,Unknown
+5450,5453,Unknown
+5454,5454,Unknown
+5455,5459,Unknown
+5460,5469,Unknown
+5470,5479,Unknown
+5480,5489,Unknown
+5490,5499,Unknown
+5500,5509,Unknown
+5510,5519,Unknown
+5520,5529,Unknown
+5530,5539,Unknown
+5540,5548,Unknown
+5549,5551,Unknown
+5552,5554,Unknown
+5555,5555,Unknown
+5556,5559,Unknown
+5560,5569,Unknown
+5570,5579,Unknown
+5580,5589,Unknown
+5590,5599,Unknown
+5600,5609,Unknown
+5610,5619,Unknown
+5620,5629,Unknown
+5630,5639,Unknown
+5640,5649,Unknown
+5650,5655,Unknown
+5656,5656,Unknown
+5657,5659,Unknown
+5660,5669,Unknown
+5670,5677,Unknown
+5678,5678,Unknown
+5679,5679,Unknown
+5680,5689,Unknown
+5690,5699,Unknown
+5700,5701,Unknown
+5702,5703,Unknown
+5704,5705,Unknown
+5706,5706,Unknown
+5707,5708,Unknown
+5709,5709,Unknown
+5710,5717,Unknown
+5718,5719,Unknown
+5720,5729,Unknown
+5730,5736,Unknown
+5737,5739,Unknown
+5740,5744,Unknown
+5745,5746,Unknown
+5747,5748,Unknown
+5749,5749,Unknown
+5750,5756,Unknown
+5757,5757,Unknown
+5758,5759,Unknown
+5760,5767,Unknown
+5768,5769,Unknown
+5770,5779,Unknown
+5780,5789,Unknown
+5790,5799,Unknown
+5800,5800,Fixed Services
+5801,5801,Fixed Services
+5802,5802,Fixed Services
+5803,5803,Fixed Services
+5804,5804,Fixed Services
+5805,5805,Fixed Services
+5806,5806,Fixed Services
+5807,5807,Fixed Services
+5808,5808,Fixed Services
+5809,5809,Fixed Services
+5810,5810,Fixed Services
+5811,5811,Fixed Services
+5812,5812,Fixed Services
+5813,5813,Fixed Services
+5814,5814,Fixed Services
+5815,5815,Fixed Services
+5816,5816,Fixed Services
+5817,5817,Fixed Services
+5818,5818,Fixed Services
+5819,5819,Fixed Services
+5989,5999,Unknown
+6190,6199,Unknown
+6200,6209,Unknown
+6210,6219,Unknown
+6220,6229,Unknown
+6230,6239,Unknown
+6240,6243,Unknown
+6244,6249,Unknown
+6250,6259,Unknown
+6260,6260,Unknown
+6261,6261,Unknown
+6262,6262,Unknown
+6263,6267,Unknown
+6268,6268,Unknown
+6269,6269,Unknown
+6270,6279,Unknown
+6280,6289,Unknown
+6290,6299,Unknown
+6300,6309,Unknown
+6310,6319,Unknown
+6320,6329,Unknown
+6330,6339,Unknown
+6340,6349,Unknown
+6350,6359,Unknown
+6360,6360,Unknown
+6361,6361,Unknown
+6362,6362,Unknown
+6363,6363,Unknown
+6364,6368,Unknown
+6369,6369,Unknown
+6370,6379,Unknown
+6380,6389,Unknown
+6390,6399,Unknown
+6400,6409,Unknown
+6410,6419,Unknown
+6420,6429,Unknown
+6430,6439,Unknown
+6440,6449,Unknown
+6450,6451,Unknown
+6451,6451,Unknown
+6452,6452,Unknown
+6453,6459,Unknown
+6460,6469,Unknown
+6470,6479,Unknown
+6480,6489,Unknown
+6490,6499,Unknown
+6500,6509,Unknown
+6510,6519,Unknown
+6520,6529,Unknown
+6530,6539,Unknown
+6540,6549,Unknown
+6550,6559,Unknown
+6560,6569,Unknown
+6570,6579,Unknown
+6580,6589,Unknown
+6590,6599,Unknown
+6600,6609,Unknown
+6610,6619,Unknown
+6620,6629,Unknown
+6630,6639,Unknown
+6640,6649,Unknown
+6650,6659,Unknown
+6660,6663,Unknown
+6664,6665,Unknown
+6666,6666,Unknown
+6667,6669,Unknown
+6670,6679,Unknown
+6680,6689,Unknown
+6690,6699,Unknown
+6700,6709,Unknown
+6710,6719,Unknown
+6720,6729,Unknown
+6730,6739,Unknown
+6740,6749,Unknown
+6750,6759,Unknown
+6760,6769,Unknown
+6770,6779,Unknown
+6780,6785,Unknown
+6786,6788,Unknown
+6789,6789,Unknown
+6790,6799,Unknown
+6800,6809,Unknown
+6810,6819,Unknown
+6820,6829,Unknown
+6830,6839,Unknown
+6989,6999,Unknown
+7111,7111,Unknown
+7112,7112,Unknown
+7113,7115,Unknown
+7116,7116,Unknown
+7117,7168,Unknown
+7169,7169,Unknown
+7170,7170,Unknown
+7171,7171,Unknown
+7172,7221,Unknown
+7222,7222,Unknown
+7223,7224,Unknown
+7225,7225,Unknown
+7226,7237,Unknown
+7238,7238,Unknown
+7239,7271,Unknown
+7272,7272,Unknown
+7273,7287,Unknown
+7288,7288,Unknown
+7289,7290,Unknown
+7291,7291,Unknown
+7292,7292,Unknown
+7293,7293,Unknown
+7294,7304,Unknown
+7305,7305,Unknown
+7306,7306,Unknown
+7307,7307,Unknown
+7308,7308,Unknown
+7309,7320,Unknown
+7321,7321,Unknown
+8100,8109,Personal Number
+8110,8119,Personal Number
+8120,8129,Personal Number
+8130,8139,Personal Number
+8140,8149,Personal Number
+8150,8159,Unknown
+8160,8167,Personal Number
+8167,8167,Unknown
+8167,8169,Personal Number
+8170,8179,Personal Number
+8180,8180,Unknown
+8181,8181,Unknown
+8182,8189,Unknown
+8190,8199,Personal Number
+8200,8209,Personal Number
+8210,8219,Personal Number
+8220,8229,Personal Number
+8230,8239,Personal Number
+8240,8249,Unknown
+8250,8259,Unknown
+8260,8267,Personal Number
+8267,8267,Unknown
+8268,8269,Personal Number
+8270,8274,Unknown
+8275,8279,Unknown
+8280,8281,Unknown
+8282,8282,Unknown
+8283,8289,Unknown
+8290,8299,Unknown
+8300,8309,Personal Number
+8310,8319,Unknown
+8320,8320,Personal Number
+8320,8320,Unknown
+8321,8324,Unknown
+8325,8328,Unknown
+8329,8329,Personal Number
+8330,8339,Personal Number
+8340,8349,Personal Number
+8350,8359,Unknown
+8360,8369,Unknown
+8370,8370,Personal Number
+8370,8370,Unknown
+8371,8379,Unknown
+8380,8382,Unknown
+8383,8383,Unknown
+8384,8389,Unknown
+8390,8399,Unknown
+8400,8409,Unknown
+8410,8419,Unknown
+8420,8429,Unknown
+8430,8439,Unknown
+8440,8442,Unknown
+8443,8479,Unknown
+8480,8480,Unknown
+8481,8481,Unknown
+8482,8482,Unknown
+8483,8483,Unknown
+8484,8484,Unknown
+8989,8999,Unknown
+9010,9019,Unknown
+9020,9029,Unknown
+9030,9039,Unknown
+9040,9049,Unknown
+9050,9059,Unknown
+9060,9069,Unknown
+9070,9079,Unknown
+9080,9089,Unknown
+9090,9099,Unknown
+9100,9109,Unknown
+9120,9129,Unknown
+9130,9139,Unknown
+9140,9149,Unknown
+9150,9159,Unknown
+9160,9169,Unknown
+9170,9179,Unknown
+9180,9189,Unknown
+9190,9199,Unknown
+9200,9209,Unknown
+9210,9219,Unknown
+9220,9229,Unknown
+9230,9239,Unknown
+9240,9249,Unknown
+9250,9259,Unknown
+9260,9269,Unknown
+9270,9279,Unknown
+9280,9289,Unknown
+9290,9290,Unknown
+9291,9291,Unknown
+9292,9292,Unknown
+9293,9299,Unknown
+9300,9309,Unknown
+9310,9319,Unknown
+9320,9329,Unknown
+9330,9339,Unknown
+9340,9349,Unknown
+9350,9359,Unknown
+9360,9369,Unknown
+9370,9379,Unknown
+9380,9389,Unknown
+9390,9391,Unknown
+9392,9392,Unknown
+9393,9393,Unknown
+9394,9399,Unknown
+9400,9409,Unknown
+9410,9419,Unknown
+9420,9429,Unknown
+9430,9439,Unknown
+9440,9449,Unknown
+9450,9459,Unknown
+9460,9469,Unknown
+9470,9479,Unknown
+9480,9489,Unknown
+9490,9499,Unknown
+9500,9509,Unknown
+9510,9519,Unknown
+9520,9529,Unknown
+9530,9539,Unknown
+9540,9549,Unknown
+9550,9559,Unknown
+9560,9569,Unknown
+9570,9579,Unknown
+9580,9589,Unknown
+9590,9594,Unknown
+9595,9595,Unknown
+9596,9597,Unknown
+9598,9599,Unknown
+9600,9609,Unknown
+9610,9619,Unknown
+9620,9629,Unknown
+9630,9639,Unknown
+9640,9649,Unknown
+9650,9659,Unknown
+9660,9669,Unknown
+9670,9679,Unknown
+9680,9689,Unknown
+9690,9699,Unknown
+9700,9709,Unknown
+9710,9719,Unknown
+9720,9729,Unknown
+9730,9739,Unknown
+9740,9749,Unknown
+9750,9759,Unknown
+9760,9769,Unknown
+9770,9779,Unknown
+9780,9789,Unknown
+9790,9799,Unknown
+9800,9809,Unknown
+9810,9819,Unknown
+9820,9829,Unknown
+9830,9839,Unknown

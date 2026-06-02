@@ -1,0 +1,9 @@
+.git
+.gitignore
+.github
+.deploy
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.log
+.vscode

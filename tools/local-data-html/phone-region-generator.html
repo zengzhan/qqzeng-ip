@@ -1,0 +1,952 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>全国城市手机号生成器</title>
+  <style>
+    :root {
+      --bg1: #f3f7ff;
+      --bg2: #e8fff6;
+      --card: #ffffff;
+      --ink: #18212f;
+      --muted: #5f6f86;
+      --accent: #0f766e;
+      --accent2: #155eef;
+      --line: #d8e3ef;
+      --ok: #0f9d58;
+      --warn: #d97706;
+      --err: #c62828;
+      --shadow: 0 12px 36px rgba(18, 38, 63, 0.1);
+      --radius: 16px;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 10% 10%, #d6f3ff 0%, transparent 35%),
+        radial-gradient(circle at 90% 80%, #d8ffe5 0%, transparent 30%),
+        linear-gradient(160deg, var(--bg1), var(--bg2));
+      min-height: 100vh;
+    }
+
+    .wrap {
+      max-width: 1160px;
+      margin: 20px auto;
+      padding: 0 14px 24px;
+      animation: rise .45s ease;
+    }
+
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .hero {
+      background: linear-gradient(125deg, #ffffffd9, #f5fffdde);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+
+    .hero h1 {
+      margin: 0 0 8px;
+      font-size: 24px;
+      letter-spacing: .3px;
+    }
+
+    .hero p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.55;
+      font-size: 14px;
+    }
+
+    .hero-link {
+      display: inline-block;
+      margin-top: 10px;
+      text-decoration: none;
+      color: #fff;
+      border-radius: 10px;
+      padding: 8px 12px;
+      font-size: 13px;
+      background: linear-gradient(120deg, #0ea5a6, #0f766e);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1.2fr 1fr;
+      gap: 14px;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 14px;
+    }
+
+    .card h2 {
+      margin: 0 0 10px;
+      font-size: 17px;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 130px 1fr;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+
+    .row label {
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    input[type="text"],
+    input[type="number"],
+    select {
+      width: 100%;
+      border: 1px solid #c9d7e9;
+      border-radius: 10px;
+      padding: 9px 10px;
+      font-size: 14px;
+      background: #fff;
+      color: var(--ink);
+    }
+
+    input[type="file"] {
+      font-size: 13px;
+      width: 100%;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 11px;
+      padding: 9px 14px;
+      font-size: 14px;
+      cursor: pointer;
+      color: #fff;
+      background: linear-gradient(120deg, var(--accent2), var(--accent));
+      transition: transform .15s ease, opacity .15s ease;
+    }
+
+    button.alt {
+      background: linear-gradient(120deg, #64748b, #334155);
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      opacity: .95;
+    }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px;
+      background: #f9fcff;
+    }
+
+    .pill .k {
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
+
+    .pill .v {
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .msg {
+      margin-top: 10px;
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-size: 13px;
+      display: none;
+    }
+
+    .msg.ok { display: block; background: #e8f7ee; color: var(--ok); border: 1px solid #b7e3c8; }
+    .msg.warn { display: block; background: #fff6e9; color: var(--warn); border: 1px solid #f2d5a5; }
+    .msg.err { display: block; background: #fdecec; color: var(--err); border: 1px solid #f5c2c7; }
+
+    .tip {
+      border: 1px dashed #bcd0ea;
+      border-radius: 10px;
+      background: #f7fbff;
+      color: #476082;
+      font-size: 12px;
+      padding: 8px 10px;
+      margin-bottom: 10px;
+      line-height: 1.55;
+    }
+
+    .table-wrap {
+      overflow: auto;
+      max-height: 420px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      margin-top: 10px;
+      background: #fcfdff;
+    }
+
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      font-size: 12px;
+    }
+
+    th, td {
+      padding: 8px;
+      border-bottom: 1px solid #e8eef7;
+      text-align: left;
+      white-space: nowrap;
+    }
+
+    th {
+      position: sticky;
+      top: 0;
+      background: #edf5ff;
+      z-index: 1;
+      font-weight: 700;
+    }
+
+    .inline {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    @media (max-width: 960px) {
+      .grid { grid-template-columns: 1fr; }
+      .row { grid-template-columns: 1fr; }
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>全国城市手机号生成器</h1>
+      <p>打开页面后会优先自动加载内置城市号段文件。你只需筛选省份/城市/运营商，然后一键生成并下载手机号。</p>
+      <a class="hero-link" href="./hk-mobile-zone.html">进入香港专区（OFCA 号段）</a>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <h2>1) 加载城市号段并筛选</h2>
+
+        <div class="tip">
+          推荐：先点“一键加载内置城市号段”。如果失败，再用“手动上传 CSV”。
+        </div>
+
+        <div class="row">
+          <label>内置号段路径</label>
+          <input id="defaultCsvPath" type="text" value="../../qqzeng-phone-6.0/python/output_cn/region_segments.csv" />
+        </div>
+
+        <div class="actions">
+          <button id="btnLoadDefault" type="button">一键加载内置城市号段</button>
+        </div>
+
+        <div class="row">
+          <label>手动上传 CSV</label>
+          <input id="fileInput" type="file" accept=".csv,text/csv" />
+        </div>
+
+        <div class="row">
+          <label>省份</label>
+          <select id="provinceSelect"><option value="">全部</option></select>
+        </div>
+
+        <div class="row">
+          <label>城市</label>
+          <select id="citySelect"><option value="">全部</option></select>
+        </div>
+
+        <div class="row">
+          <label>运营商</label>
+          <select id="ispSelect"><option value="">全部</option></select>
+        </div>
+
+        <div class="row">
+          <label>导出文件名</label>
+          <input id="outputName" type="text" value="generated_phones.txt" />
+        </div>
+
+        <div class="actions">
+          <button id="btnExportSegments" class="alt" type="button">导出当前筛选号段</button>
+        </div>
+
+        <div class="stats">
+          <div class="pill"><div class="k">已加载号段</div><div id="stLoaded" class="v">0</div></div>
+          <div class="pill"><div class="k">筛中号段</div><div id="stMatched" class="v">0</div></div>
+          <div class="pill"><div class="k">可生成容量</div><div id="stCapacity" class="v">0</div></div>
+          <div class="pill"><div class="k">地区组合数</div><div id="stRegions" class="v">0</div></div>
+        </div>
+
+        <div id="msgFilter" class="msg"></div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>省份</th>
+                <th>城市</th>
+                <th>运营商</th>
+                <th>号段数</th>
+              </tr>
+            </thead>
+            <tbody id="summaryBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>2) 生成手机号</h2>
+
+        <div class="row">
+          <label>生成数量</label>
+          <input id="generateCount" type="number" min="1" value="10000" />
+        </div>
+
+        <div class="row">
+          <label>生成模式</label>
+          <select id="modeSelect">
+            <option value="random">按号段随机</option>
+            <option value="expand">按号段顺序展开</option>
+          </select>
+        </div>
+
+        <div class="row">
+          <label>每号段生成量</label>
+          <input id="perSegment" type="number" min="1" max="10000" value="10" />
+        </div>
+
+        <div class="row">
+          <label>选项</label>
+          <div class="inline">
+            <input id="dedup" type="checkbox" checked />
+            <span>去重</span>
+          </div>
+        </div>
+
+        <div class="row">
+          <label>真实度</label>
+          <div class="inline">
+            <input id="realismFirst" type="checkbox" checked />
+            <span>优先真实概率（过滤明显测试尾号）</span>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button id="btnGenerate" type="button">生成并下载</button>
+        </div>
+
+        <div id="msgGenerate" class="msg"></div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>手机号</th>
+              </tr>
+            </thead>
+            <tbody id="previewBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="./phone-region-offline-data.js"></script>
+  <script>
+    const state = {
+      rows: [],
+      filtered: [],
+      lastGenerated: []
+    };
+
+    const fileInput = document.getElementById("fileInput");
+    const defaultCsvPath = document.getElementById("defaultCsvPath");
+    const btnLoadDefault = document.getElementById("btnLoadDefault");
+
+    const provinceSelect = document.getElementById("provinceSelect");
+    const citySelect = document.getElementById("citySelect");
+    const ispSelect = document.getElementById("ispSelect");
+
+    const stLoaded = document.getElementById("stLoaded");
+    const stMatched = document.getElementById("stMatched");
+    const stCapacity = document.getElementById("stCapacity");
+    const stRegions = document.getElementById("stRegions");
+
+    const msgFilter = document.getElementById("msgFilter");
+    const msgGenerate = document.getElementById("msgGenerate");
+    const summaryBody = document.getElementById("summaryBody");
+    const previewBody = document.getElementById("previewBody");
+
+    function setMsg(el, text, type) {
+      el.textContent = text || "";
+      el.className = "msg" + (type ? " " + type : "");
+    }
+
+    function clearSelect(selectEl) {
+      while (selectEl.options.length > 1) {
+        selectEl.remove(1);
+      }
+    }
+
+    function addOptions(selectEl, values) {
+      values.forEach(v => {
+        const op = document.createElement("option");
+        op.value = v;
+        op.textContent = v;
+        selectEl.appendChild(op);
+      });
+    }
+
+    function toInt(v, d = 0) {
+      const n = Number(v);
+      return Number.isFinite(n) ? Math.trunc(n) : d;
+    }
+
+    function randomInt(maxExclusive) {
+      return Math.floor(Math.random() * maxExclusive);
+    }
+
+    function isSequentialTail(tail) {
+      const up = "0123456789";
+      const down = "9876543210";
+      return up.includes(tail) || down.includes(tail);
+    }
+
+    function tailRealismScore(tail) {
+      let score = 100;
+
+      if (tail === "0000") score -= 90;
+      if (/^(\d)\1{3}$/.test(tail)) score -= 70;
+      if (isSequentialTail(tail)) score -= 65;
+      if (/^(\d)(\d)\1\2$/.test(tail)) score -= 32; // 1212/3434
+      if (/^(\d)\1(\d)\2$/.test(tail)) score -= 32; // 1122/3344
+      if (/(\d)\1\1/.test(tail)) score -= 24; // 三连号
+      if (/00$/.test(tail)) score -= 12;
+      if (/^00/.test(tail)) score -= 10;
+
+      return score;
+    }
+
+    function buildPreferredTailPool(minScore) {
+      const out = [];
+      for (let i = 0; i < 10000; i++) {
+        const tail = String(i).padStart(4, "0");
+        if (tailRealismScore(tail) >= minScore) {
+          out.push(tail);
+        }
+      }
+      return out;
+    }
+
+    const PREFERRED_TAIL_POOL = buildPreferredTailPool(72);
+
+    function parseCsvLine(line) {
+      if (!line.includes('"')) {
+        return line.split(",");
+      }
+      const out = [];
+      let cur = "";
+      let i = 0;
+      let inQuotes = false;
+      while (i < line.length) {
+        const ch = line[i];
+        if (ch === '"') {
+          if (inQuotes && line[i + 1] === '"') {
+            cur += '"';
+            i += 2;
+            continue;
+          }
+          inQuotes = !inQuotes;
+          i++;
+          continue;
+        }
+        if (ch === "," && !inQuotes) {
+          out.push(cur);
+          cur = "";
+          i++;
+          continue;
+        }
+        cur += ch;
+        i++;
+      }
+      out.push(cur);
+      return out;
+    }
+
+    function readCsv(text) {
+      const lines = text.replace(/\r/g, "").split("\n").filter(Boolean);
+      if (lines.length < 2) {
+        throw new Error("CSV 内容为空或仅有表头。");
+      }
+
+      const header = parseCsvLine(lines[0]);
+      const idx = {
+        province: header.indexOf("province"),
+        city: header.indexOf("city"),
+        isp: header.indexOf("isp"),
+        segment7: header.indexOf("segment7")
+      };
+
+      if (Object.values(idx).some(x => x < 0)) {
+        throw new Error("CSV 表头不正确，必须包含 province, city, isp, segment7。");
+      }
+
+      const rows = [];
+      for (let i = 1; i < lines.length; i++) {
+        const cols = parseCsvLine(lines[i]);
+        const segment7 = (cols[idx.segment7] || "").trim();
+        if (!/^\d{7}$/.test(segment7)) {
+          continue;
+        }
+        rows.push({
+          province: (cols[idx.province] || "").trim(),
+          city: (cols[idx.city] || "").trim(),
+          isp: (cols[idx.isp] || "").trim(),
+          segment7
+        });
+      }
+      return rows;
+    }
+
+    function formatNum(n) {
+      return Number(n || 0).toLocaleString("zh-CN");
+    }
+
+    function renderSummary() {
+      summaryBody.innerHTML = "";
+      if (!state.filtered.length) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = "<td colspan='4'>当前筛选无数据。</td>";
+        summaryBody.appendChild(tr);
+        return;
+      }
+
+      const map = new Map();
+      state.filtered.forEach(r => {
+        const key = r.province + "|" + r.city + "|" + r.isp;
+        map.set(key, (map.get(key) || 0) + 1);
+      });
+
+      const arr = Array.from(map.entries())
+        .map(([k, v]) => {
+          const p = k.split("|");
+          return { province: p[0], city: p[1], isp: p[2], count: v };
+        })
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 120);
+
+      arr.forEach(x => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = "<td>" + x.province + "</td><td>" + x.city + "</td><td>" + x.isp + "</td><td>" + formatNum(x.count) + "</td>";
+        summaryBody.appendChild(tr);
+      });
+    }
+
+    function applyFilters() {
+      const p = provinceSelect.value;
+      const c = citySelect.value;
+      const i = ispSelect.value;
+
+      state.filtered = state.rows.filter(r => {
+        if (p && r.province !== p) return false;
+        if (c && r.city !== c) return false;
+        if (i && r.isp !== i) return false;
+        return true;
+      });
+
+      stMatched.textContent = formatNum(state.filtered.length);
+      stCapacity.textContent = formatNum(state.filtered.length * 10000);
+      const regions = new Set(state.filtered.map(r => r.province + "|" + r.city + "|" + r.isp));
+      stRegions.textContent = formatNum(regions.size);
+
+      renderSummary();
+    }
+
+    function updateCityOptions() {
+      clearSelect(citySelect);
+      const p = provinceSelect.value;
+      const cities = new Set();
+      state.rows.forEach(r => {
+        if (!p || r.province === p) {
+          cities.add(r.city);
+        }
+      });
+      addOptions(citySelect, Array.from(cities).sort((a, b) => a.localeCompare(b, "zh-Hans-CN")));
+    }
+
+    function updateOptionsFromRows() {
+      clearSelect(provinceSelect);
+      clearSelect(citySelect);
+      clearSelect(ispSelect);
+
+      const provinces = new Set();
+      const cities = new Set();
+      const isps = new Set();
+
+      state.rows.forEach(r => {
+        provinces.add(r.province);
+        cities.add(r.city);
+        isps.add(r.isp);
+      });
+
+      addOptions(provinceSelect, Array.from(provinces).sort((a, b) => a.localeCompare(b, "zh-Hans-CN")));
+      addOptions(citySelect, Array.from(cities).sort((a, b) => a.localeCompare(b, "zh-Hans-CN")));
+      addOptions(ispSelect, Array.from(isps).sort((a, b) => a.localeCompare(b, "zh-Hans-CN")));
+    }
+
+    function resetEmptyState() {
+      state.rows = [];
+      state.filtered = [];
+      state.lastGenerated = [];
+      stLoaded.textContent = "0";
+      stMatched.textContent = "0";
+      stCapacity.textContent = "0";
+      stRegions.textContent = "0";
+      summaryBody.innerHTML = "";
+      previewBody.innerHTML = "";
+      renderSummary();
+      renderPreview([]);
+    }
+
+    function loadRows(rows, sourceName) {
+      state.rows = rows;
+      state.filtered = rows.slice();
+      state.lastGenerated = [];
+
+      stLoaded.textContent = formatNum(rows.length);
+      updateOptionsFromRows();
+      applyFilters();
+      renderPreview([]);
+
+      setMsg(msgFilter, "已加载 " + formatNum(rows.length) + " 条号段，来源：" + sourceName, "ok");
+    }
+
+    function loadRowsFromOfflineBundle(bundle) {
+      if (!bundle || !Array.isArray(bundle.regions) || typeof bundle.entries !== "string") {
+        throw new Error("离线数据包格式不正确");
+      }
+
+      const rows = [];
+      const lines = bundle.entries.split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (!line) continue;
+        const idx = line.lastIndexOf(",");
+        if (idx <= 0) continue;
+
+        const segment7 = line.slice(0, idx);
+        const regionId = Number(line.slice(idx + 1));
+        const region = bundle.regions[regionId];
+
+        if (!region || region.length < 3 || !/^\d{7}$/.test(segment7)) {
+          continue;
+        }
+
+        rows.push({
+          province: region[0],
+          city: region[1],
+          isp: region[2],
+          segment7
+        });
+      }
+
+      loadRows(rows, "离线数据包（双击可用）");
+    }
+
+    async function loadCsvFromUrl(url) {
+      const resp = await fetch(url, { cache: "no-store" });
+      if (!resp.ok) {
+        throw new Error("读取失败：" + resp.status + " " + resp.statusText);
+      }
+      const text = await resp.text();
+      const rows = readCsv(text);
+      loadRows(rows, url);
+    }
+
+    function buildCsvCandidates(rawPath) {
+      const fromInput = (rawPath || "").trim();
+      const set = new Set();
+      if (fromInput) {
+        set.add(fromInput);
+      }
+
+      // 常用入口兜底：相对路径、站点根路径、当前origin绝对路径。
+      set.add("../../qqzeng-phone-6.0/python/output_cn/region_segments.csv");
+      set.add("/qqzeng-phone-6.0/python/output_cn/region_segments.csv");
+
+      if (location.origin && location.origin !== "null") {
+        set.add(location.origin + "/qqzeng-phone-6.0/python/output_cn/region_segments.csv");
+      }
+
+      return Array.from(set);
+    }
+
+    async function loadCsvByCandidates(rawPath) {
+      const candidates = buildCsvCandidates(rawPath);
+      let lastErr = null;
+
+      for (const url of candidates) {
+        try {
+          await loadCsvFromUrl(url);
+          defaultCsvPath.value = url;
+          return;
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+
+      throw lastErr || new Error("所有候选路径均加载失败");
+    }
+
+    function downloadText(filename, text) {
+      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function renderPreview(list) {
+      previewBody.innerHTML = "";
+      list.slice(0, 100).forEach((n, idx) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = "<td>" + (idx + 1) + "</td><td>" + n + "</td>";
+        previewBody.appendChild(tr);
+      });
+      if (!list.length) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = "<td colspan='2'>暂无生成结果。</td>";
+        previewBody.appendChild(tr);
+      }
+    }
+
+    function generateRandom(count, dedup, preferRealistic) {
+      const out = [];
+      const used = dedup ? new Set() : null;
+      const segs = state.filtered;
+      const maxUnique = segs.length * 10000;
+      let target = count;
+      const tailPool = preferRealistic && PREFERRED_TAIL_POOL.length ? PREFERRED_TAIL_POOL : null;
+
+      if (dedup && count > maxUnique) {
+        target = maxUnique;
+        setMsg(msgGenerate, "生成数量超过可去重上限，已自动调整到 " + formatNum(target) + "。", "warn");
+      }
+
+      let guard = 0;
+      while (out.length < target) {
+        const seg = segs[randomInt(segs.length)].segment7;
+        const tail = tailPool ? tailPool[randomInt(tailPool.length)] : String(randomInt(10000)).padStart(4, "0");
+        const phone = seg + tail;
+
+        if (!dedup) {
+          out.push(phone);
+        } else if (!used.has(phone)) {
+          used.add(phone);
+          out.push(phone);
+        }
+
+        guard++;
+        if (guard > target * 40 && dedup) {
+          break;
+        }
+      }
+      return out;
+    }
+
+    function generateExpand(total, perSegment, dedup, preferRealistic) {
+      const out = [];
+      const used = dedup ? new Set() : null;
+      let segIndex = 0;
+      let tail = 0;
+
+      while (out.length < total && segIndex < state.filtered.length) {
+        const seg = state.filtered[segIndex].segment7;
+        let local = 0;
+
+        while (local < perSegment && out.length < total && tail < 10000) {
+          const tailText = String(tail).padStart(4, "0");
+          tail++;
+
+          if (preferRealistic && tailRealismScore(tailText) < 72) {
+            continue;
+          }
+
+          const phone = seg + tailText;
+          if (!dedup) {
+            out.push(phone);
+          } else if (!used.has(phone)) {
+            used.add(phone);
+            out.push(phone);
+          }
+          local++;
+        }
+
+        segIndex++;
+        tail = 0;
+      }
+      return out;
+    }
+
+    fileInput.addEventListener("change", async (e) => {
+      setMsg(msgFilter, "", "");
+      setMsg(msgGenerate, "", "");
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+
+      try {
+        const text = await file.text();
+        const rows = readCsv(text);
+        loadRows(rows, file.name || "手动上传文件");
+      } catch (err) {
+        resetEmptyState();
+        setMsg(msgFilter, String(err.message || err), "err");
+      }
+    });
+
+    btnLoadDefault.addEventListener("click", async () => {
+      setMsg(msgFilter, "", "");
+      const url = (defaultCsvPath.value || "").trim();
+      if (!url) {
+        setMsg(msgFilter, "请先填写内置号段路径。", "warn");
+        return;
+      }
+      try {
+        await loadCsvByCandidates(url);
+      } catch (err) {
+        if (location.protocol === "file:") {
+          setMsg(msgFilter, "当前是本地文件模式(file://)，浏览器会限制自动读取本地CSV。请改用 http://127.0.0.1:8010/tools/local-data-html/phone-region-generator.html 打开，或手动上传 CSV。", "err");
+          return;
+        }
+        setMsg(msgFilter, "内置号段加载失败：" + String(err.message || err), "err");
+      }
+    });
+
+    provinceSelect.addEventListener("change", () => {
+      updateCityOptions();
+      applyFilters();
+    });
+    citySelect.addEventListener("change", applyFilters);
+    ispSelect.addEventListener("change", applyFilters);
+
+    document.getElementById("btnExportSegments").addEventListener("click", () => {
+      if (!state.filtered.length) {
+        setMsg(msgFilter, "当前没有可导出的筛选号段。", "warn");
+        return;
+      }
+
+      const lines = ["province,city,isp,segment7"];
+      state.filtered.forEach(r => lines.push([r.province, r.city, r.isp, r.segment7].join(",")));
+      downloadText("filtered_segments.csv", lines.join("\n"));
+      setMsg(msgFilter, "筛选号段已导出。", "ok");
+    });
+
+    document.getElementById("btnGenerate").addEventListener("click", () => {
+      setMsg(msgGenerate, "", "");
+      if (!state.filtered.length) {
+        setMsg(msgGenerate, "没有命中号段，请先加载数据或调整筛选条件。", "warn");
+        return;
+      }
+
+      const total = toInt(document.getElementById("generateCount").value, 0);
+      const mode = document.getElementById("modeSelect").value;
+      const perSegment = toInt(document.getElementById("perSegment").value, 10);
+      const dedup = document.getElementById("dedup").checked;
+      const preferRealistic = document.getElementById("realismFirst").checked;
+      const outputName = (document.getElementById("outputName").value || "generated_phones.txt").trim();
+
+      if (total < 1) {
+        setMsg(msgGenerate, "生成数量必须大于等于 1。", "warn");
+        return;
+      }
+
+      if (mode === "expand" && (perSegment < 1 || perSegment > 10000)) {
+        setMsg(msgGenerate, "每号段生成量必须在 1 到 10000 之间。", "warn");
+        return;
+      }
+
+      let list;
+      const t0 = performance.now();
+      if (mode === "random") {
+        list = generateRandom(total, dedup, preferRealistic);
+      } else {
+        list = generateExpand(total, perSegment, dedup, preferRealistic);
+      }
+      const t1 = performance.now();
+
+      state.lastGenerated = list;
+      renderPreview(list);
+      downloadText(outputName, list.join("\n"));
+
+      setMsg(
+        msgGenerate,
+        "已生成 " + formatNum(list.length) + " 个号码，耗时 " + ((t1 - t0) / 1000).toFixed(3) + " 秒，已下载 " + outputName + "。" + (preferRealistic ? " 当前为真实度优先模式。" : ""),
+        "ok"
+      );
+    });
+
+    renderSummary();
+    renderPreview([]);
+
+    (async () => {
+      if (window.__PHONE_OFFLINE_DATA__) {
+        try {
+          loadRowsFromOfflineBundle(window.__PHONE_OFFLINE_DATA__);
+          return;
+        } catch (err) {
+          setMsg(msgFilter, "离线数据包加载失败，将尝试CSV路径加载。", "warn");
+        }
+      }
+
+      const url = (defaultCsvPath.value || "").trim();
+      if (!url) return;
+      try {
+        await loadCsvByCandidates(url);
+      } catch (err) {
+        if (location.protocol === "file:") {
+          setMsg(msgFilter, "当前为本地文件模式(file://)。若离线数据包未加载，请确认 phone-region-offline-data.js 与本页面在同目录，或手动上传 CSV。", "warn");
+          return;
+        }
+        setMsg(msgFilter, "自动加载未成功，请点击“一键加载内置城市号段”重试，或手动上传 CSV。", "warn");
+      }
+    })();
+  </script>
+</body>
+</html>

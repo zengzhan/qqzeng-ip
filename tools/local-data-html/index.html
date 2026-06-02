@@ -1,0 +1,1116 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>本地数据分割/合并/随机插入工具</title>
+  <style>
+    :root {
+      --bg: #f5f7fb;
+      --card: #ffffff;
+      --line: #dbe2ef;
+      --text: #1f2a44;
+      --sub: #54607a;
+      --primary: #0b57d0;
+      --ok: #0e9f6e;
+      --warn: #b45309;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: radial-gradient(circle at top right, #e8f0ff 0%, var(--bg) 45%);
+      color: var(--text);
+      line-height: 1.5;
+    }
+
+    .wrap {
+      max-width: 1100px;
+      margin: 24px auto;
+      padding: 0 16px 24px;
+    }
+
+    .title {
+      background: linear-gradient(120deg, #0b57d0, #00a3a3);
+      color: #fff;
+      border-radius: 14px;
+      padding: 18px 20px;
+      box-shadow: 0 10px 24px rgba(11, 87, 208, 0.2);
+    }
+
+    .title h1 {
+      margin: 0;
+      font-size: 22px;
+    }
+
+    .title p {
+      margin: 8px 0 0;
+      opacity: 0.95;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 14px;
+      margin-top: 16px;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+      box-shadow: 0 5px 16px rgba(31, 42, 68, 0.06);
+    }
+
+    .card h2 {
+      margin: 0 0 10px;
+      font-size: 18px;
+    }
+
+    .row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 8px;
+      flex-wrap: wrap;
+    }
+
+    label {
+      font-size: 13px;
+      color: var(--sub);
+      min-width: 98px;
+    }
+
+    input[type="number"],
+    input[type="text"],
+    select,
+    textarea,
+    input[type="file"] {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 14px;
+      color: var(--text);
+      background: #fff;
+    }
+
+    textarea {
+      min-height: 90px;
+      resize: vertical;
+    }
+
+    .ctrl {
+      flex: 1;
+      min-width: 150px;
+    }
+
+    button {
+      border: 0;
+      border-radius: 8px;
+      background: var(--primary);
+      color: #fff;
+      font-size: 14px;
+      padding: 9px 12px;
+      cursor: pointer;
+      transition: transform .08s ease, opacity .08s ease;
+    }
+
+    button:hover { opacity: .95; }
+    button:active { transform: translateY(1px); }
+
+    .mini {
+      background: #eef4ff;
+      color: #123a7a;
+      border: 1px solid #c7dbff;
+      font-size: 13px;
+      padding: 6px 8px;
+    }
+
+    .msg {
+      margin-top: 8px;
+      font-size: 13px;
+      color: var(--sub);
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .msg.ok { color: var(--ok); }
+    .msg.warn { color: var(--warn); }
+
+    .links {
+      margin-top: 10px;
+      max-height: 200px;
+      overflow: auto;
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      padding: 8px;
+      background: #fcfdff;
+    }
+
+    .links a {
+      display: block;
+      text-decoration: none;
+      margin: 4px 0;
+      color: #0b57d0;
+      font-size: 13px;
+    }
+
+    .foot {
+      margin-top: 14px;
+      font-size: 12px;
+      color: var(--sub);
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="title">
+      <h1>本地数据工具（纯静态 HTML）</h1>
+      <p>支持数据分割、数据合并、随机插入指定号码，全部在浏览器本地执行，不上传服务器。</p>
+    </div>
+
+    <div class="grid">
+      <section class="card">
+        <h2>1. 数据分割</h2>
+        <div class="row">
+          <label>源文件</label>
+          <div class="ctrl"><input id="splitFile" type="file" accept=".txt,.csv,.tx" /></div>
+        </div>
+        <div class="row">
+          <label>每份行数</label>
+          <div class="ctrl"><input id="splitChunkSize" type="number" min="1" value="100000" /></div>
+        </div>
+        <div class="row">
+          <label>文件前缀</label>
+          <div class="ctrl"><input id="splitPrefix" type="text" value="part" /></div>
+        </div>
+        <div class="row">
+          <label>扩展名</label>
+          <div class="ctrl">
+            <select id="splitExt">
+              <option value="txt">txt</option>
+              <option value="tx">tx</option>
+              <option value="csv">csv</option>
+            </select>
+          </div>
+        </div>
+        <div class="row">
+          <button id="btnSplit">一键分割</button>
+          <button id="btnSplitAll" class="mini" type="button">一键打包下载ZIP</button>
+        </div>
+        <div id="splitMsg" class="msg"></div>
+        <div id="splitLinks" class="links"></div>
+      </section>
+
+      <section class="card">
+        <h2>2. 数据合并</h2>
+        <div class="row">
+          <label>多个文件</label>
+          <div class="ctrl"><input id="mergeFiles" type="file" accept=".txt,.csv,.tx" multiple /></div>
+        </div>
+        <div class="row">
+          <label>输出文件名</label>
+          <div class="ctrl"><input id="mergeName" type="text" value="merged.txt" /></div>
+        </div>
+        <div class="row">
+          <button id="btnMerge">一键合并</button>
+        </div>
+        <div id="mergeMsg" class="msg"></div>
+        <div id="mergeLinks" class="links"></div>
+      </section>
+
+      <section class="card">
+        <h2>3. 随机插入指定号码</h2>
+        <div class="row">
+          <label>基础文件</label>
+          <div class="ctrl"><input id="insertFile" type="file" accept=".txt,.csv,.tx" /></div>
+        </div>
+        <div class="row">
+          <label>指定号码</label>
+          <div class="ctrl"><textarea id="insertNumbers" placeholder="支持分段粘贴，自动提取号码。例如：13800138000 13900139000，或多段文本混贴"></textarea></div>
+        </div>
+        <div class="row">
+          <label>每个号码插入次数</label>
+          <div class="ctrl"><input id="insertTimes" type="number" min="1" value="1" /></div>
+        </div>
+        <div class="row">
+          <label>输出文件名</label>
+          <div class="ctrl"><input id="insertName" type="text" value="inserted.tx" /></div>
+        </div>
+        <div class="row">
+          <button id="btnInsert">一键随机插入</button>
+        </div>
+        <div id="insertMsg" class="msg"></div>
+        <div id="insertLinks" class="links"></div>
+      </section>
+
+      <section class="card">
+        <h2>4. 底库去重 + 本地记忆</h2>
+        <div class="row">
+          <label>底库更新文件</label>
+          <div class="ctrl"><input id="baseLibraryFile" type="file" accept=".txt,.csv,.tx" /></div>
+        </div>
+        <div class="row">
+          <label>底库设置</label>
+          <div class="ctrl" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <button id="btnSetBaseLibrary" class="mini" type="button">设置/手动更新底库</button>
+            <button id="btnClearBaseLibrary" class="mini" type="button">清空底库</button>
+            <span id="baseCount" style="font-size:13px; color: var(--sub);">底库号码: 0</span>
+          </div>
+        </div>
+        <div class="row">
+          <label>新号码文件</label>
+          <div class="ctrl"><input id="newFile" type="file" accept=".txt,.csv,.tx" /></div>
+        </div>
+        <div class="row">
+          <label>命中查询</label>
+          <div class="ctrl" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <input id="hitNumber" type="text" placeholder="输入号码，点击查询是否在底库中" />
+            <button id="btnHitQuery" class="mini" type="button">查询命中</button>
+          </div>
+        </div>
+        <div class="row">
+          <label>批量查询</label>
+          <div class="ctrl">
+            <textarea id="batchHitNumbers" placeholder="可粘贴多行号码进行批量命中分析"></textarea>
+          </div>
+        </div>
+        <div class="row">
+          <label>批量结果文件</label>
+          <div class="ctrl" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <input id="batchHitOutputName" type="text" value="batch_hit_result.csv" />
+            <button id="btnBatchHitQuery" class="mini" type="button">批量命中并下载</button>
+          </div>
+        </div>
+        <div class="row">
+          <label>输出文件名</label>
+          <div class="ctrl"><input id="baseOutputName" type="text" value="new_unique.txt" /></div>
+        </div>
+        <div class="row">
+          <label>记忆底库</label>
+          <div class="ctrl">
+            <label style="min-width: auto; display: inline-flex; align-items: center; gap: 6px; color: var(--text);">
+              <input id="includeMemoryAsBase" type="checkbox" checked />
+              将本地已记忆号码并入底库参与去重
+            </label>
+          </div>
+        </div>
+        <div class="row">
+          <button id="btnBaseDedup">一键底库去重</button>
+        </div>
+        <div class="row">
+          <label>本地记忆</label>
+          <div class="ctrl" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <span id="memCount" style="font-size:13px; color: var(--sub);">已记忆号码: 0</span>
+            <button id="btnExportMemory" class="mini" type="button">导出记忆号码</button>
+            <button id="btnClearMemory" class="mini" type="button">清空记忆号码</button>
+          </div>
+        </div>
+        <div id="hitMsg" class="msg"></div>
+        <div id="baseMsg" class="msg"></div>
+        <div id="baseLinks" class="links"></div>
+      </section>
+
+      <section class="card">
+        <h2>5. TXT 转 VCF（复刻脚本逻辑）</h2>
+        <div class="row">
+          <label>TXT文件</label>
+          <div class="ctrl"><input id="vcfTxtFiles" type="file" accept=".txt" multiple /></div>
+        </div>
+        <div class="row">
+          <label>每批数量</label>
+          <div class="ctrl"><input id="vcfBatchSize" type="number" min="1" value="287" /></div>
+        </div>
+        <div class="row">
+          <label>替换号码</label>
+          <div class="ctrl"><textarea id="vcfReplaceNumbers" placeholder="支持分行或分段粘贴，例如：821082687451 821057467109">821082687451
+821057467109</textarea></div>
+        </div>
+        <div class="row">
+          <label>替换范围</label>
+          <div class="ctrl"><input id="vcfReplaceRange" type="number" min="1" value="220" /></div>
+        </div>
+        <div class="row">
+          <label>输出压缩包</label>
+          <div class="ctrl"><input id="vcfZipName" type="text" value="contacts_vcf.zip" /></div>
+        </div>
+        <div class="row">
+          <button id="btnGenerateVcf">一键生成VCF并打包ZIP</button>
+        </div>
+        <div id="vcfMsg" class="msg"></div>
+        <div id="vcfLinks" class="links"></div>
+      </section>
+    </div>
+
+    <div class="foot">
+      说明：若单文件过大（几 GB），浏览器可能内存压力较大。建议先按块拆分后处理。
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script>
+    const MEMORY_KEY = "qqzeng_processed_numbers_v1";
+    const BASE_LIBRARY_KEY = "qqzeng_base_library_numbers_v1";
+    const PROCESS_INDEX_KEY = "qqzeng_number_process_index_v1";
+    const PROCESS_BATCH_SEQ_KEY = "qqzeng_number_process_batch_seq_v1";
+
+    function setMsg(el, text, cls) {
+      el.className = "msg" + (cls ? " " + cls : "");
+      el.textContent = text;
+    }
+
+    function normalizeLines(text) {
+      return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
+    }
+
+    function downloadText(name, text) {
+      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      return { url, name, blob };
+    }
+
+    function createDownloadLink(container, item) {
+      const a = document.createElement("a");
+      a.href = item.url;
+      a.download = item.name;
+      a.textContent = "下载: " + item.name;
+      container.appendChild(a);
+      return a;
+    }
+
+    function readFileAsText(file) {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ""));
+        reader.onerror = reject;
+        reader.readAsText(file, "utf-8");
+      });
+    }
+
+    function extractNumbers(rawText) {
+      // Auto-detect number tokens from free-form pasted text.
+      const matches = String(rawText || "").match(/\d+/g) || [];
+      return matches.filter(x => x.length >= 7);
+    }
+
+    function loadMemorySet() {
+      try {
+        const raw = localStorage.getItem(MEMORY_KEY);
+        if (!raw) {
+          return new Set();
+        }
+        const arr = JSON.parse(raw);
+        if (!Array.isArray(arr)) {
+          return new Set();
+        }
+        return new Set(arr.filter(x => typeof x === "string" && x));
+      } catch {
+        return new Set();
+      }
+    }
+
+    function saveMemorySet(memSet) {
+      localStorage.setItem(MEMORY_KEY, JSON.stringify(Array.from(memSet)));
+    }
+
+    const memorySet = loadMemorySet();
+
+    function loadProcessIndex() {
+      try {
+        const raw = localStorage.getItem(PROCESS_INDEX_KEY);
+        if (!raw) {
+          return {};
+        }
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+          return {};
+        }
+        return parsed;
+      } catch {
+        return {};
+      }
+    }
+
+    function saveProcessIndex(index) {
+      localStorage.setItem(PROCESS_INDEX_KEY, JSON.stringify(index));
+    }
+
+    function nextBatchId() {
+      const current = Number(localStorage.getItem(PROCESS_BATCH_SEQ_KEY) || 0);
+      const next = current + 1;
+      localStorage.setItem(PROCESS_BATCH_SEQ_KEY, String(next));
+      return next;
+    }
+
+    const processIndex = loadProcessIndex();
+
+    function recordProcessingBatch(moduleName, numbers, inputFiles, outputFile) {
+      const uniqueNumbers = Array.from(new Set(numbers || []));
+      if (!uniqueNumbers.length) {
+        return;
+      }
+
+      const batchId = nextBatchId();
+      const event = {
+        batchId,
+        processedAt: new Date().toLocaleString("zh-CN", { hour12: false }),
+        moduleName,
+        inputFiles: (inputFiles || []).filter(Boolean),
+        outputFile: outputFile || ""
+      };
+
+      try {
+        for (const n of uniqueNumbers) {
+          const arr = Array.isArray(processIndex[n]) ? processIndex[n] : [];
+          arr.unshift(event);
+          processIndex[n] = arr.slice(0, 30);
+        }
+        saveProcessIndex(processIndex);
+      } catch {
+        // Ignore storage overflow to keep core features usable.
+      }
+    }
+
+    function loadBaseLibrarySet() {
+      try {
+        const raw = localStorage.getItem(BASE_LIBRARY_KEY);
+        if (!raw) {
+          return new Set();
+        }
+        const arr = JSON.parse(raw);
+        if (!Array.isArray(arr)) {
+          return new Set();
+        }
+        return new Set(arr.filter(x => typeof x === "string" && x));
+      } catch {
+        return new Set();
+      }
+    }
+
+    function saveBaseLibrarySet(baseSet) {
+      localStorage.setItem(BASE_LIBRARY_KEY, JSON.stringify(Array.from(baseSet)));
+    }
+
+    const baseLibrarySet = loadBaseLibrarySet();
+
+    function updateMemoryCount() {
+      const el = document.getElementById("memCount");
+      if (el) {
+        el.textContent = `已记忆号码: ${memorySet.size}`;
+      }
+    }
+
+    function updateBaseCount() {
+      const el = document.getElementById("baseCount");
+      if (el) {
+        el.textContent = `底库号码: ${baseLibrarySet.size}`;
+      }
+    }
+
+    function rememberNumbers(numbers) {
+      if (!numbers || !numbers.length) {
+        return;
+      }
+      let changed = false;
+      for (const n of numbers) {
+        if (!memorySet.has(n)) {
+          memorySet.add(n);
+          changed = true;
+        }
+      }
+      if (changed) {
+        saveMemorySet(memorySet);
+        updateMemoryCount();
+      }
+    }
+
+    const splitLinks = document.getElementById("splitLinks");
+    const splitMsg = document.getElementById("splitMsg");
+    let splitItems = [];
+
+    updateMemoryCount();
+    updateBaseCount();
+
+    document.getElementById("btnSplit").addEventListener("click", async () => {
+      splitLinks.innerHTML = "";
+      splitItems.forEach(x => URL.revokeObjectURL(x.url));
+      splitItems = [];
+
+      const file = document.getElementById("splitFile").files[0];
+      const chunkSize = Number(document.getElementById("splitChunkSize").value || 0);
+      const prefix = (document.getElementById("splitPrefix").value || "part").trim();
+      const ext = document.getElementById("splitExt").value;
+
+      if (!file) {
+        setMsg(splitMsg, "请先选择需要分割的文件", "warn");
+        return;
+      }
+      if (!Number.isFinite(chunkSize) || chunkSize < 1) {
+        setMsg(splitMsg, "每份行数必须大于 0", "warn");
+        return;
+      }
+
+      try {
+        setMsg(splitMsg, "处理中，请稍候...");
+        const text = await readFileAsText(file);
+        const lines = normalizeLines(text);
+        if (lines.length === 0) {
+          setMsg(splitMsg, "文件为空", "warn");
+          return;
+        }
+
+        const totalParts = Math.ceil(lines.length / chunkSize);
+        for (let i = 0; i < totalParts; i++) {
+          const chunk = lines.slice(i * chunkSize, (i + 1) * chunkSize).join("\n");
+          const partName = `${prefix}_${String(i + 1).padStart(4, "0")}.${ext}`;
+          const item = downloadText(partName, chunk);
+          splitItems.push(item);
+          createDownloadLink(splitLinks, item);
+        }
+
+        setMsg(splitMsg, `分割完成: 共 ${lines.length} 行，生成 ${totalParts} 个文件`, "ok");
+      } catch (err) {
+        setMsg(splitMsg, "分割失败: " + (err && err.message ? err.message : String(err)), "warn");
+      }
+    });
+
+    document.getElementById("btnSplitAll").addEventListener("click", () => {
+      if (!splitItems.length) {
+        setMsg(splitMsg, "请先执行分割", "warn");
+        return;
+      }
+
+      if (!window.JSZip) {
+        setMsg(splitMsg, "ZIP 打包组件加载失败，请检查网络后重试", "warn");
+        return;
+      }
+
+      const prefix = (document.getElementById("splitPrefix").value || "part").trim() || "part";
+      setMsg(splitMsg, "ZIP 打包中，请稍候...");
+
+      const zip = new window.JSZip();
+      splitItems.forEach(item => {
+        zip.file(item.name, item.blob);
+      });
+
+      zip.generateAsync({ type: "blob" }).then(zipBlob => {
+        const zipUrl = URL.createObjectURL(zipBlob);
+        const a = document.createElement("a");
+        a.href = zipUrl;
+        a.download = `${prefix}_parts.zip`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(zipUrl), 5000);
+        setMsg(splitMsg, `已打包下载: ${prefix}_parts.zip（共 ${splitItems.length} 个分片）`, "ok");
+      }).catch(err => {
+        setMsg(splitMsg, "ZIP 打包失败: " + (err && err.message ? err.message : String(err)), "warn");
+      });
+    });
+
+    const mergeMsg = document.getElementById("mergeMsg");
+    const mergeLinks = document.getElementById("mergeLinks");
+    let mergeItems = [];
+
+    document.getElementById("btnMerge").addEventListener("click", async () => {
+      mergeLinks.innerHTML = "";
+      mergeItems.forEach(x => URL.revokeObjectURL(x.url));
+      mergeItems = [];
+
+      const files = Array.from(document.getElementById("mergeFiles").files || []);
+      const outputName = (document.getElementById("mergeName").value || "merged.txt").trim();
+
+      if (!files.length) {
+        setMsg(mergeMsg, "请至少选择 2 个文件", "warn");
+        return;
+      }
+
+      try {
+        setMsg(mergeMsg, "合并中，请稍候...");
+        const allNumbers = [];
+        for (const f of files) {
+          const text = await readFileAsText(f);
+          const numbers = extractNumbers(text);
+          allNumbers.push(...numbers);
+        }
+
+        if (!allNumbers.length) {
+          setMsg(mergeMsg, "未识别到号码，请确认文件内容", "warn");
+          return;
+        }
+
+        const uniqueNumbers = Array.from(new Set(allNumbers));
+        const dedupCount = allNumbers.length - uniqueNumbers.length;
+        const merged = uniqueNumbers.join("\n");
+        const item = downloadText(outputName, merged);
+        mergeItems.push(item);
+        createDownloadLink(mergeLinks, item);
+        rememberNumbers(uniqueNumbers);
+        recordProcessingBatch(
+          "数据合并",
+          uniqueNumbers,
+          files.map(f => f.name),
+          outputName
+        );
+
+        setMsg(
+          mergeMsg,
+          `合并完成: ${files.length} 个文件\n识别号码: ${allNumbers.length} 条\n自动去重: ${dedupCount} 条\n输出未重复号码: ${uniqueNumbers.length} 条 -> ${outputName}`,
+          "ok"
+        );
+      } catch (err) {
+        setMsg(mergeMsg, "合并失败: " + (err && err.message ? err.message : String(err)), "warn");
+      }
+    });
+
+    const insertMsg = document.getElementById("insertMsg");
+    const insertLinks = document.getElementById("insertLinks");
+    let insertItems = [];
+
+    function randomIndex(maxInclusive) {
+      return Math.floor(Math.random() * (maxInclusive + 1));
+    }
+
+    document.getElementById("btnInsert").addEventListener("click", async () => {
+      insertLinks.innerHTML = "";
+      insertItems.forEach(x => URL.revokeObjectURL(x.url));
+      insertItems = [];
+
+      const baseFile = document.getElementById("insertFile").files[0];
+      const numbersRaw = document.getElementById("insertNumbers").value || "";
+      const insertTimes = Number(document.getElementById("insertTimes").value || 0);
+      const outputName = (document.getElementById("insertName").value || "inserted.tx").trim();
+
+      const numbers = extractNumbers(numbersRaw);
+      if (!numbers.length) {
+        setMsg(insertMsg, "未识别到号码，请粘贴纯数字或含数字的文本", "warn");
+        return;
+      }
+      if (!Number.isFinite(insertTimes) || insertTimes < 1) {
+        setMsg(insertMsg, "每个号码插入次数必须大于 0", "warn");
+        return;
+      }
+
+      try {
+        setMsg(insertMsg, "随机插入中，请稍候...");
+        let lines = [];
+        if (baseFile) {
+          const baseText = await readFileAsText(baseFile);
+          lines = normalizeLines(baseText);
+        }
+
+        let insertCount = 0;
+        for (const n of numbers) {
+          for (let i = 0; i < insertTimes; i++) {
+            const idx = randomIndex(lines.length);
+            lines.splice(idx, 0, n);
+            insertCount++;
+          }
+        }
+
+        const out = lines.join("\n");
+        const item = downloadText(outputName, out);
+        insertItems.push(item);
+        createDownloadLink(insertLinks, item);
+        rememberNumbers(Array.from(new Set(numbers)));
+        recordProcessingBatch(
+          "随机插入指定号码",
+          numbers,
+          [baseFile ? baseFile.name : "(无基础文件，直接生成)"],
+          outputName
+        );
+
+        setMsg(insertMsg, `完成: 识别 ${numbers.length} 个号码，插入 ${insertCount} 条，输出 ${outputName}`, "ok");
+      } catch (err) {
+        setMsg(insertMsg, "处理失败: " + (err && err.message ? err.message : String(err)), "warn");
+      }
+    });
+
+    const baseMsg = document.getElementById("baseMsg");
+    const hitMsg = document.getElementById("hitMsg");
+    const baseLinks = document.getElementById("baseLinks");
+    let baseItems = [];
+
+    function buildEffectiveBaseSet(includeMemory) {
+      const effectiveBaseSet = new Set(baseLibrarySet);
+      if (includeMemory) {
+        memorySet.forEach(x => effectiveBaseSet.add(x));
+      }
+      return effectiveBaseSet;
+    }
+
+    function analyzeSingleHit(rawInput) {
+      const includeMemory = document.getElementById("includeMemoryAsBase").checked;
+      const nums = extractNumbers(rawInput || "");
+
+      if (!nums.length) {
+        return { ok: false, msg: "请输入号码后再查询", cls: "warn" };
+      }
+
+      const queryNo = nums[0];
+      const effectiveBaseSet = buildEffectiveBaseSet(includeMemory);
+
+      if (!effectiveBaseSet.size) {
+        return { ok: false, msg: "底库为空，请先手动更新底库文件", cls: "warn" };
+      }
+
+      const hit = effectiveBaseSet.has(queryNo);
+      const history = Array.isArray(processIndex[queryNo]) ? processIndex[queryNo] : [];
+      const historyText = history.length
+        ? history.map((h, idx) => `${idx + 1}. 第${h.batchId}次 | ${h.processedAt} | ${h.moduleName} | 输入文件: ${(h.inputFiles || []).join(", ") || "-"} | 输出: ${h.outputFile || "-"}`).join("\n")
+        : "暂无该号码的处理历史记录（可能是在启用历史功能前处理的数据）";
+
+      return {
+        ok: true,
+        cls: hit ? "ok" : "warn",
+        msg: `查询号码: ${queryNo}\n查询范围: 底库 ${baseLibrarySet.size} 条${includeMemory ? ` + 记忆并集 ${effectiveBaseSet.size} 条` : ""}\n结果: ${hit ? "命中(在底库中)" : "未命中(不在底库中)"}\n历史命中分析:\n${historyText}`
+      };
+    }
+
+    document.getElementById("btnSetBaseLibrary").addEventListener("click", async () => {
+      const file = document.getElementById("baseLibraryFile").files[0];
+      if (!file) {
+        setMsg(baseMsg, "请先上传用于更新底库的文件", "warn");
+        return;
+      }
+
+      try {
+        setMsg(baseMsg, "底库更新中，请稍候...");
+        const text = await readFileAsText(file);
+        const numbers = extractNumbers(text);
+        if (!numbers.length) {
+          setMsg(baseMsg, "底库更新文件未识别到号码", "warn");
+          return;
+        }
+
+        const unique = Array.from(new Set(numbers));
+        baseLibrarySet.clear();
+        unique.forEach(n => baseLibrarySet.add(n));
+        saveBaseLibrarySet(baseLibrarySet);
+        updateBaseCount();
+        recordProcessingBatch(
+          "底库手动更新",
+          unique,
+          [file.name],
+          "(更新本地底库)"
+        );
+
+        setMsg(baseMsg, `底库已更新: 识别 ${numbers.length} 条，去重后 ${unique.length} 条`, "ok");
+      } catch (err) {
+        setMsg(baseMsg, "底库更新失败: " + (err && err.message ? err.message : String(err)), "warn");
+      }
+    });
+
+    document.getElementById("btnClearBaseLibrary").addEventListener("click", () => {
+      const ok = window.confirm("确认清空底库号码吗？此操作不可撤销。");
+      if (!ok) {
+        return;
+      }
+
+      baseLibrarySet.clear();
+      saveBaseLibrarySet(baseLibrarySet);
+      updateBaseCount();
+      setMsg(baseMsg, "已清空底库号码", "ok");
+    });
+
+    document.getElementById("btnHitQuery").addEventListener("click", () => {
+      const result = analyzeSingleHit(document.getElementById("hitNumber").value || "");
+      setMsg(hitMsg, result.msg, result.cls);
+    });
+
+    let hitDebounceTimer = null;
+    document.getElementById("hitNumber").addEventListener("input", (e) => {
+      const v = e.target.value || "";
+      if (!v.trim()) {
+        setMsg(hitMsg, "", "");
+        return;
+      }
+      if (hitDebounceTimer) {
+        clearTimeout(hitDebounceTimer);
+      }
+      hitDebounceTimer = setTimeout(() => {
+        const result = analyzeSingleHit(v);
+        setMsg(hitMsg, result.msg, result.cls);
+      }, 220);
+    });
+
+    document.getElementById("btnBatchHitQuery").addEventListener("click", () => {
+      baseLinks.innerHTML = "";
+      baseItems.forEach(x => URL.revokeObjectURL(x.url));
+      baseItems = [];
+
+      const includeMemory = document.getElementById("includeMemoryAsBase").checked;
+      const effectiveBaseSet = buildEffectiveBaseSet(includeMemory);
+      const raw = document.getElementById("batchHitNumbers").value || "";
+      const outputName = (document.getElementById("batchHitOutputName").value || "batch_hit_result.csv").trim();
+      const nums = Array.from(new Set(extractNumbers(raw)));
+
+      if (!nums.length) {
+        setMsg(hitMsg, "批量查询未识别到号码", "warn");
+        return;
+      }
+      if (!effectiveBaseSet.size) {
+        setMsg(hitMsg, "底库为空，请先手动更新底库文件", "warn");
+        return;
+      }
+
+      const rows = ["number,hit,history_count,last_batch,last_time,last_module,last_input_files,last_output"]; 
+      let hitCount = 0;
+      nums.forEach(n => {
+        const hit = effectiveBaseSet.has(n);
+        if (hit) {
+          hitCount++;
+        }
+        const history = Array.isArray(processIndex[n]) ? processIndex[n] : [];
+        const last = history[0] || {};
+        const safe = (s) => `"${String(s || "").replace(/"/g, '""')}"`;
+        rows.push([
+          safe(n),
+          safe(hit ? "1" : "0"),
+          safe(history.length),
+          safe(last.batchId || ""),
+          safe(last.processedAt || ""),
+          safe(last.moduleName || ""),
+          safe((last.inputFiles || []).join(";")),
+          safe(last.outputFile || "")
+        ].join(","));
+      });
+
+      const item = downloadText(outputName, rows.join("\n"));
+      baseItems.push(item);
+      createDownloadLink(baseLinks, item);
+      setMsg(hitMsg, `批量查询完成: ${nums.length} 个号码，命中 ${hitCount} 个，结果已生成 ${outputName}`, "ok");
+    });
+
+    document.getElementById("btnBaseDedup").addEventListener("click", async () => {
+      baseLinks.innerHTML = "";
+      baseItems.forEach(x => URL.revokeObjectURL(x.url));
+      baseItems = [];
+
+      const newFile = document.getElementById("newFile").files[0];
+      const outputName = (document.getElementById("baseOutputName").value || "new_unique.txt").trim();
+      const includeMemory = document.getElementById("includeMemoryAsBase").checked;
+
+      if (!newFile) {
+        setMsg(baseMsg, "请先上传新号码文件", "warn");
+        return;
+      }
+
+      try {
+        setMsg(baseMsg, "底库去重处理中，请稍候...");
+        const newText = await readFileAsText(newFile);
+        const newNumbers = extractNumbers(newText);
+        if (!newNumbers.length) {
+          setMsg(baseMsg, "新号码文件未识别到号码", "warn");
+          return;
+        }
+
+        const baseSet = new Set(baseLibrarySet);
+        const pureBaseUnique = baseSet.size;
+        if (includeMemory) {
+          memorySet.forEach(x => baseSet.add(x));
+        }
+
+        if (!baseSet.size) {
+          setMsg(baseMsg, "底库为空，请先点击“设置/手动更新底库”", "warn");
+          return;
+        }
+
+        const newUnique = Array.from(new Set(newNumbers));
+        const repeatedWithBase = [];
+        const notInBase = [];
+
+        for (const n of newUnique) {
+          if (baseSet.has(n)) {
+            repeatedWithBase.push(n);
+          } else {
+            notInBase.push(n);
+          }
+        }
+
+        const item = downloadText(outputName, notInBase.join("\n"));
+        baseItems.push(item);
+        createDownloadLink(baseLinks, item);
+        rememberNumbers(newUnique);
+        recordProcessingBatch(
+          "底库去重",
+          newUnique,
+          [newFile.name],
+          outputName
+        );
+
+        setMsg(
+          baseMsg,
+          `底库去重完成\n底库号码(去重): ${pureBaseUnique} 条${includeMemory ? `，合并记忆后底库: ${baseSet.size} 条` : ""}\n新号码识别: ${newNumbers.length} 条\n新号码去重后: ${newUnique.length} 条\n与底库重复: ${repeatedWithBase.length} 条\n可下载未重复号码: ${notInBase.length} 条 -> ${outputName}`,
+          "ok"
+        );
+      } catch (err) {
+        setMsg(baseMsg, "底库去重失败: " + (err && err.message ? err.message : String(err)), "warn");
+      }
+    });
+
+    document.getElementById("btnExportMemory").addEventListener("click", () => {
+      baseLinks.innerHTML = "";
+      baseItems.forEach(x => URL.revokeObjectURL(x.url));
+      baseItems = [];
+
+      if (!memorySet.size) {
+        setMsg(baseMsg, "当前没有已记忆号码", "warn");
+        return;
+      }
+
+      const item = downloadText("memory_numbers.txt", Array.from(memorySet).join("\n"));
+      baseItems.push(item);
+      createDownloadLink(baseLinks, item);
+      setMsg(baseMsg, `已导出本地记忆号码: ${memorySet.size} 条`, "ok");
+    });
+
+    document.getElementById("btnClearMemory").addEventListener("click", () => {
+      const ok = window.confirm("确认清空本地已记忆号码吗？此操作不可撤销。");
+      if (!ok) {
+        return;
+      }
+
+      memorySet.clear();
+      saveMemorySet(memorySet);
+      updateMemoryCount();
+      setMsg(baseMsg, "已清空本地记忆号码", "ok");
+    });
+
+    const vcfMsg = document.getElementById("vcfMsg");
+    const vcfLinks = document.getElementById("vcfLinks");
+    let vcfItems = [];
+
+    function normalizeNumberLine(raw) {
+      return String(raw || "").trim().replace(/[\s-]+/g, "");
+    }
+
+    function toVcfContent(numbers, startIndex) {
+      let index = startIndex;
+      const lines = [];
+      for (const number of numbers) {
+        const name = `${String(index).padStart(3, "0")}B-${number}`;
+        lines.push("BEGIN:VCARD");
+        lines.push("VERSION:3.0");
+        lines.push(`N:${name};;;`);
+        lines.push(`FN:${name}`);
+        lines.push(`TEL;TYPE=CELL:${number}`);
+        lines.push("END:VCARD");
+        index += 1;
+      }
+      return { content: lines.join("\n") + (lines.length ? "\n" : ""), nextIndex: index };
+    }
+
+    document.getElementById("btnGenerateVcf").addEventListener("click", async () => {
+      vcfLinks.innerHTML = "";
+      vcfItems.forEach(x => URL.revokeObjectURL(x.url));
+      vcfItems = [];
+
+      const files = Array.from(document.getElementById("vcfTxtFiles").files || []);
+      const batchSize = Number(document.getElementById("vcfBatchSize").value || 0);
+      const replaceRaw = document.getElementById("vcfReplaceNumbers").value || "";
+      const replaceRangeLimit = Number(document.getElementById("vcfReplaceRange").value || 0);
+      const zipName = (document.getElementById("vcfZipName").value || "contacts_vcf.zip").trim();
+
+      if (!files.length) {
+        setMsg(vcfMsg, "请先选择至少一个TXT文件", "warn");
+        return;
+      }
+      if (!Number.isFinite(batchSize) || batchSize < 1) {
+        setMsg(vcfMsg, "每批数量必须大于 0", "warn");
+        return;
+      }
+      if (!Number.isFinite(replaceRangeLimit) || replaceRangeLimit < 1) {
+        setMsg(vcfMsg, "替换范围必须大于 0", "warn");
+        return;
+      }
+      if (!window.JSZip) {
+        setMsg(vcfMsg, "ZIP 打包组件加载失败，请检查网络后重试", "warn");
+        return;
+      }
+
+      try {
+        setMsg(vcfMsg, "处理中，请稍候...");
+
+        const allNumbers = [];
+        for (const f of files) {
+          const text = await readFileAsText(f);
+          const lines = normalizeLines(text);
+          for (const line of lines) {
+            const num = normalizeNumberLine(line);
+            if (num) {
+              allNumbers.push(num);
+            }
+          }
+        }
+
+        const dedupNumbers = Array.from(new Set(allNumbers));
+        if (!dedupNumbers.length) {
+          setMsg(vcfMsg, "TXT文件中没有有效号码", "warn");
+          return;
+        }
+
+        const replaceNumbers = extractNumbers(replaceRaw);
+        if (!replaceNumbers.length) {
+          setMsg(vcfMsg, "请填写至少一个替换号码", "warn");
+          return;
+        }
+
+        const zip = new window.JSZip();
+        let globalIndex = 1;
+        let fileIndex = 1;
+        let totalReplaced = 0;
+
+        for (let i = 0; i < dedupNumbers.length; i += batchSize) {
+          const batch = dedupNumbers.slice(i, i + batchSize);
+          const replaceRange = Math.min(replaceRangeLimit, batch.length);
+          const replaceCount = Math.min(replaceNumbers.length, replaceRange);
+
+          if (replaceCount > 0) {
+            const indexes = Array.from({ length: replaceRange }, (_, idx) => idx);
+            for (let k = indexes.length - 1; k > 0; k--) {
+              const r = Math.floor(Math.random() * (k + 1));
+              const temp = indexes[k];
+              indexes[k] = indexes[r];
+              indexes[r] = temp;
+            }
+            const picked = indexes.slice(0, replaceCount);
+            picked.forEach((idx, n) => {
+              batch[idx] = replaceNumbers[n];
+              totalReplaced += 1;
+            });
+          }
+
+          const vcfResult = toVcfContent(batch, globalIndex);
+          const filename = `contacts_${fileIndex}.vcf`;
+          zip.file(filename, vcfResult.content);
+          globalIndex = vcfResult.nextIndex;
+          fileIndex += 1;
+        }
+
+        const finalZipName = zipName.toLowerCase().endsWith(".zip") ? zipName : `${zipName}.zip`;
+        const zipBlob = await zip.generateAsync({ type: "blob" });
+        const zipItem = { url: URL.createObjectURL(zipBlob), name: finalZipName, blob: zipBlob };
+        vcfItems.push(zipItem);
+        createDownloadLink(vcfLinks, zipItem);
+
+        recordProcessingBatch(
+          "TXT转VCF",
+          dedupNumbers,
+          files.map(f => f.name),
+          finalZipName
+        );
+
+        setMsg(
+          vcfMsg,
+          `完成: 读取 ${allNumbers.length} 条，去重后 ${dedupNumbers.length} 条，生成 ${fileIndex - 1} 个VCF，随机替换 ${totalReplaced} 处`,
+          "ok"
+        );
+      } catch (err) {
+        setMsg(vcfMsg, "处理失败: " + (err && err.message ? err.message : String(err)), "warn");
+      }
+    });
+  </script>
+</body>
+</html>

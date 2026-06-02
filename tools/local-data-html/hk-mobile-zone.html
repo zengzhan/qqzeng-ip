@@ -1,0 +1,626 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>香港专区手机号生成器</title>
+  <style>
+    :root {
+      --bg1: #eef7ff;
+      --bg2: #ecfff5;
+      --card: #ffffff;
+      --ink: #18212f;
+      --muted: #5f6f86;
+      --accent: #0f766e;
+      --accent2: #155eef;
+      --line: #d8e3ef;
+      --ok: #0f9d58;
+      --warn: #d97706;
+      --err: #c62828;
+      --radius: 16px;
+      --shadow: 0 12px 36px rgba(18, 38, 63, 0.1);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 15% 10%, #d7edff 0%, transparent 35%),
+        radial-gradient(circle at 85% 85%, #ddffe9 0%, transparent 30%),
+        linear-gradient(160deg, var(--bg1), var(--bg2));
+      min-height: 100vh;
+    }
+
+    .wrap {
+      max-width: 1120px;
+      margin: 18px auto;
+      padding: 0 14px 22px;
+    }
+
+    .hero {
+      background: linear-gradient(125deg, #ffffffdc, #f4fff9e8);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 16px;
+      margin-bottom: 14px;
+    }
+
+    .hero h1 { margin: 0 0 8px; font-size: 24px; }
+    .hero p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.6; }
+
+    .actions-top {
+      margin-top: 10px;
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .top-link {
+      text-decoration: none;
+      font-size: 13px;
+      color: #ffffff;
+      background: linear-gradient(120deg, #334155, #475569);
+      border-radius: 10px;
+      padding: 8px 12px;
+      display: inline-block;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1.15fr 1fr;
+      gap: 14px;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      padding: 14px;
+    }
+
+    .card h2 { margin: 0 0 10px; font-size: 17px; }
+
+    .row {
+      display: grid;
+      grid-template-columns: 128px 1fr;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .row label { color: var(--muted); font-size: 13px; }
+
+    input[type="text"],
+    input[type="number"],
+    select {
+      width: 100%;
+      border: 1px solid #c9d7e9;
+      border-radius: 10px;
+      padding: 9px 10px;
+      font-size: 14px;
+      background: #fff;
+      color: var(--ink);
+    }
+
+    input[type="file"] { width: 100%; font-size: 13px; }
+
+    .actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+
+    button {
+      border: 0;
+      border-radius: 11px;
+      padding: 9px 14px;
+      font-size: 14px;
+      cursor: pointer;
+      color: #fff;
+      background: linear-gradient(120deg, var(--accent2), var(--accent));
+      transition: transform .15s ease, opacity .15s ease;
+    }
+
+    button.alt { background: linear-gradient(120deg, #64748b, #334155); }
+    button:hover { transform: translateY(-1px); opacity: .95; }
+
+    .inline { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
+
+    .stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px;
+      background: #f9fcff;
+    }
+
+    .pill .k { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+    .pill .v { font-size: 15px; font-weight: 700; }
+
+    .msg {
+      margin-top: 10px;
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-size: 13px;
+      display: none;
+    }
+
+    .msg.ok { display: block; background: #e8f7ee; color: var(--ok); border: 1px solid #b7e3c8; }
+    .msg.warn { display: block; background: #fff6e9; color: var(--warn); border: 1px solid #f2d5a5; }
+    .msg.err { display: block; background: #fdecec; color: var(--err); border: 1px solid #f5c2c7; }
+
+    .table-wrap {
+      overflow: auto;
+      max-height: 420px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      margin-top: 10px;
+      background: #fcfdff;
+    }
+
+    table { border-collapse: collapse; width: 100%; font-size: 12px; }
+    th, td { padding: 8px; border-bottom: 1px solid #e8eef7; text-align: left; white-space: nowrap; }
+    th { position: sticky; top: 0; background: #edf5ff; z-index: 1; font-weight: 700; }
+
+    @media (max-width: 960px) {
+      .grid { grid-template-columns: 1fr; }
+      .row { grid-template-columns: 1fr; }
+      .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>香港专区手机号生成器</h1>
+      <p>基于 OFCA 号段，默认加载高概率个人手机号段。你可以按首位与运营商筛选后生成号码。</p>
+      <div class="actions-top">
+        <a class="top-link" href="./phone-region-generator.html">返回全国专区</a>
+      </div>
+    </section>
+
+    <section class="grid">
+      <div class="card">
+        <h2>1) 加载香港号段并筛选</h2>
+
+        <div class="row">
+          <label>内置号段路径</label>
+          <input id="defaultCsvPath" type="text" value="../../demo-data/ofca_hk_likely_personal_mobile_segments.csv" />
+        </div>
+
+        <div class="actions">
+          <button id="btnLoadDefault" type="button">一键加载香港号段</button>
+        </div>
+
+        <div class="row">
+          <label>手动上传 CSV</label>
+          <input id="fileInput" type="file" accept=".csv,text/csv" />
+        </div>
+
+        <div class="row">
+          <label>号码首位</label>
+          <select id="digitSelect"><option value="">全部</option></select>
+        </div>
+
+        <div class="row">
+          <label>运营商</label>
+          <select id="operatorSelect"><option value="">全部</option></select>
+        </div>
+
+        <div class="row">
+          <label>导出文件名</label>
+          <input id="outputName" type="text" value="hk_generated_phones.txt" />
+        </div>
+
+        <div class="stats">
+          <div class="pill"><div class="k">已加载区间</div><div id="stLoaded" class="v">0</div></div>
+          <div class="pill"><div class="k">筛中区间</div><div id="stMatched" class="v">0</div></div>
+          <div class="pill"><div class="k">可生成容量</div><div id="stCapacity" class="v">0</div></div>
+          <div class="pill"><div class="k">运营商数</div><div id="stOps" class="v">0</div></div>
+        </div>
+
+        <div id="msgFilter" class="msg"></div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>开始号码</th>
+                <th>结束号码</th>
+                <th>首位</th>
+                <th>运营商</th>
+              </tr>
+            </thead>
+            <tbody id="summaryBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>2) 生成香港手机号</h2>
+
+        <div class="row">
+          <label>生成数量</label>
+          <input id="generateCount" type="number" min="1" value="10000" />
+        </div>
+
+        <div class="row">
+          <label>生成模式</label>
+          <select id="modeSelect">
+            <option value="weighted">按容量加权随机</option>
+            <option value="uniform">按区间平均随机</option>
+          </select>
+        </div>
+
+        <div class="row">
+          <label>选项</label>
+          <div class="inline">
+            <input id="dedup" type="checkbox" checked />
+            <span>去重</span>
+          </div>
+        </div>
+
+        <div class="row">
+          <label>真实度</label>
+          <div class="inline">
+            <input id="realismFirst" type="checkbox" checked />
+            <span>优先真实概率（过滤明显测试尾号）</span>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button id="btnGenerate" type="button">生成并下载</button>
+        </div>
+
+        <div id="msgGenerate" class="msg"></div>
+
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>#</th><th>手机号</th></tr>
+            </thead>
+            <tbody id="previewBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const state = { rows: [], filtered: [], weightedPool: [] };
+
+    const fileInput = document.getElementById("fileInput");
+    const defaultCsvPath = document.getElementById("defaultCsvPath");
+    const btnLoadDefault = document.getElementById("btnLoadDefault");
+    const digitSelect = document.getElementById("digitSelect");
+    const operatorSelect = document.getElementById("operatorSelect");
+
+    const stLoaded = document.getElementById("stLoaded");
+    const stMatched = document.getElementById("stMatched");
+    const stCapacity = document.getElementById("stCapacity");
+    const stOps = document.getElementById("stOps");
+
+    const msgFilter = document.getElementById("msgFilter");
+    const msgGenerate = document.getElementById("msgGenerate");
+    const summaryBody = document.getElementById("summaryBody");
+    const previewBody = document.getElementById("previewBody");
+
+    function setMsg(el, text, type) {
+      el.textContent = text || "";
+      el.className = "msg" + (type ? " " + type : "");
+    }
+
+    function parseCsvLine(line) {
+      if (!line.includes('"')) return line.split(",");
+      const out = [];
+      let cur = "";
+      let i = 0;
+      let inQuotes = false;
+      while (i < line.length) {
+        const ch = line[i];
+        if (ch === '"') {
+          if (inQuotes && line[i + 1] === '"') { cur += '"'; i += 2; continue; }
+          inQuotes = !inQuotes;
+          i++;
+          continue;
+        }
+        if (ch === "," && !inQuotes) { out.push(cur); cur = ""; i++; continue; }
+        cur += ch;
+        i++;
+      }
+      out.push(cur);
+      return out;
+    }
+
+    function readCsv(text) {
+      const lines = text.replace(/\r/g, "").split("\n").filter(Boolean);
+      if (lines.length < 2) throw new Error("CSV 内容为空或仅有表头。");
+
+      const header = parseCsvLine(lines[0]);
+      const idx = {
+        start: header.indexOf("start"),
+        end: header.indexOf("end"),
+        firstDigit: header.indexOf("first_digit"),
+        operator: header.indexOf("operator_hint")
+      };
+
+      if (idx.start < 0 || idx.end < 0) {
+        throw new Error("CSV 表头不正确，至少需要 start,end 字段。");
+      }
+
+      const rows = [];
+      for (let i = 1; i < lines.length; i++) {
+        const cols = parseCsvLine(lines[i]);
+        const s = (cols[idx.start] || "").trim();
+        const e = (cols[idx.end] || "").trim();
+        if (!/^\d{8}$/.test(s) || !/^\d{8}$/.test(e)) continue;
+        const fd = idx.firstDigit >= 0 ? (cols[idx.firstDigit] || s[0]).trim() : s[0];
+        const op = idx.operator >= 0 ? (cols[idx.operator] || "").trim() : "Unknown";
+        rows.push({
+          start: s,
+          end: e,
+          firstDigit: fd,
+          operator: op || "Unknown",
+          capacity: Number(e) - Number(s) + 1
+        });
+      }
+      return rows;
+    }
+
+    function formatNum(n) { return Number(n || 0).toLocaleString("zh-CN"); }
+    function randInt(maxExclusive) { return Math.floor(Math.random() * maxExclusive); }
+
+    function clearSelect(s) { while (s.options.length > 1) s.remove(1); }
+    function addOptions(s, vals) {
+      vals.forEach(v => {
+        const op = document.createElement("option");
+        op.value = v;
+        op.textContent = v;
+        s.appendChild(op);
+      });
+    }
+
+    function updateOptions(rows) {
+      clearSelect(digitSelect);
+      clearSelect(operatorSelect);
+      const digits = new Set();
+      const ops = new Set();
+      rows.forEach(r => { digits.add(r.firstDigit); ops.add(r.operator); });
+      addOptions(digitSelect, Array.from(digits).sort());
+      addOptions(operatorSelect, Array.from(ops).sort((a,b)=>a.localeCompare(b, "zh-Hans-CN")));
+    }
+
+    function renderSummary() {
+      summaryBody.innerHTML = "";
+      if (!state.filtered.length) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = "<td colspan='4'>当前筛选无数据。</td>";
+        summaryBody.appendChild(tr);
+        return;
+      }
+      state.filtered.slice(0, 160).forEach(r => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${r.start}</td><td>${r.end}</td><td>${r.firstDigit}</td><td>${r.operator}</td>`;
+        summaryBody.appendChild(tr);
+      });
+    }
+
+    function renderPreview(list) {
+      previewBody.innerHTML = "";
+      if (!list.length) {
+        const tr = document.createElement("tr");
+        tr.innerHTML = "<td colspan='2'>暂无生成结果。</td>";
+        previewBody.appendChild(tr);
+        return;
+      }
+      list.slice(0, 100).forEach((n, i) => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${i + 1}</td><td>${n}</td>`;
+        previewBody.appendChild(tr);
+      });
+    }
+
+    function isSequentialTail(tail) {
+      const up = "0123456789";
+      const down = "9876543210";
+      return up.includes(tail) || down.includes(tail);
+    }
+
+    function tailRealismScore(tail) {
+      let score = 100;
+      if (tail === "0000") score -= 90;
+      if (/^(\d)\1{3}$/.test(tail)) score -= 70;
+      if (isSequentialTail(tail)) score -= 65;
+      if (/^(\d)(\d)\1\2$/.test(tail)) score -= 32;
+      if (/^(\d)\1(\d)\2$/.test(tail)) score -= 32;
+      if (/(\d)\1\1/.test(tail)) score -= 24;
+      if (/00$/.test(tail)) score -= 12;
+      if (/^00/.test(tail)) score -= 10;
+      return score;
+    }
+
+    const PREFERRED_TAIL_POOL = (() => {
+      const out = [];
+      for (let i = 0; i < 10000; i++) {
+        const t = String(i).padStart(4, "0");
+        if (tailRealismScore(t) >= 72) out.push(t);
+      }
+      return out;
+    })();
+
+    function applyFilters() {
+      const d = digitSelect.value;
+      const o = operatorSelect.value;
+      state.filtered = state.rows.filter(r => (!d || r.firstDigit === d) && (!o || r.operator === o));
+
+      const cap = state.filtered.reduce((a, x) => a + x.capacity, 0);
+      const ops = new Set(state.filtered.map(x => x.operator));
+
+      stMatched.textContent = formatNum(state.filtered.length);
+      stCapacity.textContent = formatNum(cap);
+      stOps.textContent = formatNum(ops.size);
+
+      state.weightedPool = [];
+      let acc = 0;
+      state.filtered.forEach(r => {
+        acc += r.capacity;
+        state.weightedPool.push({ max: acc, row: r });
+      });
+
+      renderSummary();
+    }
+
+    function loadRows(rows, source) {
+      state.rows = rows;
+      stLoaded.textContent = formatNum(rows.length);
+      updateOptions(rows);
+      applyFilters();
+      renderPreview([]);
+      setMsg(msgFilter, `已加载 ${formatNum(rows.length)} 条区间，来源：${source}`, "ok");
+    }
+
+    async function loadCsvFromUrl(url) {
+      const resp = await fetch(url, { cache: "no-store" });
+      if (!resp.ok) throw new Error(`读取失败：${resp.status} ${resp.statusText}`);
+      const text = await resp.text();
+      const rows = readCsv(text);
+      loadRows(rows, url);
+    }
+
+    function pickWeightedRow() {
+      const total = state.weightedPool.length ? state.weightedPool[state.weightedPool.length - 1].max : 0;
+      if (!total) return null;
+      const n = randInt(total) + 1;
+      let left = 0, right = state.weightedPool.length - 1;
+      while (left < right) {
+        const mid = Math.floor((left + right) / 2);
+        if (n <= state.weightedPool[mid].max) right = mid; else left = mid + 1;
+      }
+      return state.weightedPool[left].row;
+    }
+
+    function generateNumbers(count, mode, dedup, realismFirst) {
+      const out = [];
+      const used = dedup ? new Set() : null;
+      const maxCap = state.filtered.reduce((a, x) => a + x.capacity, 0);
+      let target = count;
+      if (dedup && target > maxCap) target = maxCap;
+
+      let guard = 0;
+      while (out.length < target) {
+        const row = mode === "weighted"
+          ? pickWeightedRow()
+          : state.filtered[randInt(state.filtered.length)];
+        if (!row) break;
+
+        const startNum = Number(row.start);
+        const offset = randInt(row.capacity);
+        let num = String(startNum + offset).padStart(8, "0");
+        if (realismFirst) {
+          const tail = PREFERRED_TAIL_POOL[randInt(PREFERRED_TAIL_POOL.length)];
+          num = num.slice(0, 4) + tail;
+          const n2 = Number(num);
+          if (n2 < Number(row.start) || n2 > Number(row.end)) {
+            guard++;
+            if (guard > target * 60) break;
+            continue;
+          }
+        }
+
+        if (!dedup) {
+          out.push(num);
+        } else if (!used.has(num)) {
+          used.add(num);
+          out.push(num);
+        }
+
+        guard++;
+        if (guard > target * 80 && dedup) break;
+      }
+
+      return out;
+    }
+
+    function downloadText(filename, text) {
+      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    fileInput.addEventListener("change", async (e) => {
+      setMsg(msgFilter, "", "");
+      const file = e.target.files && e.target.files[0];
+      if (!file) return;
+      try {
+        const text = await file.text();
+        loadRows(readCsv(text), file.name || "手动上传文件");
+      } catch (err) {
+        setMsg(msgFilter, String(err.message || err), "err");
+      }
+    });
+
+    btnLoadDefault.addEventListener("click", async () => {
+      const url = (defaultCsvPath.value || "").trim();
+      if (!url) return;
+      try {
+        await loadCsvFromUrl(url);
+      } catch (err) {
+        setMsg(msgFilter, "内置号段加载失败，请手动上传 CSV。", "warn");
+      }
+    });
+
+    digitSelect.addEventListener("change", applyFilters);
+    operatorSelect.addEventListener("change", applyFilters);
+
+    document.getElementById("btnGenerate").addEventListener("click", () => {
+      setMsg(msgGenerate, "", "");
+      if (!state.filtered.length) {
+        setMsg(msgGenerate, "没有命中区间，请先加载数据或调整筛选条件。", "warn");
+        return;
+      }
+      const count = Number(document.getElementById("generateCount").value || 0);
+      const mode = document.getElementById("modeSelect").value;
+      const dedup = document.getElementById("dedup").checked;
+      const realismFirst = document.getElementById("realismFirst").checked;
+      const outputName = (document.getElementById("outputName").value || "hk_generated_phones.txt").trim();
+
+      if (!Number.isFinite(count) || count < 1) {
+        setMsg(msgGenerate, "生成数量必须大于等于 1。", "warn");
+        return;
+      }
+
+      const t0 = performance.now();
+      const list = generateNumbers(Math.trunc(count), mode, dedup, realismFirst);
+      const t1 = performance.now();
+
+      renderPreview(list);
+      downloadText(outputName, list.join("\n"));
+      setMsg(msgGenerate, `已生成 ${formatNum(list.length)} 个号码，耗时 ${((t1 - t0) / 1000).toFixed(3)} 秒。`, "ok");
+    });
+
+    renderSummary();
+    renderPreview([]);
+
+    (async () => {
+      try {
+        await loadCsvFromUrl((defaultCsvPath.value || "").trim());
+      } catch {
+        setMsg(msgFilter, "自动加载未成功，你可以点“一键加载香港号段”或手动上传 CSV。", "warn");
+      }
+    })();
+  </script>
+</body>
+</html>
