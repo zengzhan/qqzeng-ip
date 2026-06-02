@@ -727,15 +727,15 @@
 
       const t0 = performance.now();
       const requestedCount = Math.trunc(count);
-      const useChunkedDownload = requestedCount >= 100000;
+      const useChunkedDownload = requestedCount >= 1000000;
 
       if (useChunkedDownload) {
-        setMsg(msgGenerate, "数量较大，正在分块生成并准备下载，请稍候...", "warn");
+        setMsg(msgGenerate, "数量较大，正在按顺序分块生成并准备下载，请稍候...", "warn");
       }
 
       const result = useChunkedDownload
         ? await generateNumbersForDownload(requestedCount, mode, dedup, realismFirst, (done, total) => {
-            setMsg(msgGenerate, `数量较大，正在分块生成并准备下载：${formatNum(done)} / ${formatNum(total)}`, "warn");
+            setMsg(msgGenerate, `数量较大，正在按顺序分块生成并准备下载：${formatNum(done)} / ${formatNum(total)}`, "warn");
           })
         : { preview: generateNumbers(requestedCount, mode, dedup, realismFirst), blob: null };
       const t1 = performance.now();
@@ -751,7 +751,7 @@
 
       setMsg(
         msgGenerate,
-        `已生成 ${formatNum(result.count ?? list.length)} 个号码，耗时 ${((t1 - t0) / 1000).toFixed(3)} 秒。${useChunkedDownload ? " 已启用分块下载以减少卡顿。" : ""}`,
+        `已生成 ${formatNum(result.count ?? list.length)} 个号码，耗时 ${((t1 - t0) / 1000).toFixed(3)} 秒。${useChunkedDownload ? " 已启用顺序分块下载以减少卡顿。" : ""}`,
         "ok"
       );
     });
