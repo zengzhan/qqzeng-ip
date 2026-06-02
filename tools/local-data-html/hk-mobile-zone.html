@@ -376,6 +376,7 @@
 
     function formatNum(n) { return Number(n || 0).toLocaleString("zh-CN"); }
     function randInt(maxExclusive) { return Math.floor(Math.random() * maxExclusive); }
+    function pauseTick() { return new Promise(resolve => setTimeout(resolve, 0)); }
 
     function clearSelect(s) { while (s.options.length > 1) s.remove(1); }
     function addOptions(s, vals) {
@@ -582,8 +583,90 @@
       return out;
     }
 
+    async function generateNumbersForDownload(count, mode, dedup, realismFirst, onProgress) {
+      const used = dedup ? new Set() : null;
+      const maxCap = state.filtered.reduce((a, x) => a + x.capacity, 0);
+      let target = count;
+      if (dedup && target > maxCap) target = maxCap;
+
+      const preview = [];
+      const parts = [];
+      const chunk = [];
+      const flushSize = 5000;
+      let produced = 0;
+      let guard = 0;
+
+      while (produced < target) {
+        const row = mode === "weighted"
+          ? pickWeightedRow()
+          : state.filtered[randInt(state.filtered.length)];
+        if (!row) break;
+
+        const startNum = Number(row.start);
+        const offset = randInt(row.capacity);
+        let num = String(startNum + offset).padStart(8, "0");
+        if (realismFirst) {
+          const tail = PREFERRED_TAIL_POOL[randInt(PREFERRED_TAIL_POOL.length)];
+          num = num.slice(0, 4) + tail;
+          const n2 = Number(num);
+          if (n2 < Number(row.start) || n2 > Number(row.end)) {
+            guard++;
+            if (guard > target * 60) break;
+            continue;
+          }
+        }
+
+        let accepted = false;
+        if (!dedup) {
+          accepted = true;
+        } else if (!used.has(num)) {
+          used.add(num);
+          accepted = true;
+        }
+
+        if (accepted) {
+          if (preview.length < 100) preview.push(num);
+          chunk.push(num);
+          produced++;
+
+          if (chunk.length >= flushSize) {
+            parts.push(chunk.join("\n") + "\n");
+            chunk.length = 0;
+            if (onProgress) onProgress(produced, target);
+            await pauseTick();
+          }
+        }
+
+        guard++;
+        if (guard > target * 80 && dedup) break;
+      }
+
+      if (chunk.length) {
+        parts.push(chunk.join("\n"));
+      }
+      if (onProgress) onProgress(produced, target);
+
+      return {
+        preview,
+        blob: new Blob(parts, { type: "text/plain;charset=utf-8" }),
+        count: produced,
+        target
+      };
+    }
+
     function downloadText(filename, text) {
       const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function downloadBlob(filename, blob) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -621,7 +704,7 @@
     digitSelect.addEventListener("change", applyFilters);
     operatorSelect.addEventListener("change", applyFilters);
 
-    document.getElementById("btnGenerate").addEventListener("click", () => {
+    document.getElementById("btnGenerate").addEventListener("click", async () => {
       setMsg(msgGenerate, "", "");
       if (!state.filtered.length) {
         setMsg(msgGenerate, "没有命中区间，请先加载数据或调整筛选条件。", "warn");
@@ -639,12 +722,34 @@
       }
 
       const t0 = performance.now();
-      const list = generateNumbers(Math.trunc(count), mode, dedup, realismFirst);
+      const requestedCount = Math.trunc(count);
+      const useChunkedDownload = requestedCount >= 100000;
+
+      if (useChunkedDownload) {
+        setMsg(msgGenerate, "数量较大，正在分块生成并准备下载，请稍候...", "warn");
+      }
+
+      const result = useChunkedDownload
+        ? await generateNumbersForDownload(requestedCount, mode, dedup, realismFirst, (done, total) => {
+            setMsg(msgGenerate, `数量较大，正在分块生成并准备下载：${formatNum(done)} / ${formatNum(total)}`, "warn");
+          })
+        : { preview: generateNumbers(requestedCount, mode, dedup, realismFirst), blob: null };
       const t1 = performance.now();
 
+      const list = result.preview;
       renderPreview(list);
-      downloadText(outputName, list.join("\n"));
-      setMsg(msgGenerate, `已生成 ${formatNum(list.length)} 个号码，耗时 ${((t1 - t0) / 1000).toFixed(3)} 秒。`, "ok");
+
+      if (result.blob) {
+        downloadBlob(outputName, result.blob);
+      } else {
+        downloadText(outputName, list.join("\n"));
+      }
+
+      setMsg(
+        msgGenerate,
+        `已生成 ${formatNum(result.count ?? list.length)} 个号码，耗时 ${((t1 - t0) / 1000).toFixed(3)} 秒。${useChunkedDownload ? " 已启用分块下载以减少卡顿。" : ""}`,
+        "ok"
+      );
     });
 
     renderSummary();
