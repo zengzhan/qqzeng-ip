@@ -192,7 +192,7 @@
 
         <div class="row">
           <label>内置号段路径</label>
-          <input id="defaultCsvPath" type="text" value="../../demo-data/ofca_hk_likely_personal_mobile_segments.csv" />
+          <input id="defaultCsvPath" type="text" value="/demo-data/ofca_hk_likely_personal_mobile_segments.csv" />
         </div>
 
         <div class="actions">
@@ -494,6 +494,40 @@
       loadRows(rows, url);
     }
 
+    function buildCsvCandidates(rawPath) {
+      const input = (rawPath || "").trim();
+      const set = new Set();
+
+      if (input) set.add(input);
+
+      set.add("/demo-data/ofca_hk_likely_personal_mobile_segments.csv");
+      set.add("../../demo-data/ofca_hk_likely_personal_mobile_segments.csv");
+      set.add("../demo-data/ofca_hk_likely_personal_mobile_segments.csv");
+
+      if (location.origin && location.origin !== "null") {
+        set.add(location.origin + "/demo-data/ofca_hk_likely_personal_mobile_segments.csv");
+      }
+
+      return Array.from(set);
+    }
+
+    async function loadCsvByCandidates(rawPath) {
+      const candidates = buildCsvCandidates(rawPath);
+      let lastErr = null;
+
+      for (const url of candidates) {
+        try {
+          await loadCsvFromUrl(url);
+          defaultCsvPath.value = url;
+          return;
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+
+      throw lastErr || new Error("所有候选路径均加载失败");
+    }
+
     function pickWeightedRow() {
       const total = state.weightedPool.length ? state.weightedPool[state.weightedPool.length - 1].max : 0;
       if (!total) return null;
@@ -573,11 +607,13 @@
     });
 
     btnLoadDefault.addEventListener("click", async () => {
-      const url = (defaultCsvPath.value || "").trim();
-      if (!url) return;
       try {
-        await loadCsvFromUrl(url);
+        await loadCsvByCandidates((defaultCsvPath.value || "").trim());
       } catch (err) {
+        if (location.protocol === "file:") {
+          setMsg(msgFilter, "当前是本地文件模式(file://)，浏览器限制自动读取本地CSV。部署后会自动加载；本地可用手动上传。", "warn");
+          return;
+        }
         setMsg(msgFilter, "内置号段加载失败，请手动上传 CSV。", "warn");
       }
     });
@@ -616,9 +652,13 @@
 
     (async () => {
       try {
-        await loadCsvFromUrl((defaultCsvPath.value || "").trim());
+        await loadCsvByCandidates((defaultCsvPath.value || "").trim());
       } catch {
-        setMsg(msgFilter, "自动加载未成功，你可以点“一键加载香港号段”或手动上传 CSV。", "warn");
+        if (location.protocol === "file:") {
+          setMsg(msgFilter, "当前是本地文件模式(file://)，自动加载受限。部署环境会自动加载；本地可用手动上传。", "warn");
+          return;
+        }
+        setMsg(msgFilter, "自动加载未成功，你可以点“一键加载香港号段”重试。", "warn");
       }
     })();
   </script>
