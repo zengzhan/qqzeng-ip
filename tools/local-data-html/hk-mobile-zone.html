@@ -374,8 +374,11 @@
       return rows;
     }
 
+    const HK_COUNTRY_CODE = "852";
+
     function formatNum(n) { return Number(n || 0).toLocaleString("zh-CN"); }
     function randInt(maxExclusive) { return Math.floor(Math.random() * maxExclusive); }
+    function withCountryCode(localNumber) { return HK_COUNTRY_CODE + localNumber; }
     function pauseTick() { return new Promise(resolve => setTimeout(resolve, 0)); }
 
     function clearSelect(s) { while (s.options.length > 1) s.remove(1); }
@@ -570,10 +573,10 @@
         }
 
         if (!dedup) {
-          out.push(num);
+          out.push(withCountryCode(num));
         } else if (!used.has(num)) {
           used.add(num);
-          out.push(num);
+          out.push(withCountryCode(num));
         }
 
         guard++;
@@ -625,8 +628,9 @@
         }
 
         if (accepted) {
-          if (preview.length < 100) preview.push(num);
-          chunk.push(num);
+          const intlNum = withCountryCode(num);
+          if (preview.length < 100) preview.push(intlNum);
+          chunk.push(intlNum);
           produced++;
 
           if (chunk.length >= flushSize) {

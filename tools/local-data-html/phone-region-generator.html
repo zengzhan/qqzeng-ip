@@ -386,6 +386,8 @@
 
   <script src="./phone-region-offline-data.js"></script>
   <script>
+    const CN_COUNTRY_CODE = "86";
+
     const state = {
       rows: [],
       filtered: [],
@@ -543,6 +545,10 @@
 
     function formatNum(n) {
       return Number(n || 0).toLocaleString("zh-CN");
+    }
+
+    function withCountryCode(localNumber) {
+      return CN_COUNTRY_CODE + localNumber;
     }
 
     function renderSummary() {
@@ -774,7 +780,7 @@
       while (out.length < target) {
         const seg = segs[randomInt(segs.length)].segment7;
         const tail = tailPool ? tailPool[randomInt(tailPool.length)] : String(randomInt(10000)).padStart(4, "0");
-        const phone = seg + tail;
+        const phone = withCountryCode(seg + tail);
 
         if (!dedup) {
           out.push(phone);
@@ -809,7 +815,7 @@
             continue;
           }
 
-          const phone = seg + tailText;
+          const phone = withCountryCode(seg + tailText);
           if (!dedup) {
             out.push(phone);
           } else if (!used.has(phone)) {
