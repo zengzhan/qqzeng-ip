@@ -441,13 +441,22 @@
         const s = (cols[idx.start] || "").trim();
         const e = (cols[idx.end] || "").trim();
         if (!/^\d{8}$/.test(s) || !/^\d{8}$/.test(e)) continue;
-        const fd = idx.firstDigit >= 0 ? (cols[idx.firstDigit] || s[0]).trim() : s[0];
-        const op = idx.operator >= 0 ? (cols[idx.operator] || "").trim() : "Unknown";
+        
+        let fd = s[0];
+        if (idx.firstDigit >= 0 && cols[idx.firstDigit]) {
+          fd = (cols[idx.firstDigit] || "").trim() || s[0];
+        }
+        
+        let op = "Unknown";
+        if (idx.operator >= 0 && cols[idx.operator]) {
+          op = (cols[idx.operator] || "").trim() || "Unknown";
+        }
+        
         rows.push({
           start: s,
           end: e,
           firstDigit: fd,
-          operator: op || "Unknown",
+          operator: op,
           capacity: Number(e) - Number(s) + 1
         });
       }
@@ -871,7 +880,7 @@
           setMsg(msgFilter, "当前是本地文件模式(file://)，浏览器限制自动读取本地CSV。部署后会自动加载；本地可用手动上传。", "warn");
           return;
         }
-        setMsg(msgFilter, "内置号段加载失败，请手动上传 CSV。", "warn");
+        setMsg(msgFilter, "内置号段加载失败，请手动上传 CSV。错误：" + String(err.message || err), "err");
       }
     });
 
