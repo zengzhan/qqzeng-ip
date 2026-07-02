@@ -123,7 +123,8 @@
     }
 
     button.alt { background: linear-gradient(120deg, #64748b, #334155); }
-    button:hover { transform: translateY(-1px); opacity: .95; }
+    button:hover:not(:disabled) { transform: translateY(-1px); opacity: .95; }
+    button:disabled { cursor: not-allowed; opacity: .55; }
 
     .inline { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 13px; }
 
@@ -204,6 +205,22 @@
       cursor: not-allowed;
       opacity: .55;
       transform: none;
+    }
+
+    .progress-bar {
+      width: 100%;
+      height: 6px;
+      background: #e8eef7;
+      border-radius: 3px;
+      overflow: hidden;
+      margin-top: 8px;
+    }
+
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent2), var(--accent));
+      width: 0%;
+      transition: width .3s ease;
     }
 
     .table-wrap {
@@ -327,13 +344,15 @@
 
         <div class="actions">
           <button id="btnGenerate" type="button">生成并下载</button>
+          <button id="btnAutoDownload" type="button" class="alt" style="display:none;">一键下载所有分片</button>
         </div>
 
         <div id="msgGenerate" class="msg"></div>
 
         <div id="downloadPlan" class="download-plan">
           <h3>分片下载任务</h3>
-          <p>大于等于 100 万条时，不会自动下载。请按顺序手动点击单个分片下载，避免浏览器内存压力过大。</p>
+          <p>大于等于 100 万条时，自动拆分为多个分片。点击"一键下载所有分片"自动顺序下载。</p>
+          <div class="progress-bar"><div id="progressFill" class="progress-fill"></div></div>
           <div id="downloadList" class="download-list"></div>
         </div>
 
@@ -350,13 +369,15 @@
   </div>
 
   <script>
-    const state = { rows: [], filtered: [], weightedPool: [], downloadPlan: null };
+    const state = { rows: [], filtered: [], weightedPool: [], downloadPlan: null, autoDownloading: false };
 
     const fileInput = document.getElementById("fileInput");
     const defaultCsvPath = document.getElementById("defaultCsvPath");
     const btnLoadDefault = document.getElementById("btnLoadDefault");
     const digitSelect = document.getElementById("digitSelect");
     const operatorSelect = document.getElementById("operatorSelect");
+    const btnGenerate = document.getElementById("btnGenerate");
+    const btnAutoDownload = document.getElementById("btnAutoDownload");
 
     const stLoaded = document.getElementById("stLoaded");
     const stMatched = document.getElementById("stMatched");
@@ -369,6 +390,7 @@
     const previewBody = document.getElementById("previewBody");
     const downloadPlan = document.getElementById("downloadPlan");
     const downloadList = document.getElementById("downloadList");
+    const progressFill = document.getElementById("progressFill");
 
     function setMsg(el, text, type) {
       el.textContent = text || "";
@@ -491,8 +513,11 @@
 
     function resetDownloadPlan() {
       state.downloadPlan = null;
+      state.autoDownloading = false;
       downloadList.innerHTML = "";
       downloadPlan.className = "download-plan";
+      btnAutoDownload.style.display = "none";
+      progressFill.style.width = "0%";
     }
 
     function buildChunkFilename(baseName, index, totalParts) {
@@ -512,7 +537,7 @@
           index,
           count,
           filename: buildChunkFilename(baseName, index, partCount),
-          status: index === 0 ? "ready" : "waiting"
+          status: "waiting"
         });
       }
       state.downloadPlan = {
@@ -534,6 +559,11 @@
       }
 
       downloadPlan.className = "download-plan show";
+      const totalTasks = state.downloadPlan.tasks.length;
+      const completedTasks = state.downloadPlan.tasks.filter(t => t.status === "done").length;
+      const progress = totalTasks > 0 ? (completedTasks / totalTasks) * 100 : 0;
+      progressFill.style.width = progress + "%";
+
       state.downloadPlan.tasks.forEach(task => {
         const item = document.createElement("div");
         item.className = "download-item";
@@ -543,12 +573,12 @@
 
         const meta = document.createElement("div");
         meta.className = "meta";
-        meta.textContent = `${formatNum(task.count)} 条 | ${task.status === "done" ? "已下载" : task.status === "running" ? "生成中" : task.status === "ready" ? "可下载" : "等待前一片完成"}`;
+        meta.textContent = `${formatNum(task.count)} 条 | ${task.status === "done" ? "已下载" : task.status === "running" ? "生成中" : "等待中"}`;
 
         const button = document.createElement("button");
         button.type = "button";
         button.textContent = task.status === "done" ? "已完成" : task.status === "running" ? "生成中..." : "下载这一片";
-        button.disabled = task.status !== "ready";
+        button.disabled = task.status !== "waiting" || state.autoDownloading;
         button.addEventListener("click", () => downloadPlannedChunk(task.index));
 
         item.appendChild(title);
@@ -671,48 +701,6 @@
       return state.weightedPool[left].row;
     }
 
-    function generateNumbers(count, mode, dedup, realismFirst) {
-      const out = [];
-      const used = dedup ? new Set() : null;
-      const maxCap = state.filtered.reduce((a, x) => a + x.capacity, 0);
-      let target = count;
-      if (dedup && target > maxCap) target = maxCap;
-
-      let guard = 0;
-      while (out.length < target) {
-        const row = mode === "weighted"
-          ? pickWeightedRow()
-          : state.filtered[randInt(state.filtered.length)];
-        if (!row) break;
-
-        const startNum = Number(row.start);
-        const offset = randInt(row.capacity);
-        let num = String(startNum + offset).padStart(8, "0");
-        if (realismFirst) {
-          const tail = PREFERRED_TAIL_POOL[randInt(PREFERRED_TAIL_POOL.length)];
-          num = num.slice(0, 4) + tail;
-          const n2 = Number(num);
-          if (n2 < Number(row.start) || n2 > Number(row.end)) {
-            guard++;
-            if (guard > target * 60) break;
-            continue;
-          }
-        }
-
-        if (!dedup) {
-          out.push(withCountryCode(num));
-        } else if (!used.has(num)) {
-          used.add(num);
-          out.push(withCountryCode(num));
-        }
-
-        guard++;
-        if (guard > target * 80 && dedup) break;
-      }
-
-      return out;
-    }
-
     async function generateNumbersChunk(count, mode, dedup, realismFirst, used, onProgress) {
       const maxCap = state.filtered.reduce((a, x) => a + x.capacity, 0);
       let target = count;
@@ -723,9 +711,12 @@
       const chunk = [];
       const flushSize = 5000;
       let produced = 0;
-      let guard = 0;
+      let attempts = 0;
+      const maxAttempts = Math.max(target * 100, 1000000);
 
-      while (produced < target) {
+      while (produced < target && attempts < maxAttempts) {
+        attempts++;
+        
         const row = mode === "weighted"
           ? pickWeightedRow()
           : state.filtered[randInt(state.filtered.length)];
@@ -734,13 +725,12 @@
         const startNum = Number(row.start);
         const offset = randInt(row.capacity);
         let num = String(startNum + offset).padStart(8, "0");
+        
         if (realismFirst) {
           const tail = PREFERRED_TAIL_POOL[randInt(PREFERRED_TAIL_POOL.length)];
           num = num.slice(0, 4) + tail;
           const n2 = Number(num);
           if (n2 < Number(row.start) || n2 > Number(row.end)) {
-            guard++;
-            if (guard > target * 60) break;
             continue;
           }
         }
@@ -766,9 +756,6 @@
             await pauseTick();
           }
         }
-
-        guard++;
-        if (guard > target * 80 && dedup) break;
       }
 
       if (chunk.length) {
@@ -787,7 +774,7 @@
     async function downloadPlannedChunk(index) {
       if (!state.downloadPlan) return;
       const task = state.downloadPlan.tasks[index];
-      if (!task || task.status !== "ready" || index !== state.downloadPlan.nextIndex) return;
+      if (!task || task.status !== "waiting") return;
 
       task.status = "running";
       renderDownloadPlan();
@@ -808,25 +795,47 @@
       downloadBlob(task.filename, result.blob);
 
       task.status = "done";
-      state.downloadPlan.nextIndex += 1;
-      if (state.downloadPlan.tasks[state.downloadPlan.nextIndex]) {
-        state.downloadPlan.tasks[state.downloadPlan.nextIndex].status = "ready";
-      }
+      state.downloadPlan.nextIndex = index + 1;
       renderDownloadPlan();
 
       setMsg(msgGenerate, `第 ${index + 1} 个分片已下载，包含 ${formatNum(result.count)} 个号码，耗时 ${((t1 - t0) / 1000).toFixed(3)} 秒。`, "ok");
     }
 
-    function downloadText(filename, text) {
-      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+    async function autoDownloadAllChunks() {
+      if (!state.downloadPlan || state.autoDownloading) return;
+      state.autoDownloading = true;
+      btnAutoDownload.disabled = true;
+
+      const tasks = state.downloadPlan.tasks;
+      for (let i = 0; i < tasks.length; i++) {
+        if (tasks[i].status === "done") continue;
+        
+        tasks[i].status = "running";
+        renderDownloadPlan();
+        setMsg(msgGenerate, `正在生成第 ${i + 1} 个分片（${i + 1}/${tasks.length}），请稍候...`, "warn");
+
+        const t0 = performance.now();
+        const result = await generateNumbersChunk(
+          tasks[i].count,
+          state.downloadPlan.mode,
+          state.downloadPlan.dedup,
+          state.downloadPlan.realismFirst,
+          state.downloadPlan.used,
+          (done, total) => setMsg(msgGenerate, `第 ${i + 1} 个分片：${formatNum(done)} / ${formatNum(total)}`, "warn")
+        );
+        const t1 = performance.now();
+
+        if (i === 0) renderPreview(result.preview);
+        downloadBlob(tasks[i].filename, result.blob);
+
+        tasks[i].status = "done";
+        renderDownloadPlan();
+        await pauseTick();
+      }
+
+      state.autoDownloading = false;
+      btnAutoDownload.disabled = false;
+      setMsg(msgGenerate, `✓ 所有 ${tasks.length} 个分片已全部下载完成！`, "ok");
     }
 
     function downloadBlob(filename, blob) {
@@ -869,7 +878,7 @@
     digitSelect.addEventListener("change", applyFilters);
     operatorSelect.addEventListener("change", applyFilters);
 
-    document.getElementById("btnGenerate").addEventListener("click", async () => {
+    btnGenerate.addEventListener("click", async () => {
       setMsg(msgGenerate, "", "");
       resetDownloadPlan();
       if (!state.filtered.length) {
@@ -887,36 +896,33 @@
         return;
       }
 
-      const t0 = performance.now();
       const requestedCount = Math.trunc(count);
       const useChunkedDownload = requestedCount >= 1000000;
 
       if (useChunkedDownload) {
         buildDownloadPlan(requestedCount, outputName, mode, dedup, realismFirst);
         renderDownloadPlan();
-        setMsg(msgGenerate, `数量较大，已拆分为 ${formatNum(state.downloadPlan.tasks.length)} 个分片。请按顺序手动点击单个分片下载。`, "warn");
+        btnAutoDownload.style.display = "inline-block";
+        setMsg(msgGenerate, `数量较大，已拆分为 ${formatNum(state.downloadPlan.tasks.length)} 个分片。点击"一键下载所有分片"自动顺序下载。`, "warn");
         renderPreview([]);
         return;
       }
 
-      const result = { preview: generateNumbers(requestedCount, mode, dedup, realismFirst), blob: null };
+      const t0 = performance.now();
+      const result = await generateNumbersChunk(requestedCount, mode, dedup, realismFirst, null, null);
       const t1 = performance.now();
 
-      const list = result.preview;
-      renderPreview(list);
-
-      if (result.blob) {
-        downloadBlob(outputName, result.blob);
-      } else {
-        downloadText(outputName, list.join("\n"));
-      }
+      renderPreview(result.preview);
+      downloadBlob(outputName, result.blob);
 
       setMsg(
         msgGenerate,
-        `已生成 ${formatNum(result.count ?? list.length)} 个号码，耗时 ${((t1 - t0) / 1000).toFixed(3)} 秒。${useChunkedDownload ? " 已启用顺序分块下载以减少卡顿。" : ""}`,
+        `已生成 ${formatNum(result.count)} 个号码，耗时 ${((t1 - t0) / 1000).toFixed(3)} 秒。`,
         "ok"
       );
     });
+
+    btnAutoDownload.addEventListener("click", autoDownloadAllChunks);
 
     renderSummary();
     renderPreview([]);
@@ -929,9 +935,10 @@
           setMsg(msgFilter, "当前是本地文件模式(file://)，自动加载受限。部署环境会自动加载；本地可用手动上传。", "warn");
           return;
         }
-        setMsg(msgFilter, "自动加载未成功，你可以点“一键加载香港号段”重试。", "warn");
+        setMsg(msgFilter, "自动加载未成功，你可以点"一键加载香港号段"重试。", "warn");
       }
     })();
   </script>
 </body>
 </html>
+
