@@ -679,7 +679,11 @@
 
       if (location.origin && location.origin !== "null") {
         set.add(location.origin + "/demo-data/ofca_hk_likely_personal_mobile_segments.csv");
-        set.add(location.origin + location.pathname.replace(/[^/]+$/, "/../demo-data/ofca_hk_likely_personal_mobile_segments.csv"));
+        const basePath = location.pathname.replace(/\/[^/]+$/, "");
+        const siteRoot = basePath.replace(/\/tools\/local-data-html$/, "");
+        if (siteRoot) {
+          set.add(location.origin + siteRoot + "/demo-data/ofca_hk_likely_personal_mobile_segments.csv");
+        }
       }
 
       return Array.from(set);
