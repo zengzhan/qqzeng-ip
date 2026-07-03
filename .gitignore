@@ -1,3 +1,4 @@
 .DS_Store
 *.dat
 *.db
+!qqzeng-phone-6.0/python/qqzeng-phone-6.0.db
