@@ -664,7 +664,6 @@
       loadRows(rows, url);
     }
 
-      document.body.appendChild(a);
     function buildCsvCandidates(rawPath) {
       const input = (rawPath || "").trim();
       const set = new Set();
@@ -672,13 +671,15 @@
       if (input) set.add(input);
 
       set.add("/demo-data/ofca_hk_likely_personal_mobile_segments.csv");
+      set.add("../demo-data/ofca_hk_likely_personal_mobile_segments.csv");
       set.add("../../demo-data/ofca_hk_likely_personal_mobile_segments.csv");
       set.add("../../../demo-data/ofca_hk_likely_personal_mobile_segments.csv");
-      set.add("../../demo-data/ofca_hk_likely_personal_mobile_segments.csv");
-      set.add("../demo-data/ofca_hk_likely_personal_mobile_segments.csv");
+      set.add("demo-data/ofca_hk_likely_personal_mobile_segments.csv");
+      set.add("./demo-data/ofca_hk_likely_personal_mobile_segments.csv");
 
       if (location.origin && location.origin !== "null") {
         set.add(location.origin + "/demo-data/ofca_hk_likely_personal_mobile_segments.csv");
+        set.add(location.origin + location.pathname.replace(/[^/]+$/, "/../demo-data/ofca_hk_likely_personal_mobile_segments.csv"));
       }
 
       return Array.from(set);

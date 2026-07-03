@@ -177,7 +177,7 @@
         <h2>1. 数据分割</h2>
         <div class="row">
           <label>源文件</label>
-          <div class="ctrl"><input id="splitFile" type="file" accept=".txt,.csv,.tx" /></div>
+          <div class="ctrl"><input id="splitFile" type="file" accept=".txt,.csv,.tx" multiple /></div>
         </div>
         <div class="row">
           <label>每份行数</label>
@@ -226,7 +226,7 @@
         <h2>3. 随机插入指定号码</h2>
         <div class="row">
           <label>基础文件</label>
-          <div class="ctrl"><input id="insertFile" type="file" accept=".txt,.csv,.tx" /></div>
+          <div class="ctrl"><input id="insertFile" type="file" accept=".txt,.csv,.tx" multiple /></div>
         </div>
         <div class="row">
           <label>指定号码</label>
@@ -251,7 +251,7 @@
         <h2>4. 底库去重 + 本地记忆</h2>
         <div class="row">
           <label>底库更新文件</label>
-          <div class="ctrl"><input id="baseLibraryFile" type="file" accept=".txt,.csv,.tx" /></div>
+          <div class="ctrl"><input id="baseLibraryFile" type="file" accept=".txt,.csv,.tx" multiple /></div>
         </div>
         <div class="row">
           <label>底库设置</label>
@@ -263,7 +263,7 @@
         </div>
         <div class="row">
           <label>新号码文件</label>
-          <div class="ctrl"><input id="newFile" type="file" accept=".txt,.csv,.tx" /></div>
+          <div class="ctrl"><input id="newFile" type="file" accept=".txt,.csv,.tx" multiple /></div>
         </div>
         <div class="row">
           <label>命中查询</label>
@@ -539,12 +539,12 @@
       splitItems.forEach(x => URL.revokeObjectURL(x.url));
       splitItems = [];
 
-      const file = document.getElementById("splitFile").files[0];
+      const files = Array.from(document.getElementById("splitFile").files || []);
       const chunkSize = Number(document.getElementById("splitChunkSize").value || 0);
       const prefix = (document.getElementById("splitPrefix").value || "part").trim();
       const ext = document.getElementById("splitExt").value;
 
-      if (!file) {
+      if (!files.length) {
         setMsg(splitMsg, "请先选择需要分割的文件", "warn");
         return;
       }
@@ -555,23 +555,34 @@
 
       try {
         setMsg(splitMsg, "处理中，请稍候...");
-        const text = await readFileAsText(file);
-        const lines = normalizeLines(text);
-        if (lines.length === 0) {
-          setMsg(splitMsg, "文件为空", "warn");
+        let totalParts = 0;
+        let totalLines = 0;
+        for (const file of files) {
+          const text = await readFileAsText(file);
+          const lines = normalizeLines(text);
+          if (!lines.length) {
+            continue;
+          }
+          totalLines += lines.length;
+          const baseName = file.name.replace(/\.[^.]*$/, "");
+          const filePrefix = prefix || baseName;
+          const fileParts = Math.ceil(lines.length / chunkSize);
+          for (let i = 0; i < fileParts; i++) {
+            const chunk = lines.slice(i * chunkSize, (i + 1) * chunkSize).join("\n");
+            const partName = `${filePrefix}_${String(i + 1).padStart(4, "0")}.${ext}`;
+            const item = downloadText(partName, chunk);
+            splitItems.push(item);
+            createDownloadLink(splitLinks, item);
+          }
+          totalParts += fileParts;
+        }
+
+        if (!totalParts) {
+          setMsg(splitMsg, "所有选中文件均为空", "warn");
           return;
         }
 
-        const totalParts = Math.ceil(lines.length / chunkSize);
-        for (let i = 0; i < totalParts; i++) {
-          const chunk = lines.slice(i * chunkSize, (i + 1) * chunkSize).join("\n");
-          const partName = `${prefix}_${String(i + 1).padStart(4, "0")}.${ext}`;
-          const item = downloadText(partName, chunk);
-          splitItems.push(item);
-          createDownloadLink(splitLinks, item);
-        }
-
-        setMsg(splitMsg, `分割完成: 共 ${lines.length} 行，生成 ${totalParts} 个文件`, "ok");
+        setMsg(splitMsg, `分割完成: 共 ${totalLines} 行，生成 ${totalParts} 个文件`, "ok");
       } catch (err) {
         setMsg(splitMsg, "分割失败: " + (err && err.message ? err.message : String(err)), "warn");
       }
@@ -677,7 +688,7 @@
       insertItems.forEach(x => URL.revokeObjectURL(x.url));
       insertItems = [];
 
-      const baseFile = document.getElementById("insertFile").files[0];
+      const baseFiles = Array.from(document.getElementById("insertFile").files || []);
       const numbersRaw = document.getElementById("insertNumbers").value || "";
       const insertTimes = Number(document.getElementById("insertTimes").value || 0);
       const outputName = (document.getElementById("insertName").value || "inserted.tx").trim();
@@ -695,9 +706,9 @@
       try {
         setMsg(insertMsg, "随机插入中，请稍候...");
         let lines = [];
-        if (baseFile) {
+        for (const baseFile of baseFiles) {
           const baseText = await readFileAsText(baseFile);
-          lines = normalizeLines(baseText);
+          lines.push(...normalizeLines(baseText));
         }
 
         let insertCount = 0;
@@ -717,7 +728,7 @@
         recordProcessingBatch(
           "随机插入指定号码",
           numbers,
-          [baseFile ? baseFile.name : "(无基础文件，直接生成)"],
+          baseFiles.length ? baseFiles.map(f => f.name) : ["(无基础文件，直接生成)"],
           outputName
         );
 
@@ -769,16 +780,19 @@
     }
 
     document.getElementById("btnSetBaseLibrary").addEventListener("click", async () => {
-      const file = document.getElementById("baseLibraryFile").files[0];
-      if (!file) {
+      const files = Array.from(document.getElementById("baseLibraryFile").files || []);
+      if (!files.length) {
         setMsg(baseMsg, "请先上传用于更新底库的文件", "warn");
         return;
       }
 
       try {
         setMsg(baseMsg, "底库更新中，请稍候...");
-        const text = await readFileAsText(file);
-        const numbers = extractNumbers(text);
+        const numbers = [];
+        for (const file of files) {
+          const text = await readFileAsText(file);
+          numbers.push(...extractNumbers(text));
+        }
         if (!numbers.length) {
           setMsg(baseMsg, "底库更新文件未识别到号码", "warn");
           return;
@@ -792,7 +806,7 @@
         recordProcessingBatch(
           "底库手动更新",
           unique,
-          [file.name],
+          files.map(f => f.name),
           "(更新本地底库)"
         );
 
@@ -888,19 +902,22 @@
       baseItems.forEach(x => URL.revokeObjectURL(x.url));
       baseItems = [];
 
-      const newFile = document.getElementById("newFile").files[0];
+      const newFiles = Array.from(document.getElementById("newFile").files || []);
       const outputName = (document.getElementById("baseOutputName").value || "new_unique.txt").trim();
       const includeMemory = document.getElementById("includeMemoryAsBase").checked;
 
-      if (!newFile) {
+      if (!newFiles.length) {
         setMsg(baseMsg, "请先上传新号码文件", "warn");
         return;
       }
 
       try {
         setMsg(baseMsg, "底库去重处理中，请稍候...");
-        const newText = await readFileAsText(newFile);
-        const newNumbers = extractNumbers(newText);
+        const newNumbers = [];
+        for (const file of newFiles) {
+          const text = await readFileAsText(file);
+          newNumbers.push(...extractNumbers(text));
+        }
         if (!newNumbers.length) {
           setMsg(baseMsg, "新号码文件未识别到号码", "warn");
           return;
@@ -936,7 +953,7 @@
         recordProcessingBatch(
           "底库去重",
           newUnique,
-          [newFile.name],
+          newFiles.map(f => f.name),
           outputName
         );
 

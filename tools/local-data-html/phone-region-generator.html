@@ -814,10 +814,14 @@
 
       // 常用入口兜底：相对路径、站点根路径、当前origin绝对路径。
       set.add("../../qqzeng-phone-6.0/python/output_cn/region_segments.csv");
+      set.add("../qqzeng-phone-6.0/python/output_cn/region_segments.csv");
       set.add("/qqzeng-phone-6.0/python/output_cn/region_segments.csv");
+      set.add("qqzeng-phone-6.0/python/output_cn/region_segments.csv");
+      set.add("./qqzeng-phone-6.0/python/output_cn/region_segments.csv");
 
       if (location.origin && location.origin !== "null") {
         set.add(location.origin + "/qqzeng-phone-6.0/python/output_cn/region_segments.csv");
+        set.add(location.origin + location.pathname.replace(/[^/]+$/, "/../qqzeng-phone-6.0/python/output_cn/region_segments.csv"));
       }
 
       return Array.from(set);
