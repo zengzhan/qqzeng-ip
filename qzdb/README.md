@@ -197,4 +197,4 @@ The SDKs resolve the database path in this order: current directory → `data/` 
 ## 📄 License
 This project is licensed under the MIT License.
 
-<!-- commit description update -->
+<!-- commit description update v2 -->
