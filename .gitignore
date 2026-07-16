@@ -13,3 +13,6 @@ qzdb/java/build/
 qzdb/rust/target/
 bin/
 obj/
+
+# Local private documentation
+docs/GITHUB_FOLDER_DESCRIPTIONS.md
