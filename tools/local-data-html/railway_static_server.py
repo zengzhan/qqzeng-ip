@@ -5,7 +5,7 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 
-SERVE_DIR = "/app"
+SERVE_DIR = os.getenv("SERVE_DIR") or ("/app" if os.path.isdir("/app") else os.getcwd())
 DEFAULT_PORT = 8010
 
 
