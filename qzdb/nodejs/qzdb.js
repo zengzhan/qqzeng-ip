@@ -25,31 +25,54 @@ function _crc32(buf) {
 const SENTINEL = 0x80000000;
 const FLOAT_FIELDS = new Set(['longitude', 'latitude']);
 
+// Parallel-array storage (not a dict) keeps per-query allocation cheap; floatFlags[i]
+// replaces a Set so toPipe() does an O(1) boolean check per field.
 class GeoInfo {
-  constructor(fields = {}, fieldNames = [], floatIndices = new Set()) {
-    this._fields = fields;
+  constructor(vals = [], fieldNames = [], floatFlags = null) {
+    this._vals = vals;
     this._fieldNames = fieldNames;
-    this._floatIndices = floatIndices;
-    for (const key in fields) {
-      this[key] = fields[key];
+    this._floatFlags = floatFlags;
+    this._nameToIdx = null;
+    for (let i = 0; i < fieldNames.length; i++) {
+      this[fieldNames[i]] = vals[i] !== undefined ? vals[i] : '';
     }
   }
 
   get(name) {
-    return this._fields[name] !== undefined ? this._fields[name] : '';
+    if (this._nameToIdx === null) {
+      this._nameToIdx = {};
+      for (let i = 0; i < this._fieldNames.length; i++) {
+        this._nameToIdx[this._fieldNames[i]] = i;
+      }
+    }
+    const idx = this._nameToIdx[name];
+    if (idx === undefined) return '';
+    const v = this._vals[idx];
+    return v !== undefined ? v : '';
   }
 
   toPipe() {
-    return this._fieldNames.map(fname => {
-      const val = this._fields[fname] !== undefined ? this._fields[fname] : '';
-      if (this._floatIndices.has(fname) && val !== '') {
+    const names = this._fieldNames;
+    const vals = this._vals;
+    const flags = this._floatFlags;
+    const out = new Array(names.length);
+    for (let i = 0; i < names.length; i++) {
+      let val = vals[i] !== undefined ? vals[i] : '';
+      if (flags && flags[i] && val !== '') {
         const num = parseFloat(val);
-        if (!isNaN(num)) {
-          return num.toFixed(6);
-        }
+        val = !isNaN(num) ? num.toFixed(6) : val;
       }
-      return String(val);
-    }).join('|');
+      out[i] = String(val);
+    }
+    return out.join('|');
+  }
+
+  toDict() {
+    const names = this._fieldNames;
+    const vals = this._vals;
+    const d = {};
+    for (let i = 0; i < names.length; i++) d[names[i]] = vals[i] !== undefined ? vals[i] : '';
+    return d;
   }
 }
 
@@ -354,16 +377,22 @@ class QzdbSearcher {
 
       if (fieldNames && fieldNames.length === this._groupFieldCounts[0]) {
         this._fieldNames = fieldNames;
-        this._floatFieldIndices = new Set(
-          fieldNames.map((n, i) => FLOAT_FIELDS.has(n) ? n : null).filter(Boolean)
-        );
+        this._floatFlags = fieldNames.map(n => FLOAT_FIELDS.has(n));
         return;
       }
     }
 
     // Fallback placeholder names
     this._fieldNames = Array.from({ length: this._groupFieldCounts[0] }, (_, i) => `field_${i}`);
-    this._floatFieldIndices = new Set();
+    this._floatFlags = new Array(this._groupFieldCounts[0]).fill(false);
+  }
+
+  getFloatIndices() {
+    const out = [];
+    for (let i = 0; i < this._floatFlags.length; i++) {
+      if (this._floatFlags[i]) out.push(i);
+    }
+    return out;
   }
 
   _ensurePoolsLoaded() {
@@ -586,40 +615,46 @@ class QzdbSearcher {
     const baseOffsets = this._groupFieldOffsets[groupIndex];
     const natives = this._groupFieldNative[groupIndex];
     const natTypes = this._groupFieldNativeType[groupIndex];
+    const groupPool = this._groupPools[groupIndex];
+    const names = this._fieldNames;
+    const vals = new Array(fieldCount);
 
-    const fields = {};
     for (let i = 0; i < fieldCount; i++) {
       const w = widths[i];
       const fo = entryOffset + baseOffsets[i];
       const isNative = natives && i < natives.length && natives[i];
 
-      let val = '';
+      let val;
       if (isNative) {
         const t = natTypes && i < natTypes.length ? natTypes[i] : 0;
         if (t === 1) {
-          // float
-          const valNum = w === 4 ? d.readFloatLE(fo) : d.readDoubleLE(fo);
-          val = String(valNum);
+          val = String(w === 4 ? d.readFloatLE(fo) : d.readDoubleLE(fo));
+        } else if (w <= 1) {
+          val = String(d[fo]);
+        } else if (w === 2) {
+          val = String(d[fo] | (d[fo + 1] << 8));
+        } else if (w === 3) {
+          val = String(d[fo] | (d[fo + 1] << 8) | (d[fo + 2] << 16));
         } else {
-          // int
-          const valNum = this._readUintWidth(fo, w);
-          val = String(valNum);
+          val = String(d[fo] | (d[fo + 1] << 8) | (d[fo + 2] << 16) | (d[fo + 3] << 24));
         }
       } else {
-        const idx = this._readUintWidth(fo, w);
-        const groupPool = this._groupPools[groupIndex];
+        let idx;
+        if (w <= 1) idx = d[fo];
+        else if (w === 2) idx = d[fo] | (d[fo + 1] << 8);
+        else if (w === 3) idx = d[fo] | (d[fo + 1] << 8) | (d[fo + 2] << 16);
+        else idx = d[fo] | (d[fo + 1] << 8) | (d[fo + 2] << 16) | (d[fo + 3] << 24);
+
         if (groupPool && i < groupPool.length && idx < groupPool[i].length) {
           val = groupPool[i][idx];
         } else {
           val = '';
         }
       }
-
-      const fname = i < this._fieldNames.length ? this._fieldNames[i] : `field_${i}`;
-      fields[fname] = val;
+      vals[i] = val;
     }
 
-    return new GeoInfo(fields, this._fieldNames, this._floatFieldIndices);
+    return new GeoInfo(vals, names, this._floatFlags);
   }
 
   find(ipStr) {
@@ -673,6 +708,19 @@ class QzdbSearcher {
     if (!this._hasV6) {
       return null;
     }
+    const rowId = this._trieWalkV6(ipInt);
+    if (rowId === 0) {
+      return null;
+    }
+    return this._resolveRowId(rowId, this._groupIndex);
+  }
+
+  // High/low are BigInts (each 64-bit) forming the 128-bit address.
+  findV6(high, low) {
+    if (!this._hasV6) {
+      return null;
+    }
+    const ipInt = (BigInt(high) << 64n) | (BigInt(low) & 0xFFFFFFFFFFFFFFFFn);
     const rowId = this._trieWalkV6(ipInt);
     if (rowId === 0) {
       return null;

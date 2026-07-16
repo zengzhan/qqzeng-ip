@@ -19,7 +19,7 @@ QZDB (qqzeng IP Database) is a next-generation binary format and search engine d
   * **Java**: `5.0M+` ~ `8.0M+` QPS
   * **Node.js**: `3.0M+` ~ `5.0M+` QPS
   * **Python / PHP**: `100K+` ~ `2.0M+` QPS (depending on database size and lookup depth)
-* **🔬 100% Scientific Verification**: Tested against every single one of the `959,162` CIDR ranges using a rigorous 3-point check (Start IP, End IP, Middle IP) totaling **`2,877,486` query checks with a 100.00% success rate**.
+* **🔬 Cross-Language Verification**: The full database is validated by an internal cross-verification pipeline (`cross_verify.py`) that runs every generated `.qzdb` against all 8 SDKs (Python as the reference baseline), comparing pipe-delimited output field-by-field. This pipeline is exercised in CI before each release; the published repository ships the SDK engines and test harnesses, while the `.qzdb` datasets are distributed separately (see *Database Files* below).
 * **⚙️ Thread-Safe Read-Only Mmap**: The C, Go, Rust, Java, and C# implementations load all string pools eagerly into immutable read-only memory, guaranteeing absolute thread-safety and zero query-time locking overhead.
 * **🌐 Dynamic Fields Schema**: Supports dynamic fields (e.g. continent, country, province, city, district, ISP, longitude, latitude, timezone) determined at runtime by the database metadata.
 
@@ -174,6 +174,23 @@ To assist architects in technical selection, the table below provides an objecti
 1. **Keep Searcher as a Singleton**: Loading the database parses headers, checks CRC, and prepares string index pools. This has an initialization overhead. Always instantiate the searcher **once** at startup and reuse it across the application life cycle.
 2. **Memory Considerations**: In C, Go, and Rust, databases are loaded via memory-mapping (`mmap`), which shares physical memory across processes. In JVM/JVM-like environments, ensure heap limits accommodate the size of the database.
 3. **Thread Safety**: All query APIs (`find`, `find_str`) are completely thread-safe and stateless. You can query concurrently from hundreds of threads without mutex locks.
+
+---
+
+## 📁 Database Files
+
+The `.qzdb` datasets are **not** bundled in this repository — they are distributed separately. To run the test harnesses (`run_all_tests.sh` and each language's `test.*`), place a dataset in the expected location:
+
+```
+qzdb/
+├── data/
+│   └── qqzeng_ip_std_china.qzdb   # required by run_all_tests.sh / test harnesses
+└── ... (other language SDK dirs)
+```
+
+The SDKs resolve the database path in this order: current directory → `data/` → `../data/`. Any edition (`std` / `ult` / `max` / `asn` × `china` / `global`) is accepted; the schema (field names, group count, native scalar layout) is read dynamically from the file header and Metadata section, so the SDKs are forward and backward compatible across builds.
+
+> **Note**: `run_all_tests.sh` reports `TEST_PASS` only when a dataset is present. Without `data/qqzeng_ip_std_china.qzdb` the suite exits non-zero — this is expected, not a SDK defect.
 
 ---
 

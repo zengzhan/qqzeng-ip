@@ -245,6 +245,7 @@ int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
             } else if (t == 2) {
                 ctx->field_names = malloc(ctx->group_field_counts[0] * sizeof(char*));
                 ctx->float_field_flags = calloc(ctx->group_field_counts[0], sizeof(int));
+                ctx->field_count = ctx->group_field_counts[0];
                 int idx = 0;
                 char* token = strtok(val, "|");
                 while (token && idx < ctx->group_field_counts[0]) {
@@ -266,6 +267,7 @@ int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
     if (!ctx->field_names) {
         ctx->field_names = malloc(ctx->group_field_counts[0] * sizeof(char*));
         ctx->float_field_flags = calloc(ctx->group_field_counts[0], sizeof(int));
+        ctx->field_count = ctx->group_field_counts[0];
         for (int i = 0; i < ctx->group_field_counts[0]; i++) {
             char buf[32];
             sprintf(buf, "field_%d", i);

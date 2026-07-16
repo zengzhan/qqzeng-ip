@@ -10,4 +10,8 @@ public class IpLocation {
     public String[] getValues() {
         return values;
     }
+
+    public String toPipeString() {
+        return String.join("|", values);
+    }
 }

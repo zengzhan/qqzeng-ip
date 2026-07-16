@@ -51,7 +51,7 @@ class GeoInfo implements \ArrayAccess
         foreach ($this->fieldNames as $fname) {
             $val = $this->fields[$fname] ?? '';
             if (isset($this->floatIndices[$fname]) && $val !== '') {
-                $val = number_format((float)$val, 6, '.', '');
+                $val = sprintf('%.6f', (float)$val);
             }
             $parts[] = (string)$val;
         }
@@ -647,6 +647,7 @@ class QzdbSearcher
         $natTypes = $this->groupFieldNativeType[$groupIndex];
 
         $fields = [];
+        $resolvedFieldNames = [];
         for ($i = 0; $i < $fieldCount; $i++) {
             $w = $widths[$i];
             $fo = $entryOffset + $baseOffsets[$i];
@@ -679,9 +680,10 @@ class QzdbSearcher
 
             $fname = $i < count($this->fieldNames) ? $this->fieldNames[$i] : "field_{$i}";
             $fields[$fname] = $val;
+            $resolvedFieldNames[$i] = $fname;
         }
 
-        return new GeoInfo($fields, $this->fieldNames, $this->floatFieldIndices);
+        return new GeoInfo($fields, $resolvedFieldNames, $this->floatFieldIndices);
     }
 
     public function find($ipStr)

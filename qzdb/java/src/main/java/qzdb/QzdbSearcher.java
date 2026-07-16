@@ -546,7 +546,7 @@ public class QzdbSearcher {
             String fname = i < fieldNames.length ? fieldNames[i] : "field_" + i;
             if (floatFieldIndices.contains(fname) && !val.isEmpty()) {
                 try {
-                    val = new BigDecimal(Double.parseDouble(val)).setScale(6, RoundingMode.HALF_UP).toPlainString();
+                    val = new BigDecimal(Double.parseDouble(val)).setScale(6, RoundingMode.HALF_EVEN).toPlainString();
                 } catch (NumberFormatException ignored) {}
             }
             values[i] = val;

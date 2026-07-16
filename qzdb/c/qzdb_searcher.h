@@ -60,6 +60,7 @@ typedef struct {
 
     char** field_names;
     int* float_field_flags;
+    int field_count;
     char* version_name;
     int version_code;
 } qzdb_searcher_t;
