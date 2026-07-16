@@ -6,3 +6,10 @@ data/
 __pycache__/
 node_modules/
 *.pyc
+
+# Build and compilation directories
+qzdb/c/qzdb_test
+qzdb/java/build/
+qzdb/rust/target/
+bin/
+obj/
