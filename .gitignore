@@ -1,3 +1,8 @@
 .DS_Store
 *.dat
 *.db
+*.qzdb
+data/
+__pycache__/
+node_modules/
+*.pyc
