@@ -71,7 +71,7 @@ CREATE TABLE [dbo].[qqzeng_ip_range_asn] (
   [asn] NVARCHAR(150) NULL,
   [as_name] NVARCHAR(150) NULL,
   [as_domain] NVARCHAR(150) NULL,
-  [usage_flags] NVARCHAR(150) NULL,
+  [usage_type] NVARCHAR(150) NULL,
 );
 
 CREATE CLUSTERED INDEX [idx_qqzeng_ip_range_asn_num] ON [dbo].[qqzeng_ip_range_asn]([ip_start_num], [ip_end_num]);
@@ -104,7 +104,7 @@ CREATE TABLE [dbo].[qqzeng_ip_range_ult] (
   [asn] NVARCHAR(150) NULL,
   [as_name] NVARCHAR(150) NULL,
   [as_domain] NVARCHAR(150) NULL,
-  [usage_flags] NVARCHAR(150) NULL,
+  [usage_type] NVARCHAR(150) NULL,
 );
 
 CREATE CLUSTERED INDEX [idx_qqzeng_ip_range_ult_num] ON [dbo].[qqzeng_ip_range_ult]([ip_start_num], [ip_end_num]);
@@ -147,7 +147,7 @@ CREATE TABLE [dbo].[qqzeng_ip_range_max] (
   [asn] NVARCHAR(150) NULL,
   [as_name] NVARCHAR(150) NULL,
   [as_domain] NVARCHAR(150) NULL,
-  [usage_flags] NVARCHAR(150) NULL,
+  [usage_type] NVARCHAR(150) NULL,
 );
 
 CREATE CLUSTERED INDEX [idx_qqzeng_ip_range_max_num] ON [dbo].[qqzeng_ip_range_max]([ip_start_num], [ip_end_num]);

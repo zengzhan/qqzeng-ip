@@ -69,13 +69,13 @@ CREATE TABLE IF NOT EXISTS public.qqzeng_ip_range_asn (
   asn VARCHAR(150),
   as_name VARCHAR(150),
   as_domain VARCHAR(150),
-  usage_flags VARCHAR(150),
+  usage_type VARCHAR(150),
 );
 
 CREATE INDEX IF NOT EXISTS idx_qqzeng_ip_range_asn_num ON public.qqzeng_ip_range_asn (ip_start_num, ip_end_num);
 
 -- 导入 CSV 示例:
--- COPY public.qqzeng_ip_range_asn(ip_start, ip_end, ip_start_num, ip_end_num, continent, country_code, country, isp, asn, as_name, as_domain, usage_flags)
+-- COPY public.qqzeng_ip_range_asn(ip_start, ip_end, ip_start_num, ip_end_num, continent, country_code, country, isp, asn, as_name, as_domain, usage_type)
 -- FROM '/path/to/qqzeng_ip_asn_global_range.csv' WITH (FORMAT csv, HEADER true, DELIMITER ',');
 
 
@@ -101,13 +101,13 @@ CREATE TABLE IF NOT EXISTS public.qqzeng_ip_range_ult (
   asn VARCHAR(150),
   as_name VARCHAR(150),
   as_domain VARCHAR(150),
-  usage_flags VARCHAR(150),
+  usage_type VARCHAR(150),
 );
 
 CREATE INDEX IF NOT EXISTS idx_qqzeng_ip_range_ult_num ON public.qqzeng_ip_range_ult (ip_start_num, ip_end_num);
 
 -- 导入 CSV 示例:
--- COPY public.qqzeng_ip_range_ult(ip_start, ip_end, ip_start_num, ip_end_num, continent, country_code, country, province, city, district, geo_id, longitude, latitude, timezone, isp, asn, as_name, as_domain, usage_flags)
+-- COPY public.qqzeng_ip_range_ult(ip_start, ip_end, ip_start_num, ip_end_num, continent, country_code, country, province, city, district, geo_id, longitude, latitude, timezone, isp, asn, as_name, as_domain, usage_type)
 -- FROM '/path/to/qqzeng_ip_ult_global_range.csv' WITH (FORMAT csv, HEADER true, DELIMITER ',');
 
 
@@ -143,13 +143,13 @@ CREATE TABLE IF NOT EXISTS public.qqzeng_ip_range_max (
   asn VARCHAR(150),
   as_name VARCHAR(150),
   as_domain VARCHAR(150),
-  usage_flags VARCHAR(150),
+  usage_type VARCHAR(150),
 );
 
 CREATE INDEX IF NOT EXISTS idx_qqzeng_ip_range_max_num ON public.qqzeng_ip_range_max (ip_start_num, ip_end_num);
 
 -- 导入 CSV 示例:
--- COPY public.qqzeng_ip_range_max(ip_start, ip_end, ip_start_num, ip_end_num, continent, continent_en, country_code, country_alpha3, country, country_en, province, province_en, city, city_en, district, district_en, geo_id, longitude, latitude, timezone, languages, currency_code, phone_prefix, emoji_flag, isp, asn, as_name, as_domain, usage_flags)
+-- COPY public.qqzeng_ip_range_max(ip_start, ip_end, ip_start_num, ip_end_num, continent, continent_en, country_code, country_alpha3, country, country_en, province, province_en, city, city_en, district, district_en, geo_id, longitude, latitude, timezone, languages, currency_code, phone_prefix, emoji_flag, isp, asn, as_name, as_domain, usage_type)
 -- FROM '/path/to/qqzeng_ip_max_global_range.csv' WITH (FORMAT csv, HEADER true, DELIMITER ',');
 
 

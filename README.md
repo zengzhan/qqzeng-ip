@@ -96,14 +96,14 @@ QZDB 引擎核心采用专门定制的 **双阶段 Patricia Trie 树型检索算
 | :--- | :---: | :--- | :--- |
 | **`std` 标准版** | **6** | 基础地理 + 运营商 | `continent`, `country_code`, `country`, `province`, `city`, `isp` |
 | **`pro` 专业版** | **11** | 细粒度地理定位 | `std` 字段 + `district`, `geo_id`, `longitude`, `latitude`, `timezone` |
-| **`asn` ASN 路由版** | **8** | 网络专项（无细粒度地理）| `continent`, `country_code`, `country`, `isp`, `asn`, `as_name`, `as_domain`, `usage_flags` |
-| **`ult` 旗舰版** | **15** | 地理 + 路由 + 风控应用 | `pro` 字段 + `asn`, `as_name`, `as_domain`, `usage_flags` |
+| **`asn` ASN 路由版** | **8** | 网络专项（无细粒度地理）| `continent`, `country_code`, `country`, `isp`, `asn`, `as_name`, `as_domain`, `usage_type` |
+| **`ult` 旗舰版** | **15** | 地理 + 路由 + 风控应用 | `pro` 字段 + `asn`, `as_name`, `as_domain`, `usage_type` |
 | **`max` 至尊版** | **25** | 全维度 (地理/英文/风控等) | `ult` 字段 + 10 个英文扩展项（`continent_en`, `country_alpha3`, `country_en`, `province_en`, `city_en`, `district_en`, `languages`, `currency_code`, `phone_prefix`, `emoji_flag`） |
 
 > **字段设计说明**：
 > * **规范物理排序**：各版本在导出为 CSV 或构建 QZDB 时均遵循统一的「规范顺序」内插平铺（如英文扩展项 `_en` 紧随对应中文项，ASN 与应用场景位放置于末尾）。
-> * **应用场景位 `usage_flags`**：采用标准的 64 位无符号整型位掩码（uint64），可被 SDK 动态解析为 `Cloud.AWS` 或 `Spider.Search.Google` 等层级标签。
-> * **老客户无缝迁移说明**：旧版旗舰版（Ultimate 历史在售版为 11 维，仅地理无 ASN）的数据结构与当前的全新的 **`pro` 专业版 (11 维)** 完全一致，历史购入旗舰版的用户可直接无缝对应迁移至新版的 **`pro` 专业版** ；全新版本的 **`ult` 旗舰版** 则升级为 15 维（融入了网络 ASN 自治域与使用场景位）。
+> * **应用场景分类 `usage_type`**：使用英文字符串存储网络应用场景分类值（如 `Broadband`、`DataCenter`、`VPN`、`Cloud`、`Spider`、`Reserved` 等），SDK 直接读取字符串无需位运算解码。
+> * **老客户无缝迁移说明**：旧版旗舰版（Ultimate 历史在售版为 11 维，仅地理无 ASN）的数据结构与当前的全新的 **`pro` 专业版 (11 维)** 完全一致，历史购入旗舰版的用户可直接无缝对应迁移至新版的 **`pro` 专业版** ；全新版本的 **`ult` 旗舰版** 则升级为 15 维（融入了网络 ASN 自治域与应用场景分类）。
 
 ---
 

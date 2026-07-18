@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS `qqzeng_ip_asn` (
   `asn` VARCHAR(150) NULL,
   `as_name` VARCHAR(150) NULL,
   `as_domain` VARCHAR(150) NULL,
-  `usage_flags` VARCHAR(150) NULL,
+  `usage_type` VARCHAR(50) NULL,
   PRIMARY KEY (`cidr`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS `qqzeng_ip_asn` (
 -- FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"'
 -- LINES TERMINATED BY '\n'
 -- IGNORE 1 LINES
--- (`cidr`, `continent`, `country_code`, `country`, `isp`, `asn`, `as_name`, `as_domain`, `usage_flags`);
+-- (`cidr`, `continent`, `country_code`, `country`, `isp`, `asn`, `as_name`, `as_domain`, `usage_type`);
 
 
 -- ------------------------------------------
@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS `qqzeng_ip_ult` (
   `asn` VARCHAR(150) NULL,
   `as_name` VARCHAR(150) NULL,
   `as_domain` VARCHAR(150) NULL,
-  `usage_flags` VARCHAR(150) NULL,
+  `usage_type` VARCHAR(50) NULL,
   PRIMARY KEY (`cidr`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -112,7 +112,7 @@ CREATE TABLE IF NOT EXISTS `qqzeng_ip_ult` (
 -- FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"'
 -- LINES TERMINATED BY '\n'
 -- IGNORE 1 LINES
--- (`cidr`, `continent`, `country_code`, `country`, `province`, `city`, `district`, `geo_id`, `longitude`, `latitude`, `timezone`, `isp`, `asn`, `as_name`, `as_domain`, `usage_flags`);
+-- (`cidr`, `continent`, `country_code`, `country`, `province`, `city`, `district`, `geo_id`, `longitude`, `latitude`, `timezone`, `isp`, `asn`, `as_name`, `as_domain`, `usage_type`);
 
 
 -- ------------------------------------------
@@ -144,7 +144,7 @@ CREATE TABLE IF NOT EXISTS `qqzeng_ip_max` (
   `asn` VARCHAR(150) NULL,
   `as_name` VARCHAR(150) NULL,
   `as_domain` VARCHAR(150) NULL,
-  `usage_flags` VARCHAR(150) NULL,
+  `usage_type` VARCHAR(50) NULL,
   PRIMARY KEY (`cidr`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -155,7 +155,7 @@ CREATE TABLE IF NOT EXISTS `qqzeng_ip_max` (
 -- FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"'
 -- LINES TERMINATED BY '\n'
 -- IGNORE 1 LINES
--- (`cidr`, `continent`, `continent_en`, `country_code`, `country_alpha3`, `country`, `country_en`, `province`, `province_en`, `city`, `city_en`, `district`, `district_en`, `geo_id`, `longitude`, `latitude`, `timezone`, `languages`, `currency_code`, `phone_prefix`, `emoji_flag`, `isp`, `asn`, `as_name`, `as_domain`, `usage_flags`);
+-- (`cidr`, `continent`, `continent_en`, `country_code`, `country_alpha3`, `country`, `country_en`, `province`, `province_en`, `city`, `city_en`, `district`, `district_en`, `geo_id`, `longitude`, `latitude`, `timezone`, `languages`, `currency_code`, `phone_prefix`, `emoji_flag`, `isp`, `asn`, `as_name`, `as_domain`, `usage_type`);
 
 
 -- ------------------------------------------

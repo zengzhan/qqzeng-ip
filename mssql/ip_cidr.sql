@@ -58,7 +58,7 @@ CREATE TABLE [dbo].[qqzeng_ip_asn] (
   [asn] NVARCHAR(150) NULL,
   [as_name] NVARCHAR(150) NULL,
   [as_domain] NVARCHAR(150) NULL,
-  [usage_flags] NVARCHAR(150) NULL,
+  [usage_type] NVARCHAR(150) NULL,
 );
 
 -- 导入 CSV 示例:
@@ -86,7 +86,7 @@ CREATE TABLE [dbo].[qqzeng_ip_ult] (
   [asn] NVARCHAR(150) NULL,
   [as_name] NVARCHAR(150) NULL,
   [as_domain] NVARCHAR(150) NULL,
-  [usage_flags] NVARCHAR(150) NULL,
+  [usage_type] NVARCHAR(150) NULL,
 );
 
 -- 导入 CSV 示例:
@@ -124,7 +124,7 @@ CREATE TABLE [dbo].[qqzeng_ip_max] (
   [asn] NVARCHAR(150) NULL,
   [as_name] NVARCHAR(150) NULL,
   [as_domain] NVARCHAR(150) NULL,
-  [usage_flags] NVARCHAR(150) NULL,
+  [usage_type] NVARCHAR(150) NULL,
 );
 
 -- 导入 CSV 示例:
