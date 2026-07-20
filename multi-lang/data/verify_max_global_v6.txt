@@ -1,0 +1,206 @@
+0:0|大洋洲|澳大利亚|昆士兰州|布里斯班||Cloudflare||Australia|AU|AUS|Queensland|Brisbane|153.028090|-27.467940|Australia/Brisbane|澳大利亚东部标准时间 (布里斯班)|en-AU|AUD|澳元|61|🇦🇺|DataCenter|13335|Cloudflare|cloudflare.com
+0:281470681743360|大洋洲|澳大利亚|昆士兰州|布里斯班||Cloudflare||Australia|AU|AUS|Queensland|Brisbane|153.028090|-27.467940|Australia/Brisbane|澳大利亚东部标准时间 (布里斯班)|en-AU|AUD|澳元|61|🇦🇺|DataCenter|13335|Cloudflare|cloudflare.com
+28428538856079360:0|大洋洲|澳大利亚|昆士兰州|布里斯班||Cloudflare||Australia|AU|AUS|Queensland|Brisbane|153.028090|-27.467940|Australia/Brisbane|澳大利亚东部标准时间 (布里斯班)|en-AU|AUD|澳元|61|🇦🇺|DataCenter|13335|Cloudflare|cloudflare.com
+28428538856144896:0|大洋洲|澳大利亚|昆士兰州|布里斯班||Cloudflare||Australia|AU|AUS|Queensland|Brisbane|153.028090|-27.467940|Australia/Brisbane|澳大利亚东部标准时间 (布里斯班)|en-AU|AUD|澳元|61|🇦🇺|DataCenter|13335|Cloudflare|cloudflare.com
+72057594037927936:0|大洋洲|澳大利亚|昆士兰州|布里斯班||Cloudflare||Australia|AU|AUS|Queensland|Brisbane|153.028090|-27.467940|Australia/Brisbane|澳大利亚东部标准时间 (布里斯班)|en-AU|AUD|澳元|61|🇦🇺|DataCenter|13335|Cloudflare|cloudflare.com
+2305843009213693952:0|南美洲|哥伦比亚|弗里堡州|弗里堡||Cwnetworks||Colombia|CO|COL|||-74.081750|4.609710|America/Bogota|哥伦比亚标准时间 (波哥大)|es-CO|COP|哥伦比亚比索|57|🇨🇴|Business|262191|Liberty Networks DE Colombia S|cwnetworks.com
+2305843090818072576:0|南美洲|哥伦比亚|弗里堡州|弗里堡||Cwnetworks||Colombia|CO|COL|||-74.081750|4.609710|America/Bogota|哥伦比亚标准时间 (波哥大)|es-CO|COP|哥伦比亚比索|57|🇨🇴|Business|262191|Liberty Networks DE Colombia S|cwnetworks.com
+2305855584880361472:0|欧洲|荷兰|北荷兰省|阿姆斯特丹||DNS Oarc||Netherlands|NL|NLD|North Holland|Amsterdam|4.889690|52.374030|Europe/Amsterdam|中欧标准时间 (阿姆斯特丹)|nl-NL,fy-NL|EUR|欧元|31|🇳🇱|Backbone|112|DNS-OARC|as112.net
+2306124484190404608:0|大洋洲|澳大利亚|昆士兰州|布里斯班||Cloudflare||Australia|AU|AUS|Queensland|Brisbane|153.028090|-27.467940|Australia/Brisbane|澳大利亚东部标准时间 (布里斯班)|en-AU|AUD|澳元|61|🇦🇺|DataCenter|13335|Cloudflare|cloudflare.com
+2306124492780339200:0|大洋洲|澳大利亚|昆士兰州|布里斯班||Cloudflare||Australia|AU|AUS|Queensland|Brisbane|153.028090|-27.467940|Australia/Brisbane|澳大利亚东部标准时间 (布里斯班)|en-AU|AUD|澳元|61|🇦🇺|DataCenter|13335|Cloudflare|cloudflare.com
+2306124501388230656:0|亚洲|日本|东京都|千代田||WIDE||Japan|JP|JPN|Tokyo|Chiyoda|139.750560|35.684490|Asia/Tokyo|日本标准时间 (东京)|ja|JPY|日元|81|🇯🇵|Education|2500|WIDE BB|wide.ad.jp
+2306124621629358080:0|大洋洲|澳大利亚|昆士兰州|布里斯班||Cloudflare||Australia|AU|AUS|Queensland|Brisbane|153.028090|-27.467940|Australia/Brisbane|澳大利亚东部标准时间 (布里斯班)|en-AU|AUD|澳元|61|🇦🇺|DataCenter|13335|Cloudflare|cloudflare.com
+2306126683213660160:0|亚洲|日本|神奈川县|横滨||SINET||Japan|JP|JPN|Kanagawa|Yokohama|139.650000|35.433330|Asia/Tokyo|日本标准时间 (东京)|ja|JPY|日元|81|🇯🇵|Education|43281|Non-commercial organization Foundation for Development of the Center for Elaboration and Commercialization of New Technologies|jp.apan.net
+2306126683364655104:0|亚洲|新加坡|神奈川县|横滨||SINET||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Education|43281|Non-commercial organization Foundation for Development of the Center for Elaboration and Commercialization of New Technologies|jp.apan.net
+2306126683364744495:0|亚洲|日本|神奈川县|南林馆||WIDE||Japan|JP|JPN|Kanagawa|Minamirinkan|139.442800|35.495270|Asia/Tokyo|日本标准时间 (东京)|ja|JPY|日元|81|🇯🇵|Education|2500|WIDE BB|wide.ad.jp
+2306126683364744496:0|亚洲|新加坡|神奈川县|横滨||SINET||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Education|43281|Non-commercial organization Foundation for Development of the Center for Elaboration and Commercialization of New Technologies|jp.apan.net
+2306126683381432320:0|亚洲|日本|神奈川县|南林馆||WIDE||Japan|JP|JPN|Kanagawa|Minamirinkan|139.442800|35.495270|Asia/Tokyo|日本标准时间 (东京)|ja|JPY|日元|81|🇯🇵|Education|198486|Infotelecom|sfc.wide.ad.jp
+2306126683448541184:0|亚洲|日本|神奈川县|南林馆||WIDE||Japan|JP|JPN|Kanagawa|Minamirinkan|139.442800|35.495270|Asia/Tokyo|日本标准时间 (东京)|ja|JPY|日元|81|🇯🇵|Business|23634|E DNS JP|m.root-servers.org
+2306126683465318400:0|亚洲|日本|神奈川县|南林馆||WIDE||Japan|JP|JPN|Kanagawa|Minamirinkan|139.442800|35.495270|Asia/Tokyo|日本标准时间 (东京)|ja|JPY|日元|81|🇯🇵|Education|198486|Infotelecom|sfc.wide.ad.jp
+2306126686434885632:0|亚洲|日本|神奈川县|南林馆||WIDE||Japan|JP|JPN|Kanagawa|Minamirinkan|139.442800|35.495270|Asia/Tokyo|日本标准时间 (东京)|ja|JPY|日元|81|🇯🇵|Education|43281|Non-commercial organization Foundation for Development of the Center for Elaboration and Commercialization of New Technologies|jp.apan.net
+2306126686971756544:0|亚洲|日本|东京都|千代田||NTT||Japan|JP|JPN|Tokyo|Chiyoda|139.750560|35.684490|Asia/Tokyo|日本标准时间 (东京)|ja|JPY|日元|81|🇯🇵|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126687508627456:0|北美洲|美国|华盛顿州|西雅图||亚马逊云||United States|US|USA|Washington|Seattle|-122.332070|47.606210|America/Los_Angeles|北美太平洋标准时间 (洛杉矶)|en-US,es-US,haw,fr|USD|美元|1|🇺🇸|Cloud|||
+2306126717573398528:0|亚洲|中国|香港|||BGP Network||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Backbone.Carrier|64050|BGP Network|bgp.net
+2306126721868365824:0|北美洲|美国|华盛顿州|西雅图||亚马逊云||United States|US|USA|Washington|Seattle|-122.332070|47.606210|America/Los_Angeles|北美太平洋标准时间 (洛杉矶)|en-US,es-US,haw,fr|USD|美元|1|🇺🇸|Cloud|||
+2306126786292875264:0|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:1|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:3|亚洲|中国|台湾|台北||NTT|02|China|TW|TWN|Taiwan|Taibei|121.565170|25.037798|Asia/Shanghai|北京时间|zh-TW,zh,nan,hak|TWD|新台币|886|🇹🇼|Broadband|18018|Gamebuilders Inc.|bayviewtechnology.com
+2306126786292879360:4|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:5|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:6|亚洲|马来西亚|东京都|千代田||NTT||Malaysia|MY|MYS|||101.686530|3.141200|Asia/Kuala_Lumpur|马来西亚时间 (吉隆坡)|ms-MY,en,zh,ta,te,ml,pa,th|MYR|马来西亚林吉特|60|🇲🇾|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:7|亚洲|中国|台湾|台北||NTT|02|China|TW|TWN|Taiwan|Taibei|121.565170|25.037798|Asia/Shanghai|北京时间|zh-TW,zh,nan,hak|TWD|新台币|886|🇹🇼|Broadband|18018|Gamebuilders Inc.|bayviewtechnology.com
+2306126786292879360:8|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:9|亚洲|印度尼西亚|东京都|千代田||NTT||Indonesia|ID|IDN|||106.845130|-6.214620|Asia/Jakarta|印度尼西亚西部时间 (雅加达)|id,en,nl,jv|IDR|印尼盾|62|🇮🇩|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:10|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:11|亚洲|韩国|东京都|千代田||NTT||South Korea|KR|KOR|||126.978400|37.566000|Asia/Seoul|韩国标准时间 (首尔)|ko-KR,en|KRW|韩元|82|🇰🇷|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:12|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:18|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:19|亚洲|中国|台湾|台北||NTT|02|China|TW|TWN|Taiwan|Taibei|121.565170|25.037798|Asia/Shanghai|北京时间|zh-TW,zh,nan,hak|TWD|新台币|886|🇹🇼|Broadband|18018|Gamebuilders Inc.|bayviewtechnology.com
+2306126786292879360:20|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:21|亚洲|泰国|东京都|千代田||NTT||Thailand|TH|THA|||100.501440|13.753980|Asia/Bangkok|中南半岛时间 (曼谷)|th,en|THB|泰铢|66|🇹🇭|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:22|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:23|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:24|南美洲|巴西|东京都|千代田||NTT||Brazil|BR|BRA|||-47.929720|-15.779720|America/Sao_Paulo|巴西利亚标准时间 (圣保罗)|pt-BR,es,en,fr|BRL|巴西雷亚尔|55|🇧🇷|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:25|亚洲|中国|台湾|台北||NTT|02|China|TW|TWN|Taiwan|Taibei|121.565170|25.037798|Asia/Shanghai|北京时间|zh-TW,zh,nan,hak|TWD|新台币|886|🇹🇼|Broadband|18018|Gamebuilders Inc.|bayviewtechnology.com
+2306126786292879360:27|亚洲|印度尼西亚|东京都|千代田||NTT||Indonesia|ID|IDN|||106.845130|-6.214620|Asia/Jakarta|印度尼西亚西部时间 (雅加达)|id,en,nl,jv|IDR|印尼盾|62|🇮🇩|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:28|亚洲|泰国|东京都|千代田||NTT||Thailand|TH|THA|||100.501440|13.753980|Asia/Bangkok|中南半岛时间 (曼谷)|th,en|THB|泰铢|66|🇹🇭|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:29|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:34|亚洲|韩国|东京都|千代田||NTT||South Korea|KR|KOR|||126.978400|37.566000|Asia/Seoul|韩国标准时间 (首尔)|ko-KR,en|KRW|韩元|82|🇰🇷|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:35|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:38|亚洲|印度尼西亚|东京都|千代田||NTT||Indonesia|ID|IDN|||106.845130|-6.214620|Asia/Jakarta|印度尼西亚西部时间 (雅加达)|id,en,nl,jv|IDR|印尼盾|62|🇮🇩|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:39|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:41|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:42|亚洲|印度尼西亚|东京都|千代田||NTT||Indonesia|ID|IDN|||106.845130|-6.214620|Asia/Jakarta|印度尼西亚西部时间 (雅加达)|id,en,nl,jv|IDR|印尼盾|62|🇮🇩|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:44|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:47|亚洲|马来西亚|东京都|千代田||NTT||Malaysia|MY|MYS|||101.686530|3.141200|Asia/Kuala_Lumpur|马来西亚时间 (吉隆坡)|ms-MY,en,zh,ta,te,ml,pa,th|MYR|马来西亚林吉特|60|🇲🇾|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:48|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:49|亚洲|马来西亚|东京都|千代田||NTT||Malaysia|MY|MYS|||101.686530|3.141200|Asia/Kuala_Lumpur|马来西亚时间 (吉隆坡)|ms-MY,en,zh,ta,te,ml,pa,th|MYR|马来西亚林吉特|60|🇲🇾|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:50|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:52|亚洲|马来西亚|东京都|千代田||NTT||Malaysia|MY|MYS|||101.686530|3.141200|Asia/Kuala_Lumpur|马来西亚时间 (吉隆坡)|ms-MY,en,zh,ta,te,ml,pa,th|MYR|马来西亚林吉特|60|🇲🇾|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:53|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:58|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:59|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:60|亚洲|马来西亚|东京都|千代田||NTT||Malaysia|MY|MYS|||101.686530|3.141200|Asia/Kuala_Lumpur|马来西亚时间 (吉隆坡)|ms-MY,en,zh,ta,te,ml,pa,th|MYR|马来西亚林吉特|60|🇲🇾|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:61|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:64|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:65|亚洲|马来西亚|东京都|千代田||NTT||Malaysia|MY|MYS|||101.686530|3.141200|Asia/Kuala_Lumpur|马来西亚时间 (吉隆坡)|ms-MY,en,zh,ta,te,ml,pa,th|MYR|马来西亚林吉特|60|🇲🇾|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:66|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:67|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:82|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:83|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:87|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:89|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:90|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:91|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:93|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57345|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57348|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57350|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57352|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57353|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57355|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57357|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57359|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57361|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57362|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57365|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57367|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57369|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57371|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57373|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57375|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57377|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:57379|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57381|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:57383|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57385|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:57387|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57389|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:57390|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57393|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:57395|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57397|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:57399|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57401|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:57403|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57405|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:57407|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57409|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:57411|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57413|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:57415|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57417|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:57419|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57421|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:57422|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57425|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:57427|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57433|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:57435|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:57437|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:57439|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:61444|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:61445|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:61453|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:61454|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:61458|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:61459|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:61460|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:61462|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:61463|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:61467|欧洲|意大利|东京都|千代田||NTT||Italy|IT|ITA|||12.511330|41.891930|Europe/Rome|中欧标准时间 (罗马)|it-IT,de-IT,fr-IT,sc,ca,co,sl|EUR|欧元|39|🇮🇹|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:61468|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:61476|亚洲|中国|台湾|台北||NTT|02|China|TW|TWN|Taiwan|Taibei|121.565170|25.037798|Asia/Shanghai|北京时间|zh-TW,zh,nan,hak|TWD|新台币|886|🇹🇼|Broadband|18018|Gamebuilders Inc.|bayviewtechnology.com
+2306126786292879360:61477|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:61482|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:61483|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292879360:61485|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:61489|亚洲|中国|台湾|台北||NTT|02|China|TW|TWN|Taiwan|Taibei|121.565170|25.037798|Asia/Shanghai|北京时间|zh-TW,zh,nan,hak|TWD|新台币|886|🇹🇼|Broadband|18018|Gamebuilders Inc.|bayviewtechnology.com
+2306126786292879360:61491|亚洲|泰国|东京都|千代田||NTT||Thailand|TH|THA|||100.501440|13.753980|Asia/Bangkok|中南半岛时间 (曼谷)|th,en|THB|泰铢|66|🇹🇭|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:61493|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:61495|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292879360:61496|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:2|亚洲|泰国|东京都|千代田||NTT||Thailand|TH|THA|||100.501440|13.753980|Asia/Bangkok|中南半岛时间 (曼谷)|th,en|THB|泰铢|66|🇹🇭|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:3|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:5|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:6|亚洲|印度尼西亚|东京都|千代田||NTT||Indonesia|ID|IDN|||106.845130|-6.214620|Asia/Jakarta|印度尼西亚西部时间 (雅加达)|id,en,nl,jv|IDR|印尼盾|62|🇮🇩|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:7|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:9|亚洲|印度尼西亚|东京都|千代田||NTT||Indonesia|ID|IDN|||106.845130|-6.214620|Asia/Jakarta|印度尼西亚西部时间 (雅加达)|id,en,nl,jv|IDR|印尼盾|62|🇮🇩|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:11|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:13|亚洲|印度尼西亚|东京都|千代田||NTT||Indonesia|ID|IDN|||106.845130|-6.214620|Asia/Jakarta|印度尼西亚西部时间 (雅加达)|id,en,nl,jv|IDR|印尼盾|62|🇮🇩|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:15|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:18|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292883456:19|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:21|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:22|北美洲|美国|东京都|千代田||NTT||United States|US|USA|||-77.036370|38.895110|America/New_York|北美东部标准时间 (纽约)|en-US,es-US,haw,fr|USD|美元|1|🇺🇸|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:23|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:25|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292883456:27|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:29|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292883456:31|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:33|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:34|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:38|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292883456:39|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:49|亚洲|马来西亚|东京都|千代田||NTT||Malaysia|MY|MYS|||101.686530|3.141200|Asia/Kuala_Lumpur|马来西亚时间 (吉隆坡)|ms-MY,en,zh,ta,te,ml,pa,th|MYR|马来西亚林吉特|60|🇲🇾|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:51|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:53|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292883456:55|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:61|亚洲|韩国|东京都|千代田||NTT||South Korea|KR|KOR|||126.978400|37.566000|Asia/Seoul|韩国标准时间 (首尔)|ko-KR,en|KRW|韩元|82|🇰🇷|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:63|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:77|亚洲|中国|台湾|台北||NTT|02|China|TW|TWN|Taiwan|Taibei|121.565170|25.037798|Asia/Shanghai|北京时间|zh-TW,zh,nan,hak|TWD|新台币|886|🇹🇼|Broadband|18018|Gamebuilders Inc.|bayviewtechnology.com
+2306126786292883456:79|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:81|亚洲|中国|台湾|台北||NTT|02|China|TW|TWN|Taiwan|Taibei|121.565170|25.037798|Asia/Shanghai|北京时间|zh-TW,zh,nan,hak|TWD|新台币|886|🇹🇼|Broadband|18018|Gamebuilders Inc.|bayviewtechnology.com
+2306126786292883456:83|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:84|亚洲|中国|台湾|台北||NTT|02|China|TW|TWN|Taiwan|Taibei|121.565170|25.037798|Asia/Shanghai|北京时间|zh-TW,zh,nan,hak|TWD|新台币|886|🇹🇼|Broadband|18018|Gamebuilders Inc.|bayviewtechnology.com
+2306126786292883456:86|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:89|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292883456:91|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:93|亚洲|马来西亚|东京都|千代田||NTT||Malaysia|MY|MYS|||101.686530|3.141200|Asia/Kuala_Lumpur|马来西亚时间 (吉隆坡)|ms-MY,en,zh,ta,te,ml,pa,th|MYR|马来西亚林吉特|60|🇲🇾|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:95|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:98|欧洲|法国|东京都|千代田||NTT||France|FR|FRA|||2.348800|48.853410|Europe/Paris|中欧标准时间 (巴黎)|fr-FR,frp,br,co,ca,eu,oc|EUR|欧元|33|🇫🇷|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:99|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:101|大洋洲|澳大利亚|东京都|千代田||NTT||Australia|AU|AUS|||149.128070|-35.283460|Australia/Sydney|澳大利亚东部标准时间 (悉尼)|en-AU|AUD|澳元|61|🇦🇺|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:102|亚洲|印度尼西亚|东京都|千代田||NTT||Indonesia|ID|IDN|||106.845130|-6.214620|Asia/Jakarta|印度尼西亚西部时间 (雅加达)|id,en,nl,jv|IDR|印尼盾|62|🇮🇩|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:103|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:105|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292883456:107|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:109|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292883456:111|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:114|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292883456:115|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:116|亚洲|中国|台湾|台北||NTT|02|China|TW|TWN|Taiwan|Taibei|121.565170|25.037798|Asia/Shanghai|北京时间|zh-TW,zh,nan,hak|TWD|新台币|886|🇹🇼|Broadband|18018|Gamebuilders Inc.|bayviewtechnology.com
+2306126786292883456:118|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:121|亚洲|中国|台湾|台北||NTT|02|China|TW|TWN|Taiwan|Taibei|121.565170|25.037798|Asia/Shanghai|北京时间|zh-TW,zh,nan,hak|TWD|新台币|886|🇹🇼|Broadband|18018|Gamebuilders Inc.|bayviewtechnology.com
+2306126786292883456:122|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+2306126786292883456:123|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:125|欧洲|法国|东京都|千代田||NTT||France|FR|FRA|||2.348800|48.853410|Europe/Paris|中欧标准时间 (巴黎)|fr-FR,frp,br,co,ca,eu,oc|EUR|欧元|33|🇫🇷|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:126|亚洲|新加坡|东京都|千代田||NTT||Singapore|SG|SGP|||103.850070|1.289670|Asia/Singapore|新加坡标准时间 (新加坡)|cmn,en-SG,ms-SG,ta-SG,zh-SG|SGD|新加坡元|65|🇸🇬|Backbone.Carrier|2914|NTT America|gin.ntt.net
+2306126786292883456:133|亚洲|中国|香港|||汇丰||China|HK|HKG|Hong Kong||36.465140|51.897170|Asia/Shanghai|中国标准时间 (上海)|zh-HK,yue,zh,en|HKD|港元|852|🇭🇰|Broadband|9221|HSBC HongKong|hsbc.com
+3031255339488655023:1133890570807106666|北美洲|格林纳达|圣乔治区|圣乔治||NTRC Grenada||Grenada|GD|GRD|Saint George Parish|Saint George's|-61.752260|12.052880|America/Grenada|大西洋标准时间 (格林纳达)|en-GD|XCD|东加勒比元|1473|🇬🇩|Broadband|265518|CHURCH OF SCIENTOLOGY FLAG SERVICE ORGANIZATION, INC.|ix.gd
+3034149492139394303:5733356217121116382|北美洲|格林纳达|圣乔治区|圣乔治||NTRC Grenada||Grenada|GD|GRD|Saint George Parish|Saint George's|-61.752260|12.052880|America/Grenada|大西洋标准时间 (格林纳达)|en-GD|XCD|东加勒比元|1473|🇬🇩|Broadband|265518|CHURCH OF SCIENTOLOGY FLAG SERVICE ORGANIZATION, INC.|ix.gd
+18175737790046290546:14425790400517006333|大洋洲|澳大利亚|昆士兰州|布里斯班||Cloudflare||Australia|AU|AUS|Queensland|Brisbane|153.028090|-27.467940|Australia/Brisbane|澳大利亚东部标准时间 (布里斯班)|en-AU|AUD|澳元|61|🇦🇺|DataCenter|13335|Cloudflare|cloudflare.com
+18206100734422356719:2037293493937351909|大洋洲|澳大利亚|昆士兰州|布里斯班||Cloudflare||Australia|AU|AUS|Queensland|Brisbane|153.028090|-27.467940|Australia/Brisbane|澳大利亚东部标准时间 (布里斯班)|en-AU|AUD|澳元|61|🇦🇺|DataCenter|13335|Cloudflare|cloudflare.com
+18243831306245505066:10433427204680668459|大洋洲|澳大利亚|昆士兰州|布里斯班||Cloudflare||Australia|AU|AUS|Queensland|Brisbane|153.028090|-27.467940|Australia/Brisbane|澳大利亚东部标准时间 (布里斯班)|en-AU|AUD|澳元|61|🇦🇺|DataCenter|13335|Cloudflare|cloudflare.com
+18346487174974895699:14087324825538539282|大洋洲|澳大利亚|昆士兰州|布里斯班||Cloudflare||Australia|AU|AUS|Queensland|Brisbane|153.028090|-27.467940|Australia/Brisbane|澳大利亚东部标准时间 (布里斯班)|en-AU|AUD|澳元|61|🇦🇺|DataCenter|13335|Cloudflare|cloudflare.com

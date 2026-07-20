@@ -1,0 +1,63 @@
+# Purchased IP database files (must be obtained separately)
+*.csv
+*.qzdb
+*.db
+
+# Build artifacts
+bin/
+obj/
+*.csproj.user
+*.suo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Large raw text data (IP ranges, failure logs)
+ipv4*.txt
+failures_*.txt
+
+# Test result dumps (large IP range outputs)
+multi-lang/tools/results/
+tools/results/
+
+# Test case fixtures (large generated IP range dumps)
+multi-lang/tools/test_cases/
+tools/test_cases/
+
+# Compiled test binaries
+multi-lang/go/test_v20_helper/main
+multi-lang/go/v20_test_helper
+multi-lang/tools/batch_go
+*.exe
+
+
+# Agent / session state
+.agent/
+.omc/
+.omo/
+
+# Backups
+*.bak
+*.orig
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Language specific
+node_modules/
+vendor/
+target/
+build/
+*.class
+*.pyc
+__pycache__/
+*.egg-info/
+
+# Temp
+tmp/
+*.tmp

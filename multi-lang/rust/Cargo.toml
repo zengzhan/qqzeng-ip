@@ -1,0 +1,24 @@
+[package]
+name = "qzdb_searcher"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+memmap2 = "0.9"
+regex-lite = "0.1"
+
+[[bin]]
+name = "bench_qps"
+path = "bench_qps.rs"
+
+[[bin]]
+name = "batch_rust"
+path = "src/bin/batch_rust.rs"
+
+[[bin]]
+name = "main"
+path = "src/main.rs"
+
+[[bin]]
+name = "test_v20"
+path = "src/bin/test_v20.rs"
