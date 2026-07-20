@@ -251,12 +251,45 @@ func (s *QzdbSearcher) parseHeader() error {
 	s.ipRowSize = int(readU32(unsafe.Pointer(&d[160])))
 	s.geoEntryGroupCount = int(readU32(unsafe.Pointer(&d[164])))
 
+	// Validate section offsets are within bounds
+	if s.offV4Jump+65536*4 > uint64(len(d)) {
+		return fmt.Errorf("V4 jump table offset out of bounds")
+	}
+	if s.offV4Nodes+uint64(s.v4NodeCount)*8 > uint64(len(d)) {
+		return fmt.Errorf("V4 nodes table offset out of bounds")
+	}
+	if s.offV6Jump+65536*4 > uint64(len(d)) {
+		return fmt.Errorf("V6 jump table offset out of bounds")
+	}
+	if s.offV6Nodes+uint64(s.v6NodeCount)*8 > uint64(len(d)) {
+		return fmt.Errorf("V6 nodes table offset out of bounds")
+	}
+	if s.offIPRow+uint64(s.rowCount)*uint64(s.ipRowSize) > uint64(len(d)) {
+		return fmt.Errorf("IP row table offset out of bounds")
+	}
+	if s.offGeoEntries > uint64(len(d)) {
+		return fmt.Errorf("Geo entries offset out of bounds")
+	}
+	if s.offPools > uint64(len(d)) {
+		return fmt.Errorf("Pools offset out of bounds")
+	}
+	if s.offMeta > uint64(len(d)) {
+		return fmt.Errorf("Meta offset out of bounds")
+	}
+
 	s.groupEntryOffsets = make([]uint64, 4)
 	for i := 0; i < 4; i++ {
-		s.groupEntryOffsets[i] = s.readU48(168 + uint64(i)*6)
+		off := 168 + uint64(i)*6
+		if off+6 > uint64(len(d)) {
+			return fmt.Errorf("group entry offsets out of bounds")
+		}
+		s.groupEntryOffsets[i] = s.readU48(off)
 	}
 
 	gmOff := s.offGeoEntries
+	if gmOff >= uint64(len(d)) {
+		return fmt.Errorf("geo entries offset out of bounds")
+	}
 	groupCount := int(d[gmOff])
 	gmOff++
 
@@ -266,6 +299,9 @@ func (s *QzdbSearcher) parseHeader() error {
 	}
 	if s.geoEntryGroupCount > 0 && s.geoEntryGroupCount < actualGroups {
 		actualGroups = s.geoEntryGroupCount
+	}
+	if actualGroups > 4 {
+		actualGroups = 4
 	}
 
 	s.groupFieldCounts = make([]int, actualGroups)
@@ -451,46 +487,63 @@ func (s *QzdbSearcher) ensurePoolsLoaded() {
 				groupPoolList[f] = []string{}
 				continue;
 			}
-			count := readU32(unsafe.Pointer(&d[poolCursor]))
+		count := readU32(unsafe.Pointer(&d[poolCursor]))
+		poolCursor += 4
+		if s.offRowSchema > 0 {
 			poolCursor += 4
-			if s.offRowSchema > 0 {
-				poolCursor += 4
-			}
-			if count == 0 {
-				groupPoolList[f] = []string{}
-				continue
-			}
+		}
+		// Cap count to a sane maximum to avoid OOM / OOB on corrupt files.
+		const maxPoolCount = 1 << 26
+		if count == 0 || count > maxPoolCount {
+			groupPoolList[f] = []string{}
+			continue
+		}
+		// Ensure the offset table (count+1 uint32s) stays within the pool region.
+		if poolCursor+uint64(count+1)*4 > poolEnd {
+			groupPoolList[f] = []string{}
+			continue
+		}
 
-			offsets := make([]uint32, count+1)
-			for o := range offsets {
-				offsets[o] = readU32(unsafe.Pointer(&d[poolCursor]))
-				poolCursor += 4
-			}
+		offsets := make([]uint32, count+1)
+		for o := range offsets {
+			offsets[o] = readU32(unsafe.Pointer(&d[poolCursor]))
+			poolCursor += 4
+		}
 
-			stringsList := make([]string, count)
-			for idx := uint32(0); idx < count; idx++ {
-				start := offsets[idx]
-				end := offsets[idx+1]
-				length := end - start
-				if length > 0 {
-					stringsList[idx] = string(d[poolCursor+uint64(start) : poolCursor+uint64(end)])
+		stringsList := make([]string, count)
+		for idx := uint32(0); idx < count; idx++ {
+			start := offsets[idx]
+			end := offsets[idx+1]
+			length := end - start
+			if length > 0 {
+				segStart := poolCursor + uint64(start)
+				segEnd := poolCursor + uint64(end)
+				if segEnd <= uint64(len(d)) && segStart <= segEnd {
+					stringsList[idx] = string(d[segStart:segEnd])
 				}
 			}
-			poolCursor += uint64(offsets[count])
-			groupPoolList[f] = stringsList
+		}
+		poolCursor += uint64(offsets[count])
+		groupPoolList[f] = stringsList
 		}
 		s.groupPools[g] = groupPoolList
 	}
 }
 
 func (s *QzdbSearcher) getV4Child(nodeIdx uint32, bit uint32) uint32 {
+	if nodeIdx >= s.v4NodeCount {
+		return 0
+	}
+	d := s.data
 	if s.v4Node24 {
 		nodeOffset := s.offV4Nodes + uint64(nodeIdx)*6
 		offset := nodeOffset
 		if bit != 0 {
 			offset = nodeOffset + 3
 		}
-		d := s.data
+		if offset+3 >= uint64(len(d)) {
+			return 0
+		}
 		val := uint32(d[offset]) | uint32(d[offset+1])<<8 | uint32(d[offset+2])<<16
 		if val&0x800000 != 0 {
 			return (val & 0x7FFFFF) | SENTINEL
@@ -498,18 +551,27 @@ func (s *QzdbSearcher) getV4Child(nodeIdx uint32, bit uint32) uint32 {
 		return val
 	} else {
 		childOff := s.offV4Nodes + uint64(nodeIdx)*8 + uint64(bit)*4
-		return readU32(unsafe.Pointer(&s.data[childOff]))
+		if childOff+4 > uint64(len(d)) {
+			return 0
+		}
+		return readU32(unsafe.Pointer(&d[childOff]))
 	}
 }
 
 func (s *QzdbSearcher) getV6Child(nodeIdx uint32, bit uint32) uint32 {
+	if nodeIdx >= s.v6NodeCount {
+		return 0
+	}
+	d := s.data
 	if s.v6Node24 {
 		nodeOffset := s.offV6Nodes + uint64(nodeIdx)*6
 		offset := nodeOffset
 		if bit != 0 {
 			offset = nodeOffset + 3
 		}
-		d := s.data
+		if offset+3 >= uint64(len(d)) {
+			return 0
+		}
 		val := uint32(d[offset]) | uint32(d[offset+1])<<8 | uint32(d[offset+2])<<16
 		if val&0x800000 != 0 {
 			return (val & 0x7FFFFF) | SENTINEL
@@ -517,7 +579,10 @@ func (s *QzdbSearcher) getV6Child(nodeIdx uint32, bit uint32) uint32 {
 		return val
 	} else {
 		childOff := s.offV6Nodes + uint64(nodeIdx)*8 + uint64(bit)*4
-		return readU32(unsafe.Pointer(&s.data[childOff]))
+		if childOff+4 > uint64(len(d)) {
+			return 0
+		}
+		return readU32(unsafe.Pointer(&d[childOff]))
 	}
 }
 
@@ -535,6 +600,7 @@ func (s *QzdbSearcher) trieWalkV4(ipInt uint32) uint32 {
 	idx := ptr
 	suffix := (ipInt & 0xFFFF) << 16
 
+	steps := 0
 	for {
 		bit := (suffix >> 31) & 1
 		child := s.getV4Child(idx, bit)
@@ -548,13 +614,35 @@ func (s *QzdbSearcher) trieWalkV4(ipInt uint32) uint32 {
 
 		idx = child
 		suffix <<= 1
+		steps++
+		if steps > 32 {
+			return 0
+		}
 	}
 }
 
 func (s *QzdbSearcher) trieWalkV6(ipInt *big.Int) uint32 {
-	shift := uint(128 - s.v6JumpBits)
-	tmp := new(big.Int).Rsh(ipInt, shift)
-	idxJump := tmp.Uint64() & uint64((1<<s.v6JumpBits)-1)
+	// Convert big.Int to two uint64 (lo = most-significant 64 bits, hi = least-significant 64 bits)
+	// using the big-endian byte convention established by SetBytes. No per-bit big.Int allocation.
+	var hi, lo uint64
+	if ipInt.BitLen() <= 64 {
+		lo = ipInt.Uint64()
+	} else {
+		bytes := ipInt.Bytes()
+		if len(bytes) > 16 {
+			bytes = bytes[len(bytes)-16:]
+		} else if len(bytes) < 16 {
+			pad := make([]byte, 16-len(bytes))
+			bytes = append(pad, bytes...)
+		}
+		lo = uint64(bytes[0])<<56 | uint64(bytes[1])<<48 | uint64(bytes[2])<<40 | uint64(bytes[3])<<32 |
+			uint64(bytes[4])<<24 | uint64(bytes[5])<<16 | uint64(bytes[6])<<8 | uint64(bytes[7])
+		hi = uint64(bytes[8])<<56 | uint64(bytes[9])<<48 | uint64(bytes[10])<<40 | uint64(bytes[11])<<32 |
+			uint64(bytes[12])<<24 | uint64(bytes[13])<<16 | uint64(bytes[14])<<8 | uint64(bytes[15])
+	}
+
+	// Jump index = top v6JumpBits bits of the 128-bit address, held in the top bits of lo.
+	idxJump := (lo >> (64 - uint(s.v6JumpBits))) & uint64((1<<s.v6JumpBits)-1)
 
 	ptr := readU32(unsafe.Pointer(&s.data[s.offV6Jump+idxJump*4]))
 	if ptr == 0 {
@@ -568,8 +656,13 @@ func (s *QzdbSearcher) trieWalkV6(ipInt *big.Int) uint32 {
 	depth := s.v6JumpBits
 
 	for depth < 128 {
-		bit := int(new(big.Int).Rsh(ipInt, uint(127-depth)).Uint64() & 1)
-		child := s.getV6Child(idx, uint32(bit))
+		var bit uint32
+		if depth < 64 {
+			bit = uint32((lo >> (63 - depth)) & 1)
+		} else {
+			bit = uint32((hi >> (127 - depth)) & 1)
+		}
+		child := s.getV6Child(idx, bit)
 
 		if child == 0 {
 			return 0

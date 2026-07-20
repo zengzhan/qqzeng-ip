@@ -193,6 +193,7 @@ public class QzdbSearcher {
         gmOff++;
 
         int actualGroups = Math.min(groupCount, Math.max(1, geoEntryGroupCount));
+        if (actualGroups > 4) actualGroups = 4;
         groupFieldCounts = new int[actualGroups];
         groupEntryCounts = new long[actualGroups];
         groupDimMasks = new int[actualGroups];
@@ -616,7 +617,7 @@ public class QzdbSearcher {
     }
 
     public String[] getFieldNames() {
-        return fieldNames;
+        return fieldNames == null ? new String[0] : fieldNames.clone();
     }
 
     public int getVersionCode() {
@@ -644,16 +645,30 @@ public class QzdbSearcher {
 
     private static int fastParseIp(String ip) {
         int result = 0, val = 0, dots = 0;
+        int digitCount = 0;
+        
         for (int i = 0; i < ip.length(); i++) {
             char c = ip.charAt(i);
             if (c >= '0' && c <= '9') {
+                digitCount++;
+                if (digitCount > 3) return -1;
                 val = val * 10 + (c - '0');
+                if (val > 255) return -1;
             } else if (c == '.') {
+                if (digitCount == 0) return -1;
+                if (dots == 3) return -1;
                 result = (result << 8) | val;
                 val = 0;
+                digitCount = 0;
                 dots++;
+            } else {
+                return -1;
             }
         }
+        
+        if (dots != 3) return -1;
+        if (digitCount == 0) return -1;
+        
         return (result << 8) | val;
     }
 }

@@ -104,6 +104,7 @@ namespace Qqzeng
         private bool _poolsLoaded;
 
         private readonly object _loadLock = new();
+        private readonly object _poolsLock = new();
 
         private QzdbSearcher() { }
 
@@ -120,8 +121,8 @@ namespace Qqzeng
             {
                 _groupIndex = groupIndex;
                 var raw = File.ReadAllBytes(dbPath);
-                ParseHeader(raw);
                 _data = raw;
+                ParseHeader(raw);
             }
         }
 
@@ -225,6 +226,8 @@ namespace Qqzeng
             int actualGroups = groupCount < 1 ? 1 : groupCount;
             if (_geoEntryGroupCount > 0 && _geoEntryGroupCount < actualGroups)
                 actualGroups = _geoEntryGroupCount;
+            if (actualGroups > 4)
+                actualGroups = 4;
 
             _groupFieldCounts = new int[actualGroups];
             _groupEntryCounts = new uint[actualGroups];
@@ -378,67 +381,71 @@ namespace Qqzeng
         private void EnsurePoolsLoaded()
         {
             if (_poolsLoaded) return;
-            _poolsLoaded = true;
-
-            int groupCount = _groupFieldCounts.Length;
-            _groupPools = new string[groupCount][][];
-
-            if (_offPools <= 0) return;
-
-            int poolCursor = (int)_offPools;
-            int poolEnd = _offMeta > 0 ? (int)_offMeta : _data.Length;
-            byte[] d = _data;
-
-            for (int g = 0; g < groupCount; g++)
+            lock (_poolsLock)
             {
-                int fieldCount = _groupFieldCounts[g];
-                var groupPoolList = new string[fieldCount][];
-                bool[] natives = _groupFieldNative[g];
-                for (int f = 0; f < fieldCount; f++)
+                if (_poolsLoaded) return;
+
+                int groupCount = _groupFieldCounts.Length;
+                _groupPools = new string[groupCount][][];
+
+                if (_offPools <= 0) return;
+
+                int poolCursor = (int)_offPools;
+                int poolEnd = _offMeta > 0 ? (int)_offMeta : _data.Length;
+                byte[] d = _data;
+
+                for (int g = 0; g < groupCount; g++)
                 {
-                    if (natives != null && f < natives.Length && natives[f])
+                    int fieldCount = _groupFieldCounts[g];
+                    var groupPoolList = new string[fieldCount][];
+                    bool[] natives = _groupFieldNative[g];
+                    for (int f = 0; f < fieldCount; f++)
                     {
-                        groupPoolList[f] = Array.Empty<string>();
-                        continue;
-                    }
+                        if (natives != null && f < natives.Length && natives[f])
+                        {
+                            groupPoolList[f] = Array.Empty<string>();
+                            continue;
+                        }
 
-                    if (poolCursor + 4 > poolEnd)
-                    {
-                        groupPoolList[f] = Array.Empty<string>();
-                        continue;
-                    }
-                    int count = (int)ReadU32(d, poolCursor);
-                    poolCursor += 4;
-                    if (_offRowSchema > 0)
+                        if (poolCursor + 4 > poolEnd)
+                        {
+                            groupPoolList[f] = Array.Empty<string>();
+                            continue;
+                        }
+                        int count = (int)ReadU32(d, poolCursor);
                         poolCursor += 4;
-                    if (count == 0)
-                    {
-                        groupPoolList[f] = Array.Empty<string>();
-                        continue;
-                    }
+                        if (_offRowSchema > 0)
+                            poolCursor += 4;
+                        if (count == 0)
+                        {
+                            groupPoolList[f] = Array.Empty<string>();
+                            continue;
+                        }
 
-                    var offsets = new uint[count + 1];
-                    for (int o = 0; o <= count; o++)
-                    {
-                        offsets[o] = ReadU32(d, poolCursor);
-                        poolCursor += 4;
-                    }
+                        var offsets = new uint[count + 1];
+                        for (int o = 0; o <= count; o++)
+                        {
+                            offsets[o] = ReadU32(d, poolCursor);
+                            poolCursor += 4;
+                        }
 
-                    var strings = new string[count];
-                    for (int s = 0; s < count; s++)
-                    {
-                        int start = (int)offsets[s];
-                        int end = (int)offsets[s + 1];
-                        int length = end - start;
-                        if (length > 0)
-                            strings[s] = Encoding.UTF8.GetString(d, poolCursor + start, length);
-                        else
-                            strings[s] = "";
+                        var strings = new string[count];
+                        for (int s = 0; s < count; s++)
+                        {
+                            int start = (int)offsets[s];
+                            int end = (int)offsets[s + 1];
+                            int length = end - start;
+                            if (length > 0)
+                                strings[s] = Encoding.UTF8.GetString(d, poolCursor + start, length);
+                            else
+                                strings[s] = "";
+                        }
+                        poolCursor += (int)offsets[count];
+                        groupPoolList[f] = strings;
                     }
-                    poolCursor += (int)offsets[count];
-                    groupPoolList[f] = strings;
+                    _groupPools[g] = groupPoolList;
                 }
-                _groupPools[g] = groupPoolList;
+                _poolsLoaded = true;
             }
         }
 
@@ -622,7 +629,7 @@ namespace Qqzeng
                 values[i] = fields[fname];
             }
 
-            return new GeoInfo { Fields = fields, FieldNames = _fieldNames, FloatIndices = _floatFieldIndices, Values = values };
+            return new GeoInfo { Fields = fields, FieldNames = (string[])_fieldNames?.Clone(), FloatIndices = _floatFieldIndices, Values = values };
         }
 
         public GeoInfo Find(string ipStr)
@@ -681,7 +688,7 @@ namespace Qqzeng
             return info == null || info.IsEmpty ? "" : info.ToPipe();
         }
 
-        public string[] FieldNames => _fieldNames ?? Array.Empty<string>();
+        public string[] FieldNames => (string[])(_fieldNames?.Clone() ?? Array.Empty<string>());
 
         public string Version => _versionName;
 

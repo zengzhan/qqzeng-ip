@@ -1,9 +1,24 @@
+"""
+QZDB V20 (QZ20) IP Geolocation Database Reader for Python.
+
+Format: PATRICIA Trie + IPRow indirect layer + multi-GeoEntry groups.
+Supports all 4 version groups (std/ult/asn/max) with dynamic metadata.
+
+API (matching V18 pattern):
+    searcher = QzdbSearcher(db_path)
+    info = searcher.find('1.2.3.4')         # -> GeoInfo
+    pipe = searcher.find_str('1.2.3.4')      # -> '|' delimited string
+    fields = searcher.field_names            # -> list of field names
+    version = searcher.version               # -> version name string
+"""
+
 import ipaddress
 import struct
 import zlib
 import threading
 
 SENTINEL = 0x80000000
+
 FLOAT_FIELDS = frozenset(['longitude', 'latitude'])
 
 
@@ -23,9 +38,6 @@ class GeoInfo:
         except KeyError:
             raise AttributeError(name)
 
-    def get(self, name):
-        return self._fields.get(name, '')
-
     def to_dict(self):
         return {fname: self._fields.get(fname, '') for fname in self._field_names}
 
@@ -33,7 +45,7 @@ class GeoInfo:
         parts = []
         for fname in self._field_names:
             val = self._fields.get(fname, '')
-            if fname in self._float_indices and val != '':
+            if fname in self._float_indices and val:
                 try:
                     val = f'{float(val):.6f}'
                 except (ValueError, TypeError):
@@ -44,32 +56,28 @@ class GeoInfo:
 
 class QzdbSearcher:
     _instance = None
-    _lock = threading.Lock()
 
     @classmethod
     def get_instance(cls, db_path=None):
         if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = cls(db_path)
+            cls._instance = cls(db_path)
         elif db_path is not None:
-            with cls._lock:
-                cls._instance.load(db_path)
+            cls._instance.load(db_path)
         return cls._instance
 
-    def __init__(self, db_path=None, group_index=0):
+    def __init__(self, db_path=None, version='', group_index=0):
         self._data = b''
+        self._version = version
         self._group_index = group_index
         self._field_names = []
         self._float_field_indices = set()
-        self._version_name = ''
 
         # Header fields
         self._flags = 0
         self._has_v4 = False
         self._has_v6 = False
-        self._v4_node_24 = False
-        self._v6_node_24 = False
+        self._version_mask = 0
+        self._v4_jump_bits = 16
         self._v6_jump_bits = 16
         self._pool_count = 0
         self._pool_idx_size = 2
@@ -77,6 +85,7 @@ class QzdbSearcher:
         self._row_count = 0
         self._v4_rec_count = 0
         self._v6_rec_count = 0
+        self._header_size = 192
         self._v4_node_count = 0
         self._v6_node_count = 0
         self._ip_row_size = 6
@@ -91,32 +100,27 @@ class QzdbSearcher:
         self._off_geo_entries = 0
         self._off_pools = 0
         self._off_meta = 0
-        self._off_row_schema = 0
-        self._off_group_schema = 0
 
-        # Schema and layout cache
+        # GeoEntry group metadata
         self._group_field_counts = []
         self._group_entry_counts = []
         self._group_dim_masks = []
-        self._group_entry_offsets = []
+        self._group_entry_offsets = []  # relative to _off_geo_entries
 
-        self._group_strides = []
-        self._group_field_widths = []
-        self._group_field_offsets = []
-        self._group_field_native = []
-        self._group_field_native_type = []
-
+        # Pools cache: [group_idx][dim_idx][str_idx] -> str
         self._group_pools = None
         self._pools_loaded = False
         self._pools_lock = threading.Lock()
 
         if db_path is not None:
-            self.load(db_path)
+            self.load(db_path, version)
 
-    def load(self, db_path):
+    def load(self, db_path, version=''):
         with open(db_path, 'rb') as f:
             self._data = f.read()
         self._parse_header()
+        if version:
+            self._version = version
 
     def _read_u16(self, off):
         return struct.unpack_from('<H', self._data, off)[0]
@@ -140,35 +144,21 @@ class QzdbSearcher:
                 | (d[off + 4] << 32)
                 | (d[off + 5] << 40))
 
-    def _read_uint_width(self, off, width):
-        if width <= 1:
-            return self._data[off]
-        elif width == 2:
-            return self._read_u16(off)
-        elif width == 3:
-            return self._read_u24(off)
-        else:
-            return self._read_u32(off)
-
     def _parse_header(self):
         d = self._data
+        if len(d) < 4 or d[:4] != b'QZ20':
+            raise ValueError('Invalid magic, expected QZ20')
         if len(d) < 192:
-            raise ValueError('File too small for QZDB header')
-
-        magic = d[:4]
-        if magic != b'QZDB':
-            raise ValueError('Invalid magic, expected QZDB')
+            raise ValueError('File too small for V20 header')
 
         fmt_ver = d[4]
-        # Accept version 1 (new unified) as well as 2-6 (old V20 development versions)
-        if fmt_ver not in (1, 2, 3, 4, 5, 6):
-            raise ValueError(f'Unsupported format version: {fmt_ver}')
+        if fmt_ver not in (2, 3, 4):
+            raise ValueError(f'Unsupported V20 format version: {fmt_ver}')
 
+        self._version_mask = self._read_u16(6)
         self._flags = self._read_u16(8)
         self._has_v4 = bool(self._flags & 1)
         self._has_v6 = bool(self._flags & 2)
-        self._v4_node_24 = bool(self._flags & 0x10)
-        self._v6_node_24 = bool(self._flags & 0x20)
 
         self._v6_jump_bits = d[11]
         if self._v6_jump_bits == 0:
@@ -185,9 +175,7 @@ class QzdbSearcher:
         if hs != 192:
             raise ValueError(f'Unexpected header size: {hs}')
 
-        # Offsets
-        self._off_row_schema = self._read_u64(40)
-        self._off_group_schema = self._read_u64(48)
+        # Read offsets
         self._off_v4_jump = self._read_u64(64)
         self._off_v4_nodes = self._read_u64(72)
         self._off_v6_jump = self._read_u64(80)
@@ -204,16 +192,13 @@ class QzdbSearcher:
 
         # Bounds validation: raise on corrupt files instead of OOB reads.
         dlen = len(d)
-        node_size = 6 if self._v4_node_24 else 8
-        v6_node_size = 6 if self._v6_node_24 else 8
-
         if self._off_v4_jump + 65536 * 4 > dlen:
             raise ValueError('Section v4_jump out of bounds')
-        if self._off_v4_nodes + self._v4_node_count * node_size > dlen:
+        if self._off_v4_nodes + self._v4_node_count * 8 > dlen:
             raise ValueError('Section v4_nodes out of bounds')
         if self._off_v6_jump + (1 << self._v6_jump_bits) * 4 > dlen:
             raise ValueError('Section v6_jump out of bounds')
-        if self._off_v6_nodes + self._v6_node_count * v6_node_size > dlen:
+        if self._off_v6_nodes + self._v6_node_count * 8 > dlen:
             raise ValueError('Section v6_nodes out of bounds')
         if self._off_ip_row + self._row_count * self._ip_row_size > dlen:
             raise ValueError('Section ip_row out of bounds')
@@ -224,12 +209,14 @@ class QzdbSearcher:
         if self._off_meta > dlen:
             raise ValueError('Section meta out of bounds')
 
-        # GeoEntryOffsets[4]
+        # Read GeoEntryOffsets[4] (uint48 LE, relative to OffsetGeoEntries)
         self._group_entry_offsets = []
         for i in range(4):
-            self._group_entry_offsets.append(self._read_u48(168 + i * 6))
+            off = 168 + i * 6
+            val = self._read_u48(off)
+            self._group_entry_offsets.append(val)
 
-        # Parse GroupMetadataTable (at off_geo_entries)
+        # Parse GroupMetadataTable (at OffsetGeoEntries)
         gm_off = self._off_geo_entries
         group_count = d[gm_off]
         gm_off += 1
@@ -244,85 +231,34 @@ class QzdbSearcher:
         for gi in range(actual_groups):
             self._group_field_counts[gi] = d[gm_off]
             gm_off += 1
-            if fmt_ver == 1 or fmt_ver >= 4:
+            if fmt_ver >= 4:
                 self._group_entry_counts[gi] = self._read_u32(gm_off)
                 gm_off += 4
             else:
                 self._group_entry_counts[gi] = self._read_u16(gm_off)
                 gm_off += 2
-            
-            if fmt_ver == 1 or fmt_ver >= 3:
+            if fmt_ver >= 3:
                 self._group_dim_masks[gi] = self._read_u16(gm_off)
                 gm_off += 2
             else:
                 self._group_dim_masks[gi] = 0x01 if gi != 2 else 0x02
 
-        # Initialize schema and widths
-        self._group_strides = [0] * actual_groups
-        self._group_field_widths = [None] * actual_groups
-        self._group_field_offsets = [None] * actual_groups
-        self._group_field_native = [None] * actual_groups
-        self._group_field_native_type = [None] * actual_groups
+        if actual_groups == 0:
+            self._group_field_counts = [self._pool_count]
+            self._group_entry_counts = [self._geo_count]
+            self._group_entry_offsets = [0, 0, 0, 0]
+            self._group_dim_masks = [0x01]
 
-        # Parse GROUP_SCHEMA if present
-        if self._off_group_schema > 0:
-            sp = self._off_group_schema
-            gs_group_count = self._read_u16(sp)
-            sp += 2
-            max_gs_groups = min(gs_group_count, actual_groups)
-            for gi in range(max_gs_groups):
-                sp += 2  # skip groupId
-                fld_count = self._read_u16(sp)
-                sp += 2
-                sp += 4  # skip entryCount (uint32)
-                stride = self._read_u32(sp)
-                sp += 4
-                sp += 4  # skip flags
-
-                if gi < actual_groups:
-                    self._group_strides[gi] = stride
-                    widths = [0] * fld_count
-                    offsets = [0] * fld_count
-                    natives = [False] * fld_count
-                    nat_types = [0] * fld_count
-                    for fi in range(fld_count):
-                        sp += 2  # skip fieldId
-                        widths[fi] = d[sp]
-                        sp += 1
-                        field_flags = d[sp]
-                        sp += 1
-                        natives[fi] = (field_flags & 0x01) != 0
-                        nat_types[fi] = (field_flags >> 1) & 0x03
-                        offsets[fi] = self._read_u32(sp)
-                        sp += 4
-                        sp += 4  # skip poolSectionId
-                    self._group_field_widths[gi] = widths
-                    self._group_field_offsets[gi] = offsets
-                    self._group_field_native[gi] = natives
-                    self._group_field_native_type[gi] = nat_types
-                else:
-                    sp += fld_count * 12
-
-        # Fallback for groups without schema info
-        for g in range(actual_groups):
-            if self._group_strides[g] == 0:
-                self._group_strides[g] = self._group_field_counts[g] * self._pool_idx_size
-            if self._group_field_widths[g] is None:
-                self._group_field_widths[g] = [self._pool_idx_size] * self._group_field_counts[g]
-            if self._group_field_offsets[g] is None:
-                self._group_field_offsets[g] = [i * self._pool_idx_size for i in range(self._group_field_counts[g])]
-            if self._group_field_native[g] is None:
-                self._group_field_native[g] = [False] * self._group_field_counts[g]
-            if self._group_field_native_type[g] is None:
-                self._group_field_native_type[g] = [0] * self._group_field_counts[g]
-
+        # Resolve field names from metadata
         self._resolve_field_names()
 
     def _resolve_field_names(self):
+        """Read field names from Metadata section (type=2)."""
         d = self._data
         off_meta = self._off_meta
         if (self._flags & 4) and off_meta > 0 and off_meta + 4 <= len(d):
             field_names = None
+            version_name = None
             pos = off_meta
             while pos + 4 <= len(d):
                 t = d[pos]
@@ -331,22 +267,48 @@ class QzdbSearcher:
                     break
                 val = d[pos + 4:pos + 4 + length].decode('utf-8')
                 if t == 1:
-                    self._version_name = val
+                    version_name = val
                 elif t == 2:
                     field_names = val.split('|')
                 pos += 4 + length
 
+            # Validate: field_names must match primary group's field count
             if field_names and len(field_names) == self._group_field_counts[0]:
                 self._field_names = field_names
                 self._float_field_indices = {
                     i for i, n in enumerate(field_names)
                     if n in FLOAT_FIELDS
                 }
+                if version_name:
+                    self._version = version_name
                 return
 
-        # Fallback placeholder names
+        # Fallback: if no metadata, try to infer from pool count (legacy)
+        pc_map = {5: 'std', 7: 'asn', 11: 'ult', 25: 'max'}
+        ver = pc_map.get(self._pool_count, '')
+        if ver:
+            from importlib import import_module
+            try:
+                # Try V18 module's field definitions
+                ref = import_module('qzdb')
+                fields = ref.VERSION_FIELDS.get(ver, [])
+                if fields:
+                    self._field_names = fields
+                    self._float_field_indices = {
+                        i for i, n in enumerate(fields)
+                        if n in FLOAT_FIELDS
+                    }
+                    if not self._version:
+                        self._version = ver
+                    return
+            except ImportError:
+                pass
+
+        # Last resort: use placeholder names
         self._field_names = [f'field_{i}' for i in range(self._group_field_counts[0])]
         self._float_field_indices = set()
+
+    # ── String Pool Loading ──
 
     def _ensure_pools_loaded(self):
         if self._pools_loaded:
@@ -359,6 +321,7 @@ class QzdbSearcher:
             self._group_pools = [None] * group_count
 
             if self._off_pools <= 0:
+                self._pools_loaded = True
                 return
 
             pool_cursor = self._off_pools
@@ -368,19 +331,12 @@ class QzdbSearcher:
             for g in range(group_count):
                 field_count = self._group_field_counts[g]
                 group_pool_list = []
-                natives = self._group_field_native[g]
                 for f in range(field_count):
-                    if natives and f < len(natives) and natives[f]:
-                        group_pool_list.append([])
-                        continue
-
                     if pool_cursor + 4 > pool_end:
                         group_pool_list.append([])
                         continue
                     count = self._read_u32(pool_cursor)
                     pool_cursor += 4
-                    if self._off_row_schema > 0:
-                        pool_cursor += 4
                     if count == 0:
                         group_pool_list.append([])
                         continue
@@ -407,38 +363,12 @@ class QzdbSearcher:
 
             self._pools_loaded = True
 
-    def _get_v4_child(self, node_idx, bit):
-        if node_idx >= self._v4_node_count:
-            return 0
-        if self._v4_node_24:
-            node_offset = self._off_v4_nodes + node_idx * 6
-            offset = node_offset if bit == 0 else node_offset + 3
-            val = self._data[offset] | (self._data[offset + 1] << 8) | (self._data[offset + 2] << 16)
-            if val & 0x800000:
-                return (val & 0x7FFFFF) | SENTINEL
-            return val
-        else:
-            child_off = self._off_v4_nodes + node_idx * 8 + bit * 4
-            return self._read_u32(child_off)
-
-    def _get_v6_child(self, node_idx, bit):
-        if node_idx >= self._v6_node_count:
-            return 0
-        if self._v6_node_24:
-            node_offset = self._off_v6_nodes + node_idx * 6
-            offset = node_offset if bit == 0 else node_offset + 3
-            val = self._data[offset] | (self._data[offset + 1] << 8) | (self._data[offset + 2] << 16)
-            if val & 0x800000:
-                return (val & 0x7FFFFF) | SENTINEL
-            return val
-        else:
-            child_off = self._off_v6_nodes + node_idx * 8 + bit * 4
-            return self._read_u32(child_off)
+    # ── Trie Walk ──
 
     def _trie_walk_v4(self, ip_int):
         d = self._data
         hi16 = (ip_int >> 16) & 0xFFFF
-        ptr = self._read_u32(self._off_v4_jump + hi16 * 4)
+        ptr = struct.unpack_from('<I', d, self._off_v4_jump + hi16 * 4)[0]
 
         if ptr == 0:
             return 0
@@ -447,14 +377,19 @@ class QzdbSearcher:
 
         idx = ptr
         suffix = (ip_int & 0xFFFF) << 16
+        nodes_off = self._off_v4_nodes
         steps = 0
 
         while True:
             steps += 1
             if steps > 32:
                 return 0
+            if idx >= self._v4_node_count:
+                return 0
             bit = (suffix >> 31) & 1
-            child = self._get_v4_child(idx, bit)
+            # nodes[idx] = { left: uint32, right: uint32 }
+            child_off = nodes_off + idx * 8 + bit * 4
+            child = struct.unpack_from('<I', d, child_off)[0]
 
             if child == 0:
                 return 0
@@ -465,9 +400,10 @@ class QzdbSearcher:
             suffix <<= 1
 
     def _trie_walk_v6(self, ip_int):
+        d = self._data
         shift = 128 - self._v6_jump_bits
         idx_jump = (ip_int >> shift) & ((1 << self._v6_jump_bits) - 1)
-        ptr = self._read_u32(self._off_v6_jump + idx_jump * 4)
+        ptr = struct.unpack_from('<I', d, self._off_v6_jump + idx_jump * 4)[0]
 
         if ptr == 0:
             return 0
@@ -476,10 +412,14 @@ class QzdbSearcher:
 
         idx = ptr
         depth = self._v6_jump_bits
+        nodes_off = self._off_v6_nodes
 
         while depth < 128:
+            if idx >= self._v6_node_count:
+                return 0
             bit = (ip_int >> (127 - depth)) & 1
-            child = self._get_v6_child(idx, bit)
+            child_off = nodes_off + idx * 8 + bit * 4
+            child = struct.unpack_from('<I', d, child_off)[0]
 
             if child == 0:
                 return 0
@@ -491,18 +431,23 @@ class QzdbSearcher:
 
         return 0
 
+    # ── IPRow Resolution ──
+
     def _read_ip_row(self, row_id):
         if row_id <= 0 or row_id >= self._row_count:
             return 0, 0, 0
         off = self._off_ip_row + row_id * self._ip_row_size
-        geo_id = self._read_u24(off)
-        asn_id = self._read_u24(off + 3)
+        d = self._data
+        geo_id = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
+        asn_id = d[off + 3] | (d[off + 4] << 8) | (d[off + 5] << 16)
 
         usage_type_id = 0
         if self._ip_row_size >= 9:
-            usage_type_id = self._read_u24(off + 6)
+            usage_type_id = d[off + 6] | (d[off + 7] << 8) | (d[off + 8] << 16)
 
         return geo_id, asn_id, usage_type_id
+
+    # ── Geo Resolution ──
 
     def _resolve_row_id(self, row_id, group_index):
         geo_id, asn_id, usage_type_id = self._read_ip_row(row_id)
@@ -531,50 +476,48 @@ class QzdbSearcher:
         if field_count <= 0:
             return None
 
+        # Calculate GeoEntry data offset
         group_entry_start = self._off_geo_entries + self._group_entry_offsets[group_index]
-        stride = self._group_strides[group_index]
-        entry_offset = group_entry_start + entry_id * stride
+        entry_offset = group_entry_start + entry_id * field_count * self._pool_idx_size
         d = self._data
 
-        widths = self._group_field_widths[group_index]
-        base_offsets = self._group_field_offsets[group_index]
-        natives = self._group_field_native[group_index]
-        nat_types = self._group_field_native_type[group_index]
+        # Read pool indices
+        pool_idxs = []
+        for i in range(field_count):
+            if self._pool_idx_size == 2:
+                idx = struct.unpack_from('<H', d, entry_offset)[0]
+            elif self._pool_idx_size == 3:
+                idx = d[entry_offset] | (d[entry_offset + 1] << 8) | (d[entry_offset + 2] << 16)
+            else:
+                idx = struct.unpack_from('<I', d, entry_offset)[0]
+            pool_idxs.append(idx)
+            entry_offset += self._pool_idx_size
+
+        # Resolve pool values
+        group_pool = self._group_pools[group_index] if self._group_pools else None
+        if group_pool is None:
+            return None
+
+        # Use primary group field names if available, else this group's field names
+        field_names = self._field_names
 
         fields = {}
         for i in range(field_count):
-            w = widths[i]
-            fo = entry_offset + base_offsets[i]
-            is_native = natives and i < len(natives) and natives[i]
-            
-            if is_native:
-                t = nat_types[i] if nat_types and i < len(nat_types) else 0
-                if t == 1:
-                    # float
-                    if w == 4:
-                        val_num = struct.unpack_from('<f', d, fo)[0]
-                    else:
-                        val_num = struct.unpack_from('<d', d, fo)[0]
-                    val = str(val_num)
-                else:
-                    # int
-                    val_num = self._read_uint_width(fo, w)
-                    val = str(val_num)
+            idx = pool_idxs[i]
+            if group_pool and i < len(group_pool) and idx < len(group_pool[i]):
+                val = group_pool[i][idx]
             else:
-                idx = self._read_uint_width(fo, w)
-                group_pool = self._group_pools[group_index]
-                if group_pool and i < len(group_pool) and idx < len(group_pool[i]):
-                    val = group_pool[i][idx]
-                else:
-                    val = ''
-
-            fname = self._field_names[i] if i < len(self._field_names) else f'field_{i}'
+                val = ''
+            fname = field_names[i] if i < len(field_names) else f'field_{i}'
             fields[fname] = val
 
-        return GeoInfo(fields=fields, field_names=self._field_names,
+        return GeoInfo(fields=fields, field_names=field_names,
                        float_indices=self._float_field_indices)
 
+    # ── Public API ──
+
     def find(self, ip_str):
+        """Lookup IP and return GeoInfo. Accepts both IPv4 and IPv6 strings."""
         if not ip_str:
             return None
         try:
@@ -585,57 +528,96 @@ class QzdbSearcher:
         if isinstance(ip_obj, ipaddress.IPv4Address):
             return self.find_uint(int(ip_obj))
         else:
+            # Handle IPv4-mapped IPv6 (::ffff:x.x.x.x)
             ip_int = int(ip_obj)
-            # Check for IPv4-mapped IPv6 (::ffff:x.x.x.x)
             if ip_obj.ipv4_mapped:
                 return self.find_uint(int(ip_obj.ipv4_mapped))
             return self.find_v6_uint(ip_int)
 
-    def find_uint(self, ip_int):
+    def find_uint(self, ip_int, group_index=None):
+        """Lookup IPv4 uint32, return GeoInfo."""
         if not self._has_v4:
             return None
+        if group_index is None:
+            group_index = self._group_index
         row_id = self._trie_walk_v4(ip_int)
         if row_id == 0:
             return None
-        return self._resolve_row_id(row_id, self._group_index)
+        return self._resolve_row_id(row_id, group_index)
 
-    def find_v6_uint(self, ip_int):
+    def find_v6_uint(self, ip_int, group_index=None):
+        """Lookup IPv6 uint128, return GeoInfo."""
         if not self._has_v6:
             return None
+        if group_index is None:
+            group_index = self._group_index
         row_id = self._trie_walk_v6(ip_int)
         if row_id == 0:
             return None
-        return self._resolve_row_id(row_id, self._group_index)
+        return self._resolve_row_id(row_id, group_index)
 
     def find_str(self, ip_str):
+        """Lookup IP and return pipe-delimited string."""
         info = self.find(ip_str)
         if info is None:
             return ''
         return info.to_pipe()
 
-    @property
-    def version(self):
-        return self._version_name
+    def verify_crc(self) -> bool:
+        """Verify CRC32 checksum (bytes 16-19 store CRC, zeroed during computation)."""
+        d = self._data
+        if len(d) < 20:
+            return False
+        stored = struct.unpack_from('<I', d, 16)[0]
+        # Zero out CRC bytes for computation
+        data_copy = bytearray(d)
+        data_copy[16:20] = b'\x00\x00\x00\x00'
+        computed = zlib.crc32(bytes(data_copy)) & 0xFFFFFFFF
+        return stored == computed
 
     @property
     def field_names(self):
         return self._field_names
 
     @property
-    def version_code(self):
-        pc_map = {6: 1, 7: 2, 25: 3}
-        return pc_map.get(self._pool_count, 3)
+    def version(self):
+        return self._version
 
     @property
     def pool_count(self):
         return self._pool_count
 
-    def verify_crc(self) -> bool:
-        if len(self._data) < 20:
-            return False
-        stored = struct.unpack_from('<I', self._data, 16)[0]
-        original = self._data[16:20]
-        mutable_data = bytearray(self._data)
-        mutable_data[16:20] = b'\x00\x00\x00\x00'
-        computed = zlib.crc32(mutable_data) & 0xFFFFFFFF
-        return stored == computed
+    def set_group(self, group_index):
+        """Set default version group index (0=std, 1=ult, 2=asn, 3=max)."""
+        self._group_index = group_index
+
+
+# ── CLI Test ──
+if __name__ == '__main__':
+    import sys
+    if len(sys.argv) < 2:
+        print('Usage: python qzdb_v20.py <db_path> [ip_address]')
+        sys.exit(1)
+
+    db_path = sys.argv[1]
+    searcher = QzdbSearcher(db_path)
+
+    if len(sys.argv) >= 3:
+        ip = sys.argv[2]
+        result = searcher.find(ip)
+        if result:
+            print(result.to_pipe())
+        else:
+            print('Not found')
+    else:
+        # Interactive test
+        test_ips = ['1.2.3.4', '8.8.8.8', '114.114.114.114', '::1', '2001:4860:4860::8888']
+        for ip in test_ips:
+            result = searcher.find(ip)
+            if result:
+                print(f'{ip}: {result.to_pipe()}')
+            else:
+                print(f'{ip}: Not found')
+        print(f'Version: {searcher.version}')
+        print(f'Fields: {searcher.field_names}')
+        print(f'CRC32: {"PASS" if searcher.verify_crc() else "FAIL"}')

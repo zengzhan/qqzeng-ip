@@ -243,6 +243,34 @@ class QzdbSearcher
         $this->ipRowSize = $this->readU32(160);
         $this->geoEntryGroupCount = $this->readU32(164);
 
+        $d = $this->data;
+        $len = strlen($d);
+        
+        if ($this->offV4Jump + 65536 * 4 > $len) {
+            throw new \RuntimeException('V4 jump table out of bounds');
+        }
+        if ($this->offV4Nodes + $this->v4NodeCount * 8 > $len) {
+            throw new \RuntimeException('V4 nodes table out of bounds');
+        }
+        if ($this->offV6Jump + 65536 * 4 > $len) {
+            throw new \RuntimeException('V6 jump table out of bounds');
+        }
+        if ($this->offV6Nodes + $this->v6NodeCount * 8 > $len) {
+            throw new \RuntimeException('V6 nodes table out of bounds');
+        }
+        if ($this->offIPRow + $this->rowCount * $this->ipRowSize > $len) {
+            throw new \RuntimeException('IP row table out of bounds');
+        }
+        if ($this->offGeoEntries + $this->geoEntryGroupCount * 20 > $len) {
+            throw new \RuntimeException('Geo entries table out of bounds');
+        }
+        if ($this->offPools > $len) {
+            throw new \RuntimeException('Pools table out of bounds');
+        }
+        if ($this->offMeta > $len) {
+            throw new \RuntimeException('Meta table out of bounds');
+        }
+
         // GeoEntryOffsets[4]
         $this->groupEntryOffsets = [];
         for ($i = 0; $i < 4; $i++) {
@@ -255,6 +283,7 @@ class QzdbSearcher
         $gmOff += 1;
 
         $actualGroups = min($groupCount, max(1, $this->geoEntryGroupCount));
+        if ($actualGroups > 4) $actualGroups = 4;
         $this->groupFieldCounts = array_fill(0, $actualGroups, 0);
         $this->groupEntryCounts = array_fill(0, $actualGroups, 0);
         $this->groupDimMasks = array_fill(0, $actualGroups, 0);
@@ -468,6 +497,7 @@ class QzdbSearcher
 
     private function getV4Child($nodeIdx, $bit)
     {
+        if ($nodeIdx >= $this->v4NodeCount) return 0;
         if ($this->v4Node24) {
             $nodeOffset = $this->offV4Nodes + $nodeIdx * 6;
             $offset = $bit === 0 ? $nodeOffset : $nodeOffset + 3;
@@ -485,6 +515,7 @@ class QzdbSearcher
 
     private function getV6Child($nodeIdx, $bit)
     {
+        if ($nodeIdx >= $this->v6NodeCount) return 0;
         if ($this->v6Node24) {
             $nodeOffset = $this->offV6Nodes + $nodeIdx * 6;
             $offset = $bit === 0 ? $nodeOffset : $nodeOffset + 3;
@@ -514,6 +545,7 @@ class QzdbSearcher
 
         $idx = $ptr;
         $suffix = ($ipInt & 0xFFFF) << 16;
+        $steps = 0;
 
         while (true) {
             $bit = ($suffix >> 31) & 1;
@@ -528,6 +560,7 @@ class QzdbSearcher
 
             $idx = $child;
             $suffix <<= 1;
+            if (++$steps > 32) return 0;
         }
     }
 

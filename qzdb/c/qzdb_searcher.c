@@ -122,6 +122,12 @@ int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
     ctx->ip_row_size = READ_LE32(d + 160);
     ctx->geo_entry_group_count = READ_LE32(d + 164);
 
+    // Bounds validation for section offsets
+    if (ctx->off_v4_jump + 65536 * 4 > ctx->data_size) return -1;
+    if (ctx->off_v4_nodes + (uint64_t)ctx->v4_node_count * 8 > ctx->data_size) return -1;
+    if (ctx->off_pools > ctx->data_size) return -1;
+    if (ctx->off_meta > ctx->data_size) return -1;
+
     ctx->group_entry_offsets = malloc(4 * sizeof(uint64_t));
     for (int i = 0; i < 4; i++) {
         ctx->group_entry_offsets[i] = read_u48(d + 168 + i * 6);
@@ -135,6 +141,7 @@ int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
     if (ctx->geo_entry_group_count > 0 && ctx->geo_entry_group_count < ctx->actual_groups) {
         ctx->actual_groups = ctx->geo_entry_group_count;
     }
+    if (ctx->actual_groups > 4) ctx->actual_groups = 4;
 
     ctx->group_field_counts = malloc(ctx->actual_groups * sizeof(int));
     ctx->group_entry_counts = malloc(ctx->actual_groups * sizeof(uint32_t));
@@ -349,6 +356,7 @@ static void ensure_pools_loaded(qzdb_searcher_t* ctx) {
 }
 
 static uint32_t get_v4_child(const qzdb_searcher_t* ctx, uint32_t node_idx, uint32_t bit) {
+    if (node_idx >= ctx->v4_node_count) return 0;
     if (ctx->v4_node_24) {
         uint64_t node_offset = ctx->off_v4_nodes + (uint64_t)node_idx * 6;
         uint64_t offset = bit == 0 ? node_offset : node_offset + 3;
@@ -387,8 +395,10 @@ static uint32_t trie_walk_v4(const qzdb_searcher_t* ctx, uint32_t ip_int) {
 
     uint32_t idx = ptr;
     uint32_t suffix = (ip_int & 0xFFFF) << 16;
+    uint32_t steps = 0;
 
     while (1) {
+        if (++steps > 32) return 0;
         uint32_t bit = (suffix >> 31) & 1;
         uint32_t child = get_v4_child(ctx, idx, bit);
 
@@ -426,6 +436,7 @@ static uint32_t trie_walk_v6(const qzdb_searcher_t* ctx, const uint8_t* ip_bin) 
     int depth = v6_jump_bits;
 
     while (depth < 128) {
+        if (idx >= ctx->v6_node_count) return 0;
         int byte_idx = depth / 8;
         int bit_idx = 7 - (depth % 8);
         uint32_t bit = (ip_bin[byte_idx] >> bit_idx) & 1;
@@ -665,6 +676,7 @@ void qzdb_free(qzdb_searcher_t* ctx) {
         free(ctx->group_pool_counts);
     }
     free(ctx->group_entry_offsets);
+    int gfc0 = ctx->group_field_counts ? ctx->group_field_counts[0] : 0;
     free(ctx->group_field_counts);
     free(ctx->group_entry_counts);
     free(ctx->group_dim_masks);
@@ -682,7 +694,7 @@ void qzdb_free(qzdb_searcher_t* ctx) {
     free(ctx->group_field_native_type);
 
     if (ctx->field_names) {
-        for (int i = 0; i < ctx->group_field_counts[0]; i++) {
+        for (int i = 0; i < gfc0; i++) {
             free(ctx->field_names[i]);
         }
         free(ctx->field_names);
@@ -699,8 +711,6 @@ int qzdb_verify_crc(qzdb_searcher_t* ctx) {
     uint32_t stored = READ_LE32(ctx->data + 16);
     uint8_t orig[4];
     memcpy(orig, ctx->data + 16, 4);
-    memset(ctx->data + 16, 0, 4);
     uint32_t computed = crc32_compute(ctx->data, ctx->data_size);
-    memcpy(ctx->data + 16, orig, 4);
     return stored == computed ? 1 : 0;
 }

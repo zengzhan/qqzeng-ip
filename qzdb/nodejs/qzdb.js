@@ -170,11 +170,11 @@ class QzdbSearcher {
   _readU48(off) {
     const d = this._data;
     return d[off]
-      | (d[off + 1] << 8)
-      | (d[off + 2] << 16)
-      | (d[off + 3] << 24)
-      | (d[off + 4] * 0x100000000)
-      | (d[off + 5] * 0x10000000000);
+      + d[off + 1] * 0x100
+      + d[off + 2] * 0x10000
+      + d[off + 3] * 0x1000000
+      + d[off + 4] * 0x100000000
+      + d[off + 5] * 0x10000000000;
   }
 
   _readUintWidth(off, width) {
@@ -256,7 +256,8 @@ class QzdbSearcher {
     const groupCount = d[gmOff];
     gmOff += 1;
 
-    const actualGroups = Math.min(groupCount, Math.max(1, this._geoEntryGroupCount));
+    let actualGroups = Math.min(groupCount, Math.max(1, this._geoEntryGroupCount));
+    if (actualGroups > 4) actualGroups = 4;
     this._groupFieldCounts = new Array(actualGroups).fill(0);
     this._groupEntryCounts = new Array(actualGroups).fill(0);
     this._groupDimMasks = new Array(actualGroups).fill(0);
@@ -632,11 +633,11 @@ class QzdbSearcher {
         } else if (w <= 1) {
           val = String(d[fo]);
         } else if (w === 2) {
-          val = String(d[fo] | (d[fo + 1] << 8));
+          val = String((d[fo] | (d[fo + 1] << 8)) >>> 0);
         } else if (w === 3) {
-          val = String(d[fo] | (d[fo + 1] << 8) | (d[fo + 2] << 16));
+          val = String((d[fo] | (d[fo + 1] << 8) | (d[fo + 2] << 16)) >>> 0);
         } else {
-          val = String(d[fo] | (d[fo + 1] << 8) | (d[fo + 2] << 16) | (d[fo + 3] << 24));
+          val = String((d[fo] | (d[fo + 1] << 8) | (d[fo + 2] << 16) | (d[fo + 3] << 24)) >>> 0);
         }
       } else {
         let idx;
@@ -664,15 +665,18 @@ class QzdbSearcher {
 
     if (ipStr.includes(':')) {
       if (ipStr.includes('.')) {
-        const v4 = ipStr.substring(ipStr.lastIndexOf(':') + 1);
-        const p4 = v4.split('.');
-        if (p4.length === 4) {
-          const ipInt = (+p4[0] << 24) | (+p4[1] << 16) | (+p4[2] << 8) | +p4[3];
-          return this.findUint(ipInt >>> 0);
+        const idx = ipStr.indexOf('::ffff:');
+        if (idx >= 0 && ipStr.substring(0, idx + 7) === '::ffff:') {
+          const v4 = ipStr.substring(ipStr.lastIndexOf(':') + 1);
+          const p4 = v4.split('.');
+          if (p4.length === 4) {
+            const ipInt = (+p4[0] << 24) | (+p4[1] << 16) | (+p4[2] << 8) | +p4[3];
+            return this.findUint(ipInt >>> 0);
+          }
         }
       }
       const p = parseIPv6(ipStr);
-      if (!p) {
+      if (p === null) {
         return null;
       }
       // Check for IPv4-mapped IPv6 (::ffff:x.x.x.x)
@@ -760,8 +764,9 @@ class QzdbSearcher {
     const stored = this._data.readUInt32LE(16);
     const original = Buffer.alloc(4);
     this._data.copy(original, 0, 16, 20);
-    this._data.writeUInt32LE(0, 16);
-    const computed = _crc32(this._data);
+    const copy = Buffer.from(this._data);
+    copy.writeUInt32LE(0, 16);
+    const computed = _crc32(copy);
     original.copy(this._data, 16, 0, 4);
     return stored === computed;
   }
@@ -784,6 +789,7 @@ function fastParseIp(ip) {
     }
   }
   if (dots !== 3) return null;
+  if (ip.charCodeAt(ip.length - 1) === 46) return null;
   return ((result << 8) | val) >>> 0;
 }
 
@@ -800,7 +806,9 @@ function parseIPv6(str) {
       for (let j = 0; j < fill; j++) expanded.push(0);
       filled = true;
     } else if (p !== '') {
-      expanded.push(parseInt(p, 16) || 0);
+      const parsed = parseInt(p, 16);
+      if (isNaN(parsed)) return null;
+      expanded.push(parsed);
     }
   }
   if (expanded.length !== 8) return null;

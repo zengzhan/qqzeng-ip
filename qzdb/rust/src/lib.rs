@@ -4,6 +4,20 @@ use std::fs;
 use std::net::Ipv6Addr;
 use std::sync::OnceLock;
 
+#[derive(Debug)]
+pub enum QzdbError {
+    InvalidMagic,
+    UnsupportedVersion(u8),
+    FileTooSmall,
+    UnexpectedHeaderSize(u32),
+    OffsetOutOfBounds {
+        offset: u64,
+        required: u64,
+        field: &'static str,
+    },
+    InvalidPoolCount,
+}
+
 const SENTINEL: u32 = 0x80000000;
 
 static INSTANCE: OnceLock<QzdbSearcher> = OnceLock::new();
@@ -143,32 +157,34 @@ fn read_u48_le(data: &[u8], off: usize) -> u64 {
         | (data[off + 5] as u64) << 40
 }
 
-pub fn instance(db_path: &str) -> &'static QzdbSearcher {
-    INSTANCE.get_or_init(|| {
-        from_file(db_path)
-    })
+pub fn instance(db_path: &str) -> Result<&'static QzdbSearcher, QzdbError> {
+    Ok(INSTANCE.get_or_init(|| {
+        from_file(db_path).expect("Failed to initialize database instance")
+    }))
 }
 
-pub fn from_file(db_path: &str) -> QzdbSearcher {
-    let file = fs::File::open(db_path).expect("Failed to open database");
-    let mmap = unsafe { Mmap::map(&file).expect("Failed to mmap database") };
+pub fn from_file(db_path: &str) -> Result<QzdbSearcher, QzdbError> {
+    let file = fs::File::open(db_path).map_err(|_| QzdbError::InvalidMagic)?;
+    let mmap = unsafe { Mmap::map(&file).map_err(|_| QzdbError::FileTooSmall)? };
     QzdbSearcher::new(mmap, 0)
 }
 
 impl QzdbSearcher {
-    pub fn new(data: Mmap, group_index: usize) -> Self {
-        if data.len() < 192 {
-            panic!("File too small for QZDB header");
+    pub fn new(data: Mmap, group_index: usize) -> Result<Self, QzdbError> {
+        let data_len = data.len() as u64;
+        
+        if data_len < 192 {
+            return Err(QzdbError::FileTooSmall);
         }
 
         let magic = &data[..4];
         if magic != b"QZDB" {
-            panic!("Invalid magic, expected QZDB");
+            return Err(QzdbError::InvalidMagic);
         }
 
         let fmt_ver = data[4];
         if fmt_ver < 1 || fmt_ver > 6 {
-            panic!("Unsupported format version: {}", fmt_ver);
+            return Err(QzdbError::UnsupportedVersion(fmt_ver));
         }
 
         let flags = read_u16_le(&data, 8);
@@ -191,7 +207,7 @@ impl QzdbSearcher {
 
         let hs = read_u32_le(&data, 36);
         if hs != 192 {
-            panic!("Unexpected header size: {}", hs);
+            return Err(QzdbError::UnexpectedHeaderSize(hs));
         }
 
         let off_row_schema = read_u64_le(&data, 40);
@@ -210,6 +226,42 @@ impl QzdbSearcher {
         let ip_row_size = read_u32_le(&data, 160) as usize;
         let geo_entry_group_count = read_u32_le(&data, 164) as usize;
 
+        // Validate offsets are within bounds (overflow-safe arithmetic)
+        fn check_offset(data_len: u64, offset: u64, required: u64, field: &'static str) -> Result<(), QzdbError> {
+            let end = match offset.checked_add(required) {
+                Some(end) => end,
+                None => {
+                    return Err(QzdbError::OffsetOutOfBounds {
+                        offset,
+                        required,
+                        field,
+                    })
+                }
+            };
+            if end > data_len {
+                return Err(QzdbError::OffsetOutOfBounds {
+                    offset,
+                    required,
+                    field,
+                });
+            }
+            Ok(())
+        }
+
+        // Node record size depends on the 24-bit vs 32-bit node encoding.
+        let v4_node_size = if v4_node_24 { 6u64 } else { 8u64 };
+        let v6_node_size = if v6_node_24 { 6u64 } else { 8u64 };
+
+        // Check critical offsets
+        check_offset(data_len, off_v4_jump, 65536 * 4, "off_v4_jump")?;
+        check_offset(data_len, off_v4_nodes, v4_node_count as u64 * v4_node_size, "off_v4_nodes")?;
+        check_offset(data_len, off_v6_jump, 65536 * 4, "off_v6_jump")?;
+        check_offset(data_len, off_v6_nodes, v6_node_count as u64 * v6_node_size, "off_v6_nodes")?;
+        check_offset(data_len, off_ip_row, row_count as u64 * ip_row_size as u64, "off_ip_row")?;
+        check_offset(data_len, off_geo_entries, 1, "off_geo_entries")?;
+        check_offset(data_len, off_pools, 4, "off_pools")?;
+        check_offset(data_len, off_meta, 4, "off_meta")?;
+
         let mut group_entry_offsets = Vec::with_capacity(4);
         for i in 0..4 {
             group_entry_offsets.push(read_u48_le(&data, 168 + i * 6));
@@ -219,7 +271,10 @@ impl QzdbSearcher {
         let group_count = data[gm_off as usize] as usize;
         gm_off += 1;
 
-        let actual_groups = group_count.min(1.max(geo_entry_group_count));
+        let mut actual_groups = group_count.min(1.max(geo_entry_group_count));
+        if actual_groups > 4 {
+            actual_groups = 4;
+        }
         let mut group_field_counts = vec![0; actual_groups];
         let mut group_entry_counts = vec![0; actual_groups];
         let mut group_dim_masks = vec![0; actual_groups];
@@ -353,7 +408,7 @@ impl QzdbSearcher {
             group_pools: OnceLock::new(),
         };
         s.resolve_field_names();
-        s
+        Ok(s)
     }
 
     fn resolve_field_names(&mut self) {
@@ -396,7 +451,7 @@ impl QzdbSearcher {
         self.group_pools.get_or_init(|| {
             let group_count = self.group_field_counts.len();
             let mut group_pools = vec![Vec::new(); group_count];
-            if self.off_pools <= 0 {
+            if self.off_pools == 0 {
                 return group_pools;
             }
 
@@ -423,15 +478,25 @@ impl QzdbSearcher {
                     if self.off_row_schema > 0 {
                         pool_cursor += 4;
                     }
-                    if count == 0 {
+                    // Cap pool entry count to a sane maximum to avoid OOB reads
+                    // or runaway allocation on corrupt/truncated data.
+                    if count == 0 || count > 16_000_000 {
                         group_pool_list.push(Vec::new());
                         continue;
                     }
 
                     let mut offsets = Vec::with_capacity(count + 1);
                     for _ in 0..=count {
+                        if pool_cursor + 4 > pool_end {
+                            break;
+                        }
                         offsets.push(read_u32_le(d, pool_cursor) as usize);
                         pool_cursor += 4;
+                    }
+                    if offsets.len() <= count {
+                        // Truncated pool table: skip this pool rather than panic.
+                        group_pool_list.push(Vec::new());
+                        continue;
                     }
 
                     let mut strings = vec![String::new(); count];
@@ -466,6 +531,9 @@ impl QzdbSearcher {
     }
 
     fn get_v4_child(&self, node_idx: u32, bit: u32) -> u32 {
+        if node_idx >= self.v4_node_count {
+            return 0;
+        }
         if self.v4_node_24 {
             let node_offset = self.off_v4_nodes as usize + node_idx as usize * 6;
             let offset = if bit == 0 { node_offset } else { node_offset + 3 };
@@ -481,6 +549,9 @@ impl QzdbSearcher {
     }
 
     fn get_v6_child(&self, node_idx: u32, bit: u32) -> u32 {
+        if node_idx >= self.v6_node_count {
+            return 0;
+        }
         if self.v6_node_24 {
             let node_offset = self.off_v6_nodes as usize + node_idx as usize * 6;
             let offset = if bit == 0 { node_offset } else { node_offset + 3 };
@@ -508,8 +579,13 @@ impl QzdbSearcher {
 
         let mut idx = ptr;
         let mut suffix = (ip_int & 0xFFFF) << 16;
+        let mut steps = 0;
 
         loop {
+            steps += 1;
+            if steps > 32 {
+                return 0;
+            }
             let bit = (suffix >> 31) & 1;
             let child = self.get_v4_child(idx, bit);
 

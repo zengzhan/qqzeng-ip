@@ -1,0 +1,18 @@
+# Build artifacts
+target/
+build/
+bin/
+obj/
+__pycache__/
+*.class
+*.pyc
+*.rlib
+*.rmeta
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Agent state
+.omc/
+.omo/
