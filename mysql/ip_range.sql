@@ -92,9 +92,9 @@ CREATE TABLE IF NOT EXISTS `qqzeng_ip_range_asn` (
 
 
 -- ------------------------------------------
--- 旗舰版 (Ultimate Edition) - Range
+-- 旗舰版 (Flagship Edition) - Range
 -- ------------------------------------------
-CREATE TABLE IF NOT EXISTS `qqzeng_ip_range_ult` (
+CREATE TABLE IF NOT EXISTS `qqzeng_ip_range_max` (
   `ip_start` VARCHAR(45) NOT NULL,
   `ip_end` VARCHAR(45) NOT NULL,
   `ip_start_num` DECIMAL(39, 0) NOT NULL,
@@ -114,12 +114,12 @@ CREATE TABLE IF NOT EXISTS `qqzeng_ip_range_ult` (
   `as_name` VARCHAR(150) NULL,
   `as_domain` VARCHAR(150) NULL,
   `usage_type` VARCHAR(50) NULL,
-  INDEX `idx_qqzeng_ip_range_ult_num` (`ip_start_num`, `ip_end_num`)
+  INDEX `idx_qqzeng_ip_range_max_num` (`ip_start_num`, `ip_end_num`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 导入 CSV 示例:
--- LOAD DATA LOCAL INFILE '/path/to/qqzeng_ip_ult_global_range.csv'
--- INTO TABLE `qqzeng_ip_range_ult`
+-- LOAD DATA LOCAL INFILE '/path/to/qqzeng_ip_max_global_range.csv'
+-- INTO TABLE `qqzeng_ip_range_max`
 -- CHARACTER SET utf8mb4
 -- FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"'
 -- LINES TERMINATED BY '\n'
@@ -128,9 +128,9 @@ CREATE TABLE IF NOT EXISTS `qqzeng_ip_range_ult` (
 
 
 -- ------------------------------------------
--- 至尊版 (Max Edition) - Range
+-- 至尊版 (Ultimate Edition) - Range
 -- ------------------------------------------
-CREATE TABLE IF NOT EXISTS `qqzeng_ip_range_max` (
+CREATE TABLE IF NOT EXISTS `qqzeng_ip_range_ult` (
   `ip_start` VARCHAR(45) NOT NULL,
   `ip_end` VARCHAR(45) NOT NULL,
   `ip_start_num` DECIMAL(39, 0) NOT NULL,
@@ -160,12 +160,12 @@ CREATE TABLE IF NOT EXISTS `qqzeng_ip_range_max` (
   `as_name` VARCHAR(150) NULL,
   `as_domain` VARCHAR(150) NULL,
   `usage_type` VARCHAR(50) NULL,
-  INDEX `idx_qqzeng_ip_range_max_num` (`ip_start_num`, `ip_end_num`)
+  INDEX `idx_qqzeng_ip_range_ult_num` (`ip_start_num`, `ip_end_num`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 导入 CSV 示例:
--- LOAD DATA LOCAL INFILE '/path/to/qqzeng_ip_max_global_range.csv'
--- INTO TABLE `qqzeng_ip_range_max`
+-- LOAD DATA LOCAL INFILE '/path/to/qqzeng_ip_ult_global_range.csv'
+-- INTO TABLE `qqzeng_ip_range_ult`
 -- CHARACTER SET utf8mb4
 -- FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"'
 -- LINES TERMINATED BY '\n'
@@ -177,5 +177,5 @@ CREATE TABLE IF NOT EXISTS `qqzeng_ip_range_max` (
 -- Range 数值区间高效查询最佳实践 (支持 IPv4 / IPv6)
 -- ------------------------------------------
 -- 假设要查询 IPv4: '114.114.114.114'，对应数值为 1920119058
--- SELECT * FROM qqzeng_ip_range_max
+-- SELECT * FROM qqzeng_ip_range_ult
 -- WHERE 1920119058 >= ip_start_num AND 1920119058 <= ip_end_num LIMIT 1;

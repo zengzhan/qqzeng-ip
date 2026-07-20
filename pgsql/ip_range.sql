@@ -80,9 +80,9 @@ CREATE INDEX IF NOT EXISTS idx_qqzeng_ip_range_asn_num ON public.qqzeng_ip_range
 
 
 -- ------------------------------------------
--- 旗舰版 (Ultimate Edition) - Range
+-- 旗舰版 (Flagship Edition) - Range
 -- ------------------------------------------
-CREATE TABLE IF NOT EXISTS public.qqzeng_ip_range_ult (
+CREATE TABLE IF NOT EXISTS public.qqzeng_ip_range_max (
   ip_start VARCHAR(45) NOT NULL,
   ip_end VARCHAR(45) NOT NULL,
   ip_start_num NUMERIC(39, 0) NOT NULL,
@@ -104,17 +104,17 @@ CREATE TABLE IF NOT EXISTS public.qqzeng_ip_range_ult (
   usage_type VARCHAR(150),
 );
 
-CREATE INDEX IF NOT EXISTS idx_qqzeng_ip_range_ult_num ON public.qqzeng_ip_range_ult (ip_start_num, ip_end_num);
+CREATE INDEX IF NOT EXISTS idx_qqzeng_ip_range_max_num ON public.qqzeng_ip_range_max (ip_start_num, ip_end_num);
 
 -- 导入 CSV 示例:
--- COPY public.qqzeng_ip_range_ult(ip_start, ip_end, ip_start_num, ip_end_num, continent, country_code, country, province, city, district, geo_id, longitude, latitude, timezone, isp, asn, as_name, as_domain, usage_type)
--- FROM '/path/to/qqzeng_ip_ult_global_range.csv' WITH (FORMAT csv, HEADER true, DELIMITER ',');
+-- COPY public.qqzeng_ip_range_max(ip_start, ip_end, ip_start_num, ip_end_num, continent, country_code, country, province, city, district, geo_id, longitude, latitude, timezone, isp, asn, as_name, as_domain, usage_type)
+-- FROM '/path/to/qqzeng_ip_max_global_range.csv' WITH (FORMAT csv, HEADER true, DELIMITER ',');
 
 
 -- ------------------------------------------
--- 至尊版 (Max Edition) - Range
+-- 至尊版 (Ultimate Edition) - Range
 -- ------------------------------------------
-CREATE TABLE IF NOT EXISTS public.qqzeng_ip_range_max (
+CREATE TABLE IF NOT EXISTS public.qqzeng_ip_range_ult (
   ip_start VARCHAR(45) NOT NULL,
   ip_end VARCHAR(45) NOT NULL,
   ip_start_num NUMERIC(39, 0) NOT NULL,
@@ -146,14 +146,14 @@ CREATE TABLE IF NOT EXISTS public.qqzeng_ip_range_max (
   usage_type VARCHAR(150),
 );
 
-CREATE INDEX IF NOT EXISTS idx_qqzeng_ip_range_max_num ON public.qqzeng_ip_range_max (ip_start_num, ip_end_num);
+CREATE INDEX IF NOT EXISTS idx_qqzeng_ip_range_ult_num ON public.qqzeng_ip_range_ult (ip_start_num, ip_end_num);
 
 -- 导入 CSV 示例:
--- COPY public.qqzeng_ip_range_max(ip_start, ip_end, ip_start_num, ip_end_num, continent, continent_en, country_code, country_alpha3, country, country_en, province, province_en, city, city_en, district, district_en, geo_id, longitude, latitude, timezone, languages, currency_code, phone_prefix, emoji_flag, isp, asn, as_name, as_domain, usage_type)
--- FROM '/path/to/qqzeng_ip_max_global_range.csv' WITH (FORMAT csv, HEADER true, DELIMITER ',');
+-- COPY public.qqzeng_ip_range_ult(ip_start, ip_end, ip_start_num, ip_end_num, continent, continent_en, country_code, country_alpha3, country, country_en, province, province_en, city, city_en, district, district_en, geo_id, longitude, latitude, timezone, languages, currency_code, phone_prefix, emoji_flag, isp, asn, as_name, as_domain, usage_type)
+-- FROM '/path/to/qqzeng_ip_ult_global_range.csv' WITH (FORMAT csv, HEADER true, DELIMITER ',');
 
 
 -- ------------------------------------------
 -- Range 数值区间匹配查询最佳实践
 -- ------------------------------------------
--- SELECT * FROM public.qqzeng_ip_range_max WHERE 1920119058 >= ip_start_num AND 1920119058 <= ip_end_num LIMIT 1;
+-- SELECT * FROM public.qqzeng_ip_range_ult WHERE 1920119058 >= ip_start_num AND 1920119058 <= ip_end_num LIMIT 1;

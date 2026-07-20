@@ -83,9 +83,9 @@ CREATE CLUSTERED INDEX [idx_qqzeng_ip_range_asn_num] ON [dbo].[qqzeng_ip_range_a
 
 
 -- ------------------------------------------
--- 旗舰版 (Ultimate Edition) - Range
+-- 旗舰版 (Flagship Edition) - Range
 -- ------------------------------------------
-CREATE TABLE [dbo].[qqzeng_ip_range_ult] (
+CREATE TABLE [dbo].[qqzeng_ip_range_max] (
   [ip_start] NVARCHAR(45) NOT NULL,
   [ip_end] NVARCHAR(45) NOT NULL,
   [ip_start_num] DECIMAL(38, 0) NOT NULL, -- MSSQL 最大精度 38 位，支持 IPv6 数值
@@ -107,18 +107,18 @@ CREATE TABLE [dbo].[qqzeng_ip_range_ult] (
   [usage_type] NVARCHAR(150) NULL,
 );
 
-CREATE CLUSTERED INDEX [idx_qqzeng_ip_range_ult_num] ON [dbo].[qqzeng_ip_range_ult]([ip_start_num], [ip_end_num]);
+CREATE CLUSTERED INDEX [idx_qqzeng_ip_range_max_num] ON [dbo].[qqzeng_ip_range_max]([ip_start_num], [ip_end_num]);
 
 -- 导入 CSV 示例:
--- BULK INSERT [dbo].[qqzeng_ip_range_ult]
--- FROM 'C:\path\to\qqzeng_ip_ult_global_range.csv'
+-- BULK INSERT [dbo].[qqzeng_ip_range_max]
+-- FROM 'C:\path\to\qqzeng_ip_max_global_range.csv'
 -- WITH ( FIRSTROW = 2, FIELDTERMINATOR = ',', ROWTERMINATOR = '\n', CODEPAGE = '65001' );
 
 
 -- ------------------------------------------
--- 至尊版 (Max Edition) - Range
+-- 至尊版 (Ultimate Edition) - Range
 -- ------------------------------------------
-CREATE TABLE [dbo].[qqzeng_ip_range_max] (
+CREATE TABLE [dbo].[qqzeng_ip_range_ult] (
   [ip_start] NVARCHAR(45) NOT NULL,
   [ip_end] NVARCHAR(45) NOT NULL,
   [ip_start_num] DECIMAL(38, 0) NOT NULL, -- MSSQL 最大精度 38 位，支持 IPv6 数值
@@ -150,10 +150,10 @@ CREATE TABLE [dbo].[qqzeng_ip_range_max] (
   [usage_type] NVARCHAR(150) NULL,
 );
 
-CREATE CLUSTERED INDEX [idx_qqzeng_ip_range_max_num] ON [dbo].[qqzeng_ip_range_max]([ip_start_num], [ip_end_num]);
+CREATE CLUSTERED INDEX [idx_qqzeng_ip_range_ult_num] ON [dbo].[qqzeng_ip_range_ult]([ip_start_num], [ip_end_num]);
 
 -- 导入 CSV 示例:
--- BULK INSERT [dbo].[qqzeng_ip_range_max]
--- FROM 'C:\path\to\qqzeng_ip_max_global_range.csv'
+-- BULK INSERT [dbo].[qqzeng_ip_range_ult]
+-- FROM 'C:\path\to\qqzeng_ip_ult_global_range.csv'
 -- WITH ( FIRSTROW = 2, FIELDTERMINATOR = ',', ROWTERMINATOR = '\n', CODEPAGE = '65001' );
 

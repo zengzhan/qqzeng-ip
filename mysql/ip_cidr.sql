@@ -83,9 +83,9 @@ CREATE TABLE IF NOT EXISTS `qqzeng_ip_asn` (
 
 
 -- ------------------------------------------
--- 旗舰版 (Ultimate Edition) - 15 维度
+-- 旗舰版 (Flagship Edition) - 15 维度
 -- ------------------------------------------
-CREATE TABLE IF NOT EXISTS `qqzeng_ip_ult` (
+CREATE TABLE IF NOT EXISTS `qqzeng_ip_max` (
   `cidr` VARCHAR(50) NOT NULL,
   `continent` VARCHAR(150) NULL,
   `country_code` VARCHAR(150) NULL,
@@ -106,8 +106,8 @@ CREATE TABLE IF NOT EXISTS `qqzeng_ip_ult` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 导入 CSV 示例:
--- LOAD DATA LOCAL INFILE '/path/to/qqzeng_ip_ult_global.csv'
--- INTO TABLE `qqzeng_ip_ult`
+-- LOAD DATA LOCAL INFILE '/path/to/qqzeng_ip_max_global.csv'
+-- INTO TABLE `qqzeng_ip_max`
 -- CHARACTER SET utf8mb4
 -- FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"'
 -- LINES TERMINATED BY '\n'
@@ -116,9 +116,9 @@ CREATE TABLE IF NOT EXISTS `qqzeng_ip_ult` (
 
 
 -- ------------------------------------------
--- 至尊版 (Max Edition) - 25 维度
+-- 至尊版 (Ultimate Edition) - 25 维度
 -- ------------------------------------------
-CREATE TABLE IF NOT EXISTS `qqzeng_ip_max` (
+CREATE TABLE IF NOT EXISTS `qqzeng_ip_ult` (
   `cidr` VARCHAR(50) NOT NULL,
   `continent` VARCHAR(150) NULL,
   `continent_en` VARCHAR(150) NULL,
@@ -149,8 +149,8 @@ CREATE TABLE IF NOT EXISTS `qqzeng_ip_max` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 导入 CSV 示例:
--- LOAD DATA LOCAL INFILE '/path/to/qqzeng_ip_max_global.csv'
--- INTO TABLE `qqzeng_ip_max`
+-- LOAD DATA LOCAL INFILE '/path/to/qqzeng_ip_ult_global.csv'
+-- INTO TABLE `qqzeng_ip_ult`
 -- CHARACTER SET utf8mb4
 -- FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"'
 -- LINES TERMINATED BY '\n'
@@ -162,6 +162,6 @@ CREATE TABLE IF NOT EXISTS `qqzeng_ip_max` (
 -- MySQL 8.0+ CIDR 匹配查询最佳实践
 -- ------------------------------------------
 -- 方案 A: 使用 LIKE 通配 (适用极简前缀匹配)
--- SELECT * FROM qqzeng_ip_max WHERE '114.114.114.114' LIKE CONCAT(SUBSTRING_INDEX(cidr, '/', 1), '%') LIMIT 1;
+-- SELECT * FROM qqzeng_ip_ult WHERE '114.114.114.114' LIKE CONCAT(SUBSTRING_INDEX(cidr, '/', 1), '%') LIMIT 1;
 
 -- 方案 B: 高并发与超大数据集场景，强烈推荐直接使用 QZDB 极速二进制解析 SDK (纯内存检索无上锁)。

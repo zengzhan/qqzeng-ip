@@ -68,9 +68,9 @@ CREATE TABLE [dbo].[qqzeng_ip_asn] (
 
 
 -- ------------------------------------------
--- 旗舰版 (Ultimate Edition) - CIDR
+-- 旗舰版 (Flagship Edition) - CIDR
 -- ------------------------------------------
-CREATE TABLE [dbo].[qqzeng_ip_ult] (
+CREATE TABLE [dbo].[qqzeng_ip_max] (
   [cidr] NVARCHAR(50) NOT NULL PRIMARY KEY,
   [continent] NVARCHAR(150) NULL,
   [country_code] NVARCHAR(150) NULL,
@@ -90,15 +90,15 @@ CREATE TABLE [dbo].[qqzeng_ip_ult] (
 );
 
 -- 导入 CSV 示例:
--- BULK INSERT [dbo].[qqzeng_ip_ult]
--- FROM 'C:\path\to\qqzeng_ip_ult_global.csv'
+-- BULK INSERT [dbo].[qqzeng_ip_max]
+-- FROM 'C:\path\to\qqzeng_ip_max_global.csv'
 -- WITH ( FIRSTROW = 2, FIELDTERMINATOR = ',', ROWTERMINATOR = '\n', CODEPAGE = '65001' );
 
 
 -- ------------------------------------------
--- 至尊版 (Max Edition) - CIDR
+-- 至尊版 (Ultimate Edition) - CIDR
 -- ------------------------------------------
-CREATE TABLE [dbo].[qqzeng_ip_max] (
+CREATE TABLE [dbo].[qqzeng_ip_ult] (
   [cidr] NVARCHAR(50) NOT NULL PRIMARY KEY,
   [continent] NVARCHAR(150) NULL,
   [continent_en] NVARCHAR(150) NULL,
@@ -128,7 +128,7 @@ CREATE TABLE [dbo].[qqzeng_ip_max] (
 );
 
 -- 导入 CSV 示例:
--- BULK INSERT [dbo].[qqzeng_ip_max]
--- FROM 'C:\path\to\qqzeng_ip_max_global.csv'
+-- BULK INSERT [dbo].[qqzeng_ip_ult]
+-- FROM 'C:\path\to\qqzeng_ip_ult_global.csv'
 -- WITH ( FIRSTROW = 2, FIELDTERMINATOR = ',', ROWTERMINATOR = '\n', CODEPAGE = '65001' );
 

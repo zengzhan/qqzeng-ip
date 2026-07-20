@@ -74,9 +74,9 @@ CREATE INDEX IF NOT EXISTS idx_qqzeng_ip_asn_cidr ON public.qqzeng_ip_asn USING 
 
 
 -- ------------------------------------------
--- 旗舰版 (Ultimate Edition) - CIDR
+-- 旗舰版 (Flagship Edition) - CIDR
 -- ------------------------------------------
-CREATE TABLE IF NOT EXISTS public.qqzeng_ip_ult (
+CREATE TABLE IF NOT EXISTS public.qqzeng_ip_max (
   cidr CIDR NOT NULL PRIMARY KEY, -- 使用 PG 原生 CIDR/INET 类型
   continent VARCHAR(150),
   country_code VARCHAR(150),
@@ -96,17 +96,17 @@ CREATE TABLE IF NOT EXISTS public.qqzeng_ip_ult (
 );
 
 -- 创建 GiST 索引提供极速掩码扫描
-CREATE INDEX IF NOT EXISTS idx_qqzeng_ip_ult_cidr ON public.qqzeng_ip_ult USING gist (cidr_ops(cidr));
+CREATE INDEX IF NOT EXISTS idx_qqzeng_ip_max_cidr ON public.qqzeng_ip_max USING gist (cidr_ops(cidr));
 
 -- 导入 CSV 示例:
--- COPY public.qqzeng_ip_ult(cidr, continent, country_code, country, province, city, district, geo_id, longitude, latitude, timezone, isp, asn, as_name, as_domain, usage_type)
--- FROM '/path/to/qqzeng_ip_ult_global.csv' WITH (FORMAT csv, HEADER true, DELIMITER ',');
+-- COPY public.qqzeng_ip_max(cidr, continent, country_code, country, province, city, district, geo_id, longitude, latitude, timezone, isp, asn, as_name, as_domain, usage_type)
+-- FROM '/path/to/qqzeng_ip_max_global.csv' WITH (FORMAT csv, HEADER true, DELIMITER ',');
 
 
 -- ------------------------------------------
--- 至尊版 (Max Edition) - CIDR
+-- 至尊版 (Ultimate Edition) - CIDR
 -- ------------------------------------------
-CREATE TABLE IF NOT EXISTS public.qqzeng_ip_max (
+CREATE TABLE IF NOT EXISTS public.qqzeng_ip_ult (
   cidr CIDR NOT NULL PRIMARY KEY, -- 使用 PG 原生 CIDR/INET 类型
   continent VARCHAR(150),
   continent_en VARCHAR(150),
@@ -136,14 +136,14 @@ CREATE TABLE IF NOT EXISTS public.qqzeng_ip_max (
 );
 
 -- 创建 GiST 索引提供极速掩码扫描
-CREATE INDEX IF NOT EXISTS idx_qqzeng_ip_max_cidr ON public.qqzeng_ip_max USING gist (cidr_ops(cidr));
+CREATE INDEX IF NOT EXISTS idx_qqzeng_ip_ult_cidr ON public.qqzeng_ip_ult USING gist (cidr_ops(cidr));
 
 -- 导入 CSV 示例:
--- COPY public.qqzeng_ip_max(cidr, continent, continent_en, country_code, country_alpha3, country, country_en, province, province_en, city, city_en, district, district_en, geo_id, longitude, latitude, timezone, languages, currency_code, phone_prefix, emoji_flag, isp, asn, as_name, as_domain, usage_type)
--- FROM '/path/to/qqzeng_ip_max_global.csv' WITH (FORMAT csv, HEADER true, DELIMITER ',');
+-- COPY public.qqzeng_ip_ult(cidr, continent, continent_en, country_code, country_alpha3, country, country_en, province, province_en, city, city_en, district, district_en, geo_id, longitude, latitude, timezone, languages, currency_code, phone_prefix, emoji_flag, isp, asn, as_name, as_domain, usage_type)
+-- FROM '/path/to/qqzeng_ip_ult_global.csv' WITH (FORMAT csv, HEADER true, DELIMITER ',');
 
 
 -- ------------------------------------------
 -- PostgreSQL 原生掩码匹配查询最佳实践
 -- ------------------------------------------
--- SELECT * FROM public.qqzeng_ip_max WHERE cidr >>= '114.114.114.114'::inet LIMIT 1;
+-- SELECT * FROM public.qqzeng_ip_ult WHERE cidr >>= '114.114.114.114'::inet LIMIT 1;
