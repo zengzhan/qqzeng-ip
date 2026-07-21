@@ -116,7 +116,7 @@ bit3~15: reserved
 
 ---
 
-## 4. Trie Nodes（PATRICIA）
+## 4. Trie Nodes（Binary Trie）
 
 - 顺序扁平布局，节点按数组下标访问，CPU 缓存友好。
 - 遍历使用最长前缀匹配（LPM）：从 Jump Table 定位子树根，逐 bit（高位到低位）走向 left/right 子节点，遇 sentinel 即命中 `row_id`。
@@ -232,7 +232,7 @@ SDK 优先用 type-2 字段名列表（与 `groupFieldCounts[0]` 数量一致时
 |------|--------|------|
 | 查找时间 | O(W − K) | W=IP 位宽(32/128)，K=跳表位宽(16)。IPv4 经跳表跳过前 16 层，通常 < 16 次 bit 判断 |
 | 空间 | 极小 | 节点 6~8 字节/个；百万级子网全局库索引 < 20MB |
-| 堆分配 | O(0) | C/Go/Rust 走 mmap 零拷贝；JVM 类载入后只读视图，查询态无锁 |
+| 堆分配 | O(1) | 查询路径零堆分配：C/Go/Rust 走 mmap 零拷贝直接返回指针；JVM/.NET 类载入后只读视图，查询态无锁 |
 
 ---
 

@@ -662,7 +662,7 @@ namespace Qqzeng
                 values[i] = fields[fname];
             }
 
-            return new GeoInfo { Fields = fields, FieldNames = (string[])_fieldNames?.Clone(), FloatIndices = _floatFieldIndices, Values = values };
+            return new GeoInfo { Fields = fields, FieldNames = _fieldNames, FloatIndices = _floatFieldIndices, Values = values };
         }
 
         public GeoInfo Find(string ipStr)

@@ -450,9 +450,8 @@ public class QzdbSearcher {
         }
     }
 
-    private int trieWalkV6(BigInteger ipInt) {
-        int shift = 128 - v6JumpBits;
-        int idxJump = ipInt.shiftRight(shift).intValue() & ((1 << v6JumpBits) - 1);
+    private int trieWalkV6(long ipHigh, long ipLow) {
+        int idxJump = (int)(ipHigh >>> (64 - v6JumpBits)) & ((1 << v6JumpBits) - 1);
         int ptr = readU32(data, (int) (offV6Jump + idxJump * 4L));
 
         if (ptr == 0) return 0;
@@ -462,7 +461,9 @@ public class QzdbSearcher {
         int depth = v6JumpBits;
 
         while (depth < 128) {
-            int bit = ipInt.shiftRight(127 - depth).intValue() & 1;
+            int bit = (depth <= 63)
+                ? (int)((ipHigh >>> (63 - depth)) & 1)
+                : (int)((ipLow >>> (127 - depth)) & 1);
             int child = getV6Child(idx, bit);
 
             if (child == 0) return 0;
@@ -536,7 +537,8 @@ public class QzdbSearcher {
                 int t = (natTypes != null && i < natTypes.length) ? natTypes[i] : 0;
                 if (t == 1) {
                     if (w == 4) {
-                        val = Float.toString(ByteBuffer.wrap(d, fo, 4).order(ByteOrder.LITTLE_ENDIAN).getFloat());
+                        int bits = (d[fo] & 0xFF) | ((d[fo + 1] & 0xFF) << 8) | ((d[fo + 2] & 0xFF) << 16) | ((d[fo + 3] & 0xFF) << 24);
+                        val = Float.toString(Float.intBitsToFloat(bits));
                     } else {
                         val = Double.toString(ByteBuffer.wrap(d, fo, 8).order(ByteOrder.LITTLE_ENDIAN).getDouble());
                     }
@@ -594,8 +596,12 @@ public class QzdbSearcher {
                 return findUint(ipInt);
             }
 
-            BigInteger ipInt = new BigInteger(1, bytes);
-            return findV6Uint(ipInt);
+            long ipHigh = 0, ipLow = 0;
+            for (int i = 0; i < 8; i++) {
+                ipHigh = (ipHigh << 8) | (bytes[i] & 0xFF);
+                ipLow = (ipLow << 8) | (bytes[8 + i] & 0xFF);
+            }
+            return findV6Uint(ipHigh, ipLow);
         }
 
         int ipInt = fastParseIp(ipStr);
@@ -611,7 +617,14 @@ public class QzdbSearcher {
 
     public IpLocation findV6Uint(BigInteger ipInt) {
         if (!hasV6) return null;
-        int rowId = trieWalkV6(ipInt);
+        long ipHigh = ipInt.shiftRight(64).longValue();
+        long ipLow = ipInt.longValue();
+        return findV6Uint(ipHigh, ipLow);
+    }
+
+    private IpLocation findV6Uint(long ipHigh, long ipLow) {
+        if (!hasV6) return null;
+        int rowId = trieWalkV6(ipHigh, ipLow);
         if (rowId == 0) return null;
         return resolveRowId(rowId, groupIndex);
     }

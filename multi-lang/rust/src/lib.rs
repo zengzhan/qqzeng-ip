@@ -1,8 +1,7 @@
 use memmap2::Mmap;
-use std::collections::HashMap;
 use std::fs;
 use std::net::Ipv6Addr;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 #[derive(Debug)]
 pub enum QzdbError {
@@ -22,6 +21,8 @@ const SENTINEL: u32 = 0x80000000;
 
 static INSTANCE: OnceLock<QzdbSearcher> = OnceLock::new();
 
+static CRC32_TABLE: OnceLock<[u32; 256]> = OnceLock::new();
+
 fn crc32_compute(data: &[u8]) -> u32 {
     let table = crc32_table();
     let mut crc: u32 = 0xFFFFFFFF;
@@ -31,38 +32,45 @@ fn crc32_compute(data: &[u8]) -> u32 {
     crc ^ 0xFFFFFFFF
 }
 
-fn crc32_table() -> [u32; 256] {
-    let mut table = [0u32; 256];
-    for i in 0..256u32 {
-        let mut c = i;
-        for _ in 0..8 {
-            if c & 1 != 0 {
-                c = (c >> 1) ^ 0xEDB88320;
-            } else {
-                c >>= 1;
+fn crc32_table() -> &'static [u32; 256] {
+    CRC32_TABLE.get_or_init(|| {
+        let mut table = [0u32; 256];
+        for i in 0..256u32 {
+            let mut c = i;
+            for _ in 0..8 {
+                if c & 1 != 0 {
+                    c = (c >> 1) ^ 0xEDB88320;
+                } else {
+                    c >>= 1;
+                }
             }
+            table[i as usize] = c;
         }
-        table[i as usize] = c;
-    }
-    table
+        table
+    })
 }
 
 #[derive(Debug, Clone)]
 pub struct GeoInfo {
-    pub fields: HashMap<String, String>,
-    pub field_names: Vec<String>,
-    pub float_field_indices: Vec<usize>,
+    pub values: Vec<String>,
+    pub field_names: Arc<Vec<String>>,
+    pub float_field_indices: Arc<Vec<usize>>,
 }
 
 impl GeoInfo {
     pub fn get(&self, name: &str) -> &str {
-        self.fields.get(name).map(|s| s.as_str()).unwrap_or("")
+        self.field_names
+            .iter()
+            .position(|n| n == name)
+            .and_then(|i| self.values.get(i))
+            .map(|s| s.as_str())
+            .unwrap_or("")
     }
 
     pub fn to_pipe(&self) -> String {
         let mut parts = Vec::with_capacity(self.field_names.len());
-        for (i, fname) in self.field_names.iter().enumerate() {
-            let val = self.fields.get(fname).cloned().unwrap_or_default();
+        for (i, _) in self.field_names.iter().enumerate() {
+            let val = self.values.get(i).cloned().unwrap_or_default();
             if self.float_field_indices.contains(&i) && !val.is_empty() {
                 if let Ok(f) = val.parse::<f64>() {
                     parts.push(format!("{:.6}", f));
@@ -78,8 +86,8 @@ impl GeoInfo {
 pub struct QzdbSearcher {
     data: Mmap,
     group_index: usize,
-    field_names: Vec<String>,
-    float_field_indices: Vec<usize>,
+    field_names: Arc<Vec<String>>,
+    float_field_indices: Arc<Vec<usize>>,
     version_name: String,
 
     // Header fields
@@ -367,8 +375,8 @@ impl QzdbSearcher {
         let mut s = QzdbSearcher {
             data,
             group_index,
-            field_names: Vec::new(),
-            float_field_indices: Vec::new(),
+            field_names: Arc::new(Vec::new()),
+            float_field_indices: Arc::new(Vec::new()),
             version_name: String::new(),
             flags,
             has_v4,
@@ -434,17 +442,17 @@ impl QzdbSearcher {
 
             if let Some(names) = field_names {
                 if names.len() == self.group_field_counts[0] {
-                    self.field_names = names;
-                    self.float_field_indices = self.field_names.iter().enumerate()
+                    self.field_names = Arc::new(names);
+                    self.float_field_indices = Arc::new(self.field_names.iter().enumerate()
                         .filter(|(_, n)| *n == "longitude" || *n == "latitude")
-                        .map(|(i, _)| i).collect();
+                        .map(|(i, _)| i).collect());
                     return;
                 }
             }
         }
 
-        self.field_names = (0..self.group_field_counts[0]).map(|i| format!("field_{}", i)).collect();
-        self.float_field_indices = Vec::new();
+        self.field_names = Arc::new((0..self.group_field_counts[0]).map(|i| format!("field_{}", i)).collect());
+        self.float_field_indices = Arc::new(Vec::new());
     }
 
     fn ensure_pools_loaded(&self) -> &Vec<Vec<Vec<String>>> {
@@ -696,7 +704,7 @@ impl QzdbSearcher {
         let natives = &self.group_field_native[group_index];
         let nat_types = &self.group_field_native_type[group_index];
 
-        let mut fields = HashMap::with_capacity(field_count);
+        let mut values = Vec::with_capacity(field_count);
         for i in 0..field_count {
             let w = widths[i];
             let fo = entry_offset + base_offsets[i];
@@ -726,16 +734,11 @@ impl QzdbSearcher {
                 }
             };
 
-            let fname = if i < self.field_names.len() {
-                self.field_names[i].clone()
-            } else {
-                format!("field_{}", i)
-            };
-            fields.insert(fname, val);
+            values.push(val);
         }
 
         Some(GeoInfo {
-            fields,
+            values,
             field_names: self.field_names.clone(),
             float_field_indices: self.float_field_indices.clone(),
         })
@@ -793,11 +796,11 @@ impl QzdbSearcher {
     }
 
     pub fn field_names(&self) -> &[String] {
-        &self.field_names
+        self.field_names.as_slice()
     }
 
     pub fn float_indices(&self) -> &[usize] {
-        &self.float_field_indices
+        self.float_field_indices.as_slice()
     }
 
     pub fn version_code(&self) -> u8 {
@@ -818,10 +821,16 @@ impl QzdbSearcher {
             return false;
         }
         let stored = read_u32_le(&self.data, 16);
-        let mut tmp = self.data[..].to_vec();
-        tmp[16..20].copy_from_slice(&[0u8; 4]);
-        let computed = crc32_compute(&tmp);
-        stored == computed
+        let table = crc32_table();
+        let mut crc = 0xFFFFFFFFu32;
+        for &b in &self.data[..16] {
+            crc = table[((crc ^ b as u32) & 0xFF) as usize] ^ (crc >> 8);
+        }
+        // Skip bytes 16..20 (CRC slot, treated as zero)
+        for &b in &self.data[20..] {
+            crc = table[((crc ^ b as u32) & 0xFF) as usize] ^ (crc >> 8);
+        }
+        stored == (crc ^ 0xFFFFFFFF)
     }
 }
 

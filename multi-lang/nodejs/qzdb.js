@@ -812,25 +812,28 @@ function parseIPv6(str) {
   const idx = str.indexOf('%');
   if (idx >= 0) str = str.substring(0, idx);
   const parts = str.split(':');
-  const nonEmpty = parts.filter(p => p !== '').length;
+  // Count non-empty groups manually, avoiding .filter() intermediate array.
+  let nonEmpty = 0;
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i] !== '') nonEmpty++;
+  }
   const fill = 8 - nonEmpty;
-  const expanded = [];
+  // Build the BigInt directly, avoiding the intermediate expanded[] array.
+  let val = 0n;
   let filled = false;
+  let count = 0;
   for (const p of parts) {
     if (p === '' && !filled) {
-      for (let j = 0; j < fill; j++) expanded.push(0);
+      for (let j = 0; j < fill; j++) { val = (val << 16n); count++; }
       filled = true;
     } else if (p !== '') {
       const parsed = parseInt(p, 16);
       if (isNaN(parsed)) return null;
-      expanded.push(parsed);
+      val = (val << 16n) | BigInt(parsed);
+      count++;
     }
   }
-  if (expanded.length !== 8) return null;
-  let val = 0n;
-  for (let i = 0; i < 8; i++) {
-    val = (val << 16n) | BigInt(expanded[i]);
-  }
+  if (count !== 8) return null;
   return val;
 }
 

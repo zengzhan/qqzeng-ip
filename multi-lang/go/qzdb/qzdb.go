@@ -646,17 +646,11 @@ func (s *QzdbSearcher) trieWalkV6(ipInt *big.Int) uint32 {
 	if ipInt.BitLen() <= 64 {
 		lo = ipInt.Uint64()
 	} else {
-		bytes := ipInt.Bytes()
-		if len(bytes) > 16 {
-			bytes = bytes[len(bytes)-16:]
-		} else if len(bytes) < 16 {
-			pad := make([]byte, 16-len(bytes))
-			bytes = append(pad, bytes...)
-		}
-		lo = uint64(bytes[0])<<56 | uint64(bytes[1])<<48 | uint64(bytes[2])<<40 | uint64(bytes[3])<<32 |
-			uint64(bytes[4])<<24 | uint64(bytes[5])<<16 | uint64(bytes[6])<<8 | uint64(bytes[7])
-		hi = uint64(bytes[8])<<56 | uint64(bytes[9])<<48 | uint64(bytes[10])<<40 | uint64(bytes[11])<<32 |
-			uint64(bytes[12])<<24 | uint64(bytes[13])<<16 | uint64(bytes[14])<<8 | uint64(bytes[15])
+		// Rsh by 64 bits to get the upper (most-significant) half, then extract hi/lo as uint64.
+		// Avoids ipInt.Bytes() heap allocation and padding/truncation logic.
+		var tmp big.Int
+		lo = tmp.Rsh(ipInt, 64).Uint64()
+		hi = ipInt.Uint64()
 	}
 
 	// Jump index = top v6JumpBits bits of the 128-bit address, held in the top bits of lo.

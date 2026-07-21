@@ -5,13 +5,13 @@
 
 ## 简介
 
-高性能、跨平台的 IP 地理位置数据库查询引擎，支持 8 种语言。基于 **QZDB 二进制格式**：192 字节自描述头 + PATRICIA Trie 跳表 + IPRow 间接层 + 多版本组 GeoEntry，支持单文件多版本共存与动态字段 Schema。
+高性能、跨平台的 IP 地理位置数据库查询引擎，支持 8 种语言。基于 **QZDB 二进制格式**：192 字节自描述头 + Binary Trie 跳表 + IPRow 间接层 + 多版本组 GeoEntry，支持单文件多版本共存与动态字段 Schema。
 
 ## 特性
 
 - **多语言支持**: C, C#, Java, PHP, Go, Python, Node.js, Rust
 - **单文件 SDK** — 拷贝即用，无外部依赖
-- **QZDB 格式**: 24 位节点 PATRICIA Trie（V4 跳表跳过前 16 层）+ 扁平 Trie 遍历（V6）
+- **QZDB 格式**: 24 位节点 Binary Trie（V4 跳表跳过前 16 层）+ 扁平 Trie 遍历（V6）
 - **自描述 Schema**: 字段名、版本组、原生标量布局由文件 Metadata 段动态解析，SDK 前后向兼容
 - **地理信息**: 洲、国家、省、市、区、运营商、区划代码、英文名、经纬度等（按版本组动态决定）
 
@@ -180,13 +180,27 @@ Console.WriteLine(s.FindStr("1.2.3.4"));
 - **输入**: `uint32` IPv4 整数
 - **返回**: 同 `find()`
 
-> 所有查询 API 无状态、线程安全，可并发调用。
+> 所有查询 API 加载后无状态、线程安全，可并发调用（加载/替换数据库时需外部同步）。
 
 ## 基准测试
 
 3M 随机 IPv4 + 1M 随机 IPv6 查询，覆盖三种数据库（std_china ~3MB, max_china ~6MB, max_global ~67MB）。
-测试环境：**Apple M4 Pro**, 单线程, mmap 内存映射, 随机种子 123(V4)/456(V6)。
+测试环境：**Apple M4 Pro (12 核)**, 单线程, 随机种子 123(V4)/456(V6)。
+C/Go/Rust 使用 mmap 内存映射；Java/C# 使用堆分配预加载字节数组。
 所有数字为**本轮实测**（2026-06-29），SDK 缺陷修复后重新采集。
+
+| 语言 | 编译器/运行时 | API 类型 |
+|------|-------------|---------|
+| C | Apple Clang 17, -O3 | `qzdb_find_uint` (V4) / `qzdb_find_v6` (V6) |
+| Go | go 1.24, `-gcflags="-B"` | `FindUint` (V4) / `Find` (V6) |
+| Java | OpenJDK 21.0.4, -O3 | `findUInt` (V4) / `find` (V6) |
+| Rust | rustc 1.87, `--release` (LTO) | `find_uint` (V4) / `find` (V6) |
+| C# | .NET 9.0.100, `-c Release` | `FindUInt` (V4) / `Find` (V6) |
+| Node.js | Node 25.4.0, V8 | `find_uint` (V4) / `find` (V6) |
+| PHP | PHP 8.4, OPcache | `findUInt` (V4) / `find` (V6) |
+| Python | CPython 3.13 | `find_uint` (V4) / `find` (V6) |
+
+> 测试代码位于各语言目录下的 `bench_qps` / `bench_qps.rs` / `Main.java` / `Program.cs` 等文件。
 
 ### std_china（标准库，中国区，~3MB）
 
