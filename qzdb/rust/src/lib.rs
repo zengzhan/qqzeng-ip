@@ -1,23 +1,54 @@
 use memmap2::Mmap;
 use std::fs;
-use std::net::Ipv6Addr;
+
 use std::sync::{Arc, OnceLock};
+
+const MAX_TRIE_WALK_STEPS: usize = 1000;
 
 #[derive(Debug)]
 pub enum QzdbError {
-    InvalidMagic,
-    UnsupportedVersion(u8),
-    FileTooSmall,
-    UnexpectedHeaderSize(u32),
-    OffsetOutOfBounds {
+    NotFound,
+    Corrupted,
+    OutOfBounds {
         offset: u64,
         required: u64,
         field: &'static str,
     },
-    InvalidPoolCount,
+    InvalidParam(&'static str),
+    BadHeader(String),
+    BadMagic,
+    Unsupported(String),
+    IoError(std::io::Error),
+}
+
+impl std::fmt::Display for QzdbError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            QzdbError::NotFound => write!(f, "NotFound"),
+            QzdbError::Corrupted => write!(f, "Corrupted"),
+            QzdbError::OutOfBounds { offset, required, field } => {
+                write!(f, "OutOfBounds at offset {} (required {} bytes for field: {}), data may be truncated or corrupted", offset, required, field)
+            },
+            QzdbError::InvalidParam(msg) => write!(f, "InvalidParam: {}", msg),
+            QzdbError::BadHeader(msg) => write!(f, "BadHeader: {}", msg),
+            QzdbError::BadMagic => write!(f, "BadMagic"),
+            QzdbError::Unsupported(msg) => write!(f, "Unsupported: {}", msg),
+            QzdbError::IoError(e) => write!(f, "IoError: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for QzdbError {}
+
+impl From<std::io::Error> for QzdbError {
+    fn from(e: std::io::Error) -> Self {
+        QzdbError::IoError(e)
+    }
 }
 
 const SENTINEL: u32 = 0x80000000;
+const SENTINEL_MASK_24: u32 = 0x7FFFFF;
+const SENTINEL_MASK_31: u32 = 0x7FFFFFFF;
 
 static INSTANCE: OnceLock<QzdbSearcher> = OnceLock::new();
 
@@ -87,6 +118,7 @@ pub struct QzdbSearcher {
     data: Mmap,
     group_index: usize,
     field_names: Arc<Vec<String>>,
+    field_name_to_idx: Arc<std::collections::HashMap<String, usize>>,
     float_field_indices: Arc<Vec<usize>>,
     version_name: String,
 
@@ -135,28 +167,77 @@ pub struct QzdbSearcher {
     group_pools: OnceLock<Vec<Vec<Vec<String>>>>,
 }
 
+/// Safe read helpers — return None on out-of-bounds instead of panicking.
+/// Used in hot paths (trie walk, pool/geo access) for SEC-01+SEC-02 hardening.
+
 #[inline(always)]
-fn read_u16_le(data: &[u8], off: usize) -> u16 {
-    u16::from_le_bytes(data[off..off + 2].try_into().unwrap())
+fn safe_read_u16(data: &[u8], off: usize) -> Option<u16> {
+    if off + 2 > data.len() { return None; }
+    Some(u16::from_le_bytes(data[off..off + 2].try_into().ok()?))
 }
 
 #[inline(always)]
-fn read_u32_le(data: &[u8], off: usize) -> u32 {
-    u32::from_le_bytes(data[off..off + 4].try_into().unwrap())
+fn safe_read_u32(data: &[u8], off: usize) -> Option<u32> {
+    if off + 4 > data.len() { return None; }
+    Some(u32::from_le_bytes(data[off..off + 4].try_into().ok()?))
 }
 
 #[inline(always)]
-fn read_u64_le(data: &[u8], off: usize) -> u64 {
-    u64::from_le_bytes(data[off..off + 8].try_into().unwrap())
+fn safe_read_u64(data: &[u8], off: usize) -> Option<u64> {
+    if off + 8 > data.len() { return None; }
+    Some(u64::from_le_bytes(data[off..off + 8].try_into().ok()?))
 }
 
 #[inline(always)]
-fn read_u24_le(data: &[u8], off: usize) -> u32 {
-    data[off] as u32 | (data[off + 1] as u32) << 8 | (data[off + 2] as u32) << 16
+fn safe_read_u24(data: &[u8], off: usize) -> Option<u32> {
+    if off + 3 > data.len() { return None; }
+    Some(data[off] as u32 | (data[off + 1] as u32) << 8 | (data[off + 2] as u32) << 16)
 }
 
 #[inline(always)]
-fn read_u48_le(data: &[u8], off: usize) -> u64 {
+fn safe_read_u48(data: &[u8], off: usize) -> Option<u64> {
+    if off + 6 > data.len() { return None; }
+    Some(data[off] as u64
+        | (data[off + 1] as u64) << 8
+        | (data[off + 2] as u64) << 16
+        | (data[off + 3] as u64) << 24
+        | (data[off + 4] as u64) << 32
+        | (data[off + 5] as u64) << 40)
+}
+
+#[inline(always)]
+fn safe_read_uint_width(data: &[u8], off: usize, width: usize) -> Option<u32> {
+    if width <= 1 {
+        if off >= data.len() { return None; }
+        Some(data[off] as u32)
+    } else if width == 2 {
+        safe_read_u16(data, off).map(|v| v as u32)
+    } else if width == 3 {
+        safe_read_u24(data, off)
+    } else {
+        safe_read_u32(data, off)
+    }
+}
+
+/// Legacy unsafe read helpers — used ONLY in header parsing where
+/// check_offset() already guarantees all offsets are within bounds.
+#[inline(always)]
+unsafe fn read_u16_le_unchecked(data: &[u8], off: usize) -> u16 {
+    u16::from_le_bytes(data[off..off + 2].try_into().unwrap_unchecked())
+}
+
+#[inline(always)]
+unsafe fn read_u32_le_unchecked(data: &[u8], off: usize) -> u32 {
+    u32::from_le_bytes(data[off..off + 4].try_into().unwrap_unchecked())
+}
+
+#[inline(always)]
+unsafe fn read_u64_le_unchecked(data: &[u8], off: usize) -> u64 {
+    u64::from_le_bytes(data[off..off + 8].try_into().unwrap_unchecked())
+}
+
+#[inline(always)]
+unsafe fn read_u48_le_unchecked(data: &[u8], off: usize) -> u64 {
     data[off] as u64
         | (data[off + 1] as u64) << 8
         | (data[off + 2] as u64) << 16
@@ -172,8 +253,8 @@ pub fn instance(db_path: &str) -> Result<&'static QzdbSearcher, QzdbError> {
 }
 
 pub fn from_file(db_path: &str) -> Result<QzdbSearcher, QzdbError> {
-    let file = fs::File::open(db_path).map_err(|_| QzdbError::InvalidMagic)?;
-    let mmap = unsafe { Mmap::map(&file).map_err(|_| QzdbError::FileTooSmall)? };
+    let file = fs::File::open(db_path).map_err(|_| QzdbError::BadMagic)?;
+    let mmap = unsafe { Mmap::map(&file).map_err(|_| QzdbError::Corrupted)? };
     QzdbSearcher::new(mmap, 0)
 }
 
@@ -182,20 +263,20 @@ impl QzdbSearcher {
         let data_len = data.len() as u64;
         
         if data_len < 192 {
-            return Err(QzdbError::FileTooSmall);
+            return Err(QzdbError::Corrupted);
         }
 
         let magic = &data[..4];
         if magic != b"QZDB" {
-            return Err(QzdbError::InvalidMagic);
+            return Err(QzdbError::BadMagic);
         }
 
         let fmt_ver = data[4];
         if fmt_ver < 1 || fmt_ver > 6 {
-            return Err(QzdbError::UnsupportedVersion(fmt_ver));
+            return Err(QzdbError::Unsupported(format!("Unsupported version: {}", fmt_ver)));
         }
 
-        let flags = read_u16_le(&data, 8);
+        let flags = unsafe { read_u16_le_unchecked(&data, 8) };
         let has_v4 = flags & 1 != 0;
         let has_v6 = flags & 2 != 0;
         let v4_node_24 = flags & 0x10 != 0;
@@ -206,44 +287,44 @@ impl QzdbSearcher {
             v6_jump_bits = 16;
         }
         if v6_jump_bits < 16 || v6_jump_bits > 20 {
-            return Err(QzdbError::OffsetOutOfBounds { offset: v6_jump_bits as u64, required: 0, field: "v6_jump_bits must be 16..20" });
+            return Err(QzdbError::OutOfBounds { offset: v6_jump_bits as u64, required: 0, field: "v6_jump_bits must be 16..20" });
         }
 
         let pool_count = data[12] as usize;
         let pool_idx_size = data[13] as usize;
         if pool_idx_size != 2 && pool_idx_size != 3 {
-            return Err(QzdbError::OffsetOutOfBounds { offset: pool_idx_size as u64, required: 0, field: "pool_idx_size must be 2 or 3" });
+            return Err(QzdbError::OutOfBounds { offset: pool_idx_size as u64, required: 0, field: "pool_idx_size must be 2 or 3" });
         }
-        let geo_count = read_u16_le(&data, 14) as usize;
-        let row_count = read_u32_le(&data, 20) as usize;
-        let v4_rec_count = read_u32_le(&data, 24);
-        let v6_rec_count = read_u32_le(&data, 28);
+        let geo_count = unsafe { read_u16_le_unchecked(&data, 14) } as usize;
+        let row_count = unsafe { read_u32_le_unchecked(&data, 20) } as usize;
+        let v4_rec_count = unsafe { read_u32_le_unchecked(&data, 24) };
+        let v6_rec_count = unsafe { read_u32_le_unchecked(&data, 28) };
 
-        let hs = read_u32_le(&data, 36);
+        let hs = unsafe { read_u32_le_unchecked(&data, 36) };
         if hs != 192 {
-            return Err(QzdbError::UnexpectedHeaderSize(hs));
+            return Err(QzdbError::BadHeader(format!("Unexpected header size: {}", hs)));
         }
 
-        let off_row_schema = read_u64_le(&data, 40);
-        let off_group_schema = read_u64_le(&data, 48);
-        let off_v4_jump = read_u64_le(&data, 64);
-        let off_v4_nodes = read_u64_le(&data, 72);
-        let off_v6_jump = read_u64_le(&data, 80);
-        let off_v6_nodes = read_u64_le(&data, 88);
-        let off_ip_row = read_u64_le(&data, 96);
-        let off_geo_entries = read_u64_le(&data, 104);
-        let off_pools = read_u64_le(&data, 136);
-        let off_meta = read_u64_le(&data, 144);
+        let off_row_schema = unsafe { read_u64_le_unchecked(&data, 40) };
+        let off_group_schema = unsafe { read_u64_le_unchecked(&data, 48) };
+        let off_v4_jump = unsafe { read_u64_le_unchecked(&data, 64) };
+        let off_v4_nodes = unsafe { read_u64_le_unchecked(&data, 72) };
+        let off_v6_jump = unsafe { read_u64_le_unchecked(&data, 80) };
+        let off_v6_nodes = unsafe { read_u64_le_unchecked(&data, 88) };
+        let off_ip_row = unsafe { read_u64_le_unchecked(&data, 96) };
+        let off_geo_entries = unsafe { read_u64_le_unchecked(&data, 104) };
+        let off_pools = unsafe { read_u64_le_unchecked(&data, 136) };
+        let off_meta = unsafe { read_u64_le_unchecked(&data, 144) };
 
-        let v4_node_count = read_u32_le(&data, 152);
-        let v6_node_count = read_u32_le(&data, 156);
-        let ip_row_size = read_u32_le(&data, 160) as usize;
+        let v4_node_count = unsafe { read_u32_le_unchecked(&data, 152) };
+        let v6_node_count = unsafe { read_u32_le_unchecked(&data, 156) };
+        let ip_row_size = unsafe { read_u32_le_unchecked(&data, 160) } as usize;
         if ip_row_size < 1 || ip_row_size > 64 {
-            return Err(QzdbError::OffsetOutOfBounds { offset: ip_row_size as u64, required: 0, field: "ip_row_size out of range [1,64]" });
+            return Err(QzdbError::OutOfBounds { offset: ip_row_size as u64, required: 0, field: "ip_row_size out of range [1,64]" });
         }
-        let geo_entry_group_count = read_u32_le(&data, 164) as usize;
+        let geo_entry_group_count = unsafe { read_u32_le_unchecked(&data, 164) } as usize;
         if geo_entry_group_count < 1 || geo_entry_group_count > 255 {
-            return Err(QzdbError::OffsetOutOfBounds { offset: geo_entry_group_count as u64, required: 0, field: "geo_entry_group_count out of range [1,255]" });
+            return Err(QzdbError::OutOfBounds { offset: geo_entry_group_count as u64, required: 0, field: "geo_entry_group_count out of range [1,255]" });
         }
 
         // Validate offsets are within bounds (overflow-safe arithmetic)
@@ -251,7 +332,7 @@ impl QzdbSearcher {
             let end = match offset.checked_add(required) {
                 Some(end) => end,
                 None => {
-                    return Err(QzdbError::OffsetOutOfBounds {
+                    return Err(QzdbError::OutOfBounds {
                         offset,
                         required,
                         field,
@@ -259,7 +340,7 @@ impl QzdbSearcher {
                 }
             };
             if end > data_len {
-                return Err(QzdbError::OffsetOutOfBounds {
+                return Err(QzdbError::OutOfBounds {
                     offset,
                     required,
                     field,
@@ -283,7 +364,7 @@ impl QzdbSearcher {
 
         let mut group_entry_offsets = Vec::with_capacity(4);
         for i in 0..4 {
-            group_entry_offsets.push(read_u48_le(&data, 168 + i * 6));
+            group_entry_offsets.push(unsafe { read_u48_le_unchecked(&data, 168 + i * 6) });
         }
 
         let mut gm_off = off_geo_entries;
@@ -302,15 +383,15 @@ impl QzdbSearcher {
             group_field_counts[gi] = data[gm_off as usize] as usize;
             gm_off += 1;
             if fmt_ver == 1 || fmt_ver >= 4 {
-                group_entry_counts[gi] = read_u32_le(&data, gm_off as usize);
+                group_entry_counts[gi] = unsafe { read_u32_le_unchecked(&data, gm_off as usize) };
                 gm_off += 4;
             } else {
-                group_entry_counts[gi] = read_u16_le(&data, gm_off as usize) as u32;
+                group_entry_counts[gi] = unsafe { read_u16_le_unchecked(&data, gm_off as usize) } as u32;
                 gm_off += 2;
             }
 
             if fmt_ver == 1 || fmt_ver >= 3 {
-                group_dim_masks[gi] = read_u16_le(&data, gm_off as usize);
+                group_dim_masks[gi] = unsafe { read_u16_le_unchecked(&data, gm_off as usize) };
                 gm_off += 2;
             } else {
                 group_dim_masks[gi] = if gi != 2 { 0x01 } else { 0x02 };
@@ -325,15 +406,15 @@ impl QzdbSearcher {
 
         if off_group_schema > 0 {
             let mut sp = off_group_schema as usize;
-            let gs_group_count = read_u16_le(&data, sp) as usize;
+            let gs_group_count = unsafe { read_u16_le_unchecked(&data, sp) } as usize;
             sp += 2;
             let max_gs_groups = gs_group_count.min(actual_groups);
             for gi in 0..max_gs_groups {
                 sp += 2; // skip groupId
-                let fld_count = read_u16_le(&data, sp) as usize;
+                let fld_count = unsafe { read_u16_le_unchecked(&data, sp) } as usize;
                 sp += 2;
                 sp += 4; // skip entryCount
-                let stride = read_u32_le(&data, sp) as usize;
+                let stride = unsafe { read_u32_le_unchecked(&data, sp) } as usize;
                 sp += 4;
                 sp += 4; // skip flags
 
@@ -351,7 +432,7 @@ impl QzdbSearcher {
                         sp += 1;
                         natives[fi] = (field_flags & 0x01) != 0;
                         nat_types[fi] = ((field_flags >> 1) & 0x03) as usize;
-                        offsets[fi] = read_u32_le(&data, sp) as usize;
+                        offsets[fi] = unsafe { read_u32_le_unchecked(&data, sp) } as usize;
                         sp += 4;
                         sp += 4; // skip poolSectionId
                     }
@@ -387,6 +468,7 @@ impl QzdbSearcher {
             data,
             group_index,
             field_names: Arc::new(Vec::new()),
+            field_name_to_idx: Arc::new(std::collections::HashMap::new()),
             float_field_indices: Arc::new(Vec::new()),
             version_name: String::new(),
             flags,
@@ -438,8 +520,14 @@ impl QzdbSearcher {
             let mut pos = off_meta as usize;
             while pos + 4 <= d.len() {
                 let t = d[pos];
-                let length = read_u16_le(d, pos + 2) as usize;
+                let length = match safe_read_u16(d, pos + 2) {
+                    Some(v) => v as usize,
+                    None => break,
+                };
                 if t == 0 || length == 0 {
+                    break;
+                }
+                if pos + 4 + length > d.len() {
                     break;
                 }
                 let val = std::str::from_utf8(&d[pos + 4..pos + 4 + length]).unwrap_or("").to_string();
@@ -454,6 +542,8 @@ impl QzdbSearcher {
             if let Some(names) = field_names {
                 if names.len() == self.group_field_counts[0] {
                     self.field_names = Arc::new(names);
+                    self.field_name_to_idx = Arc::new(self.field_names.iter().enumerate()
+                        .map(|(i, n)| (n.clone(), i)).collect());
                     self.float_field_indices = Arc::new(self.field_names.iter().enumerate()
                         .filter(|(_, n)| *n == "longitude" || *n == "latitude")
                         .map(|(i, _)| i).collect());
@@ -463,6 +553,8 @@ impl QzdbSearcher {
         }
 
         self.field_names = Arc::new((0..self.group_field_counts[0]).map(|i| format!("field_{}", i)).collect());
+        self.field_name_to_idx = Arc::new(self.field_names.iter().enumerate()
+            .map(|(i, n)| (n.clone(), i)).collect());
         self.float_field_indices = Arc::new(Vec::new());
     }
 
@@ -492,13 +584,17 @@ impl QzdbSearcher {
                         group_pool_list.push(Vec::new());
                         continue;
                     }
-                    let count = read_u32_le(d, pool_cursor) as usize;
+                    let count = match safe_read_u32(d, pool_cursor) {
+                        Some(v) => v as usize,
+                        None => {
+                            group_pool_list.push(Vec::new());
+                            continue;
+                        }
+                    };
                     pool_cursor += 4;
                     if self.off_row_schema > 0 {
                         pool_cursor += 4;
                     }
-                    // Cap pool entry count to a sane maximum to avoid OOB reads
-                    // or runaway allocation on corrupt/truncated data.
                     if count == 0 || count > 16_000_000 {
                         group_pool_list.push(Vec::new());
                         continue;
@@ -509,7 +605,10 @@ impl QzdbSearcher {
                         if pool_cursor + 4 > pool_end {
                             break;
                         }
-                        offsets.push(read_u32_le(d, pool_cursor) as usize);
+                        match safe_read_u32(d, pool_cursor) {
+                            Some(v) => offsets.push(v as usize),
+                            None => break,
+                        }
                         pool_cursor += 4;
                     }
                     if offsets.len() <= count {
@@ -538,15 +637,7 @@ impl QzdbSearcher {
     }
 
     fn read_uint_width(&self, off: usize, width: usize) -> u32 {
-        if width <= 1 {
-            self.data[off] as u32
-        } else if width == 2 {
-            read_u16_le(&self.data, off) as u32
-        } else if width == 3 {
-            read_u24_le(&self.data, off)
-        } else {
-            read_u32_le(&self.data, off)
-        }
+        safe_read_uint_width(&self.data, off, width).unwrap_or(0)
     }
 
     fn get_v4_child(&self, node_idx: u32, bit: u32) -> u32 {
@@ -556,14 +647,17 @@ impl QzdbSearcher {
         if self.v4_node_24 {
             let node_offset = self.off_v4_nodes as usize + node_idx as usize * 6;
             let offset = if bit == 0 { node_offset } else { node_offset + 3 };
-            let val = self.data[offset] as u32 | (self.data[offset + 1] as u32) << 8 | (self.data[offset + 2] as u32) << 16;
+            let val = match safe_read_u24(&self.data, offset) {
+                Some(v) => v,
+                None => return 0,
+            };
             if val & 0x800000 != 0 {
-                return (val & 0x7FFFFF) | SENTINEL;
+                return (val & SENTINEL_MASK_24) | SENTINEL;
             }
             val
         } else {
             let child_off = self.off_v4_nodes as usize + node_idx as usize * 8 + bit as usize * 4;
-            read_u32_le(&self.data, child_off)
+            safe_read_u32(&self.data, child_off).unwrap_or(0)
         }
     }
 
@@ -574,26 +668,32 @@ impl QzdbSearcher {
         if self.v6_node_24 {
             let node_offset = self.off_v6_nodes as usize + node_idx as usize * 6;
             let offset = if bit == 0 { node_offset } else { node_offset + 3 };
-            let val = self.data[offset] as u32 | (self.data[offset + 1] as u32) << 8 | (self.data[offset + 2] as u32) << 16;
+            let val = match safe_read_u24(&self.data, offset) {
+                Some(v) => v,
+                None => return 0,
+            };
             if val & 0x800000 != 0 {
-                return (val & 0x7FFFFF) | SENTINEL;
+                return (val & SENTINEL_MASK_24) | SENTINEL;
             }
             val
         } else {
             let child_off = self.off_v6_nodes as usize + node_idx as usize * 8 + bit as usize * 4;
-            read_u32_le(&self.data, child_off)
+            safe_read_u32(&self.data, child_off).unwrap_or(0)
         }
     }
 
     fn trie_walk_v4(&self, ip_int: u32) -> u32 {
         let hi16 = ((ip_int >> 16) & 0xFFFF) as usize;
-        let ptr = read_u32_le(&self.data, (self.off_v4_jump as usize) + hi16 * 4);
+        let ptr = match safe_read_u32(&self.data, (self.off_v4_jump as usize) + hi16 * 4) {
+            Some(v) => v,
+            None => return 0,
+        };
 
         if ptr == 0 {
             return 0;
         }
         if ptr & SENTINEL != 0 {
-            return ptr & 0x7FFFFFFF;
+            return ptr & SENTINEL_MASK_31;
         }
 
         let mut idx = ptr;
@@ -602,7 +702,7 @@ impl QzdbSearcher {
 
         loop {
             steps += 1;
-            if steps > 32 {
+            if steps >= MAX_TRIE_WALK_STEPS {
                 return 0;
             }
             let bit = (suffix >> 31) & 1;
@@ -612,7 +712,7 @@ impl QzdbSearcher {
                 return 0;
             }
             if child & SENTINEL != 0 {
-                return child & 0x7FFFFFFF;
+                return child & SENTINEL_MASK_31;
             }
 
             idx = child;
@@ -623,13 +723,16 @@ impl QzdbSearcher {
     fn trie_walk_v6(&self, ip_int: u128) -> u32 {
         let shift = 128 - self.v6_jump_bits;
         let idx_jump = ((ip_int >> shift) & ((1 << self.v6_jump_bits) - 1)) as usize;
-        let ptr = read_u32_le(&self.data, (self.off_v6_jump as usize) + idx_jump * 4);
+        let ptr = match safe_read_u32(&self.data, (self.off_v6_jump as usize) + idx_jump * 4) {
+            Some(v) => v,
+            None => return 0,
+        };
 
         if ptr == 0 {
             return 0;
         }
         if ptr & SENTINEL != 0 {
-            return ptr & 0x7FFFFFFF;
+            return ptr & SENTINEL_MASK_31;
         }
 
         let mut idx = ptr;
@@ -643,7 +746,7 @@ impl QzdbSearcher {
                 return 0;
             }
             if child & SENTINEL != 0 {
-                return child & 0x7FFFFFFF;
+                return child & SENTINEL_MASK_31;
             }
 
             idx = child;
@@ -658,12 +761,12 @@ impl QzdbSearcher {
             return (0, 0, 0);
         }
         let off = (self.off_ip_row as usize) + (row_id as usize) * self.ip_row_size;
-        let geo_id = read_u24_le(&self.data, off);
-        let asn_id = read_u24_le(&self.data, off + 3);
+        let geo_id = safe_read_u24(&self.data, off).unwrap_or(0);
+        let asn_id = safe_read_u24(&self.data, off + 3).unwrap_or(0);
 
         let mut usage_type_id = 0;
         if self.ip_row_size >= 9 {
-            usage_type_id = read_u24_le(&self.data, off + 6);
+            usage_type_id = safe_read_u24(&self.data, off + 6).unwrap_or(0);
         }
 
         (geo_id, asn_id, usage_type_id)
@@ -725,10 +828,10 @@ impl QzdbSearcher {
                 let t = nat_types[i];
                 if t == 1 {
                     if w == 4 {
-                        let bits = read_u32_le(d, fo);
+                        let bits = safe_read_u32(d, fo).unwrap_or(0);
                         f32::from_bits(bits).to_string()
                     } else {
-                        let bits = read_u64_le(d, fo);
+                        let bits = safe_read_u64(d, fo).unwrap_or(0);
                         f64::from_bits(bits).to_string()
                     }
                 } else {
@@ -756,27 +859,10 @@ impl QzdbSearcher {
     }
 
     pub fn find(&self, ip_str: &str) -> Option<GeoInfo> {
-        if ip_str.is_empty() {
-            return None;
-        }
-
-        if ip_str.contains(':') {
-            let addr: Ipv6Addr = ip_str.parse().ok()?;
-            let octets = addr.octets();
-            
-            // Check for IPv4-mapped IPv6 (::ffff:x.x.x.x)
-            if octets[..12] == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff] {
-                let v4 = u32::from_be_bytes([octets[12], octets[13], octets[14], octets[15]]);
-                return self.find_uint(v4);
-            }
-
-            let mut val: u128 = 0;
-            for &o in &octets {
-                val = (val << 8) | o as u128;
-            }
-            self.find_v6(val)
-        } else {
-            self.find_uint(fast_parse_ip_v4(ip_str)?)
+        if ip_str.is_empty() { return None; }
+        match fast_parse_ip(ip_str)? {
+            ParseIpResult::V4(v4) => self.find_uint(v4),
+            ParseIpResult::V6(v6) => self.find_v6(v6),
         }
     }
 
@@ -804,24 +890,9 @@ impl QzdbSearcher {
 
     pub fn lookup_row_id(&self, ip_str: &str) -> u32 {
         if ip_str.is_empty() { return 0; }
-        if ip_str.contains(':') {
-            let addr: std::net::Ipv6Addr = match ip_str.parse() {
-                Ok(a) => a,
-                Err(_) => return 0,
-            };
-            let octets = addr.octets();
-            if octets[..12] == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff] {
-                let v4 = u32::from_be_bytes([octets[12], octets[13], octets[14], octets[15]]);
-                return self.lookup_row_id_uint(v4);
-            }
-            let mut val: u128 = 0;
-            for &o in &octets {
-                val = (val << 8) | o as u128;
-            }
-            return self.lookup_row_id_v6(val);
-        }
-        match fast_parse_ip_v4(ip_str) {
-            Some(v4) => self.lookup_row_id_uint(v4),
+        match fast_parse_ip(ip_str) {
+            Some(ParseIpResult::V4(v4)) => self.lookup_row_id_uint(v4),
+            Some(ParseIpResult::V6(v6)) => self.lookup_row_id_v6(v6),
             None => 0,
         }
     }
@@ -840,6 +911,78 @@ impl QzdbSearcher {
         if row_id == 0 || row_id >= self.row_count as u32 { return None; }
         let r = self.read_ip_row(row_id);
         Some((r.0, r.1, r.2))
+    }
+
+    pub fn find_fields(&self, ip_str: &str, field_names: &[&str]) -> Option<GeoInfo> {
+        if field_names.is_empty() {
+            return self.find(ip_str);
+        }
+        let row_id = self.lookup_row_id(ip_str);
+        if row_id == 0 {
+            return None;
+        }
+        self.resolve_geo_fields(row_id, self.group_index, field_names)
+    }
+
+    fn resolve_geo_fields(&self, row_id: u32, group_index: usize, field_names: &[&str]) -> Option<GeoInfo> {
+        let (geo_id, asn_id, usage_type_id) = self.read_ip_row(row_id);
+        let mask = self.group_dim_masks.get(group_index).copied().unwrap_or(0);
+        let entry_id = if mask & 0x02 != 0 { asn_id } else if mask & 0x04 != 0 { usage_type_id } else { geo_id };
+        if entry_id == 0 || group_index >= self.group_field_counts.len() {
+            return None;
+        }
+        if entry_id >= self.group_entry_counts[group_index] {
+            return None;
+        }
+        let pools = self.ensure_pools_loaded();
+        let field_count = self.group_field_counts[group_index];
+        if field_count == 0 {
+            return None;
+        }
+        // Use cached name→index map
+        let indices: Vec<usize> = field_names.iter()
+            .filter_map(|name| self.field_name_to_idx.get(*name).copied()).collect();
+        if indices.is_empty() {
+            return None;
+        }
+        let group_entry_start = self.off_geo_entries + self.group_entry_offsets[group_index];
+        let stride = self.group_strides[group_index];
+        let entry_offset = group_entry_start as usize + (entry_id as usize) * stride;
+        let d = &self.data;
+        let widths = &self.group_field_widths[group_index];
+        let base_offsets = &self.group_field_offsets[group_index];
+        let natives = &self.group_field_native[group_index];
+        let nat_types = &self.group_field_native_type[group_index];
+
+        let mut values = vec![String::new(); field_count];
+        for &i in &indices {
+            if i >= field_count { continue; }
+            let w = widths[i];
+            let fo = entry_offset + base_offsets[i];
+            values[i] = if natives[i] {
+                let t = nat_types[i];
+                if t == 1 {
+                    if w == 4 { f32::from_bits(safe_read_u32(d, fo).unwrap_or(0)).to_string() }
+                    else { f64::from_bits(safe_read_u64(d, fo).unwrap_or(0)).to_string() }
+                } else {
+                    self.read_uint_width(fo, w).to_string()
+                }
+            } else {
+                let idx = self.read_uint_width(fo, w) as usize;
+                let gp = &pools[group_index];
+                if i < gp.len() && idx < gp[i].len() { gp[i][idx].clone() }
+                else { String::new() }
+            };
+        }
+        Some(GeoInfo { values, field_names: self.field_names.clone(), float_field_indices: self.float_field_indices.clone() })
+    }
+
+    /// Reload database from a new file path, replacing current state.
+    pub fn reload(&mut self, path: &str) -> Result<(), QzdbError> {
+        let file = fs::File::open(path).map_err(|_| QzdbError::BadMagic)?;
+        let mmap = unsafe { Mmap::map(&file).map_err(|_| QzdbError::Corrupted)? };
+        *self = Self::new(mmap, self.group_index)?;
+        Ok(())
     }
 
     pub fn find_str(&self, ip_str: &str) -> String {
@@ -871,7 +1014,7 @@ impl QzdbSearcher {
         if self.data.len() < 20 {
             return false;
         }
-        let stored = read_u32_le(&self.data, 16);
+        let stored = safe_read_u32(&self.data, 16).unwrap_or(0);
         let table = crc32_table();
         let mut crc = 0xFFFFFFFFu32;
         for &b in &self.data[..16] {
@@ -885,36 +1028,129 @@ impl QzdbSearcher {
     }
 }
 
-fn fast_parse_ip_v4(ip: &str) -> Option<u32> {
-    let bytes = ip.as_bytes();
-    if bytes.is_empty() {
-        return None;
-    }
-    let mut val = 0u32;
+enum ParseIpResult {
+    V4(u32),
+    V6(u128),
+}
+
+static HEX: [u8; 128] = {
+    let mut h = [0u8; 128];
+    let mut i = 0u8;
+    while i < 10 { h[48 + i as usize] = i; i += 1; }
+    let mut i = 0u8;
+    while i < 6 { h[97 + i as usize] = 10 + i; h[65 + i as usize] = 10 + i; i += 1; }
+    h
+};
+
+fn fast_parse_ip_v4(s: &str) -> Option<u32> {
+    let bytes = s.as_bytes();
+    let n = bytes.len();
+    if n == 0 || bytes[n - 1] == b'.' { return None; }
     let mut result = 0u32;
-    let mut parts = 0u32;
-    for (i, &b) in bytes.iter().enumerate() {
-        if b >= b'0' && b <= b'9' {
-            val = val * 10 + (b - b'0') as u32;
-            if val > 255 {
-                return None;
+    let mut dots = 0u32;
+    let mut start = 0;
+    for i in 0..=n {
+        let c = if i < n { bytes[i] } else { b'.' };
+        if c == b'.' {
+            let seg_len = i - start;
+            if seg_len == 0 || seg_len > 3 { return None; }
+            if seg_len > 1 && bytes[start] == b'0' { return None; }
+            let mut val = 0u32;
+            for j in start..i {
+                let d = bytes[j];
+                if d < b'0' || d > b'9' { return None; }
+                val = val * 10 + (d - b'0') as u32;
             }
-        } else if b == b'.' {
-            if i == 0 || bytes[i - 1] == b'.' {
-                return None;
-            }
+            if val > 255 { return None; }
             result = (result << 8) | val;
-            val = 0;
-            parts += 1;
-        } else {
-            return None;
+            dots += 1;
+            start = i + 1;
         }
     }
-    if parts != 3 {
-        return None;
+    if dots != 4 { return None; }
+    Some(result)
+}
+
+fn fast_parse_ip(s: &str) -> Option<ParseIpResult> {
+    let s = s.trim();
+    let n = s.len();
+    if n == 0 || n > 45 { return None; }
+    if !s.contains(':') {
+        return fast_parse_ip_v4(s).map(ParseIpResult::V4);
     }
-    if bytes.last() == Some(&b'.') {
-        return None;
+    if s.contains('%') { return None; }
+    let dc = s.find("::");
+    if let Some(dc) = dc {
+        if s[dc + 2..].find("::").is_some() { return None; }
     }
-    Some((result << 8) | val)
+    let (lft, rgt) = match dc {
+        Some(dc) => (&s[..dc], &s[dc + 2..]),
+        None => (s, ""),
+    };
+    let mut lg: Vec<&str> = if lft.is_empty() { Vec::new() } else { lft.split(':').collect() };
+    let mut rg: Vec<&str> = if rgt.is_empty() { Vec::new() } else { rgt.split(':').collect() };
+    if lg.len() == 1 && lg[0] == "" { lg.clear(); }
+    if rg.len() == 1 && rg[0] == "" { rg.clear(); }
+    for g in &lg { if g.is_empty() { return None; } }
+    for g in &rg { if g.is_empty() { return None; } }
+    let mut allg: Vec<&str> = Vec::with_capacity(lg.len() + rg.len());
+    allg.extend_from_slice(&lg);
+    allg.extend_from_slice(&rg);
+    let mut has_v4 = false;
+    let mut v4_int = 0u32;
+    if let Some(last) = allg.last() {
+        if last.contains('.') {
+            v4_int = fast_parse_ip_v4(last)?;
+            has_v4 = true;
+            allg.pop();
+        }
+    }
+    let ng = allg.len();
+    let v4_slots: usize = if has_v4 { 2 } else { 0 };
+    if dc.is_some() {
+        if ng + v4_slots > 7 { return None; }
+    } else {
+        if ng + v4_slots != 8 { return None; }
+    }
+    for g in &allg {
+        let gl = g.len();
+        if gl == 0 || gl > 4 { return None; }
+        for &cc in g.as_bytes() {
+            if cc >= 128 || (HEX[cc as usize] == 0 && cc != b'0') { return None; }
+        }
+    }
+    let zeros = 8 - ng - v4_slots;
+    let mut buf = [0u8; 16];
+    let mut off = 0usize;
+    for g in &lg {
+        let mut v = 0u16;
+        for &c in g.as_bytes() { v = (v << 4) | HEX[c as usize] as u16; }
+        buf[off] = (v >> 8) as u8;
+        buf[off + 1] = v as u8;
+        off += 2;
+    }
+    off += zeros * 2;
+    for g in &rg {
+        let mut v = 0u16;
+        for &c in g.as_bytes() { v = (v << 4) | HEX[c as usize] as u16; }
+        buf[off] = (v >> 8) as u8;
+        buf[off + 1] = v as u8;
+        off += 2;
+    }
+    if has_v4 {
+        buf[12] = (v4_int >> 24) as u8;
+        buf[13] = (v4_int >> 16) as u8;
+        buf[14] = (v4_int >> 8) as u8;
+        buf[15] = v4_int as u8;
+    }
+    if buf[10] == 0xff && buf[11] == 0xff
+        && buf[..10].iter().all(|&b| b == 0)
+    {
+        return Some(ParseIpResult::V4(u32::from_be_bytes([buf[12], buf[13], buf[14], buf[15]])));
+    }
+    let mut v128 = 0u128;
+    for &b in &buf {
+        v128 = (v128 << 8) | b as u128;
+    }
+    Some(ParseIpResult::V6(v128))
 }
