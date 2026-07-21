@@ -14,7 +14,13 @@ fn test(db: &str, label: &str, ip: &str) {
         println!("  ⚠ {} not found", db);
         return;
     }
-    let searcher = qzdb_searcher::from_file(&path);
+    let searcher = match qzdb_searcher::from_file(&path) {
+        Ok(s) => s,
+        Err(e) => {
+            println!("  ⚠ {} load error: {:?}", db, e);
+            return;
+        }
+    };
     let s = searcher.find_str(ip);
     if !s.is_empty() {
         println!("  ✅ {} {:<42} → {}", family(ip), label, s);

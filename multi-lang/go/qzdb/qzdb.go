@@ -257,13 +257,21 @@ func (s *QzdbSearcher) parseHeader() error {
 	if s.offV4Jump+65536*4 > uint64(len(d)) {
 		return fmt.Errorf("V4 jump table offset out of bounds")
 	}
-	if s.offV4Nodes+uint64(s.v4NodeCount)*8 > uint64(len(d)) {
+	v4NodeSize := uint64(8)
+	if s.v4Node24 {
+		v4NodeSize = 6
+	}
+	if s.offV4Nodes+uint64(s.v4NodeCount)*v4NodeSize > uint64(len(d)) {
 		return fmt.Errorf("V4 nodes table offset out of bounds")
 	}
 	if s.offV6Jump+65536*4 > uint64(len(d)) {
 		return fmt.Errorf("V6 jump table offset out of bounds")
 	}
-	if s.offV6Nodes+uint64(s.v6NodeCount)*8 > uint64(len(d)) {
+	v6NodeSize := uint64(8)
+	if s.v6Node24 {
+		v6NodeSize = 6
+	}
+	if s.offV6Nodes+uint64(s.v6NodeCount)*v6NodeSize > uint64(len(d)) {
 		return fmt.Errorf("V6 nodes table offset out of bounds")
 	}
 	if s.offIPRow+uint64(s.rowCount)*uint64(s.ipRowSize) > uint64(len(d)) {

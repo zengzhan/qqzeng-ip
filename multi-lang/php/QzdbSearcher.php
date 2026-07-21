@@ -259,7 +259,8 @@ class QzdbSearcher
         if ($this->offV6Jump + 65536 * 4 > $len) {
             throw new \RuntimeException('V6 jump table out of bounds');
         }
-        if ($this->offV6Nodes + $this->v6NodeCount * 8 > $len) {
+        $v6NodeSize = $this->v6Node24 ? 6 : 8;
+        if ($this->offV6Nodes + $this->v6NodeCount * $v6NodeSize > $len) {
             throw new \RuntimeException('V6 nodes table out of bounds');
         }
         if ($this->offIPRow + $this->rowCount * $this->ipRowSize > $len) {
@@ -720,26 +721,11 @@ class QzdbSearcher
                 $idx = $this->readUintWidth($fo, $w);
                 $groupPool = $this->groupPools[$groupIndex];
                 
-                // Use fieldId and poolSectionId if available
-                $fieldId = ($fieldIds && $i < count($fieldIds)) ? $fieldIds[$i] : $i;
-                $poolSectionId = ($poolSectionIds && $i < count($poolSectionIds)) ? $poolSectionIds[$i] : $i;
-                
-                // Bounds checks
-                if ($fieldId >= count($this->fieldNames) || $poolSectionId >= count($groupPool[$i])) {
-                    // Fall back to positional index
-                    if ($groupPool && $i < count($groupPool) && $idx < count($groupPool[$i])) {
-                        $val = $groupPool[$i][$idx];
-                    } else {
-                        $val = '';
-                    }
+                // Use positional index for pool lookup (poolSectionId is metadata only)
+                if ($groupPool && $i < count($groupPool) && $idx < count($groupPool[$i])) {
+                    $val = $groupPool[$i][$idx];
                 } else {
-                    // Use fieldId and poolSectionId
-                    $pool = $groupPool[$poolSectionId] ?? null;
-                    if ($pool && $idx < count($pool)) {
-                        $val = $pool[$idx];
-                    } else {
-                        $val = '';
-                    }
+                    $val = '';
                 }
             }
 
