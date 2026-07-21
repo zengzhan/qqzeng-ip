@@ -75,6 +75,7 @@ int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
         ctx->data = NULL;
         return -1;
     }
+    madvise(ctx->data, ctx->data_size, MADV_RANDOM);
 
     uint8_t* d = ctx->data;
     if (ctx->data_size < 192) {
@@ -505,13 +506,14 @@ static int get_geo_info(qzdb_searcher_t* ctx, uint32_t entry_id, int group_index
                 snprintf(buf, sizeof(buf), "%u", val);
             }
             result->values[i] = strdup(buf);
+            result->values_mask |= (1u << i);
         } else {
             uint32_t idx = read_uint_width(d + fo, w);
             // Pools are indexed by field position, not poolSectionId
             if (ctx->group_pools[group_index] && ctx->group_pools[group_index][i] && (int)idx < ctx->group_pool_counts[group_index][i]) {
-                result->values[i] = strdup(ctx->group_pools[group_index][i][idx]);
+                result->values[i] = ctx->group_pools[group_index][i][idx];  // raw pointer into pool (not owned)
             } else {
-                result->values[i] = strdup("");
+                result->values[i] = "";  // string literal (not owned)
             }
         }
     }
@@ -520,9 +522,10 @@ static int get_geo_info(qzdb_searcher_t* ctx, uint32_t entry_id, int group_index
 
 static void free_geo_info(qzdb_geo_info_t* info) {
     for (int i = 0; i < QZDB_MAX_FIELDS; i++) {
-        if (info->values[i]) {
+        if (info->values_mask & (1u << i)) {
             free(info->values[i]);
             info->values[i] = NULL;
+            info->values_mask &= ~(1u << i);
         }
     }
 }

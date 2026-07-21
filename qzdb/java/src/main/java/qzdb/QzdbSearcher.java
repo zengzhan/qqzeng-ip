@@ -11,6 +11,7 @@ import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.zip.CRC32;
+import java.util.Locale;
 
 public class QzdbSearcher {
 
@@ -25,7 +26,7 @@ public class QzdbSearcher {
 
     private volatile byte[] data;
     private int groupIndex = 0;
-    private String[] fieldNames;
+    private volatile String[] fieldNames;
     private final HashSet<String> floatFieldIndices = new HashSet<>();
     private String versionName = "";
 
@@ -60,21 +61,21 @@ public class QzdbSearcher {
     private long offGroupSchema;
 
     // Schema/layout cache
-    private int[] groupFieldCounts;
-    private long[] groupEntryCounts;
-    private int[] groupDimMasks;
-    private long[] groupEntryOffsets;
+    private volatile int[] groupFieldCounts;
+    private volatile long[] groupEntryCounts;
+    private volatile int[] groupDimMasks;
+    private volatile long[] groupEntryOffsets;
 
-    private int[] groupStrides;
-    private int[][] groupFieldWidths;
-    private int[][] groupFieldOffsets;
-    private boolean[][] groupFieldNative;
-    private int[][] groupFieldNativeType;
+    private volatile int[] groupStrides;
+    private volatile int[][] groupFieldWidths;
+    private volatile int[][] groupFieldOffsets;
+    private volatile boolean[][] groupFieldNative;
+    private volatile int[][] groupFieldNativeType;
 
-    private String[][][] groupPools;
+    private volatile String[][][] groupPools;
     private boolean poolsLoaded;
 
-    private QzdbSearcher() {}
+    public QzdbSearcher() {}
 
     public static QzdbSearcher getInstance() {
         return INSTANCE;
@@ -221,6 +222,8 @@ public class QzdbSearcher {
         groupFieldOffsets = new int[actualGroups][];
         groupFieldNative = new boolean[actualGroups][];
         groupFieldNativeType = new int[actualGroups][];
+        int[][] groupFieldIds = new int[actualGroups][];
+        int[][] groupPoolSectionIds = new int[actualGroups][];
 
         if (offGroupSchema > 0) {
             int sp = (int) offGroupSchema;
@@ -242,8 +245,11 @@ public class QzdbSearcher {
                     int[] offsets = new int[fldCount];
                     boolean[] natives = new boolean[fldCount];
                     int[] natTypes = new int[fldCount];
+                    int[] fieldIds = new int[fldCount];
+                    int[] poolSectionIds = new int[fldCount];
                     for (int fi = 0; fi < fldCount; fi++) {
-                        sp += 2; // skip fieldId
+                        fieldIds[fi] = readU16(d, sp);
+                        sp += 2;
                         widths[fi] = d[sp] & 0xFF;
                         sp++;
                         int fieldFlags = d[sp] & 0xFF;
@@ -252,12 +258,15 @@ public class QzdbSearcher {
                         natTypes[fi] = (fieldFlags >> 1) & 0x03;
                         offsets[fi] = readU32(d, sp);
                         sp += 4;
-                        sp += 4; // skip poolSectionId
+                        poolSectionIds[fi] = readU32(d, sp);
+                        sp += 4;
                     }
                     groupFieldWidths[gi] = widths;
                     groupFieldOffsets[gi] = offsets;
                     groupFieldNative[gi] = natives;
                     groupFieldNativeType[gi] = natTypes;
+                    groupFieldIds[gi] = fieldIds;
+                    groupPoolSectionIds[gi] = poolSectionIds;
                 } else {
                     sp += fldCount * 12;
                 }
@@ -441,9 +450,8 @@ public class QzdbSearcher {
         }
     }
 
-    private int trieWalkV6(BigInteger ipInt) {
-        int shift = 128 - v6JumpBits;
-        int idxJump = ipInt.shiftRight(shift).intValue() & ((1 << v6JumpBits) - 1);
+    private int trieWalkV6(long ipHigh, long ipLow) {
+        int idxJump = (int)(ipHigh >>> (64 - v6JumpBits)) & ((1 << v6JumpBits) - 1);
         int ptr = readU32(data, (int) (offV6Jump + idxJump * 4L));
 
         if (ptr == 0) return 0;
@@ -453,7 +461,9 @@ public class QzdbSearcher {
         int depth = v6JumpBits;
 
         while (depth < 128) {
-            int bit = ipInt.shiftRight(127 - depth).intValue() & 1;
+            int bit = (depth <= 63)
+                ? (int)((ipHigh >>> (63 - depth)) & 1)
+                : (int)((ipLow >>> (127 - depth)) & 1);
             int child = getV6Child(idx, bit);
 
             if (child == 0) return 0;
@@ -498,7 +508,8 @@ public class QzdbSearcher {
 
     private IpLocation resolveGeo(int entryId, int groupIndex) {
         if (groupIndex < 0 || groupIndex >= groupFieldCounts.length) return null;
-        if (entryId < 0 || entryId >= groupEntryCounts[groupIndex]) return null;
+        if (entryId < 0) return null;
+        if (entryId >= groupEntryCounts[groupIndex]) return null;
 
         ensurePoolsLoaded();
 
@@ -526,7 +537,8 @@ public class QzdbSearcher {
                 int t = (natTypes != null && i < natTypes.length) ? natTypes[i] : 0;
                 if (t == 1) {
                     if (w == 4) {
-                        val = Float.toString(ByteBuffer.wrap(d, fo, 4).order(ByteOrder.LITTLE_ENDIAN).getFloat());
+                        int bits = (d[fo] & 0xFF) | ((d[fo + 1] & 0xFF) << 8) | ((d[fo + 2] & 0xFF) << 16) | ((d[fo + 3] & 0xFF) << 24);
+                        val = Float.toString(Float.intBitsToFloat(bits));
                     } else {
                         val = Double.toString(ByteBuffer.wrap(d, fo, 8).order(ByteOrder.LITTLE_ENDIAN).getDouble());
                     }
@@ -537,7 +549,9 @@ public class QzdbSearcher {
             } else {
                 int idx = readUintWidth(d, fo, w);
                 String[][] gp = groupPools[groupIndex];
-                if (gp != null && i < gp.length && idx < gp[i].length) {
+
+                // Pools are indexed by field position, not poolSectionId
+                if (gp != null && i < gp.length && idx >= 0 && idx < gp[i].length) {
                     val = gp[i][idx];
                 } else {
                     val = "";
@@ -547,7 +561,7 @@ public class QzdbSearcher {
             String fname = i < fieldNames.length ? fieldNames[i] : "field_" + i;
             if (floatFieldIndices.contains(fname) && !val.isEmpty()) {
                 try {
-                    val = new BigDecimal(Double.parseDouble(val)).setScale(6, RoundingMode.HALF_EVEN).toPlainString();
+                    val = String.format(Locale.US, "%.6f", Double.parseDouble(val));
                 } catch (NumberFormatException ignored) {}
             }
             values[i] = val;
@@ -582,8 +596,12 @@ public class QzdbSearcher {
                 return findUint(ipInt);
             }
 
-            BigInteger ipInt = new BigInteger(1, bytes);
-            return findV6Uint(ipInt);
+            long ipHigh = 0, ipLow = 0;
+            for (int i = 0; i < 8; i++) {
+                ipHigh = (ipHigh << 8) | (bytes[i] & 0xFF);
+                ipLow = (ipLow << 8) | (bytes[8 + i] & 0xFF);
+            }
+            return findV6Uint(ipHigh, ipLow);
         }
 
         int ipInt = fastParseIp(ipStr);
@@ -599,7 +617,14 @@ public class QzdbSearcher {
 
     public IpLocation findV6Uint(BigInteger ipInt) {
         if (!hasV6) return null;
-        int rowId = trieWalkV6(ipInt);
+        long ipHigh = ipInt.shiftRight(64).longValue();
+        long ipLow = ipInt.longValue();
+        return findV6Uint(ipHigh, ipLow);
+    }
+
+    private IpLocation findV6Uint(long ipHigh, long ipLow) {
+        if (!hasV6) return null;
+        int rowId = trieWalkV6(ipHigh, ipLow);
         if (rowId == 0) return null;
         return resolveRowId(rowId, groupIndex);
     }

@@ -70,6 +70,7 @@ typedef struct {
 
 typedef struct {
     char* values[QZDB_MAX_FIELDS];
+    uint32_t values_mask;  // bit i = 1 if values[i] is heap-owned and must be freed
 } qzdb_geo_info_t;
 
 int qzdb_init(qzdb_searcher_t* ctx, const char* db_path);
