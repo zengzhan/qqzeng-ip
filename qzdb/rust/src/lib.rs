@@ -862,5 +862,8 @@ fn fast_parse_ip_v4(ip: &str) -> Option<u32> {
     if parts != 3 {
         return None;
     }
+    if bytes.last() == Some(&b'.') {
+        return None;
+    }
     Some((result << 8) | val)
 }

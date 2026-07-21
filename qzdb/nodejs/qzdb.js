@@ -516,8 +516,10 @@ class QzdbSearcher {
 
     let idx = ptr;
     let suffix = (ipInt & 0xFFFF) << 16;
+    let steps = 0;
 
     while (true) {
+      if (++steps > 32) return 0;
       const bit = (suffix >>> 31) & 1;
       const child = this._getV4Child(idx, bit);
 
@@ -824,8 +826,8 @@ function parseIPv6(str) {
       for (let j = 0; j < fill; j++) { val = (val << 16n); count++; }
       filled = true;
     } else if (p !== '') {
+      if (!/^[0-9a-fA-F]{1,4}$/.test(p)) return null;
       const parsed = parseInt(p, 16);
-      if (isNaN(parsed)) return null;
       val = (val << 16n) | BigInt(parsed);
       count++;
     }

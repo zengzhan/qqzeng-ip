@@ -559,6 +559,7 @@ class QzdbSearcher
         $steps = 0;
 
         while (true) {
+            if (++$steps > 32) return 0;
             $bit = ($suffix >> 31) & 1;
             $child = $this->getV4Child($idx, $bit);
 
@@ -820,18 +821,13 @@ class QzdbSearcher
         }
         $stored = unpack('V', substr($this->data, 16, 4))[1];
         
-        $original = substr($this->data, 16, 4);
-        $this->data[16] = "\x00";
-        $this->data[17] = "\x00";
-        $this->data[18] = "\x00";
-        $this->data[19] = "\x00";
+        $copy = $this->data;
+        $copy[16] = "\x00";
+        $copy[17] = "\x00";
+        $copy[18] = "\x00";
+        $copy[19] = "\x00";
         
-        $computed = hexdec(hash('crc32b', $this->data));
-        
-        $this->data[16] = $original[0];
-        $this->data[17] = $original[1];
-        $this->data[18] = $original[2];
-        $this->data[19] = $original[3];
+        $computed = hexdec(hash('crc32b', $copy));
         
         return $stored === $computed;
     }
@@ -857,6 +853,7 @@ class QzdbSearcher
             }
         }
         if ($dots !== 3) return null;
+        if ($len > 0 && $ip[$len - 1] === '.') return null;
         return ($result << 8) | $val;
     }
 }

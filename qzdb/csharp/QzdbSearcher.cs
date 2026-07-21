@@ -507,9 +507,11 @@ namespace Qqzeng
 
             uint idx = ptr;
             uint suffix = (ipInt & 0xFFFF) << 16;
+            uint steps = 0;
 
             while (true)
             {
+                if (++steps > 32) return 0;
                 uint bit = (suffix >> 31) & 1;
                 uint child = GetV4Child(idx, bit);
 
@@ -758,6 +760,7 @@ namespace Qqzeng
                 else return false;
             }
             if (dots != 3) return false;
+            if (ip.Length > 0 && ip[ip.Length - 1] == '.') return false;
             v4Int = (result << 8) | (uint)val;
             return true;
         }

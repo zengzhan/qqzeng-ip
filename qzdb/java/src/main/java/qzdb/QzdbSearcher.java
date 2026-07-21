@@ -437,8 +437,10 @@ public class QzdbSearcher {
 
         int idx = ptr;
         int suffix = (ipInt & 0xFFFF) << 16;
+        int steps = 0;
 
         while (true) {
+            if (++steps > 32) return 0;
             int bit = (suffix >>> 31) & 1;
             int child = getV4Child(idx, bit);
 

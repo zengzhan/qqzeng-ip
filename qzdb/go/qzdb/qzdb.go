@@ -926,5 +926,8 @@ func fastParseIpV4(ip string) (uint32, bool) {
 	if parts != 3 {
 		return 0, false
 	}
+	if len(ip) > 0 && ip[len(ip)-1] == '.' {
+		return 0, false
+	}
 	return (result << 8) | val, true
 }
