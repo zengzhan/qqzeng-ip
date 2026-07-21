@@ -695,9 +695,6 @@ class QzdbSearcher {
         return null;
       }
       // Check for IPv4-mapped IPv6 (::ffff:x.x.x.x)
-      if (p === 0n) {
-        return null;
-      }
       const isV4Mapped = (p >> 32n) === 0xffffn && (p >> 48n) === 0n;
       if (isV4Mapped) {
         return this.findUint(Number(p & 0xffffffffn));
