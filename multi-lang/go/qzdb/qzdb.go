@@ -224,9 +224,15 @@ func (s *QzdbSearcher) parseHeader() error {
 	if s.v6JumpBits == 0 {
 		s.v6JumpBits = 16
 	}
+	if s.v6JumpBits < 16 || s.v6JumpBits > 20 {
+		return fmt.Errorf("v6JumpBits out of range [16,20]: %d", s.v6JumpBits)
+	}
 
 	s.poolCount = int(d[12])
 	s.poolIdxSize = int(d[13])
+	if s.poolIdxSize != 2 && s.poolIdxSize != 3 {
+		return fmt.Errorf("poolIdxSize must be 2 or 3, got %d", s.poolIdxSize)
+	}
 	s.geoCount = int(readU16(unsafe.Pointer(&d[14])))
 	s.rowCount = int(readU32(unsafe.Pointer(&d[20])))
 	s.v4RecCount = readU32(unsafe.Pointer(&d[24]))
@@ -251,7 +257,13 @@ func (s *QzdbSearcher) parseHeader() error {
 	s.v4NodeCount = readU32(unsafe.Pointer(&d[152]))
 	s.v6NodeCount = readU32(unsafe.Pointer(&d[156]))
 	s.ipRowSize = int(readU32(unsafe.Pointer(&d[160])))
+	if s.ipRowSize < 1 || s.ipRowSize > 64 {
+		return fmt.Errorf("ipRowSize out of range [1,64]: %d", s.ipRowSize)
+	}
 	s.geoEntryGroupCount = int(readU32(unsafe.Pointer(&d[164])))
+	if s.geoEntryGroupCount < 1 || s.geoEntryGroupCount > 255 {
+		return fmt.Errorf("geoEntryGroupCount out of range [1,255]: %d", s.geoEntryGroupCount)
+	}
 
 	// Validate section offsets are within bounds
 	if s.offV4Jump+65536*4 > uint64(len(d)) {
@@ -264,7 +276,8 @@ func (s *QzdbSearcher) parseHeader() error {
 	if s.offV4Nodes+uint64(s.v4NodeCount)*v4NodeSize > uint64(len(d)) {
 		return fmt.Errorf("V4 nodes table offset out of bounds")
 	}
-	if s.offV6Jump+65536*4 > uint64(len(d)) {
+	v6JumpSize := uint64(1<<uint(s.v6JumpBits)) * 4
+	if s.offV6Jump+v6JumpSize > uint64(len(d)) {
 		return fmt.Errorf("V6 jump table offset out of bounds")
 	}
 	v6NodeSize := uint64(8)
@@ -863,6 +876,66 @@ func (s *QzdbSearcher) FindV6Uint(ipInt *big.Int) *GeoInfo {
 		return nil
 	}
 	return s.resolveRowID(rowID, s.groupIndex)
+}
+
+// LookupRowId returns the raw row_id for an IP string (trie walk only, no data materialization).
+// Returns 0 if not found.
+func (s *QzdbSearcher) LookupRowId(ipStr string) uint32 {
+	if ipStr == "" {
+		return 0
+	}
+	if strings.Contains(ipStr, ":") {
+		ip := net.ParseIP(ipStr)
+		if ip == nil {
+			return 0
+		}
+		ip16 := ip.To16()
+		if ip16 == nil {
+			return 0
+		}
+		// Check for IPv4-mapped IPv6 (::ffff:x.x.x.x)
+		if ip16[0] == 0 && ip16[1] == 0 && ip16[2] == 0 && ip16[3] == 0 &&
+			ip16[4] == 0 && ip16[5] == 0 && ip16[6] == 0 && ip16[7] == 0 &&
+			ip16[8] == 0 && ip16[9] == 0 && ip16[10] == 0xff && ip16[11] == 0xff {
+			return s.LookupRowIdUint(binary.BigEndian.Uint32(ip16[12:16]))
+		}
+		if !s.hasV6 {
+			return 0
+		}
+		ipInt := new(big.Int).SetBytes(ip16)
+		return s.trieWalkV6(ipInt)
+	}
+	ipInt, ok := fastParseIpV4(ipStr)
+	if !ok {
+		return 0
+	}
+	return s.LookupRowIdUint(ipInt)
+}
+
+// LookupRowIdUint returns the raw row_id for a pre-parsed IPv4 integer.
+func (s *QzdbSearcher) LookupRowIdUint(ipInt uint32) uint32 {
+	if !s.hasV4 {
+		return 0
+	}
+	return s.trieWalkV4(ipInt)
+}
+
+// LookupRowIdV6 returns the raw row_id for a 128-bit IPv6 integer.
+func (s *QzdbSearcher) LookupRowIdV6(ipInt *big.Int) uint32 {
+	if !s.hasV6 {
+		return 0
+	}
+	return s.trieWalkV6(ipInt)
+}
+
+// LookupIds returns the raw entry IDs (geoId, asnId, usageId) for a row_id.
+// Returns false if row_id is invalid.
+func (s *QzdbSearcher) LookupIds(rowId uint32) (geoId, asnId, usageId uint32, ok bool) {
+	if rowId == 0 || rowId >= uint32(s.rowCount) {
+		return 0, 0, 0, false
+	}
+	geoId, asnId, usageId = s.readIPRow(rowId)
+	return geoId, asnId, usageId, true
 }
 
 func (s *QzdbSearcher) FindStr(ipStr string) string {

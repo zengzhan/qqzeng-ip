@@ -189,9 +189,13 @@ namespace Qqzeng
 
             _v6JumpBits = d[11];
             if (_v6JumpBits == 0) _v6JumpBits = 16;
+            if (_v6JumpBits < 16 || _v6JumpBits > 20)
+                throw new InvalidDataException($"v6JumpBits out of range [16,20]: {_v6JumpBits}");
 
             _poolCount = d[12];
             _poolIdxSize = d[13];
+            if (_poolIdxSize != 2 && _poolIdxSize != 3)
+                throw new InvalidDataException($"poolIdxSize must be 2 or 3, got {_poolIdxSize}");
             _geoCount = ReadU16(d, 14);
             _rowCount = (int)ReadU32(d, 20);
             _v4RecCount = ReadU32(d, 24);
@@ -215,7 +219,28 @@ namespace Qqzeng
             _v4NodeCount = ReadU32(d, 152);
             _v6NodeCount = ReadU32(d, 156);
             _ipRowSize = (int)ReadU32(d, 160);
+            if (_ipRowSize < 1 || _ipRowSize > 64)
+                throw new InvalidDataException($"ipRowSize out of range [1,64]: {_ipRowSize}");
             _geoEntryGroupCount = (int)ReadU32(d, 164);
+            if (_geoEntryGroupCount < 1 || _geoEntryGroupCount > 255)
+                throw new InvalidDataException($"geoEntryGroupCount out of range [1,255]: {_geoEntryGroupCount}");
+
+            // Bounds validation for section offsets
+            long dlen = d.Length;
+            long v4NodeSize = _v4Node24 ? 6 : 8;
+            long v6NodeSize = _v6Node24 ? 6 : 8;
+            long v6JumpSize = (1L << _v6JumpBits) * 4;
+
+            if (_offV4Jump > 0 && _offV4Jump + 65536 * 4 > dlen)
+                throw new InvalidDataException("V4 jump table offset out of bounds");
+            if (_offV4Nodes > 0 && _offV4Nodes + (long)_v4NodeCount * v4NodeSize > dlen)
+                throw new InvalidDataException("V4 nodes table offset out of bounds");
+            if (_offV6Jump > 0 && _offV6Jump + v6JumpSize > dlen)
+                throw new InvalidDataException("V6 jump table offset out of bounds");
+            if (_offV6Nodes > 0 && _offV6Nodes + (long)_v6NodeCount * v6NodeSize > dlen)
+                throw new InvalidDataException("V6 nodes table offset out of bounds");
+            if (_offIPRow > 0 && _offIPRow + (long)_rowCount * _ipRowSize > dlen)
+                throw new InvalidDataException("IP row table offset out of bounds");
 
             _groupEntryOffsets = new long[4];
             for (int i = 0; i < 4; i++)
@@ -715,6 +740,63 @@ namespace Qqzeng
             uint rowId = TrieWalkV6(ipInt);
             if (rowId == 0) return null;
             return ResolveRowId(rowId, _groupIndex);
+        }
+
+        /// <summary>Lookup row_id only (trie walk, no data materialization). Returns 0 if not found.</summary>
+        public uint LookupRowId(string ipStr)
+        {
+            if (string.IsNullOrEmpty(ipStr)) return 0;
+
+            if (ipStr.Contains(':'))
+            {
+                if (System.Net.IPAddress.TryParse(ipStr, out var addr))
+                {
+                    var bytes = addr.GetAddressBytes();
+                    if (bytes.Length == 4)
+                    {
+                        uint ipInt = BinaryPrimitives.ReadUInt32BigEndian(bytes);
+                        return LookupRowIdUint(ipInt);
+                    }
+
+                    // Check for IPv4-mapped IPv6
+                    if (bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 0 && bytes[3] == 0 &&
+                        bytes[4] == 0 && bytes[5] == 0 && bytes[6] == 0 && bytes[7] == 0 &&
+                        bytes[8] == 0 && bytes[9] == 0 && bytes[10] == 0xff && bytes[11] == 0xff)
+                    {
+                        uint ipInt = BinaryPrimitives.ReadUInt32BigEndian(bytes.AsSpan(12, 4));
+                        return LookupRowIdUint(ipInt);
+                    }
+
+                    BigInteger ipIntV6 = new BigInteger(bytes, isUnsigned: true, isBigEndian: true);
+                    return LookupRowIdV6(ipIntV6);
+                }
+                return 0;
+            }
+
+            if (!fastParseIpV4(ipStr, out uint v4Int)) return 0;
+            return LookupRowIdUint(v4Int);
+        }
+
+        /// <summary>Lookup row_id for a pre-parsed IPv4 integer.</summary>
+        public uint LookupRowIdUint(uint ipInt)
+        {
+            if (!_hasV4) return 0;
+            return TrieWalkV4(ipInt);
+        }
+
+        /// <summary>Lookup row_id for a pre-parsed IPv6 BigInteger.</summary>
+        public uint LookupRowIdV6(BigInteger ipInt)
+        {
+            if (!_hasV6) return 0;
+            return TrieWalkV6(ipInt);
+        }
+
+        /// <summary>Lookup raw entry IDs from a row_id. Returns (geoId, asnId, usageId) tuple, or null if invalid.</summary>
+        public (uint geoId, uint asnId, uint usageTypeId)? LookupIds(uint rowId)
+        {
+            if (rowId <= 0 || rowId >= _rowCount) return null;
+            ReadIPRow(rowId, out uint geoId, out uint asnId, out uint usageTypeId);
+            return (geoId, asnId, usageTypeId);
         }
 
         public string FindStr(string ipStr)

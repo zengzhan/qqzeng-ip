@@ -98,9 +98,15 @@ int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
 
     ctx->v6_jump_bits = d[11];
     if (ctx->v6_jump_bits == 0) ctx->v6_jump_bits = 16;
+    if (ctx->v6_jump_bits < 16 || ctx->v6_jump_bits > 20) {
+        munmap(ctx->data, ctx->data_size); ctx->data = NULL; return -1;
+    }
 
     ctx->pool_count = d[12];
     ctx->pool_idx_size = d[13];
+    if (ctx->pool_idx_size != 2 && ctx->pool_idx_size != 3) {
+        munmap(ctx->data, ctx->data_size); ctx->data = NULL; return -1;
+    }
     ctx->geo_count = READ_LE16(d + 14);
     ctx->row_count = READ_LE32(d + 20);
     ctx->v4_rec_count = READ_LE32(d + 24);
@@ -125,13 +131,45 @@ int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
     ctx->v4_node_count = READ_LE32(d + 152);
     ctx->v6_node_count = READ_LE32(d + 156);
     ctx->ip_row_size = READ_LE32(d + 160);
+    if (ctx->ip_row_size < 1 || ctx->ip_row_size > 64) {
+        munmap(ctx->data, ctx->data_size); ctx->data = NULL; return -1;
+    }
     ctx->geo_entry_group_count = READ_LE32(d + 164);
+    if (ctx->geo_entry_group_count < 1 || ctx->geo_entry_group_count > 255) {
+        munmap(ctx->data, ctx->data_size); ctx->data = NULL; return -1;
+    }
 
     // Bounds validation for section offsets
-    if (ctx->off_v4_jump + 65536 * 4 > ctx->data_size) return -1;
-    if (ctx->off_v4_nodes + (uint64_t)ctx->v4_node_count * 8 > ctx->data_size) return -1;
-    if (ctx->off_pools > ctx->data_size) return -1;
-    if (ctx->off_meta > ctx->data_size) return -1;
+    {
+        uint64_t v4_ns = ctx->v4_node_24 ? 6 : 8;
+        uint64_t v6_ns = ctx->v6_node_24 ? 6 : 8;
+        uint64_t v6_jump_size = ((uint64_t)1 << ctx->v6_jump_bits) * 4;
+
+        if (ctx->off_v4_jump > 0 && ctx->off_v4_jump + 65536 * 4 > ctx->data_size) {
+            munmap(ctx->data, ctx->data_size); ctx->data = NULL; return -1;
+        }
+        if (ctx->off_v4_nodes > 0 && ctx->off_v4_nodes + (uint64_t)ctx->v4_node_count * v4_ns > ctx->data_size) {
+            munmap(ctx->data, ctx->data_size); ctx->data = NULL; return -1;
+        }
+        if (ctx->off_v6_jump > 0 && ctx->off_v6_jump + v6_jump_size > ctx->data_size) {
+            munmap(ctx->data, ctx->data_size); ctx->data = NULL; return -1;
+        }
+        if (ctx->off_v6_nodes > 0 && ctx->off_v6_nodes + (uint64_t)ctx->v6_node_count * v6_ns > ctx->data_size) {
+            munmap(ctx->data, ctx->data_size); ctx->data = NULL; return -1;
+        }
+        if (ctx->off_ip_row > 0 && ctx->off_ip_row + (uint64_t)ctx->row_count * ctx->ip_row_size > ctx->data_size) {
+            munmap(ctx->data, ctx->data_size); ctx->data = NULL; return -1;
+        }
+        if (ctx->off_geo_entries > 0 && ctx->off_geo_entries >= ctx->data_size) {
+            munmap(ctx->data, ctx->data_size); ctx->data = NULL; return -1;
+        }
+        if (ctx->off_pools > 0 && ctx->off_pools >= ctx->data_size) {
+            munmap(ctx->data, ctx->data_size); ctx->data = NULL; return -1;
+        }
+        if (ctx->off_meta > 0 && ctx->off_meta > ctx->data_size) {
+            munmap(ctx->data, ctx->data_size); ctx->data = NULL; return -1;
+        }
+    }
 
     ctx->group_entry_offsets = malloc(4 * sizeof(uint64_t));
     for (int i = 0; i < 4; i++) {
@@ -662,6 +700,50 @@ int qzdb_find_v6_buf(qzdb_searcher_t* ctx, const uint8_t* ip_bin,
     int count = 0;
     int rc = resolve_row_id_buf(ctx, row_id, ctx->group_index, values, bufs, buf_size, &count);
     return rc == 0 ? count : -1;
+}
+
+uint32_t qzdb_lookup_row_id(qzdb_searcher_t* ctx, const char* ip_str) {
+    if (!ip_str) return 0;
+    if (!ctx->has_v4 && !ctx->has_v6) return 0;
+
+    if (strchr(ip_str, ':')) {
+        uint8_t ip_bin[16];
+        if (inet_pton(AF_INET6, ip_str, ip_bin) != 1) return 0;
+        if (memcmp(ip_bin, "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff", 12) == 0) {
+            uint32_t ip_int = ((uint32_t)ip_bin[12] << 24) | ((uint32_t)ip_bin[13] << 16) |
+                              ((uint32_t)ip_bin[14] << 8) | (uint32_t)ip_bin[15];
+            return qzdb_lookup_row_id_uint(ctx, ip_int);
+        }
+        return ctx->has_v6 ? trie_walk_v6(ctx, ip_bin) : 0;
+    }
+    int ok;
+    uint32_t ip_int = fast_parse_ip(ip_str, &ok);
+    if (!ok) return 0;
+    return ctx->has_v4 ? trie_walk_v4(ctx, ip_int) : 0;
+}
+
+uint32_t qzdb_lookup_row_id_uint(qzdb_searcher_t* ctx, uint32_t ip_int) {
+    if (!ctx->has_v4) return 0;
+    return trie_walk_v4(ctx, ip_int);
+}
+
+uint32_t qzdb_lookup_row_id_v6(qzdb_searcher_t* ctx, const uint8_t* ip_bin) {
+    if (!ctx->has_v6) return 0;
+    return trie_walk_v6(ctx, ip_bin);
+}
+
+int qzdb_lookup_ids(qzdb_searcher_t* ctx, uint32_t row_id, qzdb_ids_t* out) {
+    if (!out) return -1;
+    memset(out, 0, sizeof(*out));
+    if (row_id == 0 || row_id >= (uint32_t)ctx->row_count) return -1;
+
+    uint64_t off = ctx->off_ip_row + (uint64_t)row_id * ctx->ip_row_size;
+    out->geo_id = read_u24(ctx->data + off);
+    out->asn_id = read_u24(ctx->data + off + 3);
+    if (ctx->ip_row_size >= 9) {
+        out->usage_id = read_u24(ctx->data + off + 6);
+    }
+    return 0;
 }
 
 static uint32_t fast_parse_ip(const char* ip, int* ok) {

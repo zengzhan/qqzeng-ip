@@ -173,9 +173,13 @@ class QzdbSearcher:
         self._v6_jump_bits = d[11]
         if self._v6_jump_bits == 0:
             self._v6_jump_bits = 16
+        if self._v6_jump_bits < 16 or self._v6_jump_bits > 20:
+            raise ValueError(f'v6_jump_bits out of range [16,20]: {self._v6_jump_bits}')
 
         self._pool_count = d[12]
         self._pool_idx_size = d[13]
+        if self._pool_idx_size not in (2, 3):
+            raise ValueError(f'pool_idx_size must be 2 or 3, got {self._pool_idx_size}')
         self._geo_count = self._read_u16(14)
         self._row_count = self._read_u32(20)
         self._v4_rec_count = self._read_u32(24)
@@ -200,28 +204,32 @@ class QzdbSearcher:
         self._v4_node_count = self._read_u32(152)
         self._v6_node_count = self._read_u32(156)
         self._ip_row_size = self._read_u32(160)
+        if self._ip_row_size < 1 or self._ip_row_size > 64:
+            raise ValueError(f'ip_row_size out of range [1,64]: {self._ip_row_size}')
         self._geo_entry_group_count = self._read_u32(164)
+        if self._geo_entry_group_count < 1 or self._geo_entry_group_count > 255:
+            raise ValueError(f'geo_entry_group_count out of range [1,255]: {self._geo_entry_group_count}')
 
         # Bounds validation: raise on corrupt files instead of OOB reads.
         dlen = len(d)
         node_size = 6 if self._v4_node_24 else 8
         v6_node_size = 6 if self._v6_node_24 else 8
 
-        if self._off_v4_jump + 65536 * 4 > dlen:
+        if self._off_v4_jump > 0 and self._off_v4_jump + 65536 * 4 > dlen:
             raise ValueError('Section v4_jump out of bounds')
-        if self._off_v4_nodes + self._v4_node_count * node_size > dlen:
+        if self._off_v4_nodes > 0 and self._off_v4_nodes + self._v4_node_count * node_size > dlen:
             raise ValueError('Section v4_nodes out of bounds')
-        if self._off_v6_jump + (1 << self._v6_jump_bits) * 4 > dlen:
+        if self._off_v6_jump > 0 and self._off_v6_jump + (1 << self._v6_jump_bits) * 4 > dlen:
             raise ValueError('Section v6_jump out of bounds')
-        if self._off_v6_nodes + self._v6_node_count * v6_node_size > dlen:
+        if self._off_v6_nodes > 0 and self._off_v6_nodes + self._v6_node_count * v6_node_size > dlen:
             raise ValueError('Section v6_nodes out of bounds')
-        if self._off_ip_row + self._row_count * self._ip_row_size > dlen:
+        if self._off_ip_row > 0 and self._off_ip_row + self._row_count * self._ip_row_size > dlen:
             raise ValueError('Section ip_row out of bounds')
-        if self._off_geo_entries + 1 > dlen:
+        if self._off_geo_entries > 0 and self._off_geo_entries >= dlen:
             raise ValueError('Section geo_entries out of bounds')
-        if self._off_pools > dlen:
+        if self._off_pools > 0 and self._off_pools >= dlen:
             raise ValueError('Section pools out of bounds')
-        if self._off_meta > dlen:
+        if self._off_meta > 0 and self._off_meta > dlen:
             raise ValueError('Section meta out of bounds')
 
         # GeoEntryOffsets[4]
@@ -606,6 +614,34 @@ class QzdbSearcher:
         if row_id == 0:
             return None
         return self._resolve_row_id(row_id, self._group_index)
+
+    def lookup_row_id(self, ip_str):
+        if not ip_str:
+            return 0
+        if ':' in ip_str:
+            ip_int = self._parse_ip_v6(ip_str)
+            if ip_int is None:
+                return 0
+            return self.lookup_row_id_v6(ip_int)
+        ip_int = self._fast_parse_ipv4(ip_str)
+        if ip_int < 0:
+            return 0
+        return self.lookup_row_id_uint(ip_int)
+
+    def lookup_row_id_uint(self, ip_int):
+        if not self._has_v4:
+            return 0
+        return self._trie_walk_v4(ip_int)
+
+    def lookup_row_id_v6(self, ip_int):
+        if not self._has_v6:
+            return 0
+        return self._trie_walk_v6(ip_int)
+
+    def lookup_ids(self, row_id):
+        if row_id <= 0 or row_id >= self._row_count:
+            return None
+        return self._read_ip_row(row_id)
 
     def find_str(self, ip_str):
         info = self.find(ip_str)

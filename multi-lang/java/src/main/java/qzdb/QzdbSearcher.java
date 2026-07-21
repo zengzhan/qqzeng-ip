@@ -155,9 +155,15 @@ public class QzdbSearcher {
 
         v6JumpBits = d[11] & 0xFF;
         if (v6JumpBits == 0) v6JumpBits = 16;
+        if (v6JumpBits < 16 || v6JumpBits > 20) {
+            throw new RuntimeException("v6JumpBits out of range [16,20]: " + v6JumpBits);
+        }
 
         poolCount = d[12] & 0xFF;
         poolIdxSize = d[13] & 0xFF;
+        if (poolIdxSize != 2 && poolIdxSize != 3) {
+            throw new RuntimeException("poolIdxSize must be 2 or 3, got " + poolIdxSize);
+        }
         geoCount = readU16(d, 14);
         rowCount = readU32(d, 20);
         v4RecCount = readU32(d, 24);
@@ -182,7 +188,35 @@ public class QzdbSearcher {
         v4NodeCount = readU32(d, 152);
         v6NodeCount = readU32(d, 156);
         ipRowSize = readU32(d, 160);
+        if (ipRowSize < 1 || ipRowSize > 64) {
+            throw new RuntimeException("ipRowSize out of range [1,64]: " + ipRowSize);
+        }
         geoEntryGroupCount = readU32(d, 164);
+        if (geoEntryGroupCount < 1 || geoEntryGroupCount > 255) {
+            throw new RuntimeException("geoEntryGroupCount out of range [1,255]: " + geoEntryGroupCount);
+        }
+
+        // Bounds validation for section offsets
+        long dlen = d.length;
+        long v4NodeSize = v4Node24 ? 6 : 8;
+        long v6NodeSize = v6Node24 ? 6 : 8;
+        long v6JumpSize = (1L << v6JumpBits) * 4;
+
+        if (offV4Jump > 0 && offV4Jump + 65536 * 4 > dlen) {
+            throw new RuntimeException("V4 jump table offset out of bounds");
+        }
+        if (offV4Nodes > 0 && offV4Nodes + (long) v4NodeCount * v4NodeSize > dlen) {
+            throw new RuntimeException("V4 nodes table offset out of bounds");
+        }
+        if (offV6Jump > 0 && offV6Jump + v6JumpSize > dlen) {
+            throw new RuntimeException("V6 jump table offset out of bounds");
+        }
+        if (offV6Nodes > 0 && offV6Nodes + (long) v6NodeCount * v6NodeSize > dlen) {
+            throw new RuntimeException("V6 nodes table offset out of bounds");
+        }
+        if (offIPRow > 0 && offIPRow + (long) rowCount * ipRowSize > dlen) {
+            throw new RuntimeException("IP row table offset out of bounds");
+        }
 
         groupEntryOffsets = new long[4];
         for (int i = 0; i < 4; i++) {
@@ -629,6 +663,62 @@ public class QzdbSearcher {
         int rowId = trieWalkV6(ipHigh, ipLow);
         if (rowId == 0) return null;
         return resolveRowId(rowId, groupIndex);
+    }
+
+    /** Lookup row_id only (trie walk, no data materialization). Returns 0 if not found. */
+    public int lookupRowId(String ipStr) {
+        if (ipStr == null || ipStr.isEmpty()) return 0;
+        if (ipStr.contains(":")) {
+            java.net.InetAddress addr;
+            try {
+                addr = java.net.InetAddress.getByName(ipStr);
+            } catch (java.net.UnknownHostException e) {
+                return 0;
+            }
+            byte[] bytes = addr.getAddress();
+            if (bytes.length == 4) {
+                int ipInt = ((bytes[0] & 0xFF) << 24) | ((bytes[1] & 0xFF) << 16) |
+                           ((bytes[2] & 0xFF) << 8) | (bytes[3] & 0xFF);
+                return lookupRowIdUint(ipInt);
+            }
+            // Embedded IPv4
+            if (bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 0 && bytes[3] == 0 &&
+                bytes[4] == 0 && bytes[5] == 0 && bytes[6] == 0 && bytes[7] == 0 &&
+                bytes[8] == 0 && bytes[9] == 0 && bytes[10] == (byte) 0xff && bytes[11] == (byte) 0xff) {
+                int ipInt = ((bytes[12] & 0xFF) << 24) | ((bytes[13] & 0xFF) << 16) |
+                           ((bytes[14] & 0xFF) << 8) | (bytes[15] & 0xFF);
+                return lookupRowIdUint(ipInt);
+            }
+            long ipHigh = 0, ipLow = 0;
+            for (int i = 0; i < 8; i++) {
+                ipHigh = (ipHigh << 8) | (bytes[i] & 0xFF);
+                ipLow = (ipLow << 8) | (bytes[8 + i] & 0xFF);
+            }
+            return lookupRowIdV6(ipHigh, ipLow);
+        }
+        int ipInt = fastParseIp(ipStr);
+        return lookupRowIdUint(ipInt);
+    }
+
+    /** Lookup row_id for a pre-parsed IPv4 integer. */
+    public int lookupRowIdUint(int ipInt) {
+        if (!hasV4) return 0;
+        return trieWalkV4(ipInt);
+    }
+
+    /** Lookup row_id for a pre-parsed IPv6 (high, low) pair. */
+    public int lookupRowIdV6(long ipHigh, long ipLow) {
+        if (!hasV6) return 0;
+        return trieWalkV6(ipHigh, ipLow);
+    }
+
+    /**
+     * Lookup raw entry IDs from a row_id.
+     * Returns int[]{geoId, asnId, usageId} on success, or null if row_id is invalid.
+     */
+    public int[] lookupIds(int rowId) {
+        if (rowId <= 0 || rowId >= rowCount) return null;
+        return readIPRow(rowId);
     }
 
     public String findStr(String ipStr) {
