@@ -780,6 +780,34 @@ class QzdbSearcher {
     return this._resolveRowId(rowId, this._groupIndex);
   }
 
+  lookupRowId(ipStr) {
+    if (!ipStr) return 0;
+    if (ipStr.includes(':')) {
+      const ip6 = this._parseIpV6(ipStr);
+      if (ip6 === null) return 0;
+      const ipInt = (ip6.high << 64n) | (ip6.low & 0xFFFFFFFFFFFFFFFFn);
+      return this.lookupRowIdV6(ipInt);
+    }
+    const ipInt = this._fastParseIpV4(ipStr);
+    if (ipInt === -1) return 0;
+    return this.lookupRowIdUint(ipInt);
+  }
+
+  lookupRowIdUint(ipInt) {
+    if (!this._hasV4) return 0;
+    return this._trieWalkV4(ipInt);
+  }
+
+  lookupRowIdV6(ipInt) {
+    if (!this._hasV6) return 0;
+    return this._trieWalkV6(ipInt);
+  }
+
+  lookupIds(rowId) {
+    if (rowId <= 0 || rowId >= this._rowCount) return null;
+    return this._readIPRow(rowId);
+  }
+
   findStr(ipStr) {
     const info = this.find(ipStr);
     if (info === null) {

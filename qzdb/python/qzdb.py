@@ -615,6 +615,34 @@ class QzdbSearcher:
             return None
         return self._resolve_row_id(row_id, self._group_index)
 
+    def lookup_row_id(self, ip_str):
+        if not ip_str:
+            return 0
+        if ':' in ip_str:
+            ip_int = self._parse_ip_v6(ip_str)
+            if ip_int is None:
+                return 0
+            return self.lookup_row_id_v6(ip_int)
+        ip_int = self._fast_parse_ipv4(ip_str)
+        if ip_int < 0:
+            return 0
+        return self.lookup_row_id_uint(ip_int)
+
+    def lookup_row_id_uint(self, ip_int):
+        if not self._has_v4:
+            return 0
+        return self._trie_walk_v4(ip_int)
+
+    def lookup_row_id_v6(self, ip_int):
+        if not self._has_v6:
+            return 0
+        return self._trie_walk_v6(ip_int)
+
+    def lookup_ids(self, row_id):
+        if row_id <= 0 or row_id >= self._row_count:
+            return None
+        return self._read_ip_row(row_id)
+
     def find_str(self, ip_str):
         info = self.find(ip_str)
         if info is None:

@@ -665,6 +665,62 @@ public class QzdbSearcher {
         return resolveRowId(rowId, groupIndex);
     }
 
+    /** Lookup row_id only (trie walk, no data materialization). Returns 0 if not found. */
+    public int lookupRowId(String ipStr) {
+        if (ipStr == null || ipStr.isEmpty()) return 0;
+        if (ipStr.contains(":")) {
+            java.net.InetAddress addr;
+            try {
+                addr = java.net.InetAddress.getByName(ipStr);
+            } catch (java.net.UnknownHostException e) {
+                return 0;
+            }
+            byte[] bytes = addr.getAddress();
+            if (bytes.length == 4) {
+                int ipInt = ((bytes[0] & 0xFF) << 24) | ((bytes[1] & 0xFF) << 16) |
+                           ((bytes[2] & 0xFF) << 8) | (bytes[3] & 0xFF);
+                return lookupRowIdUint(ipInt);
+            }
+            // Embedded IPv4
+            if (bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 0 && bytes[3] == 0 &&
+                bytes[4] == 0 && bytes[5] == 0 && bytes[6] == 0 && bytes[7] == 0 &&
+                bytes[8] == 0 && bytes[9] == 0 && bytes[10] == (byte) 0xff && bytes[11] == (byte) 0xff) {
+                int ipInt = ((bytes[12] & 0xFF) << 24) | ((bytes[13] & 0xFF) << 16) |
+                           ((bytes[14] & 0xFF) << 8) | (bytes[15] & 0xFF);
+                return lookupRowIdUint(ipInt);
+            }
+            long ipHigh = 0, ipLow = 0;
+            for (int i = 0; i < 8; i++) {
+                ipHigh = (ipHigh << 8) | (bytes[i] & 0xFF);
+                ipLow = (ipLow << 8) | (bytes[8 + i] & 0xFF);
+            }
+            return lookupRowIdV6(ipHigh, ipLow);
+        }
+        int ipInt = fastParseIp(ipStr);
+        return lookupRowIdUint(ipInt);
+    }
+
+    /** Lookup row_id for a pre-parsed IPv4 integer. */
+    public int lookupRowIdUint(int ipInt) {
+        if (!hasV4) return 0;
+        return trieWalkV4(ipInt);
+    }
+
+    /** Lookup row_id for a pre-parsed IPv6 (high, low) pair. */
+    public int lookupRowIdV6(long ipHigh, long ipLow) {
+        if (!hasV6) return 0;
+        return trieWalkV6(ipHigh, ipLow);
+    }
+
+    /**
+     * Lookup raw entry IDs from a row_id.
+     * Returns int[]{geoId, asnId, usageId} on success, or null if row_id is invalid.
+     */
+    public int[] lookupIds(int rowId) {
+        if (rowId <= 0 || rowId >= rowCount) return null;
+        return readIPRow(rowId);
+    }
+
     public String findStr(String ipStr) {
         IpLocation info = find(ipStr);
         if (info == null) return "";

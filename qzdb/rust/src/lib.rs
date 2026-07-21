@@ -802,6 +802,46 @@ impl QzdbSearcher {
         self.resolve_row_id(row_id, self.group_index)
     }
 
+    pub fn lookup_row_id(&self, ip_str: &str) -> u32 {
+        if ip_str.is_empty() { return 0; }
+        if ip_str.contains(':') {
+            let addr: std::net::Ipv6Addr = match ip_str.parse() {
+                Ok(a) => a,
+                Err(_) => return 0,
+            };
+            let octets = addr.octets();
+            if octets[..12] == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff] {
+                let v4 = u32::from_be_bytes([octets[12], octets[13], octets[14], octets[15]]);
+                return self.lookup_row_id_uint(v4);
+            }
+            let mut val: u128 = 0;
+            for &o in &octets {
+                val = (val << 8) | o as u128;
+            }
+            return self.lookup_row_id_v6(val);
+        }
+        match fast_parse_ip_v4(ip_str) {
+            Some(v4) => self.lookup_row_id_uint(v4),
+            None => 0,
+        }
+    }
+
+    pub fn lookup_row_id_uint(&self, ip_int: u32) -> u32 {
+        if !self.has_v4 { return 0; }
+        self.trie_walk_v4(ip_int)
+    }
+
+    pub fn lookup_row_id_v6(&self, ip_int: u128) -> u32 {
+        if !self.has_v6 { return 0; }
+        self.trie_walk_v6(ip_int)
+    }
+
+    pub fn lookup_ids(&self, row_id: u32) -> Option<(u32, u32, u32)> {
+        if row_id == 0 || row_id >= self.row_count as u32 { return None; }
+        let r = self.read_ip_row(row_id);
+        Some((r.0, r.1, r.2))
+    }
+
     pub fn find_str(&self, ip_str: &str) -> String {
         self.find(ip_str).map(|info| info.to_pipe()).unwrap_or_default()
     }

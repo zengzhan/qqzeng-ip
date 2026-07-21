@@ -794,6 +794,40 @@ class QzdbSearcher
         return $this->resolveRowId($rowId, $this->groupIndex);
     }
 
+    public function lookupRowId($ipStr)
+    {
+        if ($ipStr === null || $ipStr === '') return 0;
+        if (strpos($ipStr, ':') !== false) {
+            $ipBin = @inet_pton($ipStr);
+            if ($ipBin === false) return 0;
+            if (strlen($ipBin) === 4) {
+                return $this->lookupRowIdUint((ord($ipBin[0]) << 24) | (ord($ipBin[1]) << 16) | (ord($ipBin[2]) << 8) | ord($ipBin[3]));
+            }
+            return $this->lookupRowIdV6($ipBin);
+        }
+        $ipInt = $this->fastParseIp($ipStr);
+        return $this->lookupRowIdUint($ipInt);
+    }
+
+    public function lookupRowIdUint($ipInt)
+    {
+        if (!$this->hasV4) return 0;
+        return $this->trieWalkV4($ipInt);
+    }
+
+    public function lookupRowIdV6($ipBin)
+    {
+        if (!$this->hasV6) return 0;
+        return $this->trieWalkV6($ipBin);
+    }
+
+    public function lookupIds($rowId)
+    {
+        if ($rowId <= 0 || $rowId >= $this->rowCount) return null;
+        $row = $this->readIPRow($rowId);
+        return [$row[0], $row[1], $row[2]];
+    }
+
     public function findStr($ipStr)
     {
         $info = $this->find($ipStr);

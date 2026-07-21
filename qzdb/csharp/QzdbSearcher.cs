@@ -3,7 +3,6 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Text;
 
@@ -548,10 +547,9 @@ namespace Qqzeng
             }
         }
 
-        private uint TrieWalkV6(BigInteger ipInt)
+        private uint TrieWalkV6(ulong ipHigh, ulong ipLow)
         {
-            int shift = 128 - _v6JumpBits;
-            uint idxJump = (uint)(ipInt >> shift) & (uint)((1 << _v6JumpBits) - 1);
+            uint idxJump = (uint)(ipHigh >>> (64 - _v6JumpBits)) & (uint)((1 << _v6JumpBits) - 1);
             uint ptr = ReadU32(_data, (int)(_offV6Jump + idxJump * 4));
 
             if (ptr == 0) return 0;
@@ -562,7 +560,9 @@ namespace Qqzeng
 
             while (depth < 128)
             {
-                uint bit = (uint)((ipInt >> (127 - depth)) & 1);
+                uint bit = (depth <= 63)
+                    ? (uint)((ipHigh >>> (63 - depth)) & 1)
+                    : (uint)((ipLow >>> (127 - depth)) & 1);
                 uint child = GetV6Child(idx, bit);
 
                 if (child == 0) return 0;
@@ -716,8 +716,9 @@ namespace Qqzeng
                         return FindUint(ipInt);
                     }
 
-                    BigInteger ipIntV6 = new BigInteger(bytes, isUnsigned: true, isBigEndian: true);
-                    return FindV6Uint(ipIntV6);
+                    ulong ipHigh = BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(0, 8));
+                    ulong ipLow = BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(8, 8));
+                    return FindV6Uint(ipHigh, ipLow);
                 }
                 return null;
             }
@@ -734,12 +735,69 @@ namespace Qqzeng
             return ResolveRowId(rowId, _groupIndex);
         }
 
-        public GeoInfo FindV6Uint(BigInteger ipInt)
+        public GeoInfo FindV6Uint(ulong ipHigh, ulong ipLow)
         {
             if (!_hasV6) return null;
-            uint rowId = TrieWalkV6(ipInt);
+            uint rowId = TrieWalkV6(ipHigh, ipLow);
             if (rowId == 0) return null;
             return ResolveRowId(rowId, _groupIndex);
+        }
+
+        /// <summary>Lookup row_id only (trie walk, no data materialization). Returns 0 if not found.</summary>
+        public uint LookupRowId(string ipStr)
+        {
+            if (string.IsNullOrEmpty(ipStr)) return 0;
+
+            if (ipStr.Contains(':'))
+            {
+                if (System.Net.IPAddress.TryParse(ipStr, out var addr))
+                {
+                    var bytes = addr.GetAddressBytes();
+                    if (bytes.Length == 4)
+                    {
+                        uint ipInt = BinaryPrimitives.ReadUInt32BigEndian(bytes);
+                        return LookupRowIdUint(ipInt);
+                    }
+
+                    // Check for IPv4-mapped IPv6
+                    if (bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 0 && bytes[3] == 0 &&
+                        bytes[4] == 0 && bytes[5] == 0 && bytes[6] == 0 && bytes[7] == 0 &&
+                        bytes[8] == 0 && bytes[9] == 0 && bytes[10] == 0xff && bytes[11] == 0xff)
+                    {
+                        uint ipInt = BinaryPrimitives.ReadUInt32BigEndian(bytes.AsSpan(12, 4));
+                        return LookupRowIdUint(ipInt);
+                    }
+
+                    ulong ipHigh = BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(0, 8));
+                    ulong ipLow = BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(8, 8));
+                    return LookupRowIdV6(ipHigh, ipLow);
+                }
+                return 0;
+            }
+
+            if (!fastParseIpV4(ipStr, out uint v4Int)) return 0;
+            return LookupRowIdUint(v4Int);
+        }
+
+        /// <summary>Lookup row_id for a pre-parsed IPv4 integer.</summary>
+        public uint LookupRowIdUint(uint ipInt)
+        {
+            if (!_hasV4) return 0;
+            return TrieWalkV4(ipInt);
+        }
+
+        public uint LookupRowIdV6(ulong ipHigh, ulong ipLow)
+        {
+            if (!_hasV6) return 0;
+            return TrieWalkV6(ipHigh, ipLow);
+        }
+
+        /// <summary>Lookup raw entry IDs from a row_id. Returns (geoId, asnId, usageId) tuple, or null if invalid.</summary>
+        public (uint geoId, uint asnId, uint usageTypeId)? LookupIds(uint rowId)
+        {
+            if (rowId <= 0 || rowId >= _rowCount) return null;
+            ReadIPRow(rowId, out uint geoId, out uint asnId, out uint usageTypeId);
+            return (geoId, asnId, usageTypeId);
         }
 
         public string FindStr(string ipStr)

@@ -702,6 +702,50 @@ int qzdb_find_v6_buf(qzdb_searcher_t* ctx, const uint8_t* ip_bin,
     return rc == 0 ? count : -1;
 }
 
+uint32_t qzdb_lookup_row_id(qzdb_searcher_t* ctx, const char* ip_str) {
+    if (!ip_str) return 0;
+    if (!ctx->has_v4 && !ctx->has_v6) return 0;
+
+    if (strchr(ip_str, ':')) {
+        uint8_t ip_bin[16];
+        if (inet_pton(AF_INET6, ip_str, ip_bin) != 1) return 0;
+        if (memcmp(ip_bin, "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff", 12) == 0) {
+            uint32_t ip_int = ((uint32_t)ip_bin[12] << 24) | ((uint32_t)ip_bin[13] << 16) |
+                              ((uint32_t)ip_bin[14] << 8) | (uint32_t)ip_bin[15];
+            return qzdb_lookup_row_id_uint(ctx, ip_int);
+        }
+        return ctx->has_v6 ? trie_walk_v6(ctx, ip_bin) : 0;
+    }
+    int ok;
+    uint32_t ip_int = fast_parse_ip(ip_str, &ok);
+    if (!ok) return 0;
+    return ctx->has_v4 ? trie_walk_v4(ctx, ip_int) : 0;
+}
+
+uint32_t qzdb_lookup_row_id_uint(qzdb_searcher_t* ctx, uint32_t ip_int) {
+    if (!ctx->has_v4) return 0;
+    return trie_walk_v4(ctx, ip_int);
+}
+
+uint32_t qzdb_lookup_row_id_v6(qzdb_searcher_t* ctx, const uint8_t* ip_bin) {
+    if (!ctx->has_v6) return 0;
+    return trie_walk_v6(ctx, ip_bin);
+}
+
+int qzdb_lookup_ids(qzdb_searcher_t* ctx, uint32_t row_id, qzdb_ids_t* out) {
+    if (!out) return -1;
+    memset(out, 0, sizeof(*out));
+    if (row_id == 0 || row_id >= (uint32_t)ctx->row_count) return -1;
+
+    uint64_t off = ctx->off_ip_row + (uint64_t)row_id * ctx->ip_row_size;
+    out->geo_id = read_u24(ctx->data + off);
+    out->asn_id = read_u24(ctx->data + off + 3);
+    if (ctx->ip_row_size >= 9) {
+        out->usage_id = read_u24(ctx->data + off + 6);
+    }
+    return 0;
+}
+
 static uint32_t fast_parse_ip(const char* ip, int* ok) {
     uint32_t val = 0, result = 0;
     int dots = 0;
