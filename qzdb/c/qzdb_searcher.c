@@ -435,6 +435,8 @@ static uint32_t get_v6_child(const qzdb_searcher_t* ctx, uint32_t node_idx, uint
     }
 }
 
+static uint32_t fast_parse_ip(const char* ip, int* ok);
+
 static uint32_t trie_walk_v4(const qzdb_searcher_t* ctx, uint32_t ip_int) {
     uint32_t hi16 = (ip_int >> 16) & 0xFFFF;
     uint32_t ptr = READ_LE32(ctx->data + ctx->off_v4_jump + hi16 * 4);
