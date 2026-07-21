@@ -530,6 +530,84 @@ static void free_geo_info(qzdb_geo_info_t* info) {
     }
 }
 
+static int get_geo_info_buf(qzdb_searcher_t* ctx, uint32_t entry_id, int group_index,
+                             char** values, char (*bufs)[64], int buf_size, int* out_count) {
+    if (group_index < 0 || group_index >= ctx->actual_groups) return -1;
+    if (entry_id < 0 || entry_id >= ctx->group_entry_counts[group_index]) return -1;
+
+    ensure_pools_loaded(ctx);
+
+    int field_count = ctx->group_field_counts[group_index];
+    if (field_count <= 0) return -1;
+
+    uint64_t group_entry_start = ctx->off_geo_entries + ctx->group_entry_offsets[group_index];
+    int stride = ctx->group_strides[group_index];
+    uint64_t entry_offset = group_entry_start + (uint64_t)entry_id * stride;
+    uint8_t* d = ctx->data;
+
+    int* widths = ctx->group_field_widths[group_index];
+    int* base_offsets = ctx->group_field_offsets[group_index];
+    int* natives = ctx->group_field_native[group_index];
+    int* nat_types = ctx->group_field_native_type[group_index];
+
+    for (int i = 0; i < field_count && i < QZDB_MAX_FIELDS; i++) {
+        int w = widths[i];
+        uint64_t fo = entry_offset + base_offsets[i];
+        int is_native = natives[i];
+
+        if (is_native) {
+            int t = nat_types[i];
+            if (t == 1) {
+                if (w == 4) {
+                    union { uint32_t u; float f; } u;
+                    u.u = READ_LE32(d + fo);
+                    snprintf(bufs[i], buf_size, "%.6f", u.f);
+                } else {
+                    union { uint64_t u; double d; } u;
+                    u.u = READ_LE64(d + fo);
+                    snprintf(bufs[i], buf_size, "%.6f", u.d);
+                }
+            } else {
+                uint32_t val = read_uint_width(d + fo, w);
+                snprintf(bufs[i], buf_size, "%u", val);
+            }
+            values[i] = bufs[i];
+        } else {
+            uint32_t idx = read_uint_width(d + fo, w);
+            if (ctx->group_pools[group_index] && ctx->group_pools[group_index][i] && (int)idx < ctx->group_pool_counts[group_index][i]) {
+                values[i] = ctx->group_pools[group_index][i][idx];
+            } else {
+                values[i] = "";
+            }
+        }
+    }
+    *out_count = field_count;
+    return 0;
+}
+
+static int resolve_row_id_buf(qzdb_searcher_t* ctx, uint32_t row_id, int group_index,
+                               char** values, char (*bufs)[64], int buf_size, int* out_count) {
+    if (row_id <= 0 || row_id >= (uint32_t)ctx->row_count) return -1;
+    uint64_t off = ctx->off_ip_row + (uint64_t)row_id * ctx->ip_row_size;
+    uint32_t geo_id = read_u24(ctx->data + off);
+    uint32_t asn_id = read_u24(ctx->data + off + 3);
+    uint32_t usage_id = 0;
+    if (ctx->ip_row_size >= 9) {
+        usage_id = read_u24(ctx->data + off + 6);
+    }
+
+    uint16_t mask = group_index < ctx->actual_groups ? ctx->group_dim_masks[group_index] : 0;
+    uint32_t entry_id = geo_id;
+    if (mask & 0x02) {
+        entry_id = asn_id;
+    } else if (mask & 0x04) {
+        entry_id = usage_id;
+    }
+
+    if (entry_id == 0) return -1;
+    return get_geo_info_buf(ctx, entry_id, group_index, values, bufs, buf_size, out_count);
+}
+
 static int resolve_row_id(qzdb_searcher_t* ctx, uint32_t row_id, int group_index, qzdb_geo_info_t* result) {
     if (row_id <= 0 || row_id >= (uint32_t)ctx->row_count) return -1;
     uint64_t off = ctx->off_ip_row + (uint64_t)row_id * ctx->ip_row_size;
@@ -564,6 +642,26 @@ int qzdb_find_v6(qzdb_searcher_t* ctx, const uint8_t* ip_bin, qzdb_geo_info_t* r
     uint32_t row_id = trie_walk_v6(ctx, ip_bin);
     if (row_id == 0) return -1;
     return resolve_row_id(ctx, row_id, ctx->group_index, result);
+}
+
+int qzdb_find_uint_buf(qzdb_searcher_t* ctx, uint32_t ip_int,
+                        char** values, char (*bufs)[64], int buf_size) {
+    if (!ctx->has_v4) return -1;
+    uint32_t row_id = trie_walk_v4(ctx, ip_int);
+    if (row_id == 0) return 0;
+    int count = 0;
+    int rc = resolve_row_id_buf(ctx, row_id, ctx->group_index, values, bufs, buf_size, &count);
+    return rc == 0 ? count : -1;
+}
+
+int qzdb_find_v6_buf(qzdb_searcher_t* ctx, const uint8_t* ip_bin,
+                      char** values, char (*bufs)[64], int buf_size) {
+    if (!ctx->has_v6) return -1;
+    uint32_t row_id = trie_walk_v6(ctx, ip_bin);
+    if (row_id == 0) return 0;
+    int count = 0;
+    int rc = resolve_row_id_buf(ctx, row_id, ctx->group_index, values, bufs, buf_size, &count);
+    return rc == 0 ? count : -1;
 }
 
 static uint32_t fast_parse_ip(const char* ip, int* ok) {
