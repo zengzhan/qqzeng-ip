@@ -381,6 +381,7 @@ class QzdbSearcherV20
     private function resolveGeo($entryId, $groupIndex)
     {
         if (!isset($this->groupFieldCounts[$groupIndex])) return null;
+        if ($entryId < 0) return null;
         if ($entryId >= $this->groupEntryCounts[$groupIndex]) return null;
 
         $this->ensurePoolsLoaded();

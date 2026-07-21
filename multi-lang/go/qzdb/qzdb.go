@@ -99,6 +99,8 @@ type QzdbSearcher struct {
 	groupFieldOffsets   [][]int
 	groupFieldNative    [][]bool
 	groupFieldNativeType [][]int
+	groupFieldIds       [][]uint16
+	groupPoolSectionIds [][]uint32
 
 	groupPools          [][][]string
 	poolsLoaded         bool
@@ -336,6 +338,8 @@ func (s *QzdbSearcher) parseHeader() error {
 	s.groupFieldOffsets = make([][]int, actualGroups)
 	s.groupFieldNative = make([][]bool, actualGroups)
 	s.groupFieldNativeType = make([][]int, actualGroups)
+	s.groupFieldIds = make([][]uint16, actualGroups)
+	s.groupPoolSectionIds = make([][]uint32, actualGroups)
 
 	if s.offGroupSchema > 0 {
 		sp := s.offGroupSchema
@@ -360,8 +364,11 @@ func (s *QzdbSearcher) parseHeader() error {
 				offsets := make([]int, fldCount)
 				natives := make([]bool, fldCount)
 				natTypes := make([]int, fldCount)
+				fieldIds := make([]uint16, fldCount)
+				poolSectionIds := make([]uint32, fldCount)
 				for fi := 0; fi < fldCount; fi++ {
-					sp += 2 // skip fieldId
+					fieldIds[fi] = readU16(unsafe.Pointer(&d[sp]))
+					sp += 2
 					widths[fi] = int(d[sp])
 					sp++
 					fieldFlags := d[sp]
@@ -370,12 +377,15 @@ func (s *QzdbSearcher) parseHeader() error {
 					natTypes[fi] = int((fieldFlags >> 1) & 0x03)
 					offsets[fi] = int(readU32(unsafe.Pointer(&d[sp])))
 					sp += 4
-					sp += 4 // skip poolSectionId
+					poolSectionIds[fi] = readU32(unsafe.Pointer(&d[sp]))
+					sp += 4
 				}
 				s.groupFieldWidths[gi] = widths
 				s.groupFieldOffsets[gi] = offsets
 				s.groupFieldNative[gi] = natives
 				s.groupFieldNativeType[gi] = natTypes
+				s.groupFieldIds[gi] = fieldIds
+				s.groupPoolSectionIds[gi] = poolSectionIds
 			} else {
 				sp += uint64(fldCount * 12)
 			}
@@ -718,6 +728,9 @@ func (s *QzdbSearcher) resolveRowID(rowID uint32, groupIndex int) *GeoInfo {
 
 func (s *QzdbSearcher) resolveGeo(entryID uint32, groupIndex int) *GeoInfo {
 	if groupIndex < 0 || groupIndex >= len(s.groupFieldCounts) {
+		return nil
+	}
+	if entryID < 0 {
 		return nil
 	}
 	if entryID >= s.groupEntryCounts[groupIndex] {
