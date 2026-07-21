@@ -410,7 +410,7 @@ static void read_ip_row(qzdb_searcher_v20_t* ctx, uint32_t row_id, uint32_t* geo
 
 static int resolve_geo(qzdb_searcher_v20_t* ctx, uint32_t entry_id, int group_index, qzdb_geo_info_v20_t* result) {
     if (group_index >= ctx->actual_groups) return -1;
-    if (entry_id >= ctx->group_entry_counts[group_index]) return -1;
+    if (entry_id < 0 || entry_id >= ctx->group_entry_counts[group_index]) return -1;
 
     if (init_pools_v20(ctx) != 0) return -1;
 

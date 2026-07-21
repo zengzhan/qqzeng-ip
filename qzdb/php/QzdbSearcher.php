@@ -109,6 +109,8 @@ class QzdbSearcher
     private $groupFieldOffsets = [];
     private $groupFieldNative = [];
     private $groupFieldNativeType = [];
+    private $groupFieldIds = [];
+    private $groupPoolSectionIds = [];
 
     private $groupPools = null;
     private $poolsLoaded = false;
@@ -130,6 +132,8 @@ class QzdbSearcher
     public function __construct($dbPath = null, $groupIndex = 0)
     {
         $this->groupIndex = $groupIndex;
+        // Set locale to C for locale-independent float formatting
+        setlocale(LC_NUMERIC, 'C');
         if ($dbPath !== null) {
             $this->load($dbPath);
         }
@@ -335,8 +339,11 @@ class QzdbSearcher
                     $offsets = array_fill(0, $fldCount, 0);
                     $natives = array_fill(0, $fldCount, false);
                     $natTypes = array_fill(0, $fldCount, 0);
+                    $fieldIds = array_fill(0, $fldCount, 0);
+                    $poolSectionIds = array_fill(0, $fldCount, 0);
                     for ($fi = 0; $fi < $fldCount; $fi++) {
-                        $sp += 2; // skip fieldId
+                        $fieldIds[$fi] = $this->readU16($sp);
+                        $sp += 2;
                         $widths[$fi] = ord($d[$sp]);
                         $sp += 1;
                         $fieldFlags = ord($d[$sp]);
@@ -345,12 +352,15 @@ class QzdbSearcher
                         $natTypes[$fi] = ($fieldFlags >> 1) & 0x03;
                         $offsets[$fi] = $this->readU32($sp);
                         $sp += 4;
-                        $sp += 4; // skip poolSectionId
+                        $poolSectionIds[$fi] = $this->readU32($sp);
+                        $sp += 4;
                     }
                     $this->groupFieldWidths[$gi] = $widths;
                     $this->groupFieldOffsets[$gi] = $offsets;
                     $this->groupFieldNative[$gi] = $natives;
                     $this->groupFieldNativeType[$gi] = $natTypes;
+                    $this->groupFieldIds[$gi] = $fieldIds;
+                    $this->groupPoolSectionIds[$gi] = $poolSectionIds;
                 } else {
                     $sp += $fldCount * 12;
                 }
@@ -658,7 +668,10 @@ class QzdbSearcher
         if ($groupIndex < 0 || $groupIndex >= count($this->groupFieldCounts)) {
             return null;
         }
-        if ($entryId < 0 || $entryId >= $this->groupEntryCounts[$groupIndex]) {
+        if ($entryId < 0) {
+            return null;
+        }
+        if ($entryId >= $this->groupEntryCounts[$groupIndex]) {
             return null;
         }
 
@@ -678,6 +691,8 @@ class QzdbSearcher
         $baseOffsets = $this->groupFieldOffsets[$groupIndex];
         $natives = $this->groupFieldNative[$groupIndex];
         $natTypes = $this->groupFieldNativeType[$groupIndex];
+        $fieldIds = isset($this->groupFieldIds[$groupIndex]) ? $this->groupFieldIds[$groupIndex] : null;
+        $poolSectionIds = isset($this->groupPoolSectionIds[$groupIndex]) ? $this->groupPoolSectionIds[$groupIndex] : null;
 
         $fields = [];
         $resolvedFieldNames = [];
@@ -695,7 +710,7 @@ class QzdbSearcher
                     } else {
                         $valNum = unpack('d', substr($d, $fo, 8))[1];
                     }
-                    $val = (string)$valNum;
+                    $val = sprintf('%.6f', $valNum);
                 } else {
                     // int
                     $valNum = $this->readUintWidth($fo, $w);
@@ -704,14 +719,33 @@ class QzdbSearcher
             } else {
                 $idx = $this->readUintWidth($fo, $w);
                 $groupPool = $this->groupPools[$groupIndex];
-                if ($groupPool && $i < count($groupPool) && $idx < count($groupPool[$i])) {
-                    $val = $groupPool[$i][$idx];
+                
+                // Use fieldId and poolSectionId if available
+                $fieldId = ($fieldIds && $i < count($fieldIds)) ? $fieldIds[$i] : $i;
+                $poolSectionId = ($poolSectionIds && $i < count($poolSectionIds)) ? $poolSectionIds[$i] : $i;
+                
+                // Bounds checks
+                if ($fieldId >= count($this->fieldNames) || $poolSectionId >= count($groupPool[$i])) {
+                    // Fall back to positional index
+                    if ($groupPool && $i < count($groupPool) && $idx < count($groupPool[$i])) {
+                        $val = $groupPool[$i][$idx];
+                    } else {
+                        $val = '';
+                    }
                 } else {
-                    $val = '';
+                    // Use fieldId and poolSectionId
+                    $pool = $groupPool[$poolSectionId] ?? null;
+                    if ($pool && $idx < count($pool)) {
+                        $val = $pool[$idx];
+                    } else {
+                        $val = '';
+                    }
                 }
             }
 
-            $fname = $i < count($this->fieldNames) ? $this->fieldNames[$i] : "field_{$i}";
+            // Use fieldId for field name if available
+            $fieldId = ($fieldIds && $i < count($fieldIds)) ? $fieldIds[$i] : $i;
+            $fname = $fieldId < count($this->fieldNames) ? $this->fieldNames[$fieldId] : "field_{$fieldId}";
             $fields[$fname] = $val;
             $resolvedFieldNames[$i] = $fname;
         }

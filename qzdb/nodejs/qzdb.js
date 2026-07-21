@@ -118,13 +118,14 @@ class QzdbSearcher {
     this._groupFieldCounts = [];
     this._groupEntryCounts = [];
     this._groupDimMasks = [];
-    this._groupEntryOffsets = [];
 
     this._groupStrides = [];
     this._groupFieldWidths = [];
     this._groupFieldOffsets = [];
     this._groupFieldNative = [];
     this._groupFieldNativeType = [];
+    this._groupFieldIds = [];
+    this._groupPoolSectionIds = [];
 
     this._groupPools = null;
     this._poolsLoaded = false;
@@ -287,6 +288,8 @@ class QzdbSearcher {
     this._groupFieldOffsets = new Array(actualGroups).fill(null);
     this._groupFieldNative = new Array(actualGroups).fill(null);
     this._groupFieldNativeType = new Array(actualGroups).fill(null);
+    this._groupFieldIds = new Array(actualGroups).fill(null);
+    this._groupPoolSectionIds = new Array(actualGroups).fill(null);
 
     // Parse GROUP_SCHEMA if present
     if (this._offGroupSchema > 0) {
@@ -309,8 +312,11 @@ class QzdbSearcher {
           const offsets = new Array(fldCount).fill(0);
           const natives = new Array(fldCount).fill(false);
           const natTypes = new Array(fldCount).fill(0);
+          const fieldIds = new Array(fldCount).fill(0);
+          const poolSectionIds = new Array(fldCount).fill(0);
           for (let fi = 0; fi < fldCount; fi++) {
-            sp += 2; // skip fieldId
+            fieldIds[fi] = this._readU16(sp);
+            sp += 2;
             widths[fi] = d[sp];
             sp += 1;
             const fieldFlags = d[sp];
@@ -319,12 +325,15 @@ class QzdbSearcher {
             natTypes[fi] = (fieldFlags >> 1) & 0x03;
             offsets[fi] = this._readU32(sp);
             sp += 4;
-            sp += 4; // skip poolSectionId
+            poolSectionIds[fi] = this._readU32(sp);
+            sp += 4;
           }
           this._groupFieldWidths[gi] = widths;
           this._groupFieldOffsets[gi] = offsets;
           this._groupFieldNative[gi] = natives;
           this._groupFieldNativeType[gi] = natTypes;
+          this._groupFieldIds[gi] = fieldIds;
+          this._groupPoolSectionIds[gi] = poolSectionIds;
         } else {
           sp += fldCount * 12;
         }
@@ -629,7 +638,7 @@ class QzdbSearcher {
       if (isNative) {
         const t = natTypes && i < natTypes.length ? natTypes[i] : 0;
         if (t === 1) {
-          val = String(w === 4 ? d.readFloatLE(fo) : d.readDoubleLE(fo));
+          val = Number(w === 4 ? d.readFloatLE(fo) : d.readDoubleLE(fo)).toFixed(6);
         } else if (w <= 1) {
           val = String(d[fo]);
         } else if (w === 2) {
@@ -646,7 +655,13 @@ class QzdbSearcher {
         else if (w === 3) idx = d[fo] | (d[fo + 1] << 8) | (d[fo + 2] << 16);
         else idx = d[fo] | (d[fo + 1] << 8) | (d[fo + 2] << 16) | (d[fo + 3] << 24);
 
-        if (groupPool && i < groupPool.length && idx < groupPool[i].length) {
+        let fieldId = i;
+        if (this._groupFieldIds[groupIndex] && i < this._groupFieldIds[groupIndex].length) {
+          fieldId = this._groupFieldIds[groupIndex][i];
+        }
+
+        // Pools are indexed by field position, not poolSectionId
+        if (groupPool && i < groupPool.length && idx >= 0 && idx < groupPool[i].length) {
           val = groupPool[i][idx];
         } else {
           val = '';

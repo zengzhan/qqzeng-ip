@@ -99,14 +99,16 @@ namespace Qqzeng
         private int[][] _groupFieldOffsets;
         private bool[][] _groupFieldNative;
         private int[][] _groupFieldNativeType;
+        private ushort[][] _groupFieldIds;
+        private uint[][] _groupPoolSectionIds;
 
         private string[][][] _groupPools;
-        private bool _poolsLoaded;
+        private volatile bool _poolsLoaded;
 
         private readonly object _loadLock = new();
         private readonly object _poolsLock = new();
 
-        private QzdbSearcher() { }
+        public QzdbSearcher() { }
 
         public static QzdbSearcher GetInstance(string dbPath = null, int groupIndex = 0)
         {
@@ -264,6 +266,8 @@ namespace Qqzeng
             _groupFieldOffsets = new int[actualGroups][];
             _groupFieldNative = new bool[actualGroups][];
             _groupFieldNativeType = new int[actualGroups][];
+            _groupFieldIds = new ushort[actualGroups][];
+            _groupPoolSectionIds = new uint[actualGroups][];
 
             if (_offGroupSchema > 0)
             {
@@ -288,9 +292,12 @@ namespace Qqzeng
                         var offsets = new int[fldCount];
                         var natives = new bool[fldCount];
                         var natTypes = new int[fldCount];
+                        var fieldIds = new ushort[fldCount];
+                        var poolSectionIds = new uint[fldCount];
                         for (int fi = 0; fi < fldCount; fi++)
                         {
-                            sp += 2; // skip fieldId
+                            fieldIds[fi] = ReadU16(d, sp);
+                            sp += 2;
                             widths[fi] = d[sp];
                             sp++;
                             int fieldFlags = d[sp];
@@ -299,12 +306,15 @@ namespace Qqzeng
                             natTypes[fi] = (fieldFlags >> 1) & 0x03;
                             offsets[fi] = (int)ReadU32(d, sp);
                             sp += 4;
-                            sp += 4; // skip poolSectionId
+                            poolSectionIds[fi] = ReadU32(d, sp);
+                            sp += 4;
                         }
                         _groupFieldWidths[gi] = widths;
                         _groupFieldOffsets[gi] = offsets;
                         _groupFieldNative[gi] = natives;
                         _groupFieldNativeType[gi] = natTypes;
+                        _groupFieldIds[gi] = fieldIds;
+                        _groupPoolSectionIds[gi] = poolSectionIds;
                     }
                     else
                     {
@@ -567,6 +577,7 @@ namespace Qqzeng
         private GeoInfo ResolveGeo(uint entryId, int groupIndex)
         {
             if (groupIndex < 0 || groupIndex >= _groupFieldCounts.Length) return null;
+            if (entryId < 0) return null;
             if (entryId >= _groupEntryCounts[groupIndex]) return null;
 
             EnsurePoolsLoaded();
@@ -592,6 +603,7 @@ namespace Qqzeng
                 bool isNative = natives != null && i < natives.Length && natives[i];
 
                 string val;
+                string fname;
                 if (isNative)
                 {
                     int t = (natTypes != null && i < natTypes.Length) ? natTypes[i] : 0;
@@ -607,18 +619,39 @@ namespace Qqzeng
                         uint valNum = ReadUintWidth(d, fo, w);
                         val = valNum.ToString();
                     }
+                    fname = i < _fieldNames.Length ? _fieldNames[i] : $"field_{i}";
                 }
                 else
                 {
                     uint idx = ReadUintWidth(d, fo, w);
                     string[][] gp = _groupPools[groupIndex];
-                    if (gp != null && i < gp.Length && idx < (uint)gp[i].Length)
-                        val = gp[i][idx];
+                    
+                    ushort fieldId = 0;
+                    if (_groupFieldIds != null && i < _groupFieldIds[groupIndex]?.Length)
+                    {
+                        fieldId = _groupFieldIds[groupIndex][i];
+                    }
+                    
+                    if (i < _fieldNames.Length && fieldId < _fieldNames.Length)
+                    {
+                        fname = _fieldNames[fieldId];
+                    }
                     else
+                    {
+                        fname = i < _fieldNames.Length ? _fieldNames[i] : $"field_{i}";
+                    }
+                    
+                    // Pools are indexed by field position, not poolSectionId
+                    if (gp != null && i < gp.Length && idx < (uint)gp[i].Length)
+                    {
+                        val = gp[i][(int)idx];
+                    }
+                    else
+                    {
                         val = "";
+                    }
                 }
 
-                string fname = i < _fieldNames.Length ? _fieldNames[i] : $"field_{i}";
                 fields[fname] = val;
             }
 

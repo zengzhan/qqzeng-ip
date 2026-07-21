@@ -54,6 +54,9 @@ typedef struct {
     int** group_field_native;
     int** group_field_native_type;
 
+    uint16_t** group_field_ids;
+    uint32_t** group_pool_section_ids;
+
     char**** group_pools;
     int** group_pool_counts;
     int pools_loaded;

@@ -9,9 +9,12 @@
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <math.h>
+#include <pthread.h>
+#include <locale.h>
 
 static uint32_t crc32_table[256];
 static int crc32_ready = 0;
+static pthread_mutex_t g_instance_mutex = PTHREAD_MUTEX_INITIALIZER;
 static void ensure_pools_loaded(qzdb_searcher_t* ctx);
 
 static void crc32_init(void) {
@@ -57,6 +60,7 @@ static uint32_t read_uint_width(const uint8_t* p, int w) {
 
 int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
     memset(ctx, 0, sizeof(*ctx));
+    setlocale(LC_NUMERIC, "C");
     int fd = open(db_path, O_RDONLY);
     if (fd < 0) return -1;
     struct stat st;
@@ -170,43 +174,49 @@ int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
     ctx->group_field_offsets = calloc(ctx->actual_groups, sizeof(int*));
     ctx->group_field_native = calloc(ctx->actual_groups, sizeof(int*));
     ctx->group_field_native_type = calloc(ctx->actual_groups, sizeof(int*));
+    ctx->group_field_ids = calloc(ctx->actual_groups, sizeof(uint16_t*));
+    ctx->group_pool_section_ids = calloc(ctx->actual_groups, sizeof(uint32_t*));
 
     if (ctx->off_group_schema > 0) {
         uint64_t sp = ctx->off_group_schema;
         int gs_group_count = READ_LE16(d + sp);
         sp += 2;
         int max_gs_groups = gs_group_count < ctx->actual_groups ? gs_group_count : ctx->actual_groups;
-        for (int gi = 0; gi < max_gs_groups; gi++) {
-            sp += 2; // skip groupId
-            int fld_count = READ_LE16(d + sp);
-            sp += 2;
-            sp += 4; // skip entryCount
-            int stride = READ_LE32(d + sp);
-            sp += 4;
-            sp += 4; // skip flags
+    for (int gi = 0; gi < max_gs_groups; gi++) {
+        sp += 2; // skip groupId
+        int fld_count = READ_LE16(d + sp);
+        sp += 2;
+        sp += 4; // skip entryCount
+        int stride = READ_LE32(d + sp);
+        sp += 4;
+        sp += 4; // skip flags
 
-            if (gi < ctx->actual_groups) {
-                ctx->group_strides[gi] = stride;
-                ctx->group_field_widths[gi] = malloc(fld_count * sizeof(int));
-                ctx->group_field_offsets[gi] = malloc(fld_count * sizeof(int));
-                ctx->group_field_native[gi] = malloc(fld_count * sizeof(int));
-                ctx->group_field_native_type[gi] = malloc(fld_count * sizeof(int));
-                for (int fi = 0; fi < fld_count; fi++) {
-                    sp += 2; // skip fieldId
-                    ctx->group_field_widths[gi][fi] = d[sp];
-                    sp++;
-                    int field_flags = d[sp];
-                    sp++;
-                    ctx->group_field_native[gi][fi] = (field_flags & 0x01) != 0;
-                    ctx->group_field_native_type[gi][fi] = (field_flags >> 1) & 0x03;
-                    ctx->group_field_offsets[gi][fi] = READ_LE32(d + sp);
-                    sp += 4;
-                    sp += 4; // skip poolSectionId
-                }
-            } else {
-                sp += fld_count * 12;
+        if (gi < ctx->actual_groups) {
+            ctx->group_strides[gi] = stride;
+            ctx->group_field_widths[gi] = malloc(fld_count * sizeof(int));
+            ctx->group_field_offsets[gi] = malloc(fld_count * sizeof(int));
+            ctx->group_field_native[gi] = malloc(fld_count * sizeof(int));
+            ctx->group_field_native_type[gi] = malloc(fld_count * sizeof(int));
+            ctx->group_field_ids[gi] = malloc(fld_count * sizeof(uint16_t));
+            ctx->group_pool_section_ids[gi] = malloc(fld_count * sizeof(uint32_t));
+            for (int fi = 0; fi < fld_count; fi++) {
+                ctx->group_field_ids[gi][fi] = READ_LE16(d + sp);
+                sp += 2;
+                ctx->group_field_widths[gi][fi] = d[sp];
+                sp++;
+                int field_flags = d[sp];
+                sp++;
+                ctx->group_field_native[gi][fi] = (field_flags & 0x01) != 0;
+                ctx->group_field_native_type[gi][fi] = (field_flags >> 1) & 0x03;
+                ctx->group_field_offsets[gi][fi] = READ_LE32(d + sp);
+                sp += 4;
+                ctx->group_pool_section_ids[gi][fi] = READ_LE32(d + sp);
+                sp += 4;
             }
+        } else {
+            sp += fld_count * 12;
         }
+    }
     }
 
     for (int g = 0; g < ctx->actual_groups; g++) {
@@ -454,7 +464,7 @@ static uint32_t trie_walk_v6(const qzdb_searcher_t* ctx, const uint8_t* ip_bin) 
 
 static int get_geo_info(qzdb_searcher_t* ctx, uint32_t entry_id, int group_index, qzdb_geo_info_t* result) {
     if (group_index < 0 || group_index >= ctx->actual_groups) return -1;
-    if (entry_id >= ctx->group_entry_counts[group_index]) return -1;
+    if (entry_id < 0 || entry_id >= ctx->group_entry_counts[group_index]) return -1;
 
     ensure_pools_loaded(ctx);
 
@@ -484,19 +494,20 @@ static int get_geo_info(qzdb_searcher_t* ctx, uint32_t entry_id, int group_index
                 if (w == 4) {
                     union { uint32_t u; float f; } u;
                     u.u = READ_LE32(d + fo);
-                    sprintf(buf, "%f", u.f);
+                    snprintf(buf, sizeof(buf), "%.6f", u.f);
                 } else {
                     union { uint64_t u; double d; } u;
                     u.u = READ_LE64(d + fo);
-                    sprintf(buf, "%f", u.d);
+                    snprintf(buf, sizeof(buf), "%.6f", u.d);
                 }
             } else {
                 uint32_t val = read_uint_width(d + fo, w);
-                sprintf(buf, "%u", val);
+                snprintf(buf, sizeof(buf), "%u", val);
             }
             result->values[i] = strdup(buf);
         } else {
             uint32_t idx = read_uint_width(d + fo, w);
+            // Pools are indexed by field position, not poolSectionId
             if (ctx->group_pools[group_index] && ctx->group_pools[group_index][i] && (int)idx < ctx->group_pool_counts[group_index][i]) {
                 result->values[i] = strdup(ctx->group_pools[group_index][i][idx]);
             } else {
@@ -638,10 +649,15 @@ static qzdb_searcher_t g_instance;
 static int g_instance_inited = 0;
 
 qzdb_searcher_t* qzdb_instance(const char* db_path) {
+    pthread_mutex_lock(&g_instance_mutex);
     if (!g_instance_inited) {
-        if (qzdb_init(&g_instance, db_path) != 0) return NULL;
+        if (qzdb_init(&g_instance, db_path) != 0) {
+            pthread_mutex_unlock(&g_instance_mutex);
+            return NULL;
+        }
         g_instance_inited = 1;
     }
+    pthread_mutex_unlock(&g_instance_mutex);
     return &g_instance;
 }
 
@@ -687,11 +703,15 @@ void qzdb_free(qzdb_searcher_t* ctx) {
         free(ctx->group_field_offsets[g]);
         free(ctx->group_field_native[g]);
         free(ctx->group_field_native_type[g]);
+        free(ctx->group_field_ids[g]);
+        free(ctx->group_pool_section_ids[g]);
     }
     free(ctx->group_field_widths);
     free(ctx->group_field_offsets);
     free(ctx->group_field_native);
     free(ctx->group_field_native_type);
+    free(ctx->group_field_ids);
+    free(ctx->group_pool_section_ids);
 
     if (ctx->field_names) {
         for (int i = 0; i < gfc0; i++) {

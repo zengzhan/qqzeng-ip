@@ -289,7 +289,7 @@ class QzdbSearcherV20 {
 
     _resolveGeo(entryId, groupIndex) {
         if (groupIndex >= this._groupFieldCounts.length) return null;
-        if (entryId >= this._groupEntryCounts[groupIndex]) return null;
+        if (entryId < 0 || entryId >= this._groupEntryCounts[groupIndex]) return null;
 
         this._ensurePoolsLoaded();
         if (groupIndex >= this._groupPools.length) return null;
