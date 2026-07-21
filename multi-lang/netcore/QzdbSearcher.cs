@@ -3,7 +3,6 @@ using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Text;
 
@@ -548,10 +547,9 @@ namespace Qqzeng
             }
         }
 
-        private uint TrieWalkV6(BigInteger ipInt)
+        private uint TrieWalkV6(ulong ipHigh, ulong ipLow)
         {
-            int shift = 128 - _v6JumpBits;
-            uint idxJump = (uint)(ipInt >> shift) & (uint)((1 << _v6JumpBits) - 1);
+            uint idxJump = (uint)(ipHigh >>> (64 - _v6JumpBits)) & (uint)((1 << _v6JumpBits) - 1);
             uint ptr = ReadU32(_data, (int)(_offV6Jump + idxJump * 4));
 
             if (ptr == 0) return 0;
@@ -562,7 +560,9 @@ namespace Qqzeng
 
             while (depth < 128)
             {
-                uint bit = (uint)((ipInt >> (127 - depth)) & 1);
+                uint bit = (depth <= 63)
+                    ? (uint)((ipHigh >>> (63 - depth)) & 1)
+                    : (uint)((ipLow >>> (127 - depth)) & 1);
                 uint child = GetV6Child(idx, bit);
 
                 if (child == 0) return 0;
@@ -716,8 +716,9 @@ namespace Qqzeng
                         return FindUint(ipInt);
                     }
 
-                    BigInteger ipIntV6 = new BigInteger(bytes, isUnsigned: true, isBigEndian: true);
-                    return FindV6Uint(ipIntV6);
+                    ulong ipHigh = BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(0, 8));
+                    ulong ipLow = BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(8, 8));
+                    return FindV6Uint(ipHigh, ipLow);
                 }
                 return null;
             }
@@ -734,10 +735,10 @@ namespace Qqzeng
             return ResolveRowId(rowId, _groupIndex);
         }
 
-        public GeoInfo FindV6Uint(BigInteger ipInt)
+        public GeoInfo FindV6Uint(ulong ipHigh, ulong ipLow)
         {
             if (!_hasV6) return null;
-            uint rowId = TrieWalkV6(ipInt);
+            uint rowId = TrieWalkV6(ipHigh, ipLow);
             if (rowId == 0) return null;
             return ResolveRowId(rowId, _groupIndex);
         }
@@ -767,8 +768,9 @@ namespace Qqzeng
                         return LookupRowIdUint(ipInt);
                     }
 
-                    BigInteger ipIntV6 = new BigInteger(bytes, isUnsigned: true, isBigEndian: true);
-                    return LookupRowIdV6(ipIntV6);
+                    ulong ipHigh = BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(0, 8));
+                    ulong ipLow = BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(8, 8));
+                    return LookupRowIdV6(ipHigh, ipLow);
                 }
                 return 0;
             }
@@ -784,11 +786,10 @@ namespace Qqzeng
             return TrieWalkV4(ipInt);
         }
 
-        /// <summary>Lookup row_id for a pre-parsed IPv6 BigInteger.</summary>
-        public uint LookupRowIdV6(BigInteger ipInt)
+        public uint LookupRowIdV6(ulong ipHigh, ulong ipLow)
         {
             if (!_hasV6) return 0;
-            return TrieWalkV6(ipInt);
+            return TrieWalkV6(ipHigh, ipLow);
         }
 
         /// <summary>Lookup raw entry IDs from a row_id. Returns (geoId, asnId, usageId) tuple, or null if invalid.</summary>

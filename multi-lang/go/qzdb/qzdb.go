@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"hash/crc32"
 	"math"
-	"math/big"
 	"net"
 	"os"
 	"strconv"
@@ -652,19 +651,9 @@ func (s *QzdbSearcher) trieWalkV4(ipInt uint32) uint32 {
 	}
 }
 
-func (s *QzdbSearcher) trieWalkV6(ipInt *big.Int) uint32 {
-	// Convert big.Int to two uint64 (lo = most-significant 64 bits, hi = least-significant 64 bits)
-	// using the big-endian byte convention established by SetBytes. No per-bit big.Int allocation.
-	var hi, lo uint64
-	if ipInt.BitLen() <= 64 {
-		lo = ipInt.Uint64()
-	} else {
-		// Rsh by 64 bits to get the upper (most-significant) half, then extract hi/lo as uint64.
-		// Avoids ipInt.Bytes() heap allocation and padding/truncation logic.
-		var tmp big.Int
-		lo = tmp.Rsh(ipInt, 64).Uint64()
-		hi = ipInt.Uint64()
-	}
+func (s *QzdbSearcher) trieWalkV6(ip16 [16]byte) uint32 {
+	hi := binary.BigEndian.Uint64(ip16[:8])
+	lo := binary.BigEndian.Uint64(ip16[8:16])
 
 	// Jump index = top v6JumpBits bits of the 128-bit address, held in the top bits of lo.
 	idxJump := (lo >> (64 - uint(s.v6JumpBits))) & uint64((1<<s.v6JumpBits)-1)
@@ -845,8 +834,9 @@ func (s *QzdbSearcher) Find(ipStr string) *GeoInfo {
 			return s.FindUint(binary.BigEndian.Uint32(ip16[12:16]))
 		}
 
-		ipInt := new(big.Int).SetBytes(ip16)
-		return s.FindV6Uint(ipInt)
+		var ip16arr [16]byte
+		copy(ip16arr[:], ip16)
+		return s.FindV6Uint(ip16arr)
 	}
 
 	ipInt, ok := fastParseIpV4(ipStr)
@@ -867,11 +857,11 @@ func (s *QzdbSearcher) FindUint(ipInt uint32) *GeoInfo {
 	return s.resolveRowID(rowID, s.groupIndex)
 }
 
-func (s *QzdbSearcher) FindV6Uint(ipInt *big.Int) *GeoInfo {
+func (s *QzdbSearcher) FindV6Uint(ip16 [16]byte) *GeoInfo {
 	if !s.hasV6 {
 		return nil
 	}
-	rowID := s.trieWalkV6(ipInt)
+	rowID := s.trieWalkV6(ip16)
 	if rowID == 0 {
 		return nil
 	}
@@ -902,8 +892,9 @@ func (s *QzdbSearcher) LookupRowId(ipStr string) uint32 {
 		if !s.hasV6 {
 			return 0
 		}
-		ipInt := new(big.Int).SetBytes(ip16)
-		return s.trieWalkV6(ipInt)
+		var ip16arr [16]byte
+		copy(ip16arr[:], ip16)
+		return s.trieWalkV6(ip16arr)
 	}
 	ipInt, ok := fastParseIpV4(ipStr)
 	if !ok {
@@ -921,11 +912,11 @@ func (s *QzdbSearcher) LookupRowIdUint(ipInt uint32) uint32 {
 }
 
 // LookupRowIdV6 returns the raw row_id for a 128-bit IPv6 integer.
-func (s *QzdbSearcher) LookupRowIdV6(ipInt *big.Int) uint32 {
+func (s *QzdbSearcher) LookupRowIdV6(ip16 [16]byte) uint32 {
 	if !s.hasV6 {
 		return 0
 	}
-	return s.trieWalkV6(ipInt)
+	return s.trieWalkV6(ip16)
 }
 
 // LookupIds returns the raw entry IDs (geoId, asnId, usageId) for a row_id.
