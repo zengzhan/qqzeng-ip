@@ -83,4 +83,25 @@ int qzdb_find_v6(qzdb_searcher_t* ctx, const uint8_t* ip_bin, qzdb_geo_info_t* r
 int qzdb_find_str(qzdb_searcher_t* ctx, const char* ip_str, char* out, size_t out_size);
 int qzdb_verify_crc(qzdb_searcher_t* ctx);
 
+/*
+ * Zero-allocation caller-buffer API.
+ *
+ * Fills `values[0..field_count-1]` with pointers:
+ *   - Pool strings → direct pointer into mmap'd pool (NOT owned, valid until qzdb_free)
+ *   - Native values (float/int) → written into `bufs[i]`, values[i] points there
+ *   - Missing fields → values[i] = ""
+ *
+ * Caller must provide:
+ *   values: array of at least QZDB_MAX_FIELDS char* pointers (output)
+ *   bufs:   array of at least QZDB_MAX_FIELDS buffers of `buf_size` bytes each
+ *
+ * Returns field_count on success, 0 if not found, -1 on error.
+ * No heap allocation. No need to call free_geo_info.
+ */
+int qzdb_find_uint_buf(qzdb_searcher_t* ctx, uint32_t ip_int,
+                        char** values, char (*bufs)[64], int buf_size);
+
+int qzdb_find_v6_buf(qzdb_searcher_t* ctx, const uint8_t* ip_bin,
+                      char** values, char (*bufs)[64], int buf_size);
+
 #endif
