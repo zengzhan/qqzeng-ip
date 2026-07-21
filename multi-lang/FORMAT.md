@@ -89,7 +89,10 @@ Magic `QZDB`（4 字节 ASCII），固定 192 字节。
 bit0: hasV4       — 包含 V4 数据
 bit1: hasV6       — 包含 V6 数据
 bit2: hasMetadata — 包含 Metadata 段（生成器无条件设置）
-bit3~15: reserved
+bit3: reserved
+bit4: v4Node24    — V4 节点使用 24 位编码（6 字节/节点）
+bit5: v6Node24    — V6 节点使用 24 位编码（6 字节/节点）
+bit6~15: reserved
 ```
 
 ### 2.2 节点 24 位编码（节点数 < 8,388,608 且 RowCount < 8,388,608 时启用）

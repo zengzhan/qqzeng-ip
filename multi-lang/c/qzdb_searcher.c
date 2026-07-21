@@ -261,7 +261,7 @@ int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
             if (t == 1) {
                 ctx->version_name = val;
             } else if (t == 2) {
-                ctx->field_names = malloc(ctx->group_field_counts[0] * sizeof(char*));
+                ctx->field_names = calloc(ctx->group_field_counts[0], sizeof(char*));
                 ctx->float_field_flags = calloc(ctx->group_field_counts[0], sizeof(int));
                 ctx->field_count = ctx->group_field_counts[0];
                 int idx = 0;
@@ -283,7 +283,7 @@ int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
     }
 
     if (!ctx->field_names) {
-        ctx->field_names = malloc(ctx->group_field_counts[0] * sizeof(char*));
+        ctx->field_names = calloc(ctx->group_field_counts[0], sizeof(char*));
         ctx->float_field_flags = calloc(ctx->group_field_counts[0], sizeof(int));
         ctx->field_count = ctx->group_field_counts[0];
         for (int i = 0; i < ctx->group_field_counts[0]; i++) {
@@ -683,6 +683,7 @@ static uint32_t fast_parse_ip(const char* ip, int* ok) {
         p++;
     }
     if (dots != 3) { *ok = 0; return 0; }
+    if (*(p - 1) == '.') { *ok = 0; return 0; }
     *ok = 1;
     return (result << 8) | val;
 }
@@ -830,8 +831,11 @@ void qzdb_free(qzdb_searcher_t* ctx) {
 int qzdb_verify_crc(qzdb_searcher_t* ctx) {
     if (!ctx->data || ctx->data_size < 20) return 0;
     uint32_t stored = READ_LE32(ctx->data + 16);
-    uint8_t orig[4];
-    memcpy(orig, ctx->data + 16, 4);
-    uint32_t computed = crc32_compute(ctx->data, ctx->data_size);
+    uint8_t* buf = malloc(ctx->data_size);
+    if (!buf) return 0;
+    memcpy(buf, ctx->data, ctx->data_size);
+    memset(buf + 16, 0, 4);
+    uint32_t computed = crc32_compute(buf, ctx->data_size);
+    free(buf);
     return stored == computed ? 1 : 0;
 }
