@@ -6,8 +6,17 @@ obj/
 __pycache__/
 *.class
 *.pyc
+*.pyo
 *.rlib
 *.rmeta
+*.o
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Rust
+Cargo.lock
 
 # OS
 .DS_Store
