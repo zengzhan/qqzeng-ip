@@ -98,9 +98,15 @@ int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
 
     ctx->v6_jump_bits = d[11];
     if (ctx->v6_jump_bits == 0) ctx->v6_jump_bits = 16;
+    if (ctx->v6_jump_bits < 16 || ctx->v6_jump_bits > 20) {
+        munmap(ctx->data, ctx->data_size); ctx->data = NULL; return -1;
+    }
 
     ctx->pool_count = d[12];
     ctx->pool_idx_size = d[13];
+    if (ctx->pool_idx_size != 2 && ctx->pool_idx_size != 3) {
+        munmap(ctx->data, ctx->data_size); ctx->data = NULL; return -1;
+    }
     ctx->geo_count = READ_LE16(d + 14);
     ctx->row_count = READ_LE32(d + 20);
     ctx->v4_rec_count = READ_LE32(d + 24);
@@ -125,13 +131,45 @@ int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
     ctx->v4_node_count = READ_LE32(d + 152);
     ctx->v6_node_count = READ_LE32(d + 156);
     ctx->ip_row_size = READ_LE32(d + 160);
+    if (ctx->ip_row_size < 1 || ctx->ip_row_size > 64) {
+        munmap(ctx->data, ctx->data_size); ctx->data = NULL; return -1;
+    }
     ctx->geo_entry_group_count = READ_LE32(d + 164);
+    if (ctx->geo_entry_group_count < 1 || ctx->geo_entry_group_count > 255) {
+        munmap(ctx->data, ctx->data_size); ctx->data = NULL; return -1;
+    }
 
     // Bounds validation for section offsets
-    if (ctx->off_v4_jump + 65536 * 4 > ctx->data_size) return -1;
-    if (ctx->off_v4_nodes + (uint64_t)ctx->v4_node_count * 8 > ctx->data_size) return -1;
-    if (ctx->off_pools > ctx->data_size) return -1;
-    if (ctx->off_meta > ctx->data_size) return -1;
+    {
+        uint64_t v4_ns = ctx->v4_node_24 ? 6 : 8;
+        uint64_t v6_ns = ctx->v6_node_24 ? 6 : 8;
+        uint64_t v6_jump_size = ((uint64_t)1 << ctx->v6_jump_bits) * 4;
+
+        if (ctx->off_v4_jump > 0 && ctx->off_v4_jump + 65536 * 4 > ctx->data_size) {
+            munmap(ctx->data, ctx->data_size); ctx->data = NULL; return -1;
+        }
+        if (ctx->off_v4_nodes > 0 && ctx->off_v4_nodes + (uint64_t)ctx->v4_node_count * v4_ns > ctx->data_size) {
+            munmap(ctx->data, ctx->data_size); ctx->data = NULL; return -1;
+        }
+        if (ctx->off_v6_jump > 0 && ctx->off_v6_jump + v6_jump_size > ctx->data_size) {
+            munmap(ctx->data, ctx->data_size); ctx->data = NULL; return -1;
+        }
+        if (ctx->off_v6_nodes > 0 && ctx->off_v6_nodes + (uint64_t)ctx->v6_node_count * v6_ns > ctx->data_size) {
+            munmap(ctx->data, ctx->data_size); ctx->data = NULL; return -1;
+        }
+        if (ctx->off_ip_row > 0 && ctx->off_ip_row + (uint64_t)ctx->row_count * ctx->ip_row_size > ctx->data_size) {
+            munmap(ctx->data, ctx->data_size); ctx->data = NULL; return -1;
+        }
+        if (ctx->off_geo_entries > 0 && ctx->off_geo_entries >= ctx->data_size) {
+            munmap(ctx->data, ctx->data_size); ctx->data = NULL; return -1;
+        }
+        if (ctx->off_pools > 0 && ctx->off_pools >= ctx->data_size) {
+            munmap(ctx->data, ctx->data_size); ctx->data = NULL; return -1;
+        }
+        if (ctx->off_meta > 0 && ctx->off_meta > ctx->data_size) {
+            munmap(ctx->data, ctx->data_size); ctx->data = NULL; return -1;
+        }
+    }
 
     ctx->group_entry_offsets = malloc(4 * sizeof(uint64_t));
     for (int i = 0; i < 4; i++) {

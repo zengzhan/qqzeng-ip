@@ -155,9 +155,15 @@ public class QzdbSearcher {
 
         v6JumpBits = d[11] & 0xFF;
         if (v6JumpBits == 0) v6JumpBits = 16;
+        if (v6JumpBits < 16 || v6JumpBits > 20) {
+            throw new RuntimeException("v6JumpBits out of range [16,20]: " + v6JumpBits);
+        }
 
         poolCount = d[12] & 0xFF;
         poolIdxSize = d[13] & 0xFF;
+        if (poolIdxSize != 2 && poolIdxSize != 3) {
+            throw new RuntimeException("poolIdxSize must be 2 or 3, got " + poolIdxSize);
+        }
         geoCount = readU16(d, 14);
         rowCount = readU32(d, 20);
         v4RecCount = readU32(d, 24);
@@ -182,7 +188,35 @@ public class QzdbSearcher {
         v4NodeCount = readU32(d, 152);
         v6NodeCount = readU32(d, 156);
         ipRowSize = readU32(d, 160);
+        if (ipRowSize < 1 || ipRowSize > 64) {
+            throw new RuntimeException("ipRowSize out of range [1,64]: " + ipRowSize);
+        }
         geoEntryGroupCount = readU32(d, 164);
+        if (geoEntryGroupCount < 1 || geoEntryGroupCount > 255) {
+            throw new RuntimeException("geoEntryGroupCount out of range [1,255]: " + geoEntryGroupCount);
+        }
+
+        // Bounds validation for section offsets
+        long dlen = d.length;
+        long v4NodeSize = v4Node24 ? 6 : 8;
+        long v6NodeSize = v6Node24 ? 6 : 8;
+        long v6JumpSize = (1L << v6JumpBits) * 4;
+
+        if (offV4Jump > 0 && offV4Jump + 65536 * 4 > dlen) {
+            throw new RuntimeException("V4 jump table offset out of bounds");
+        }
+        if (offV4Nodes > 0 && offV4Nodes + (long) v4NodeCount * v4NodeSize > dlen) {
+            throw new RuntimeException("V4 nodes table offset out of bounds");
+        }
+        if (offV6Jump > 0 && offV6Jump + v6JumpSize > dlen) {
+            throw new RuntimeException("V6 jump table offset out of bounds");
+        }
+        if (offV6Nodes > 0 && offV6Nodes + (long) v6NodeCount * v6NodeSize > dlen) {
+            throw new RuntimeException("V6 nodes table offset out of bounds");
+        }
+        if (offIPRow > 0 && offIPRow + (long) rowCount * ipRowSize > dlen) {
+            throw new RuntimeException("IP row table offset out of bounds");
+        }
 
         groupEntryOffsets = new long[4];
         for (int i = 0; i < 4; i++) {

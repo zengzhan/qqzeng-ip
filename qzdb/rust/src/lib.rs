@@ -205,9 +205,15 @@ impl QzdbSearcher {
         if v6_jump_bits == 0 {
             v6_jump_bits = 16;
         }
+        if v6_jump_bits < 16 || v6_jump_bits > 20 {
+            return Err(QzdbError::OffsetOutOfBounds { offset: v6_jump_bits as u64, required: 0, field: "v6_jump_bits must be 16..20" });
+        }
 
         let pool_count = data[12] as usize;
         let pool_idx_size = data[13] as usize;
+        if pool_idx_size != 2 && pool_idx_size != 3 {
+            return Err(QzdbError::OffsetOutOfBounds { offset: pool_idx_size as u64, required: 0, field: "pool_idx_size must be 2 or 3" });
+        }
         let geo_count = read_u16_le(&data, 14) as usize;
         let row_count = read_u32_le(&data, 20) as usize;
         let v4_rec_count = read_u32_le(&data, 24);
@@ -232,7 +238,13 @@ impl QzdbSearcher {
         let v4_node_count = read_u32_le(&data, 152);
         let v6_node_count = read_u32_le(&data, 156);
         let ip_row_size = read_u32_le(&data, 160) as usize;
+        if ip_row_size < 1 || ip_row_size > 64 {
+            return Err(QzdbError::OffsetOutOfBounds { offset: ip_row_size as u64, required: 0, field: "ip_row_size out of range [1,64]" });
+        }
         let geo_entry_group_count = read_u32_le(&data, 164) as usize;
+        if geo_entry_group_count < 1 || geo_entry_group_count > 255 {
+            return Err(QzdbError::OffsetOutOfBounds { offset: geo_entry_group_count as u64, required: 0, field: "geo_entry_group_count out of range [1,255]" });
+        }
 
         // Validate offsets are within bounds (overflow-safe arithmetic)
         fn check_offset(data_len: u64, offset: u64, required: u64, field: &'static str) -> Result<(), QzdbError> {
@@ -256,14 +268,13 @@ impl QzdbSearcher {
             Ok(())
         }
 
-        // Node record size depends on the 24-bit vs 32-bit node encoding.
         let v4_node_size = if v4_node_24 { 6u64 } else { 8u64 };
         let v6_node_size = if v6_node_24 { 6u64 } else { 8u64 };
+        let v6_jump_size = (1u64 << v6_jump_bits) * 4;
 
-        // Check critical offsets
         check_offset(data_len, off_v4_jump, 65536 * 4, "off_v4_jump")?;
         check_offset(data_len, off_v4_nodes, v4_node_count as u64 * v4_node_size, "off_v4_nodes")?;
-        check_offset(data_len, off_v6_jump, 65536 * 4, "off_v6_jump")?;
+        check_offset(data_len, off_v6_jump, v6_jump_size, "off_v6_jump")?;
         check_offset(data_len, off_v6_nodes, v6_node_count as u64 * v6_node_size, "off_v6_nodes")?;
         check_offset(data_len, off_ip_row, row_count as u64 * ip_row_size as u64, "off_ip_row")?;
         check_offset(data_len, off_geo_entries, 1, "off_geo_entries")?;

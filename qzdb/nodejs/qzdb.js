@@ -216,9 +216,15 @@ class QzdbSearcher {
     if (this._v6JumpBits === 0) {
       this._v6JumpBits = 16;
     }
+    if (this._v6JumpBits < 16 || this._v6JumpBits > 20) {
+      throw new Error(`v6JumpBits out of range [16,20]: ${this._v6JumpBits}`);
+    }
 
     this._poolCount = d[12];
     this._poolIdxSize = d[13];
+    if (this._poolIdxSize !== 2 && this._poolIdxSize !== 3) {
+      throw new Error(`poolIdxSize must be 2 or 3, got ${this._poolIdxSize}`);
+    }
     this._geoCount = this._readU16(14);
     this._rowCount = this._readU32(20);
     this._v4RecCount = this._readU32(24);
@@ -244,7 +250,35 @@ class QzdbSearcher {
     this._v4NodeCount = this._readU32(152);
     this._v6NodeCount = this._readU32(156);
     this._ipRowSize = this._readU32(160);
+    if (this._ipRowSize < 1 || this._ipRowSize > 64) {
+      throw new Error(`ipRowSize out of range [1,64]: ${this._ipRowSize}`);
+    }
     this._geoEntryGroupCount = this._readU32(164);
+    if (this._geoEntryGroupCount < 1 || this._geoEntryGroupCount > 255) {
+      throw new Error(`geoEntryGroupCount out of range [1,255]: ${this._geoEntryGroupCount}`);
+    }
+
+    // Bounds validation for section offsets
+    const dlen = d.length;
+    const v4NodeSize = this._v4Node24 ? 6 : 8;
+    const v6NodeSize = this._v6Node24 ? 6 : 8;
+    const v6JumpSize = (1 << this._v6JumpBits) * 4;
+
+    if (this._offV4Jump > 0 && this._offV4Jump + 65536 * 4 > dlen) {
+      throw new Error('V4 jump table offset out of bounds');
+    }
+    if (this._offV4Nodes > 0 && this._offV4Nodes + this._v4NodeCount * v4NodeSize > dlen) {
+      throw new Error('V4 nodes table offset out of bounds');
+    }
+    if (this._offV6Jump > 0 && this._offV6Jump + v6JumpSize > dlen) {
+      throw new Error('V6 jump table offset out of bounds');
+    }
+    if (this._offV6Nodes > 0 && this._offV6Nodes + this._v6NodeCount * v6NodeSize > dlen) {
+      throw new Error('V6 nodes table offset out of bounds');
+    }
+    if (this._offIPRow > 0 && this._offIPRow + this._rowCount * this._ipRowSize > dlen) {
+      throw new Error('IP row table offset out of bounds');
+    }
 
     // GeoEntryOffsets[4]
     this._groupEntryOffsets = [];

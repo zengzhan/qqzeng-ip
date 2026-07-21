@@ -224,9 +224,15 @@ func (s *QzdbSearcher) parseHeader() error {
 	if s.v6JumpBits == 0 {
 		s.v6JumpBits = 16
 	}
+	if s.v6JumpBits < 16 || s.v6JumpBits > 20 {
+		return fmt.Errorf("v6JumpBits out of range [16,20]: %d", s.v6JumpBits)
+	}
 
 	s.poolCount = int(d[12])
 	s.poolIdxSize = int(d[13])
+	if s.poolIdxSize != 2 && s.poolIdxSize != 3 {
+		return fmt.Errorf("poolIdxSize must be 2 or 3, got %d", s.poolIdxSize)
+	}
 	s.geoCount = int(readU16(unsafe.Pointer(&d[14])))
 	s.rowCount = int(readU32(unsafe.Pointer(&d[20])))
 	s.v4RecCount = readU32(unsafe.Pointer(&d[24]))
@@ -251,7 +257,13 @@ func (s *QzdbSearcher) parseHeader() error {
 	s.v4NodeCount = readU32(unsafe.Pointer(&d[152]))
 	s.v6NodeCount = readU32(unsafe.Pointer(&d[156]))
 	s.ipRowSize = int(readU32(unsafe.Pointer(&d[160])))
+	if s.ipRowSize < 1 || s.ipRowSize > 64 {
+		return fmt.Errorf("ipRowSize out of range [1,64]: %d", s.ipRowSize)
+	}
 	s.geoEntryGroupCount = int(readU32(unsafe.Pointer(&d[164])))
+	if s.geoEntryGroupCount < 1 || s.geoEntryGroupCount > 255 {
+		return fmt.Errorf("geoEntryGroupCount out of range [1,255]: %d", s.geoEntryGroupCount)
+	}
 
 	// Validate section offsets are within bounds
 	if s.offV4Jump+65536*4 > uint64(len(d)) {
@@ -264,7 +276,8 @@ func (s *QzdbSearcher) parseHeader() error {
 	if s.offV4Nodes+uint64(s.v4NodeCount)*v4NodeSize > uint64(len(d)) {
 		return fmt.Errorf("V4 nodes table offset out of bounds")
 	}
-	if s.offV6Jump+65536*4 > uint64(len(d)) {
+	v6JumpSize := uint64(1<<uint(s.v6JumpBits)) * 4
+	if s.offV6Jump+v6JumpSize > uint64(len(d)) {
 		return fmt.Errorf("V6 jump table offset out of bounds")
 	}
 	v6NodeSize := uint64(8)

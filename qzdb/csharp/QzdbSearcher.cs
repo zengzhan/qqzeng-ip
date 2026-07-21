@@ -189,9 +189,13 @@ namespace Qqzeng
 
             _v6JumpBits = d[11];
             if (_v6JumpBits == 0) _v6JumpBits = 16;
+            if (_v6JumpBits < 16 || _v6JumpBits > 20)
+                throw new InvalidDataException($"v6JumpBits out of range [16,20]: {_v6JumpBits}");
 
             _poolCount = d[12];
             _poolIdxSize = d[13];
+            if (_poolIdxSize != 2 && _poolIdxSize != 3)
+                throw new InvalidDataException($"poolIdxSize must be 2 or 3, got {_poolIdxSize}");
             _geoCount = ReadU16(d, 14);
             _rowCount = (int)ReadU32(d, 20);
             _v4RecCount = ReadU32(d, 24);
@@ -215,7 +219,28 @@ namespace Qqzeng
             _v4NodeCount = ReadU32(d, 152);
             _v6NodeCount = ReadU32(d, 156);
             _ipRowSize = (int)ReadU32(d, 160);
+            if (_ipRowSize < 1 || _ipRowSize > 64)
+                throw new InvalidDataException($"ipRowSize out of range [1,64]: {_ipRowSize}");
             _geoEntryGroupCount = (int)ReadU32(d, 164);
+            if (_geoEntryGroupCount < 1 || _geoEntryGroupCount > 255)
+                throw new InvalidDataException($"geoEntryGroupCount out of range [1,255]: {_geoEntryGroupCount}");
+
+            // Bounds validation for section offsets
+            long dlen = d.Length;
+            long v4NodeSize = _v4Node24 ? 6 : 8;
+            long v6NodeSize = _v6Node24 ? 6 : 8;
+            long v6JumpSize = (1L << _v6JumpBits) * 4;
+
+            if (_offV4Jump > 0 && _offV4Jump + 65536 * 4 > dlen)
+                throw new InvalidDataException("V4 jump table offset out of bounds");
+            if (_offV4Nodes > 0 && _offV4Nodes + (long)_v4NodeCount * v4NodeSize > dlen)
+                throw new InvalidDataException("V4 nodes table offset out of bounds");
+            if (_offV6Jump > 0 && _offV6Jump + v6JumpSize > dlen)
+                throw new InvalidDataException("V6 jump table offset out of bounds");
+            if (_offV6Nodes > 0 && _offV6Nodes + (long)_v6NodeCount * v6NodeSize > dlen)
+                throw new InvalidDataException("V6 nodes table offset out of bounds");
+            if (_offIPRow > 0 && _offIPRow + (long)_rowCount * _ipRowSize > dlen)
+                throw new InvalidDataException("IP row table offset out of bounds");
 
             _groupEntryOffsets = new long[4];
             for (int i = 0; i < 4; i++)

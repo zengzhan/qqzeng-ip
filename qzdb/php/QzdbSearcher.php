@@ -217,9 +217,15 @@ class QzdbSearcher
         if ($this->v6JumpBits === 0) {
             $this->v6JumpBits = 16;
         }
+        if ($this->v6JumpBits < 16 || $this->v6JumpBits > 20) {
+            throw new \RuntimeException("v6JumpBits out of range [16,20]: {$this->v6JumpBits}");
+        }
 
         $this->poolCount = ord($d[12]);
         $this->poolIdxSize = ord($d[13]);
+        if ($this->poolIdxSize !== 2 && $this->poolIdxSize !== 3) {
+            throw new \RuntimeException("poolIdxSize must be 2 or 3, got {$this->poolIdxSize}");
+        }
         $this->geoCount = $this->readU16(14);
         $this->rowCount = $this->readU32(20);
         $this->v4RecCount = $this->readU32(24);
@@ -245,35 +251,34 @@ class QzdbSearcher
         $this->v4NodeCount = $this->readU32(152);
         $this->v6NodeCount = $this->readU32(156);
         $this->ipRowSize = $this->readU32(160);
+        if ($this->ipRowSize < 1 || $this->ipRowSize > 64) {
+            throw new \RuntimeException("ipRowSize out of range [1,64]: {$this->ipRowSize}");
+        }
         $this->geoEntryGroupCount = $this->readU32(164);
+        if ($this->geoEntryGroupCount < 1 || $this->geoEntryGroupCount > 255) {
+            throw new \RuntimeException("geoEntryGroupCount out of range [1,255]: {$this->geoEntryGroupCount}");
+        }
 
         $d = $this->data;
         $len = strlen($d);
-        
-        if ($this->offV4Jump + 65536 * 4 > $len) {
+        $v4NodeSize = $this->v4Node24 ? 6 : 8;
+        $v6NodeSize = $this->v6Node24 ? 6 : 8;
+        $v6JumpSize = (1 << $this->v6JumpBits) * 4;
+
+        if ($this->offV4Jump > 0 && $this->offV4Jump + 65536 * 4 > $len) {
             throw new \RuntimeException('V4 jump table out of bounds');
         }
-        if ($this->offV4Nodes + $this->v4NodeCount * 8 > $len) {
+        if ($this->offV4Nodes > 0 && $this->offV4Nodes + $this->v4NodeCount * $v4NodeSize > $len) {
             throw new \RuntimeException('V4 nodes table out of bounds');
         }
-        if ($this->offV6Jump + 65536 * 4 > $len) {
+        if ($this->offV6Jump > 0 && $this->offV6Jump + $v6JumpSize > $len) {
             throw new \RuntimeException('V6 jump table out of bounds');
         }
-        $v6NodeSize = $this->v6Node24 ? 6 : 8;
-        if ($this->offV6Nodes + $this->v6NodeCount * $v6NodeSize > $len) {
+        if ($this->offV6Nodes > 0 && $this->offV6Nodes + $this->v6NodeCount * $v6NodeSize > $len) {
             throw new \RuntimeException('V6 nodes table out of bounds');
         }
-        if ($this->offIPRow + $this->rowCount * $this->ipRowSize > $len) {
+        if ($this->offIPRow > 0 && $this->offIPRow + $this->rowCount * $this->ipRowSize > $len) {
             throw new \RuntimeException('IP row table out of bounds');
-        }
-        if ($this->offGeoEntries + $this->geoEntryGroupCount * 20 > $len) {
-            throw new \RuntimeException('Geo entries table out of bounds');
-        }
-        if ($this->offPools > $len) {
-            throw new \RuntimeException('Pools table out of bounds');
-        }
-        if ($this->offMeta > $len) {
-            throw new \RuntimeException('Meta table out of bounds');
         }
 
         // GeoEntryOffsets[4]
