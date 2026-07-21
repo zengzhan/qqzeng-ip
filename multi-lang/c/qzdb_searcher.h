@@ -5,6 +5,10 @@
 #include <stddef.h>
 
 #define QZDB_MAX_FIELDS 32
+#define QZDB_MAX_TRIE_WALK_STEPS 1000
+#define QZDB_SENTINEL 0x80000000u
+#define QZDB_SENTINEL_MASK_24 0x7FFFFFu
+#define QZDB_SENTINEL_MASK_31 0x7FFFFFFFu
 
 typedef struct {
     uint8_t* data;
@@ -79,6 +83,21 @@ typedef struct {
     uint32_t usage_id;
 } qzdb_ids_t;
 
+/* Error codes */
+typedef enum {
+    QZDB_OK = 0,
+    QZDB_ERR_NOT_FOUND = -1,
+    QZDB_ERR_CORRUPTED = -2,
+    QZDB_ERR_OUT_OF_MEMORY = -3,
+    QZDB_ERR_INVALID_PARAM = -4,
+    QZDB_ERR_BAD_HEADER = -5,
+    QZDB_ERR_BAD_MAGIC = -6,
+    QZDB_ERR_UNSUPPORTED = -7,
+    QZDB_ERR_BOUNDS = -8,
+} qzdb_error_t;
+
+const char* qzdb_strerror(int error_code);
+
 int qzdb_init(qzdb_searcher_t* ctx, const char* db_path);
 void qzdb_free(qzdb_searcher_t* ctx);
 qzdb_searcher_t* qzdb_instance(const char* db_path);
@@ -89,26 +108,17 @@ int qzdb_find_v6(qzdb_searcher_t* ctx, const uint8_t* ip_bin, qzdb_geo_info_t* r
 int qzdb_find_str(qzdb_searcher_t* ctx, const char* ip_str, char* out, size_t out_size);
 int qzdb_verify_crc(qzdb_searcher_t* ctx);
 
-/*
- * Zero-allocation caller-buffer API.
- *
- * Fills `values[0..field_count-1]` with pointers:
- *   - Pool strings → direct pointer into mmap'd pool (NOT owned, valid until qzdb_free)
- *   - Native values (float/int) → written into `bufs[i]`, values[i] points there
- *   - Missing fields → values[i] = ""
- *
- * Caller must provide:
- *   values: array of at least QZDB_MAX_FIELDS char* pointers (output)
- *   bufs:   array of at least QZDB_MAX_FIELDS buffers of `buf_size` bytes each
- *
- * Returns field_count on success, 0 if not found, -1 on error.
- * No heap allocation. No need to call free_geo_info.
- */
+/* Buffer-based APIs */
 int qzdb_find_uint_buf(qzdb_searcher_t* ctx, uint32_t ip_int,
-                        char** values, char (*bufs)[64], int buf_size);
-
+                       char** values, char (*bufs)[64], int buf_size);
 int qzdb_find_v6_buf(qzdb_searcher_t* ctx, const uint8_t* ip_bin,
-                      char** values, char (*bufs)[64], int buf_size);
+                     char** values, char (*bufs)[64], int buf_size);
+int qzdb_find_fields_buf(qzdb_searcher_t* ctx, const char* ip_str,
+                         const char** field_names,
+                         char** values, char (*bufs)[64], int buf_size);
+int qzdb_find_fields_uint_buf(qzdb_searcher_t* ctx, uint32_t ip_int,
+                               const char** field_names,
+                               char** values, char (*bufs)[64], int buf_size);
 
 /*
  * Layer 1: Lookup row_id only (trie walk, no data access).
@@ -123,5 +133,26 @@ uint32_t qzdb_lookup_row_id_v6(qzdb_searcher_t* ctx, const uint8_t* ip_bin);
  * Fills geo_id, asn_id, usage_id. Returns 0 on success, -1 on error.
  */
 int qzdb_lookup_ids(qzdb_searcher_t* ctx, uint32_t row_id, qzdb_ids_t* out);
+
+/*
+ * Field projection API.
+ *
+ * Resolve only the fields named in field_names[] (NULL-terminated).
+ * Same caller-buffer semantics as qzdb_find_uint_buf.
+ * Returns field_count on success, 0 if not found, -1 on error.
+ */
+int qzdb_find_fields_buf(qzdb_searcher_t* ctx, const char* ip_str,
+                          const char** field_names,
+                          char** values, char (*bufs)[64], int buf_size);
+int qzdb_find_fields_uint_buf(qzdb_searcher_t* ctx, uint32_t ip_int,
+                               const char** field_names,
+                               char** values, char (*bufs)[64], int buf_size);
+
+/*
+ * Atomic reload — re-initialize from a different .qzdb file.
+ * Thread-safe: the new data is loaded completely before swapping pointers.
+ * Returns 0 on success, -1 on error (old context unchanged on failure).
+ */
+int qzdb_reload(qzdb_searcher_t* ctx, const char* db_path);
 
 #endif
