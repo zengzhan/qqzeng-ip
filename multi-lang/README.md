@@ -92,7 +92,14 @@ use qzdb_searcher::{from_file, QzdbSearcher};
 
 let searcher = from_file("qqzeng_ip_max_china.qzdb");
 if let Some(loc) = searcher.find("114.114.114.114") {
-    println!("Country: {}, City: {}", loc.get("country"), loc.get("city"));
+    // 直接字段访问 (O(1))
+    println!("Country: {}, City: {}", loc.country(), loc.city());
+    // 动态字段访问
+    println!("{}", loc.get("isp"));
+
+    // 序列化为 JSON (依赖 serde)
+    let json = serde_json::to_string(&loc).unwrap();
+    println!("{}", json);
 }
 ```
 

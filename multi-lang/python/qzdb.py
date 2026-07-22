@@ -234,12 +234,16 @@ class GeoInfo:
     @property
     def longitude(self):
         i = self._name_idx.get('longitude')
-        return self._values[i] if i is not None and i < len(self._values) else ''
+        v = self._values[i] if i is not None and i < len(self._values) else ''
+        try: return float(v) if v else None
+        except ValueError: return None
 
     @property
     def latitude(self):
         i = self._name_idx.get('latitude')
-        return self._values[i] if i is not None and i < len(self._values) else ''
+        v = self._values[i] if i is not None and i < len(self._values) else ''
+        try: return float(v) if v else None
+        except ValueError: return None
 
     def to_dict(self):
         return {fname: self._values[i] if i < len(self._values) else ''
