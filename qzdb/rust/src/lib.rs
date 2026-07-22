@@ -86,14 +86,14 @@ pub struct GeoInfo {
     pub values: Vec<String>,
     pub field_names: Arc<Vec<String>>,
     pub float_field_indices: Arc<Vec<usize>>,
+    field_name_to_idx: Arc<std::collections::HashMap<String, usize>>,
 }
 
 impl GeoInfo {
     pub fn get(&self, name: &str) -> &str {
-        self.field_names
-            .iter()
-            .position(|n| n == name)
-            .and_then(|i| self.values.get(i))
+        self.field_name_to_idx
+            .get(name)
+            .and_then(|i| self.values.get(*i))
             .map(|s| s.as_str())
             .unwrap_or("")
     }
@@ -861,6 +861,7 @@ impl QzdbSearcher {
             values,
             field_names: self.field_names.clone(),
             float_field_indices: self.float_field_indices.clone(),
+            field_name_to_idx: self.field_name_to_idx.clone(),
         })
     }
 
@@ -980,7 +981,7 @@ impl QzdbSearcher {
                 else { String::new() }
             };
         }
-        Some(GeoInfo { values, field_names: self.field_names.clone(), float_field_indices: self.float_field_indices.clone() })
+        Some(GeoInfo { values, field_names: self.field_names.clone(), float_field_indices: self.float_field_indices.clone(), field_name_to_idx: self.field_name_to_idx.clone() })
     }
 
     /// Reload database from a new file path, replacing current state.
