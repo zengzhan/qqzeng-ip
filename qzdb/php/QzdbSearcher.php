@@ -1,6 +1,14 @@
 <?php
 namespace Qqzeng\Ip;
 
+class QzdbException extends \Exception
+{
+    public function __construct(string $message, int $code, ?\Throwable $previous = null)
+    {
+        parent::__construct($message, $code, $previous);
+    }
+}
+
 class GeoInfo implements \ArrayAccess
 {
     private $fields;
@@ -116,7 +124,19 @@ class QzdbSearcher
     private $poolsLoaded = false;
 
     const SENTINEL = 0x80000000;
+    const SENTINEL_MASK_24 = 0x7FFFFF;
+    const SENTINEL_MASK_31 = 0x7FFFFFFF;
     const FLOAT_FIELDS = ['longitude' => true, 'latitude' => true];
+    const MAX_TRIE_WALK_STEPS = 1000;
+
+    // Error codes
+    const ERROR_NOT_FOUND = 1;
+    const ERROR_CORRUPTED = 2;
+    const ERROR_OUT_OF_BOUNDS = 3;
+    const ERROR_INVALID_PARAM = 4;
+    const ERROR_BAD_HEADER = 5;
+    const ERROR_BAD_MAGIC = 6;
+    const ERROR_UNSUPPORTED = 7;
 
     public static function getInstance($dbPath = null, $groupIndex = 0)
     {
@@ -143,33 +163,33 @@ class QzdbSearcher
     {
         $this->data = file_get_contents($dbPath);
         if ($this->data === false) {
-            throw new \InvalidArgumentException("Cannot read database file: " . $dbPath);
+            throw new QzdbException("Cannot read database file: " . $dbPath, self::ERROR_INVALID_PARAM);
         }
         $this->parseHeader();
     }
 
-    private function readU16($off)
+    private function safeReadU16($off)
     {
         return unpack('v', substr($this->data, $off, 2))[1];
     }
 
-    private function readU32($off)
+    private function safeReadU32($off)
     {
         return unpack('V', substr($this->data, $off, 4))[1];
     }
 
-    private function readU64($off)
+    private function safeReadU64($off)
     {
         return unpack('P', substr($this->data, $off, 8))[1];
     }
 
-    private function readU24($off)
+    private function safeReadU24($off)
     {
         $d = $this->data;
         return ord($d[$off]) | (ord($d[$off + 1]) << 8) | (ord($d[$off + 2]) << 16);
     }
 
-    private function readU48($off)
+    private function safeReadU48($off)
     {
         $d = $this->data;
         $low = unpack('V', substr($d, $off, 4))[1];
@@ -177,16 +197,16 @@ class QzdbSearcher
         return $low + ($high * 4294967296);
     }
 
-    private function readUintWidth($off, $width)
+    private function safeReadUintWidth($off, $width)
     {
         if ($width <= 1) {
             return ord($this->data[$off]);
         } elseif ($width == 2) {
-            return $this->readU16($off);
+            return $this->safeReadU16($off);
         } elseif ($width == 3) {
-            return $this->readU24($off);
+            return $this->safeReadU24($off);
         } else {
-            return $this->readU32($off);
+            return $this->safeReadU32($off);
         }
     }
 
@@ -194,20 +214,20 @@ class QzdbSearcher
     {
         $d = $this->data;
         if (strlen($d) < 192) {
-            throw new \RuntimeException('File too small for QZDB header');
+            throw new QzdbException('File too small for QZDB header', self::ERROR_CORRUPTED);
         }
 
         $magic = substr($d, 0, 4);
         if ($magic !== 'QZDB') {
-            throw new \RuntimeException('Invalid magic, expected QZDB');
+            throw new QzdbException('Invalid magic, expected QZDB', self::ERROR_BAD_MAGIC);
         }
 
         $fmtVer = ord($d[4]);
         if ($fmtVer < 1 || $fmtVer > 6) {
-            throw new \RuntimeException("Unsupported format version: {$fmtVer}");
+            throw new QzdbException("Unsupported format version: {$fmtVer}", self::ERROR_UNSUPPORTED);
         }
 
-        $this->flags = $this->readU16(8);
+        $this->flags = $this->safeReadU16(8);
         $this->hasV4 = (bool)($this->flags & 1);
         $this->hasV6 = (bool)($this->flags & 2);
         $this->v4Node24 = (bool)($this->flags & 0x10);
@@ -218,45 +238,45 @@ class QzdbSearcher
             $this->v6JumpBits = 16;
         }
         if ($this->v6JumpBits < 16 || $this->v6JumpBits > 20) {
-            throw new \RuntimeException("v6JumpBits out of range [16,20]: {$this->v6JumpBits}");
+            throw new QzdbException("v6JumpBits out of range [16,20]: {$this->v6JumpBits}", self::ERROR_CORRUPTED);
         }
 
         $this->poolCount = ord($d[12]);
         $this->poolIdxSize = ord($d[13]);
         if ($this->poolIdxSize !== 2 && $this->poolIdxSize !== 3) {
-            throw new \RuntimeException("poolIdxSize must be 2 or 3, got {$this->poolIdxSize}");
+            throw new QzdbException("poolIdxSize must be 2 or 3, got {$this->poolIdxSize}", self::ERROR_CORRUPTED);
         }
-        $this->geoCount = $this->readU16(14);
-        $this->rowCount = $this->readU32(20);
-        $this->v4RecCount = $this->readU32(24);
-        $this->v6RecCount = $this->readU32(28);
+        $this->geoCount = $this->safeReadU16(14);
+        $this->rowCount = $this->safeReadU32(20);
+        $this->v4RecCount = $this->safeReadU32(24);
+        $this->v6RecCount = $this->safeReadU32(28);
 
-        $hs = $this->readU32(36);
+        $hs = $this->safeReadU32(36);
         if ($hs !== 192) {
-            throw new \RuntimeException("Unexpected header size: {$hs}");
+            throw new QzdbException("Unexpected header size: {$hs}", self::ERROR_CORRUPTED);
         }
 
         // Offsets
-        $this->offRowSchema = $this->readU64(40);
-        $this->offGroupSchema = $this->readU64(48);
-        $this->offV4Jump = $this->readU64(64);
-        $this->offV4Nodes = $this->readU64(72);
-        $this->offV6Jump = $this->readU64(80);
-        $this->offV6Nodes = $this->readU64(88);
-        $this->offIPRow = $this->readU64(96);
-        $this->offGeoEntries = $this->readU64(104);
-        $this->offPools = $this->readU64(136);
-        $this->offMeta = $this->readU64(144);
+        $this->offRowSchema = $this->safeReadU64(40);
+        $this->offGroupSchema = $this->safeReadU64(48);
+        $this->offV4Jump = $this->safeReadU64(64);
+        $this->offV4Nodes = $this->safeReadU64(72);
+        $this->offV6Jump = $this->safeReadU64(80);
+        $this->offV6Nodes = $this->safeReadU64(88);
+        $this->offIPRow = $this->safeReadU64(96);
+        $this->offGeoEntries = $this->safeReadU64(104);
+        $this->offPools = $this->safeReadU64(136);
+        $this->offMeta = $this->safeReadU64(144);
 
-        $this->v4NodeCount = $this->readU32(152);
-        $this->v6NodeCount = $this->readU32(156);
-        $this->ipRowSize = $this->readU32(160);
+        $this->v4NodeCount = $this->safeReadU32(152);
+        $this->v6NodeCount = $this->safeReadU32(156);
+        $this->ipRowSize = $this->safeReadU32(160);
         if ($this->ipRowSize < 1 || $this->ipRowSize > 64) {
-            throw new \RuntimeException("ipRowSize out of range [1,64]: {$this->ipRowSize}");
+            throw new QzdbException("ipRowSize out of range [1,64]: {$this->ipRowSize}", self::ERROR_CORRUPTED);
         }
-        $this->geoEntryGroupCount = $this->readU32(164);
+        $this->geoEntryGroupCount = $this->safeReadU32(164);
         if ($this->geoEntryGroupCount < 1 || $this->geoEntryGroupCount > 255) {
-            throw new \RuntimeException("geoEntryGroupCount out of range [1,255]: {$this->geoEntryGroupCount}");
+            throw new QzdbException("geoEntryGroupCount out of range [1,255]: {$this->geoEntryGroupCount}", self::ERROR_CORRUPTED);
         }
 
         $d = $this->data;
@@ -266,25 +286,25 @@ class QzdbSearcher
         $v6JumpSize = (1 << $this->v6JumpBits) * 4;
 
         if ($this->offV4Jump > 0 && $this->offV4Jump + 65536 * 4 > $len) {
-            throw new \RuntimeException('V4 jump table out of bounds');
+            throw new QzdbException('V4 jump table out of bounds', self::ERROR_OUT_OF_BOUNDS);
         }
         if ($this->offV4Nodes > 0 && $this->offV4Nodes + $this->v4NodeCount * $v4NodeSize > $len) {
-            throw new \RuntimeException('V4 nodes table out of bounds');
+            throw new QzdbException('V4 nodes table out of bounds', self::ERROR_OUT_OF_BOUNDS);
         }
         if ($this->offV6Jump > 0 && $this->offV6Jump + $v6JumpSize > $len) {
-            throw new \RuntimeException('V6 jump table out of bounds');
+            throw new QzdbException('V6 jump table out of bounds', self::ERROR_OUT_OF_BOUNDS);
         }
         if ($this->offV6Nodes > 0 && $this->offV6Nodes + $this->v6NodeCount * $v6NodeSize > $len) {
-            throw new \RuntimeException('V6 nodes table out of bounds');
+            throw new QzdbException('V6 nodes table out of bounds', self::ERROR_OUT_OF_BOUNDS);
         }
         if ($this->offIPRow > 0 && $this->offIPRow + $this->rowCount * $this->ipRowSize > $len) {
-            throw new \RuntimeException('IP row table out of bounds');
+            throw new QzdbException('IP row table out of bounds', self::ERROR_OUT_OF_BOUNDS);
         }
 
         // GeoEntryOffsets[4]
         $this->groupEntryOffsets = [];
         for ($i = 0; $i < 4; $i++) {
-            $this->groupEntryOffsets[] = $this->readU48(168 + $i * 6);
+            $this->groupEntryOffsets[] = $this->safeReadU48(168 + $i * 6);
         }
 
         // Parse GroupMetadataTable (at offGeoEntries)
@@ -302,15 +322,15 @@ class QzdbSearcher
             $this->groupFieldCounts[$gi] = ord($d[$gmOff]);
             $gmOff += 1;
             if ($fmtVer === 1 || $fmtVer >= 4) {
-                $this->groupEntryCounts[$gi] = $this->readU32($gmOff);
+                $this->groupEntryCounts[$gi] = $this->safeReadU32($gmOff);
                 $gmOff += 4;
             } else {
-                $this->groupEntryCounts[$gi] = $this->readU16($gmOff);
+                $this->groupEntryCounts[$gi] = $this->safeReadU16($gmOff);
                 $gmOff += 2;
             }
 
             if ($fmtVer === 1 || $fmtVer >= 3) {
-                $this->groupDimMasks[$gi] = $this->readU16($gmOff);
+                $this->groupDimMasks[$gi] = $this->safeReadU16($gmOff);
                 $gmOff += 2;
             } else {
                 $this->groupDimMasks[$gi] = ($gi !== 2) ? 0x01 : 0x02;
@@ -327,15 +347,15 @@ class QzdbSearcher
         // Parse GROUP_SCHEMA if present
         if ($this->offGroupSchema > 0) {
             $sp = $this->offGroupSchema;
-            $gsGroupCount = $this->readU16($sp);
+            $gsGroupCount = $this->safeReadU16($sp);
             $sp += 2;
             $maxGsGroups = min($gsGroupCount, $actualGroups);
             for ($gi = 0; $gi < $maxGsGroups; $gi++) {
                 $sp += 2; // skip groupId
-                $fldCount = $this->readU16($sp);
+                $fldCount = $this->safeReadU16($sp);
                 $sp += 2;
                 $sp += 4; // skip entryCount
-                $stride = $this->readU32($sp);
+                $stride = $this->safeReadU32($sp);
                 $sp += 4;
                 $sp += 4; // skip flags
 
@@ -348,7 +368,7 @@ class QzdbSearcher
                     $fieldIds = array_fill(0, $fldCount, 0);
                     $poolSectionIds = array_fill(0, $fldCount, 0);
                     for ($fi = 0; $fi < $fldCount; $fi++) {
-                        $fieldIds[$fi] = $this->readU16($sp);
+                        $fieldIds[$fi] = $this->safeReadU16($sp);
                         $sp += 2;
                         $widths[$fi] = ord($d[$sp]);
                         $sp += 1;
@@ -356,9 +376,9 @@ class QzdbSearcher
                         $sp += 1;
                         $natives[$fi] = ($fieldFlags & 0x01) !== 0;
                         $natTypes[$fi] = ($fieldFlags >> 1) & 0x03;
-                        $offsets[$fi] = $this->readU32($sp);
+                        $offsets[$fi] = $this->safeReadU32($sp);
                         $sp += 4;
-                        $poolSectionIds[$fi] = $this->readU32($sp);
+                        $poolSectionIds[$fi] = $this->safeReadU32($sp);
                         $sp += 4;
                     }
                     $this->groupFieldWidths[$gi] = $widths;
@@ -410,7 +430,7 @@ class QzdbSearcher
             $pos = $offMeta;
             while ($pos + 4 <= strlen($d)) {
                 $t = ord($d[$pos]);
-                $length = $this->readU16($pos + 2);
+                $length = $this->safeReadU16($pos + 2);
                 if ($t === 0 || $length === 0) {
                     break;
                 }
@@ -475,7 +495,7 @@ class QzdbSearcher
                     $groupPoolList[] = [];
                     continue;
                 }
-                $count = $this->readU32($poolCursor);
+                $count = $this->safeReadU32($poolCursor);
                 $poolCursor += 4;
                 if ($this->offRowSchema > 0) {
                     $poolCursor += 4;
@@ -488,7 +508,7 @@ class QzdbSearcher
                 // Read string offsets
                 $offsets = [];
                 for ($o = 0; $o <= $count; $o++) {
-                    $offsets[] = $this->readU32($poolCursor);
+                    $offsets[] = $this->safeReadU32($poolCursor);
                     $poolCursor += 4;
                 }
 
@@ -520,12 +540,12 @@ class QzdbSearcher
             $d = $this->data;
             $val = ord($d[$offset]) | (ord($d[$offset + 1]) << 8) | (ord($d[$offset + 2]) << 16);
             if ($val & 0x800000) {
-                return ($val & 0x7FFFFF) | self::SENTINEL;
+                return ($val & self::SENTINEL_MASK_24) | self::SENTINEL;
             }
             return $val;
         } else {
             $childOff = $this->offV4Nodes + $nodeIdx * 8 + $bit * 4;
-            return $this->readU32($childOff);
+            return $this->safeReadU32($childOff);
         }
     }
 
@@ -538,25 +558,25 @@ class QzdbSearcher
             $d = $this->data;
             $val = ord($d[$offset]) | (ord($d[$offset + 1]) << 8) | (ord($d[$offset + 2]) << 16);
             if ($val & 0x800000) {
-                return ($val & 0x7FFFFF) | self::SENTINEL;
+                return ($val & self::SENTINEL_MASK_24) | self::SENTINEL;
             }
             return $val;
         } else {
             $childOff = $this->offV6Nodes + $nodeIdx * 8 + $bit * 4;
-            return $this->readU32($childOff);
+            return $this->safeReadU32($childOff);
         }
     }
 
     private function trieWalkV4($ipInt)
     {
         $hi16 = ($ipInt >> 16) & 0xFFFF;
-        $ptr = $this->readU32($this->offV4Jump + $hi16 * 4);
+        $ptr = $this->safeReadU32($this->offV4Jump + $hi16 * 4);
 
         if ($ptr === 0) {
             return 0;
         }
         if ($ptr & self::SENTINEL) {
-            return $ptr & 0x7FFFFFFF;
+            return $ptr & self::SENTINEL_MASK_31;
         }
 
         $idx = $ptr;
@@ -572,7 +592,7 @@ class QzdbSearcher
                 return 0;
             }
             if ($child & self::SENTINEL) {
-                return $child & 0x7FFFFFFF;
+                return $child & self::SENTINEL_MASK_31;
             }
 
             $idx = $child;
@@ -603,18 +623,22 @@ class QzdbSearcher
             }
         }
 
-        $ptr = $this->readU32($this->offV6Jump + $idx_jump * 4);
+        $ptr = $this->safeReadU32($this->offV6Jump + $idx_jump * 4);
         if ($ptr === 0) {
             return 0;
         }
         if ($ptr & self::SENTINEL) {
-            return $ptr & 0x7FFFFFFF;
+            return $ptr & self::SENTINEL_MASK_31;
         }
 
         $idx = $ptr;
         $depth = $v6_jump_bits;
+        $steps = 0;
 
         while ($depth < 128) {
+            if (++$steps >= self::MAX_TRIE_WALK_STEPS) {
+                return 0;
+            }
             $byteIdx = (int)($depth / 8);
             $bitIdx = 7 - ($depth % 8);
             $bit = (ord($ipBin[$byteIdx]) >> $bitIdx) & 1;
@@ -624,7 +648,7 @@ class QzdbSearcher
                 return 0;
             }
             if ($child & self::SENTINEL) {
-                return $child & 0x7FFFFFFF;
+                return $child & self::SENTINEL_MASK_31;
             }
 
             $idx = $child;
@@ -640,12 +664,12 @@ class QzdbSearcher
             return [0, 0, 0];
         }
         $off = $this->offIPRow + $rowId * $this->ipRowSize;
-        $geoId = $this->readU24($off);
-        $asnId = $this->readU24($off + 3);
+        $geoId = $this->safeReadU24($off);
+        $asnId = $this->safeReadU24($off + 3);
 
         $usageTypeId = 0;
         if ($this->ipRowSize >= 9) {
-            $usageTypeId = $this->readU24($off + 6);
+            $usageTypeId = $this->safeReadU24($off + 6);
         }
 
         return [$geoId, $asnId, $usageTypeId];
@@ -720,11 +744,11 @@ class QzdbSearcher
                     $val = sprintf('%.6f', $valNum);
                 } else {
                     // int
-                    $valNum = $this->readUintWidth($fo, $w);
+                    $valNum = $this->safeReadUintWidth($fo, $w);
                     $val = (string)$valNum;
                 }
             } else {
-                $idx = $this->readUintWidth($fo, $w);
+                $idx = $this->safeReadUintWidth($fo, $w);
                 $groupPool = $this->groupPools[$groupIndex];
                 
                 // Use positional index for pool lookup (poolSectionId is metadata only)
@@ -747,27 +771,13 @@ class QzdbSearcher
 
     public function find($ipStr)
     {
-        if (!$ipStr) {
-            return null;
-        }
-
-        if (strpos($ipStr, ':') !== false) {
-            $packed = inet_pton($ipStr);
-            if ($packed === false) {
-                return null;
-            }
-            if (substr($packed, 0, 12) === "\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff") {
-                $ipInt = unpack('N', substr($packed, 12))[1];
-                return $this->findUint($ipInt);
-            }
-            return $this->findV6Bin($packed);
-        }
-
-        $ipInt = self::fastParseIp($ipStr);
-        if ($ipInt === null) {
-            return null;
-        }
-        return $this->findUint($ipInt);
+        if (!$ipStr) return null;
+        $result = self::fastParseIp($ipStr);
+        if ($result === null) return null;
+        list($v4, $v6) = $result;
+        if ($v4 !== null) return $this->findUint($v4);
+        if (!$this->hasV6) return null;
+        return $this->findV6Bin($v6);
     }
 
     public function findUint($ipInt)
@@ -797,16 +807,11 @@ class QzdbSearcher
     public function lookupRowId($ipStr)
     {
         if ($ipStr === null || $ipStr === '') return 0;
-        if (strpos($ipStr, ':') !== false) {
-            $ipBin = @inet_pton($ipStr);
-            if ($ipBin === false) return 0;
-            if (strlen($ipBin) === 4) {
-                return $this->lookupRowIdUint((ord($ipBin[0]) << 24) | (ord($ipBin[1]) << 16) | (ord($ipBin[2]) << 8) | ord($ipBin[3]));
-            }
-            return $this->lookupRowIdV6($ipBin);
-        }
-        $ipInt = $this->fastParseIp($ipStr);
-        return $this->lookupRowIdUint($ipInt);
+        $result = self::fastParseIp($ipStr);
+        if ($result === null) return 0;
+        list($v4, $v6) = $result;
+        if ($v4 !== null) return $this->lookupRowIdUint($v4);
+        return $this->lookupRowIdV6($v6);
     }
 
     public function lookupRowIdUint($ipInt)
@@ -835,6 +840,86 @@ class QzdbSearcher
             return '';
         }
         return $info->toPipe();
+    }
+
+    public function findFields($ipStr, $fieldNames = null)
+    {
+        if ($fieldNames === null || count($fieldNames) === 0) {
+            return $this->find($ipStr);
+        }
+        $rowId = $this->lookupRowId($ipStr);
+        if ($rowId === 0) return null;
+        return $this->resolveGeoFields($rowId, $this->groupIndex, $fieldNames);
+    }
+
+    private function resolveGeoFields($rowId, $groupIndex, $fieldNames)
+    {
+        list($geoId, $asnId, $usageTypeId) = $this->readIPRow($rowId);
+        $mask = $groupIndex < count($this->groupDimMasks) ? $this->groupDimMasks[$groupIndex] : 0;
+        $entryId = ($mask & 0x02) ? $asnId : (($mask & 0x04) ? $usageTypeId : $geoId);
+        if ($entryId === 0 || $groupIndex < 0 || $groupIndex >= count($this->groupFieldCounts)) return null;
+        if ($entryId >= $this->groupEntryCounts[$groupIndex]) return null;
+
+        $this->ensurePoolsLoaded();
+        $fieldCount = $this->groupFieldCounts[$groupIndex];
+        if ($fieldCount <= 0) return null;
+
+        $nameToIdx = [];
+        foreach ($this->fieldNames as $i => $name) {
+            $nameToIdx[$name] = $i;
+        }
+        $indices = [];
+        foreach ($fieldNames as $name) {
+            if (isset($nameToIdx[$name])) $indices[] = $nameToIdx[$name];
+        }
+        if (count($indices) === 0) return null;
+
+        $groupEntryStart = $this->offGeoEntries + $this->groupEntryOffsets[$groupIndex];
+        $stride = $this->groupStrides[$groupIndex];
+        $entryOffset = $groupEntryStart + $entryId * $stride;
+        $d = $this->data;
+        $widths = $this->groupFieldWidths[$groupIndex];
+        $baseOffsets = $this->groupFieldOffsets[$groupIndex];
+        $natives = $this->groupFieldNative[$groupIndex];
+        $natTypes = $this->groupFieldNativeType[$groupIndex];
+        $fieldIds = isset($this->groupFieldIds[$groupIndex]) ? $this->groupFieldIds[$groupIndex] : null;
+
+        $resolved = [];
+        foreach ($indices as $i) {
+            if ($i < 0 || $i >= $fieldCount) continue;
+            $w = $widths[$i];
+            $fo = $entryOffset + $baseOffsets[$i];
+            $isNative = $natives && $i < count($natives) && $natives[$i];
+            if ($isNative) {
+                $t = $natTypes && $i < count($natTypes) ? $natTypes[$i] : 0;
+                if ($t === 1) {
+                    $valNum = $w === 4 ? unpack('f', substr($d, $fo, 4))[1] : unpack('d', substr($d, $fo, 8))[1];
+                    $resolved[$i] = sprintf('%.6f', $valNum);
+                } else {
+                    $resolved[$i] = (string)$this->safeReadUintWidth($fo, $w);
+                }
+            } else {
+                $idx = $this->safeReadUintWidth($fo, $w);
+                $groupPool = $this->groupPools[$groupIndex];
+                $resolved[$i] = ($groupPool && $i < count($groupPool) && $idx < count($groupPool[$i])) ? $groupPool[$i][$idx] : '';
+            }
+        }
+
+        $fields = [];
+        $resolvedFieldNames = [];
+        for ($i = 0; $i < $fieldCount; $i++) {
+            $fieldId = ($fieldIds && $i < count($fieldIds)) ? $fieldIds[$i] : $i;
+            $fname = $fieldId < count($this->fieldNames) ? $this->fieldNames[$fieldId] : "field_{$fieldId}";
+            $val = isset($resolved[$i]) ? $resolved[$i] : '';
+            $fields[$fname] = $val;
+            $resolvedFieldNames[$i] = $fname;
+        }
+        return new GeoInfo($fields, $resolvedFieldNames, $this->floatFieldIndices);
+    }
+
+    public function reload($dbPath)
+    {
+        $this->load($dbPath);
     }
 
     public function getFieldNames()
@@ -871,28 +956,113 @@ class QzdbSearcher
         return $stored === $computed;
     }
 
+    private static $HEX = null;
+
+    private static function initHex()
+    {
+        if (self::$HEX !== null) return;
+        self::$HEX = array_fill(0, 128, 0);
+        for ($i = 0; $i < 10; $i++) self::$HEX[48 + $i] = $i;
+        for ($i = 0; $i < 6; $i++) { self::$HEX[97 + $i] = 10 + $i; self::$HEX[65 + $i] = 10 + $i; }
+    }
+
+    private static function fastParseIpv4($s)
+    {
+        $n = strlen($s);
+        if ($n === 0 || $s[$n - 1] === '.') return null;
+        $result = 0; $val = 0; $dots = 0; $start = 0;
+        for ($i = 0; $i <= $n; $i++) {
+            $c = $i < $n ? ord($s[$i]) : 46;
+            if ($c === 46) {
+                $segLen = $i - $start;
+                if ($segLen === 0 || $segLen > 3) return null;
+                if ($segLen > 1 && $s[$start] === '0') return null;
+                $val = 0;
+                for ($j = $start; $j < $i; $j++) {
+                    $d = ord($s[$j]);
+                    if ($d < 48 || $d > 57) return null;
+                    $val = $val * 10 + ($d - 48);
+                }
+                if ($val > 255) return null;
+                $result = ($result << 8) | $val;
+                $dots++; $start = $i + 1;
+            }
+        }
+        return $dots === 4 ? $result : null;
+    }
+
     private static function fastParseIp($ip)
     {
-        $result = 0;
-        $val = 0;
-        $dots = 0;
-        $len = strlen($ip);
-        for ($i = 0; $i < $len; $i++) {
-            $c = ord($ip[$i]);
-            if ($c >= 48 && $c <= 57) {
-                $val = $val * 10 + ($c - 48);
-                if ($val > 255) return null;
-            } elseif ($c === 46) {
-                if ($i === 0 || $ip[$i - 1] === '.') return null;
-                $result = ($result << 8) | $val;
-                $val = 0;
-                $dots++;
-            } else {
+        if (!is_string($ip)) return null;
+        // Fail-closed: reject any whitespace (no silent trim — SSRF-safe, cross-lang consistent)
+        for ($i = 0, $n = strlen($ip); $i < $n; $i++) {
+            $c = $ip[$i];
+            if ($c === ' ' || $c === "\t" || $c === "\n" || $c === "\r" || $c === "\v" || $c === "\f") {
                 return null;
             }
         }
-        if ($dots !== 3) return null;
-        if ($len > 0 && $ip[$len - 1] === '.') return null;
-        return ($result << 8) | $val;
+        if ($n === 0 || $n > 45) return null;
+        $s = $ip;
+        if (strpos($s, ':') === false) {
+            $v4 = self::fastParseIpv4($s);
+            return $v4 !== null ? array($v4, null) : null;
+        }
+        if (strpos($s, '%') !== false) return null;
+        $dc = strpos($s, '::');
+        if ($dc !== false && strpos($s, '::', $dc + 2) !== false) return null;
+        $lft = $dc !== false ? substr($s, 0, $dc) : $s;
+        $rgt = $dc !== false ? substr($s, $dc + 2) : '';
+        $lg = $lft !== '' ? explode(':', $lft) : array();
+        $rg = $rgt !== '' ? explode(':', $rgt) : array();
+        if ($lg === array('')) $lg = array();
+        if ($rg === array('')) $rg = array();
+        foreach ($lg as $g) { if ($g === '') return null; }
+        foreach ($rg as $g) { if ($g === '') return null; }
+        $allg = array_merge($lg, $rg);
+        $hasV4 = false; $v4Int = 0;
+        $last = count($allg) - 1;
+        if ($last >= 0 && strpos($allg[$last], '.') !== false) {
+            $v4Int = self::fastParseIpv4($allg[$last]);
+            if ($v4Int === null) return null;
+            $hasV4 = true;
+            array_pop($allg);
+        }
+        $ng = count($allg);
+        $v4Slots = $hasV4 ? 2 : 0;
+        if ($dc !== false) {
+            if ($ng + $v4Slots > 7) return null;
+        } else {
+            if ($ng + $v4Slots !== 8) return null;
+        }
+        self::initHex();
+        foreach ($allg as $g) {
+            $gl = strlen($g);
+            if ($gl === 0 || $gl > 4) return null;
+            for ($j = 0; $j < $gl; $j++) {
+                $cc = ord($g[$j]);
+                if ($cc >= 128 || (self::$HEX[$cc] === 0 && $cc !== 48)) return null;
+            }
+        }
+        $zeros = 8 - $ng - $v4Slots;
+        $buf = str_repeat("\0", 16);
+        $off = 0;
+        foreach ($lg as $g) {
+            $v = 0;
+            for ($j = 0; $j < strlen($g); $j++) $v = ($v << 4) | self::$HEX[ord($g[$j])];
+            $buf[$off] = chr($v >> 8); $buf[$off + 1] = chr($v & 0xff);
+            $off += 2;
+        }
+        $off += $zeros * 2;
+        foreach ($rg as $g) {
+            $v = 0;
+            for ($j = 0; $j < strlen($g); $j++) $v = ($v << 4) | self::$HEX[ord($g[$j])];
+            $buf[$off] = chr($v >> 8); $buf[$off + 1] = chr($v & 0xff);
+            $off += 2;
+        }
+        if ($hasV4) { $buf[12] = chr(($v4Int >> 24) & 0xff); $buf[13] = chr(($v4Int >> 16) & 0xff); $buf[14] = chr(($v4Int >> 8) & 0xff); $buf[15] = chr($v4Int & 0xff); }
+        if (ord($buf[10]) === 0xff && ord($buf[11]) === 0xff && ord($buf[0]) === 0 && ord($buf[1]) === 0 && ord($buf[2]) === 0 && ord($buf[3]) === 0 && ord($buf[4]) === 0 && ord($buf[5]) === 0 && ord($buf[6]) === 0 && ord($buf[7]) === 0 && ord($buf[8]) === 0 && ord($buf[9]) === 0) {
+            return array(((ord($buf[12]) << 24) | (ord($buf[13]) << 16) | (ord($buf[14]) << 8) | ord($buf[15])) & 0xffffffff, null);
+        }
+        return array(null, $buf);
     }
 }
