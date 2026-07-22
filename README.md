@@ -1,13 +1,26 @@
-# qqzeng-ip 项目文档
+# 👑 qqzeng-ip / QZDB 极速 IP 地理位置解析引擎
 
-## 👑 旗舰产品：QZDB 下一代极速解析引擎 (Recommended)
+<p kernel-align="center">
+  <a href="https://github.com/zengzhan/qqzeng-ip"><img src="https://img.shields.io/badge/Verification-100%25%20Passed-brightgreen.svg" alt="100% Passed"></a>
+  <a href="https://github.com/zengzhan/qqzeng-ip"><img src="https://img.shields.io/badge/Latency-%3C0.08%C2%B5s-purple.svg" alt="Sub-microsecond Latency"></a>
+  <a href="https://github.com/zengzhan/qqzeng-ip"><img src="https://img.shields.io/badge/Languages-Rust%20%7C%20C%20%7C%20Go%20%7C%20Java%20%7C%20C%23%20%7C%20Node%20%7C%20PHP%20%7C%20Python-blue.svg" alt="8 Languages"></a>
+  <a href="https://github.com/zengzhan/qqzeng-ip"><img src="https://img.shields.io/badge/License-MIT-orange.svg" alt="License MIT"></a>
+</p>
 
-> **[进入 QZDB 多语言极速解析 SDK 文档](./qzdb/README_zh.md)**
+> **QZDB (qqzeng IP Database)** 是一款专为企业级高并发、云原生架构打造的下一代 IP 地理位置与号段归属地二进制搜索引擎。凭借**双阶段 Patricia Trie 树算法**、**`mmap` 零拷贝**以及**无锁并发设计**，提供单机微秒级响应与超高吞吐。
 
-**QZDB (qqzeng IP Database)** 专注于为企业提供高速、低开销的 IP 地址解析检索方案。
-- **极致性能**：Rust / C / Go 基于只读内存映射（mmap）或单次载入实现零分配查询，多版本均可达到**单机微秒级**解析延迟。
-- **全量验证**：对全部 `959,162` 个 CIDR 区间的边界及中心 IP 进行了 `2,877,486` 次无抽样全量核对，通过率 **100.00%**。
-- **全语言支持**：C, Rust, Go, Java, Node.js, C#, Python, PHP。
+---
+
+> [!IMPORTANT]
+> **🚀 为什么选择 QZDB 旗舰解析引擎？**
+> - ⚡ **极致性能**：Rust / C / Go 基于只读内存映射（mmap）实现零堆分配查询，单次解析延迟低至 **< 0.08 µs (80 纳秒)**。
+> - 🛡️ **全量无抽样验证**：对全部 `959,162` 个 CIDR 区间的边界及中心 IP 进行了 **`2,877,486` 次无抽样全量核对**，通过率 **100.00%**。
+> - 📦 **高密存储**：Trie 树前缀压路机算法，千万级全球 IP/CIDR 细化网段体积压缩率高达 **95%+**（仅十余兆）。
+> - 🌐 **全语言原生 SDK**：官方提供 Rust, C/C++, Go, Java, C#, Node.js, PHP, Python 八种主流语言支持。
+
+---
+
+## 📊 多语言 SDK 性能横向评测榜单 (SDK Benchmark)
 
 | 排名 | 语言 | 查询模式 | 单线程吞吐量 (Ops/sec) | 平均查询延迟 | 性能评价 | 状态 | 适用场景 |
 | :---: | :--- | :--- | :--- | :--- | :--- | :---: | :--- |
@@ -24,23 +37,46 @@
 
 ---
 
-## 项目简介
+## ⚡ 一行代码快速集成 (Quick Start)
 
-**qqzeng-ip** 是一个高性能的 IP 地址数据库解析工具，专注于快速、精准地查询全球 IP 地址的归属地及多维字段信息。新一代 **QZDB** 二进制格式是专为现代云原生、高并发网络环境定制的搜索引擎。
+> 更完整的 API 文档与多语言用例，请参见 **[QZDB 多语言 SDK 指南](./qzdb/README_zh.md)**。
+
+```go
+// 🐹 Go 示例 (mmap 零拷贝, Goroutine 安全)
+searcher, err := qzdb.NewSearcher("qqzeng_ip_max_china.qzdb")
+region, err := searcher.Find("114.114.114.114")
+fmt.Println(region.Country, region.Province, region.City, region.Isp) // 中国 江苏 南京 中国电信
+```
+
+```python
+# 🐍 Python 示例 (单例模式开箱即用)
+from qzdb import QzdbSearcher
+searcher = QzdbSearcher.get_instance("qqzeng_ip_max_china.qzdb")
+print(searcher.find_str("114.114.114.114")) # 亚洲|CN|中国|江苏|南京|中国电信
+```
+
+```rust
+// 🦀 Rust 示例 (零分配 Zero-Copy 检索)
+let searcher = QzdbSearcher::new("qqzeng_ip_max_china.qzdb")?;
+if let Some(info) = searcher.find("114.114.114.114") {
+    println!("{} {} {}", info.country, info.province, info.city);
+}
+```
 
 ---
 
-## 为什么选择 QZDB 与 CIDR 掩码格式？
-
-* **极致紧凑**：QZDB 二进制压缩率达到 **95%+**，仅十余兆大小即可装载千万级全球 IP 细化记录。
-* **CIDR 简化表示**：采用“IP 地址/前缀长度”（如 `192.168.1.0/24`）的标准 CIDR 结构，单个 IP 自动保留，不再使用冗余的起止多列设计，查询与管理更直观。
-* **原生 IPv4/IPv6 全支持**：网络工具、防火墙和各类现代数据库天然支持 CIDR 寻址，计算与匹配效率更高。
-
----
-
-## 📐 QZDB 算法架构与查询复杂度 (Algorithm Architecture)
+## 📐 QZDB 算法架构与查询流程 (Algorithm Architecture)
 
 QZDB 引擎核心采用专门定制的 **双阶段 Patricia Trie 树型检索算法**：
+
+```mermaid
+flowchart LR
+    A[输入目标 IP<br>例如: 114.114.114.114] --> B[阶段1: Jump Table 前缀跳级<br>16-bit 静态表槽位定位]
+    B --> C[阶段2: Patricia Trie LPM 匹配<br>只读内存按位降维遍历]
+    C --> D[阶段3: String Pool 物理偏移<br>O1 无锁直接读取字符数据]
+    D --> E[输出地理结果<br>中国|江苏|南京|中国电信]
+```
+
 1. **第一阶段 (Jump Table 快速跳级)**：
    * **IPv4**：默认预读 `16-bit` 的静态前缀跳转表（$2^{16} = 65,536$ 个槽位）。根据 IP 的前两字节，直接 $\mathcal{O}(1)$ 跳转定位到 Trie 树的具体子树节点，消除前 16 层的递归遍历。
    * **IPv6**：根据数据量大小动态估算最佳跳转位数 `v6_jump_bits`（通常为 `16~20 bit`），同样实现首阶段的快速降维。
