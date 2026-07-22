@@ -2,6 +2,27 @@
 
 const fs = require('fs');
 
+const SENTINEL = 0x80000000;
+const SENTINEL_MASK_24 = 0x7FFFFF;
+const SENTINEL_MASK_31 = 0x7FFFFFFF;
+const MAX_TRIE_WALK_STEPS = 1000;
+
+class QzdbError extends Error {
+  constructor(message, code) {
+    super(message);
+    this.name = 'QzdbError';
+    this.code = code;
+  }
+}
+
+QzdbError.NOT_FOUND = 'NOT_FOUND';
+QzdbError.CORRUPTED = 'CORRUPTED';
+QzdbError.OUT_OF_BOUNDS = 'OUT_OF_BOUNDS';
+QzdbError.INVALID_PARAM = 'INVALID_PARAM';
+QzdbError.BAD_HEADER = 'BAD_HEADER';
+QzdbError.BAD_MAGIC = 'BAD_MAGIC';
+QzdbError.UNSUPPORTED = 'UNSUPPORTED';
+
 function _initCrc32Table() {
   const t = new Uint32Array(256);
   for (let i = 0; i < 256; i++) {
@@ -22,8 +43,13 @@ function _crc32(buf) {
   return (crc ^ 0xFFFFFFFF) >>> 0;
 }
 
-const SENTINEL = 0x80000000;
 const FLOAT_FIELDS = new Set(['longitude', 'latitude']);
+
+// Reserved keys that must never be overwritten by DB field names (prototype pollution / method clobber).
+const GEOINFO_RESERVED = new Set([
+  '_vals', '_fieldNames', '_floatFlags', '_nameToIdx',
+  'get', 'toPipe', 'constructor', '__proto__', 'toString', 'valueOf', 'hasOwnProperty',
+]);
 
 // Parallel-array storage (not a dict) keeps per-query allocation cheap; floatFlags[i]
 // replaces a Set so toPipe() does an O(1) boolean check per field.
@@ -32,19 +58,18 @@ class GeoInfo {
     this._vals = vals;
     this._fieldNames = fieldNames;
     this._floatFlags = floatFlags;
-    this._nameToIdx = null;
+    this._nameToIdx = Object.create(null);
     for (let i = 0; i < fieldNames.length; i++) {
-      this[fieldNames[i]] = vals[i] !== undefined ? vals[i] : '';
+      const name = fieldNames[i];
+      this._nameToIdx[name] = i;
+      // Expose fields as own props for DX (info.country), but never clobber internals/methods.
+      if (!GEOINFO_RESERVED.has(name)) {
+        this[name] = vals[i] !== undefined ? vals[i] : '';
+      }
     }
   }
 
   get(name) {
-    if (this._nameToIdx === null) {
-      this._nameToIdx = {};
-      for (let i = 0; i < this._fieldNames.length; i++) {
-        this._nameToIdx[this._fieldNames[i]] = i;
-      }
-    }
     const idx = this._nameToIdx[name];
     if (idx === undefined) return '';
     const v = this._vals[idx];
@@ -81,6 +106,7 @@ class QzdbSearcher {
     this._data = Buffer.alloc(0);
     this._groupIndex = groupIndex;
     this._fieldNames = [];
+    this._fieldNameToIdx = {};
     this._floatFieldIndices = new Set();
     this._versionName = '';
 
@@ -137,10 +163,24 @@ class QzdbSearcher {
 
   static getInstance(dbPath = null, groupIndex = 0) {
     if (!QzdbSearcher._instance) {
-      QzdbSearcher._instance = new QzdbSearcher(dbPath, groupIndex);
+      try {
+        QzdbSearcher._instance = new QzdbSearcher(dbPath, groupIndex);
+      } catch (error) {
+        if (error instanceof QzdbError) {
+          throw error;
+        }
+        throw new QzdbError(error.message, QzdbError.CORRUPTED);
+      }
     } else if (dbPath !== null) {
-      QzdbSearcher._instance.load(dbPath);
-      QzdbSearcher._instance._groupIndex = groupIndex;
+      try {
+        QzdbSearcher._instance.load(dbPath);
+        QzdbSearcher._instance._groupIndex = groupIndex;
+      } catch (error) {
+        if (error instanceof QzdbError) {
+          throw error;
+        }
+        throw new QzdbError(error.message, QzdbError.CORRUPTED);
+      }
     }
     return QzdbSearcher._instance;
   }
@@ -151,24 +191,24 @@ class QzdbSearcher {
     return this;
   }
 
-  _readU16(off) {
+  safeReadU16(off) {
     return this._data.readUInt16LE(off);
   }
 
-  _readU32(off) {
+  safeReadU32(off) {
     return this._data.readUInt32LE(off);
   }
 
-  _readU64(off) {
+  safeReadU64(off) {
     return Number(this._data.readBigUInt64LE(off));
   }
 
-  _readU24(off) {
+  safeReadU24(off) {
     const d = this._data;
     return d[off] | (d[off + 1] << 8) | (d[off + 2] << 16);
   }
 
-  _readU48(off) {
+  safeReadU48(off) {
     const d = this._data;
     return d[off]
       + d[off + 1] * 0x100
@@ -178,35 +218,35 @@ class QzdbSearcher {
       + d[off + 5] * 0x10000000000;
   }
 
-  _readUintWidth(off, width) {
+  safeReadUintWidth(off, width) {
     if (width <= 1) {
       return this._data[off];
     } else if (width === 2) {
-      return this._readU16(off);
+      return this.safeReadU16(off);
     } else if (width === 3) {
-      return this._readU24(off);
+      return this.safeReadU24(off);
     } else {
-      return this._readU32(off);
+      return this.safeReadU32(off);
     }
   }
 
   _parseHeader() {
     const d = this._data;
     if (d.length < 192) {
-      throw new Error('File too small for QZDB header');
+      throw new QzdbError('File too small for QZDB header', QzdbError.BAD_HEADER);
     }
 
     const magic = d.toString('ascii', 0, 4);
     if (magic !== 'QZDB') {
-      throw new Error('Invalid magic, expected QZDB');
+      throw new QzdbError('Invalid magic, expected QZDB', QzdbError.BAD_MAGIC);
     }
 
     const fmtVer = d[4];
     if (fmtVer < 1 || fmtVer > 6) {
-      throw new Error(`Unsupported format version: ${fmtVer}`);
+      throw new QzdbError(`Unsupported format version: ${fmtVer}`, QzdbError.UNSUPPORTED);
     }
 
-    this._flags = this._readU16(8);
+    this._flags = this.safeReadU16(8);
     this._hasV4 = !!(this._flags & 1);
     this._hasV6 = !!(this._flags & 2);
     this._v4Node24 = !!(this._flags & 0x10);
@@ -217,45 +257,45 @@ class QzdbSearcher {
       this._v6JumpBits = 16;
     }
     if (this._v6JumpBits < 16 || this._v6JumpBits > 20) {
-      throw new Error(`v6JumpBits out of range [16,20]: ${this._v6JumpBits}`);
+      throw new QzdbError(`v6JumpBits out of range [16,20]: ${this._v6JumpBits}`, QzdbError.INVALID_PARAM);
     }
 
     this._poolCount = d[12];
     this._poolIdxSize = d[13];
     if (this._poolIdxSize !== 2 && this._poolIdxSize !== 3) {
-      throw new Error(`poolIdxSize must be 2 or 3, got ${this._poolIdxSize}`);
+      throw new QzdbError(`poolIdxSize must be 2 or 3, got ${this._poolIdxSize}`, QzdbError.INVALID_PARAM);
     }
-    this._geoCount = this._readU16(14);
-    this._rowCount = this._readU32(20);
-    this._v4RecCount = this._readU32(24);
-    this._v6RecCount = this._readU32(28);
+    this._geoCount = this.safeReadU16(14);
+    this._rowCount = this.safeReadU32(20);
+    this._v4RecCount = this.safeReadU32(24);
+    this._v6RecCount = this.safeReadU32(28);
 
-    const hs = this._readU32(36);
+    const hs = this.safeReadU32(36);
     if (hs !== 192) {
-      throw new Error(`Unexpected header size: ${hs}`);
+      throw new QzdbError(`Unexpected header size: ${hs}`, QzdbError.BAD_HEADER);
     }
 
     // Offsets
-    this._offRowSchema = this._readU64(40);
-    this._offGroupSchema = this._readU64(48);
-    this._offV4Jump = this._readU64(64);
-    this._offV4Nodes = this._readU64(72);
-    this._offV6Jump = this._readU64(80);
-    this._offV6Nodes = this._readU64(88);
-    this._offIPRow = this._readU64(96);
-    this._offGeoEntries = this._readU64(104);
-    this._offPools = this._readU64(136);
-    this._offMeta = this._readU64(144);
+    this._offRowSchema = this.safeReadU64(40);
+    this._offGroupSchema = this.safeReadU64(48);
+    this._offV4Jump = this.safeReadU64(64);
+    this._offV4Nodes = this.safeReadU64(72);
+    this._offV6Jump = this.safeReadU64(80);
+    this._offV6Nodes = this.safeReadU64(88);
+    this._offIPRow = this.safeReadU64(96);
+    this._offGeoEntries = this.safeReadU64(104);
+    this._offPools = this.safeReadU64(136);
+    this._offMeta = this.safeReadU64(144);
 
-    this._v4NodeCount = this._readU32(152);
-    this._v6NodeCount = this._readU32(156);
-    this._ipRowSize = this._readU32(160);
+    this._v4NodeCount = this.safeReadU32(152);
+    this._v6NodeCount = this.safeReadU32(156);
+    this._ipRowSize = this.safeReadU32(160);
     if (this._ipRowSize < 1 || this._ipRowSize > 64) {
-      throw new Error(`ipRowSize out of range [1,64]: ${this._ipRowSize}`);
+      throw new QzdbError(`ipRowSize out of range [1,64]: ${this._ipRowSize}`, QzdbError.INVALID_PARAM);
     }
-    this._geoEntryGroupCount = this._readU32(164);
+    this._geoEntryGroupCount = this.safeReadU32(164);
     if (this._geoEntryGroupCount < 1 || this._geoEntryGroupCount > 255) {
-      throw new Error(`geoEntryGroupCount out of range [1,255]: ${this._geoEntryGroupCount}`);
+      throw new QzdbError(`geoEntryGroupCount out of range [1,255]: ${this._geoEntryGroupCount}`, QzdbError.INVALID_PARAM);
     }
 
     // Bounds validation for section offsets
@@ -265,25 +305,25 @@ class QzdbSearcher {
     const v6JumpSize = (1 << this._v6JumpBits) * 4;
 
     if (this._offV4Jump > 0 && this._offV4Jump + 65536 * 4 > dlen) {
-      throw new Error('V4 jump table offset out of bounds');
+      throw new QzdbError('V4 jump table offset out of bounds', QzdbError.OUT_OF_BOUNDS);
     }
     if (this._offV4Nodes > 0 && this._offV4Nodes + this._v4NodeCount * v4NodeSize > dlen) {
-      throw new Error('V4 nodes table offset out of bounds');
+      throw new QzdbError('V4 nodes table offset out of bounds', QzdbError.OUT_OF_BOUNDS);
     }
     if (this._offV6Jump > 0 && this._offV6Jump + v6JumpSize > dlen) {
-      throw new Error('V6 jump table offset out of bounds');
+      throw new QzdbError('V6 jump table offset out of bounds', QzdbError.OUT_OF_BOUNDS);
     }
     if (this._offV6Nodes > 0 && this._offV6Nodes + this._v6NodeCount * v6NodeSize > dlen) {
-      throw new Error('V6 nodes table offset out of bounds');
+      throw new QzdbError('V6 nodes table offset out of bounds', QzdbError.OUT_OF_BOUNDS);
     }
     if (this._offIPRow > 0 && this._offIPRow + this._rowCount * this._ipRowSize > dlen) {
-      throw new Error('IP row table offset out of bounds');
+      throw new QzdbError('IP row table offset out of bounds', QzdbError.OUT_OF_BOUNDS);
     }
 
     // GeoEntryOffsets[4]
     this._groupEntryOffsets = [];
     for (let i = 0; i < 4; i++) {
-      this._groupEntryOffsets.push(this._readU48(168 + i * 6));
+      this._groupEntryOffsets.push(this.safeReadU48(168 + i * 6));
     }
 
     // Parse GroupMetadataTable (at offGeoEntries)
@@ -301,15 +341,15 @@ class QzdbSearcher {
       this._groupFieldCounts[gi] = d[gmOff];
       gmOff += 1;
       if (fmtVer === 1 || fmtVer >= 4) {
-        this._groupEntryCounts[gi] = this._readU32(gmOff);
+        this._groupEntryCounts[gi] = this.safeReadU32(gmOff);
         gmOff += 4;
       } else {
-        this._groupEntryCounts[gi] = this._readU16(gmOff);
+        this._groupEntryCounts[gi] = this.safeReadU16(gmOff);
         gmOff += 2;
       }
 
       if (fmtVer === 1 || fmtVer >= 3) {
-        this._groupDimMasks[gi] = this._readU16(gmOff);
+        this._groupDimMasks[gi] = this.safeReadU16(gmOff);
         gmOff += 2;
       } else {
         this._groupDimMasks[gi] = (gi !== 2) ? 0x01 : 0x02;
@@ -328,15 +368,15 @@ class QzdbSearcher {
     // Parse GROUP_SCHEMA if present
     if (this._offGroupSchema > 0) {
       let sp = this._offGroupSchema;
-      const gsGroupCount = this._readU16(sp);
+      const gsGroupCount = this.safeReadU16(sp);
       sp += 2;
       const maxGsGroups = Math.min(gsGroupCount, actualGroups);
       for (let gi = 0; gi < maxGsGroups; gi++) {
         sp += 2; // skip groupId
-        const fldCount = this._readU16(sp);
+        const fldCount = this.safeReadU16(sp);
         sp += 2;
         sp += 4; // skip entryCount
-        const stride = this._readU32(sp);
+        const stride = this.safeReadU32(sp);
         sp += 4;
         sp += 4; // skip flags
 
@@ -349,7 +389,7 @@ class QzdbSearcher {
           const fieldIds = new Array(fldCount).fill(0);
           const poolSectionIds = new Array(fldCount).fill(0);
           for (let fi = 0; fi < fldCount; fi++) {
-            fieldIds[fi] = this._readU16(sp);
+            fieldIds[fi] = this.safeReadU16(sp);
             sp += 2;
             widths[fi] = d[sp];
             sp += 1;
@@ -357,9 +397,9 @@ class QzdbSearcher {
             sp += 1;
             natives[fi] = (fieldFlags & 0x01) !== 0;
             natTypes[fi] = (fieldFlags >> 1) & 0x03;
-            offsets[fi] = this._readU32(sp);
+            offsets[fi] = this.safeReadU32(sp);
             sp += 4;
-            poolSectionIds[fi] = this._readU32(sp);
+            poolSectionIds[fi] = this.safeReadU32(sp);
             sp += 4;
           }
           this._groupFieldWidths[gi] = widths;
@@ -406,7 +446,7 @@ class QzdbSearcher {
       let pos = offMeta;
       while (pos + 4 <= d.length) {
         const t = d[pos];
-        const length = this._readU16(pos + 2);
+        const length = this.safeReadU16(pos + 2);
         if (t === 0 || length === 0) {
           break;
         }
@@ -421,6 +461,8 @@ class QzdbSearcher {
 
       if (fieldNames && fieldNames.length === this._groupFieldCounts[0]) {
         this._fieldNames = fieldNames;
+        this._fieldNameToIdx = Object.create(null);
+        for (let i = 0; i < fieldNames.length; i++) this._fieldNameToIdx[fieldNames[i]] = i;
         this._floatFlags = fieldNames.map(n => FLOAT_FIELDS.has(n));
         return;
       }
@@ -428,6 +470,8 @@ class QzdbSearcher {
 
     // Fallback placeholder names
     this._fieldNames = Array.from({ length: this._groupFieldCounts[0] }, (_, i) => `field_${i}`);
+    this._fieldNameToIdx = Object.create(null);
+    for (let i = 0; i < this._fieldNames.length; i++) this._fieldNameToIdx[this._fieldNames[i]] = i;
     this._floatFlags = new Array(this._groupFieldCounts[0]).fill(false);
   }
 
@@ -470,7 +514,7 @@ class QzdbSearcher {
           groupPoolList.push([]);
           continue;
         }
-        const count = this._readU32(poolCursor);
+        const count = this.safeReadU32(poolCursor);
         poolCursor += 4;
         if (this._offRowSchema > 0) {
           poolCursor += 4;
@@ -483,7 +527,7 @@ class QzdbSearcher {
         // Read string offsets
         const offsets = [];
         for (let o = 0; o <= count; o++) {
-          offsets.push(this._readU32(poolCursor));
+          offsets.push(this.safeReadU32(poolCursor));
           poolCursor += 4;
         }
 
@@ -512,12 +556,12 @@ class QzdbSearcher {
       const offset = bit === 0 ? nodeOffset : nodeOffset + 3;
       const val = this._data[offset] | (this._data[offset + 1] << 8) | (this._data[offset + 2] << 16);
       if (val & 0x800000) {
-        return (val & 0x7FFFFF) | SENTINEL;
+        return (val & SENTINEL_MASK_24) | SENTINEL;
       }
       return val;
     } else {
       const childOff = this._offV4Nodes + nodeIdx * 8 + bit * 4;
-      return this._readU32(childOff);
+      return this.safeReadU32(childOff);
     }
   }
 
@@ -527,25 +571,25 @@ class QzdbSearcher {
       const offset = bit === 0 ? nodeOffset : nodeOffset + 3;
       const val = this._data[offset] | (this._data[offset + 1] << 8) | (this._data[offset + 2] << 16);
       if (val & 0x800000) {
-        return (val & 0x7FFFFF) | SENTINEL;
+        return (val & SENTINEL_MASK_24) | SENTINEL;
       }
       return val;
     } else {
       const childOff = this._offV6Nodes + nodeIdx * 8 + bit * 4;
-      return this._readU32(childOff);
+      return this.safeReadU32(childOff);
     }
   }
 
   _trieWalkV4(ipInt) {
     const d = this._data;
     const hi16 = (ipInt >>> 16) & 0xFFFF;
-    const ptr = this._readU32(this._offV4Jump + hi16 * 4);
+    const ptr = this.safeReadU32(this._offV4Jump + hi16 * 4);
 
     if (ptr === 0) {
       return 0;
     }
     if (ptr & SENTINEL) {
-      return ptr & 0x7FFFFFFF;
+      return ptr & SENTINEL_MASK_31;
     }
 
     let idx = ptr;
@@ -553,7 +597,7 @@ class QzdbSearcher {
     let steps = 0;
 
     while (true) {
-      if (++steps > 32) return 0;
+      if (++steps >= MAX_TRIE_WALK_STEPS) return 0;
       const bit = (suffix >>> 31) & 1;
       const child = this._getV4Child(idx, bit);
 
@@ -561,7 +605,7 @@ class QzdbSearcher {
         return 0;
       }
       if (child & SENTINEL) {
-        return child & 0x7FFFFFFF;
+        return child & SENTINEL_MASK_31;
       }
 
       idx = child;
@@ -569,32 +613,38 @@ class QzdbSearcher {
     }
   }
 
-  _trieWalkV6(ipInt) {
-    const shift = 128 - this._v6JumpBits;
-    const idxJump = Number(ipInt >> BigInt(shift)) & ((1 << this._v6JumpBits) - 1);
-    const ptr = this._readU32(this._offV6Jump + idxJump * 4);
-
-    if (ptr === 0) {
-      return 0;
+  // PERF-03: Buffer-based V6 trie walk (no BigInt, operates on raw bytes)
+  _trieWalkV6Buf(ipBuf) {
+    // Extract jump index using 4×uint32 approach (no BigInt)
+    const jumpBits = this._v6JumpBits;
+    let idxJump = 0;
+    if (jumpBits <= 32) {
+      // All jump bits fit in first 4 bytes
+      const b0 = ipBuf[0], b1 = ipBuf[1], b2 = ipBuf[2], b3 = ipBuf[3];
+      if (jumpBits <= 8) idxJump = b0 >> (8 - jumpBits);
+      else if (jumpBits <= 16) idxJump = ((b0 << 8) | b1) >> (16 - jumpBits);
+      else if (jumpBits <= 24) idxJump = ((b0 << 16) | (b1 << 8) | b2) >> (24 - jumpBits);
+      else idxJump = ((b0 << 24) | (b1 << 16) | (b2 << 8) | b3) >> (32 - jumpBits);
+    } else {
+      // Jump bits span into second dword
+      const b0 = ipBuf[0], b1 = ipBuf[1], b2 = ipBuf[2], b3 = ipBuf[3];
+      const b4 = ipBuf[4], b5 = ipBuf[5], b6 = ipBuf[6];
+      const hi = (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
+      const lo = (b4 << 16) | (b5 << 8) | b6;
+      idxJump = ((hi << (jumpBits - 32)) | (lo >> (64 - jumpBits))) & ((1 << jumpBits) - 1);
     }
-    if (ptr & SENTINEL) {
-      return ptr & 0x7FFFFFFF;
-    }
+    const ptr = this.safeReadU32(this._offV6Jump + idxJump * 4);
+    if (ptr === 0) return 0;
+    if (ptr & SENTINEL) return ptr & SENTINEL_MASK_31;
 
     let idx = ptr;
-    let depth = this._v6JumpBits;
-
+    let depth = jumpBits;
     while (depth < 128) {
-      const bit = Number((ipInt >> BigInt(127 - depth)) & 1n);
+      const byteIdx = depth >> 3;
+      const bit = (ipBuf[byteIdx] >> (7 - (depth & 7))) & 1;
       const child = this._getV6Child(idx, bit);
-
-      if (child === 0) {
-        return 0;
-      }
-      if (child & SENTINEL) {
-        return child & 0x7FFFFFFF;
-      }
-
+      if (child === 0) return 0;
+      if (child & SENTINEL) return child & SENTINEL_MASK_31;
       idx = child;
       depth += 1;
     }
@@ -607,12 +657,12 @@ class QzdbSearcher {
       return [0, 0, 0];
     }
     const off = this._offIPRow + rowId * this._ipRowSize;
-    const geoId = this._readU24(off);
-    const asnId = this._readU24(off + 3);
+    const geoId = this.safeReadU24(off);
+    const asnId = this.safeReadU24(off + 3);
 
     let usageTypeId = 0;
     if (this._ipRowSize >= 9) {
-      usageTypeId = this._readU24(off + 6);
+      usageTypeId = this.safeReadU24(off + 6);
     }
 
     return [geoId, asnId, usageTypeId];
@@ -710,39 +760,14 @@ class QzdbSearcher {
   }
 
   find(ipStr) {
-    if (!ipStr) {
-      return null;
-    }
-
-    if (ipStr.includes(':')) {
-      if (ipStr.includes('.')) {
-        const idx = ipStr.indexOf('::ffff:');
-        if (idx >= 0 && ipStr.substring(0, idx + 7) === '::ffff:') {
-          const v4 = ipStr.substring(ipStr.lastIndexOf(':') + 1);
-          const p4 = v4.split('.');
-          if (p4.length === 4) {
-            const ipInt = (+p4[0] << 24) | (+p4[1] << 16) | (+p4[2] << 8) | +p4[3];
-            return this.findUint(ipInt >>> 0);
-          }
-        }
-      }
-      const p = parseIPv6(ipStr);
-      if (p === null) {
-        return null;
-      }
-      // Check for IPv4-mapped IPv6 (::ffff:x.x.x.x)
-      const isV4Mapped = (p >> 32n) === 0xffffn && (p >> 48n) === 0n;
-      if (isV4Mapped) {
-        return this.findUint(Number(p & 0xffffffffn));
-      }
-      return this.findV6Uint(p);
-    }
-
-    const ipInt = fastParseIp(ipStr);
-    if (ipInt === null) {
-      return null;
-    }
-    return this.findUint(ipInt);
+    if (!ipStr) return null;
+    const result = fastParseIp(ipStr);
+    if (!result) return null;
+    if (result.v4 !== null) return this.findUint(result.v4);
+    if (!this._hasV6) return null;
+    const rowId = this._trieWalkV6Buf(result.v6);
+    if (rowId === 0) return null;
+    return this._resolveRowId(rowId, this._groupIndex);
   }
 
   findUint(ipInt) {
@@ -760,7 +785,8 @@ class QzdbSearcher {
     if (!this._hasV6) {
       return null;
     }
-    const rowId = this._trieWalkV6(ipInt);
+    // One-shot BigInt→bytes, then zero-BigInt walk (same as string path).
+    const rowId = this._trieWalkV6Buf(_bigint128ToBuf(ipInt));
     if (rowId === 0) {
       return null;
     }
@@ -772,25 +798,85 @@ class QzdbSearcher {
     if (!this._hasV6) {
       return null;
     }
-    const ipInt = (BigInt(high) << 64n) | (BigInt(low) & 0xFFFFFFFFFFFFFFFFn);
-    const rowId = this._trieWalkV6(ipInt);
+    const buf = _highLowToBuf(high, low);
+    const rowId = this._trieWalkV6Buf(buf);
     if (rowId === 0) {
       return null;
     }
     return this._resolveRowId(rowId, this._groupIndex);
   }
 
+  findFields(ipStr, fieldNames = null) {
+    if (fieldNames === null || fieldNames.length === 0) {
+      return this.find(ipStr);
+    }
+    const rowId = this.lookupRowId(ipStr);
+    if (rowId === 0) return null;
+    const ids = this.lookupIds(rowId);
+    if (ids === null) return null;
+    const [geoId, asnId, usageTypeId] = ids;
+    const mask = this._groupDimMasks[this._groupIndex] || 0;
+    const entryId = (mask & 0x02) ? asnId : ((mask & 0x04) ? usageTypeId : geoId);
+    if (entryId === 0) return null;
+    const indices = [];
+    for (const name of fieldNames) {
+      const idx = this._fieldNameToIdx[name];
+      if (idx !== undefined) indices.push(idx);
+    }
+    if (indices.length === 0) return null;
+    const fields = this._resolveGeoFields(entryId, this._groupIndex, indices);
+    return new GeoInfo(fields, this._fieldNames, this._floatFlags);
+  }
+
+  _resolveGeoFields(entryId, groupIndex, indices) {
+    this._ensurePoolsLoaded();
+    const gc = this._groupFieldCounts[groupIndex];
+    if (gc <= 0) return {};
+    const groupEntryStart = this._offGeoEntries + this._groupEntryOffsets[groupIndex];
+    const stride = this._groupStrides[groupIndex];
+    const entryOffset = groupEntryStart + entryId * stride;
+    const d = this._data;
+    const widths = this._groupFieldWidths[groupIndex];
+    const baseOffsets = this._groupFieldOffsets[groupIndex];
+    const natives = this._groupFieldNative[groupIndex];
+    const natTypes = this._groupFieldNativeType[groupIndex];
+    const fields = {};
+    for (const i of indices) {
+      if (i < 0 || i >= gc) continue;
+      const w = widths[i];
+      const fo = entryOffset + baseOffsets[i];
+      let val = '';
+      if (natives && natives[i]) {
+        const t = (natTypes && natTypes[i]) || 0;
+        if (t === 1) {
+          val = w === 4 ? String(d.readFloatLE(fo)) : String(d.readDoubleLE(fo));
+        } else {
+          val = String(this.safeReadUintWidth(fo, w));
+        }
+      } else {
+        const poolIdx = this.safeReadUintWidth(fo, w);
+        const gp = this._groupPools[groupIndex];
+        if (gp && i < gp.length && poolIdx < gp[i].length) {
+          val = gp[i][poolIdx];
+        }
+      }
+      fields[this._fieldNames[i]] = val;
+    }
+    return fields;
+  }
+
+  // Atomically replace database state with a fresh load
+  reload(dbPath) {
+    this.load(dbPath);
+  }
+
   lookupRowId(ipStr) {
     if (!ipStr) return 0;
-    if (ipStr.includes(':')) {
-      const ip6 = this._parseIpV6(ipStr);
-      if (ip6 === null) return 0;
-      const ipInt = (ip6.high << 64n) | (ip6.low & 0xFFFFFFFFFFFFFFFFn);
-      return this.lookupRowIdV6(ipInt);
-    }
-    const ipInt = this._fastParseIpV4(ipStr);
-    if (ipInt === -1) return 0;
-    return this.lookupRowIdUint(ipInt);
+    const result = fastParseIp(ipStr);
+    if (!result) return 0;
+    if (result.v4 !== null) return this.lookupRowIdUint(result.v4);
+    if (!this._hasV6) return 0;
+    return this._trieWalkV6Buf(result.v6);
   }
 
   lookupRowIdUint(ipInt) {
@@ -800,7 +886,7 @@ class QzdbSearcher {
 
   lookupRowIdV6(ipInt) {
     if (!this._hasV6) return 0;
-    return this._trieWalkV6(ipInt);
+    return this._trieWalkV6Buf(_bigint128ToBuf(ipInt));
   }
 
   lookupIds(rowId) {
@@ -834,68 +920,165 @@ class QzdbSearcher {
   }
 
   verifyCrc() {
-    if (this._data.length < 20) {
+    if (!this._data || this._data.length < 20) {
       return false;
     }
     const stored = this._data.readUInt32LE(16);
-    const original = Buffer.alloc(4);
-    this._data.copy(original, 0, 16, 20);
-    const copy = Buffer.from(this._data);
-    copy.writeUInt32LE(0, 16);
-    const computed = _crc32(copy);
-    original.copy(this._data, 16, 0, 4);
+    // Segmented CRC: CRC field counted as zero — no full-buffer copy/mutation.
+    const computed = _crc32File(this._data);
     return stored === computed;
   }
+
+  close() {
+    this._data = Buffer.alloc(0);
+    this._poolsLoaded = false;
+    this._groupPools = null;
+    this._fieldNames = [];
+    this._fieldNameToIdx = {};
+    this._floatFieldIndices = new Set();
+    this._floatFlags = null;
+    this._versionName = '';
+  }
+}
+
+/** Convert a 128-bit BigInt or high/low pair to a 16-byte big-endian Buffer. */
+function _bigint128ToBuf(ipInt) {
+  const buf = Buffer.allocUnsafe(16);
+  buf.writeBigUInt64BE(BigInt(ipInt) >> 64n, 0);
+  buf.writeBigUInt64BE(BigInt(ipInt) & 0xFFFFFFFFFFFFFFFFn, 8);
+  return buf;
+}
+
+function _highLowToBuf(high, low) {
+  const buf = Buffer.allocUnsafe(16);
+  buf.writeBigUInt64BE(BigInt(high), 0);
+  buf.writeBigUInt64BE(BigInt(low) & 0xFFFFFFFFFFFFFFFFn, 8);
+  return buf;
+}
+
+function _crc32Update(crc, buf, start, end) {
+  for (let i = start; i < end; i++) {
+    crc = (CRC32_TABLE[(crc ^ buf[i]) & 0xFF] >>> 0) ^ (crc >>> 8);
+  }
+  return crc >>> 0;
+}
+
+function _crc32File(buf) {
+  let crc = 0xFFFFFFFF;
+  crc = _crc32Update(crc, buf, 0, 16);
+  // 4 zero bytes for the CRC field
+  for (let i = 0; i < 4; i++) {
+    crc = (CRC32_TABLE[(crc ^ 0) & 0xFF] >>> 0) ^ (crc >>> 8);
+  }
+  crc = _crc32Update(crc, buf, 20, buf.length);
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+const _HEX = new Uint8Array(128);
+(function initHex() {
+  for (let i = 0; i < 10; i++) _HEX[48 + i] = i;
+  for (let i = 0; i < 6; i++) { _HEX[97 + i] = 10 + i; _HEX[65 + i] = 10 + i; }
+})();
+
+function _fastParseIPv4(s) {
+  const n = s.length;
+  if (n === 0 || s.charCodeAt(n - 1) === 46) return null;
+  let result = 0, val = 0, dots = 0, start = 0;
+  for (let i = 0; i <= n; i++) {
+    const c = i < n ? s.charCodeAt(i) : 46;
+    if (c === 46) {
+      const segLen = i - start;
+      if (segLen === 0 || segLen > 3) return null;
+      if (segLen > 1 && s.charCodeAt(start) === 48) return null;
+      val = 0;
+      for (let j = start; j < i; j++) {
+        const d = s.charCodeAt(j);
+        if (d < 48 || d > 57) return null;
+        val = val * 10 + (d - 48);
+      }
+      if (val > 255) return null;
+      result = (result << 8) | val;
+      dots++;
+      start = i + 1;
+    }
+  }
+  return dots === 4 ? (result >>> 0) : null;
 }
 
 function fastParseIp(ip) {
-  let result = 0, val = 0, dots = 0;
-  for (let i = 0; i < ip.length; i++) {
-    const c = ip.charCodeAt(i);
-    if (c >= 48 && c <= 57) {
-      val = val * 10 + (c - 48);
-      if (val > 255) return null;
-    } else if (c === 46) {
-      if (i === 0 || ip.charCodeAt(i - 1) === 46) return null;
-      result = (result << 8) | val;
-      val = 0;
-      dots++;
-    } else {
-      return null;
+  if (typeof ip !== 'string') return null;
+  const s = ip;
+  const n = s.length;
+  if (n === 0 || n > 45) return null;
+  // Fail-closed: reject any whitespace (no silent trim — SSRF-safe, cross-lang consistent)
+  for (let i = 0; i < n; i++) {
+    const c = s.charCodeAt(i);
+    if (c === 32 || c === 9 || c === 10 || c === 13 || c === 11 || c === 12) return null;
+  }
+  if (s.indexOf(':') < 0) {
+    const v4 = _fastParseIPv4(s);
+    if (v4 === null) return null;
+    return { v4, v6: null };
+  }
+  if (s.indexOf('%') >= 0) return null;
+  const dc = s.indexOf('::');
+  if (dc >= 0 && s.indexOf('::', dc + 2) >= 0) return null;
+  const lft = dc >= 0 ? s.substring(0, dc) : s;
+  const rgt = dc >= 0 ? s.substring(dc + 2) : '';
+  const lg = lft ? lft.split(':') : [];
+  const rg = rgt ? rgt.split(':') : [];
+  if (lg.length === 1 && lg[0] === '') lg.length = 0;
+  if (rg.length === 1 && rg[0] === '') rg.length = 0;
+  for (let i = 0; i < lg.length; i++) if (lg[i] === '') return null;
+  for (let i = 0; i < rg.length; i++) if (rg[i] === '') return null;
+  const allg = lg.concat(rg);
+  let hasV4 = false, v4Int = 0;
+  const last = allg.length - 1;
+    if (last >= 0 && allg[last].indexOf('.') >= 0) {
+    v4Int = _fastParseIPv4(allg[last]);
+    if (v4Int === null) return null;
+    hasV4 = true;
+    allg.length = last;
+  }
+  const ng = allg.length;
+  const v4Slots = hasV4 ? 2 : 0;
+  if (dc >= 0) {
+    if (ng + v4Slots > 7) return null;
+  } else {
+    if (ng + v4Slots !== 8) return null;
+  }
+  for (let i = 0; i < ng; i++) {
+    const g = allg[i];
+    const gl = g.length;
+    if (gl === 0 || gl > 4) return null;
+    for (let j = 0; j < gl; j++) {
+      const cc = g.charCodeAt(j);
+      if (cc >= 128 || _HEX[cc] === 0 && cc !== 48) return null;
     }
   }
-  if (dots !== 3) return null;
-  if (ip.charCodeAt(ip.length - 1) === 46) return null;
-  return ((result << 8) | val) >>> 0;
-}
-
-function parseIPv6(str) {
-  const idx = str.indexOf('%');
-  if (idx >= 0) str = str.substring(0, idx);
-  const parts = str.split(':');
-  // Count non-empty groups manually, avoiding .filter() intermediate array.
-  let nonEmpty = 0;
-  for (let i = 0; i < parts.length; i++) {
-    if (parts[i] !== '') nonEmpty++;
+  const zeros = 8 - ng - v4Slots;
+  const buf = Buffer.alloc(16);
+  let off = 0;
+  for (let i = 0; i < lg.length; i++) {
+    const g = lg[i];
+    let v = 0;
+    for (let j = 0; j < g.length; j++) v = (v << 4) | _HEX[g.charCodeAt(j)];
+    buf[off] = v >> 8; buf[off + 1] = v & 0xff;
+    off += 2;
   }
-  const fill = 8 - nonEmpty;
-  // Build the BigInt directly, avoiding the intermediate expanded[] array.
-  let val = 0n;
-  let filled = false;
-  let count = 0;
-  for (const p of parts) {
-    if (p === '' && !filled) {
-      for (let j = 0; j < fill; j++) { val = (val << 16n); count++; }
-      filled = true;
-    } else if (p !== '') {
-      if (!/^[0-9a-fA-F]{1,4}$/.test(p)) return null;
-      const parsed = parseInt(p, 16);
-      val = (val << 16n) | BigInt(parsed);
-      count++;
-    }
+  off += zeros * 2;
+  for (let i = 0; i < rg.length; i++) {
+    const g = rg[i];
+    let v = 0;
+    for (let j = 0; j < g.length; j++) v = (v << 4) | _HEX[g.charCodeAt(j)];
+    buf[off] = v >> 8; buf[off + 1] = v & 0xff;
+    off += 2;
   }
-  if (count !== 8) return null;
-  return val;
+  if (hasV4) { buf[12] = (v4Int >>> 24); buf[13] = (v4Int >>> 16) & 0xff; buf[14] = (v4Int >>> 8) & 0xff; buf[15] = v4Int & 0xff; }
+  if (buf[10] === 0xff && buf[11] === 0xff && buf[0] === 0 && buf[1] === 0 && buf[2] === 0 && buf[3] === 0 && buf[4] === 0 && buf[5] === 0 && buf[6] === 0 && buf[7] === 0 && buf[8] === 0 && buf[9] === 0) {
+    return { v4: ((buf[12] << 24) | (buf[13] << 16) | (buf[14] << 8) | buf[15]) >>> 0, v6: null };
+  }
+  return { v4: null, v6: buf };
 }
 
 module.exports = QzdbSearcher;
