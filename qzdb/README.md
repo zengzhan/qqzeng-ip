@@ -306,3 +306,5 @@ TEST_PASS
 ## License
 
 MIT
+
+<!-- commit: qzdb: 👑 下一代 QZDB 极速解析引擎多语言 SDK (支持 C/Go/Java/Rust/C#/Node.js/PHP/Python) -->
