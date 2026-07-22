@@ -8,6 +8,32 @@ using System.Text;
 
 namespace Qqzeng
 {
+    public enum ErrorCode
+    {
+        NotFound,
+        Corrupted,
+        OutOfBounds,
+        InvalidParam,
+        BadHeader,
+        BadMagic,
+        Unsupported
+    }
+
+    public class QzdbException : Exception
+    {
+        public ErrorCode Code { get; }
+
+        public QzdbException(ErrorCode code, string message) : base(message)
+        {
+            Code = code;
+        }
+
+        public QzdbException(ErrorCode code, string message, Exception inner) : base(message, inner)
+        {
+            Code = code;
+        }
+    }
+
     public class GeoInfo
     {
         public Dictionary<string, string> Fields;
@@ -15,12 +41,17 @@ namespace Qqzeng
         public HashSet<string> FloatIndices;
         public string[] Values;
 
-        public bool IsEmpty => Fields == null || Fields.Count == 0;
+        public bool IsEmpty => Values == null || Values.Length == 0;
 
         public string Get(string name)
         {
             if (Fields != null && Fields.TryGetValue(name, out var val))
                 return val;
+            for (int i = 0; i < FieldNames.Length; i++)
+            {
+                if (FieldNames[i] == name && i < Values.Length)
+                    return Values[i] ?? "";
+            }
             return "";
         }
 
@@ -30,9 +61,8 @@ namespace Qqzeng
             var parts = new string[FieldNames.Length];
             for (int i = 0; i < FieldNames.Length; i++)
             {
-                string fname = FieldNames[i];
-                string val = Fields.TryGetValue(fname, out var v) ? v : "";
-                if (FloatIndices.Contains(fname) && val.Length > 0)
+                string val = i < Values.Length ? Values[i] ?? "" : "";
+                if (FloatIndices.Contains(FieldNames[i]) && val.Length > 0)
                 {
                     if (double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out double f))
                         val = f.ToString("F6", CultureInfo.InvariantCulture);
@@ -49,11 +79,15 @@ namespace Qqzeng
         public static QzdbSearcher Instance => _lazy.Value;
 
         private const uint SENTINEL = 0x80000000;
+        private const uint SENTINEL_MASK_24 = 0x7FFFFF;
+        private const uint SENTINEL_MASK_31 = 0x7FFFFFFF;
+        private const int MaxTrieWalkSteps = 1000;
         private static readonly HashSet<string> FloatFields = new() { "longitude", "latitude" };
 
         private byte[] _data;
         private int _groupIndex;
         private string[] _fieldNames;
+        private Dictionary<string, int> _fieldNameToIdx;
         private HashSet<string> _floatFieldIndices = new();
         private string _versionName = "";
 
@@ -121,66 +155,78 @@ namespace Qqzeng
             lock (_loadLock)
             {
                 _groupIndex = groupIndex;
-                var raw = File.ReadAllBytes(dbPath);
+                byte[] raw;
+                try
+                {
+                    raw = File.ReadAllBytes(dbPath);
+                }
+                catch (FileNotFoundException ex)
+                {
+                    throw new QzdbException(ErrorCode.NotFound, $"Database file not found: {dbPath}", ex);
+                }
+                catch (IOException ex)
+                {
+                    throw new QzdbException(ErrorCode.Corrupted, $"Failed to read database file: {dbPath}", ex);
+                }
                 _data = raw;
                 ParseHeader(raw);
             }
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private ushort ReadU16(byte[] d, int off)
+        private ushort SafeReadU16(byte[] d, int off)
         {
             return BinaryPrimitives.ReadUInt16LittleEndian(d.AsSpan(off, 2));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private uint ReadU32(byte[] d, int off)
+        private uint SafeReadU32(byte[] d, int off)
         {
             return BinaryPrimitives.ReadUInt32LittleEndian(d.AsSpan(off, 4));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private ulong ReadU64(byte[] d, int off)
+        private ulong SafeReadU64(byte[] d, int off)
         {
             return BinaryPrimitives.ReadUInt64LittleEndian(d.AsSpan(off, 8));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private uint ReadU24(byte[] d, int off)
+        private uint SafeReadU24(byte[] d, int off)
         {
             return (uint)(d[off] | (d[off + 1] << 8) | (d[off + 2] << 16));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private long ReadU48(byte[] d, int off)
+        private long SafeReadU48(byte[] d, int off)
         {
             return (long)(d[off] | ((long)d[off + 1] << 8) | ((long)d[off + 2] << 16) |
                           ((long)d[off + 3] << 24) | ((long)d[off + 4] << 32) | ((long)d[off + 5] << 40));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private uint ReadUintWidth(byte[] d, int off, int width)
+        private uint SafeReadUintWidth(byte[] d, int off, int width)
         {
             if (width <= 1) return d[off];
-            if (width == 2) return ReadU16(d, off);
-            if (width == 3) return ReadU24(d, off);
-            return ReadU32(d, off);
+            if (width == 2) return SafeReadU16(d, off);
+            if (width == 3) return SafeReadU24(d, off);
+            return SafeReadU32(d, off);
         }
 
         private void ParseHeader(byte[] d)
         {
             if (d.Length < 192)
-                throw new InvalidDataException("File too small for QZDB header");
+                throw new QzdbException(ErrorCode.Corrupted, "File too small for QZDB header");
 
             string magic = Encoding.ASCII.GetString(d, 0, 4);
             if (magic != "QZDB")
-                throw new InvalidDataException("Invalid magic, expected QZDB");
+                throw new QzdbException(ErrorCode.BadMagic, "Invalid magic, expected QZDB");
 
             int fmtVer = d[4];
             if (fmtVer < 1 || fmtVer > 6)
-                throw new InvalidDataException($"Unsupported format version: {fmtVer}");
+                throw new QzdbException(ErrorCode.Unsupported, $"Unsupported format version: {fmtVer}");
 
-            _flags = ReadU16(d, 8);
+            _flags = SafeReadU16(d, 8);
             _hasV4 = (_flags & 1) != 0;
             _hasV6 = (_flags & 2) != 0;
             _v4Node24 = (_flags & 0x10) != 0;
@@ -189,40 +235,40 @@ namespace Qqzeng
             _v6JumpBits = d[11];
             if (_v6JumpBits == 0) _v6JumpBits = 16;
             if (_v6JumpBits < 16 || _v6JumpBits > 20)
-                throw new InvalidDataException($"v6JumpBits out of range [16,20]: {_v6JumpBits}");
+                throw new QzdbException(ErrorCode.InvalidParam, $"v6JumpBits out of range [16,20]: {_v6JumpBits}");
 
             _poolCount = d[12];
             _poolIdxSize = d[13];
             if (_poolIdxSize != 2 && _poolIdxSize != 3)
-                throw new InvalidDataException($"poolIdxSize must be 2 or 3, got {_poolIdxSize}");
-            _geoCount = ReadU16(d, 14);
-            _rowCount = (int)ReadU32(d, 20);
-            _v4RecCount = ReadU32(d, 24);
-            _v6RecCount = ReadU32(d, 28);
+                throw new QzdbException(ErrorCode.InvalidParam, $"poolIdxSize must be 2 or 3, got {_poolIdxSize}");
+            _geoCount = SafeReadU16(d, 14);
+            _rowCount = (int)SafeReadU32(d, 20);
+            _v4RecCount = SafeReadU32(d, 24);
+            _v6RecCount = SafeReadU32(d, 28);
 
-            int hs = (int)ReadU32(d, 36);
+            int hs = (int)SafeReadU32(d, 36);
             if (hs != 192)
-                throw new InvalidDataException($"Unexpected header size: {hs}");
+                throw new QzdbException(ErrorCode.BadHeader, $"Unexpected header size: {hs}");
 
-            _offRowSchema = (long)ReadU64(d, 40);
-            _offGroupSchema = (long)ReadU64(d, 48);
-            _offV4Jump = (long)ReadU64(d, 64);
-            _offV4Nodes = (long)ReadU64(d, 72);
-            _offV6Jump = (long)ReadU64(d, 80);
-            _offV6Nodes = (long)ReadU64(d, 88);
-            _offIPRow = (long)ReadU64(d, 96);
-            _offGeoEntries = (long)ReadU64(d, 104);
-            _offPools = (long)ReadU64(d, 136);
-            _offMeta = (long)ReadU64(d, 144);
+            _offRowSchema = (long)SafeReadU64(d, 40);
+            _offGroupSchema = (long)SafeReadU64(d, 48);
+            _offV4Jump = (long)SafeReadU64(d, 64);
+            _offV4Nodes = (long)SafeReadU64(d, 72);
+            _offV6Jump = (long)SafeReadU64(d, 80);
+            _offV6Nodes = (long)SafeReadU64(d, 88);
+            _offIPRow = (long)SafeReadU64(d, 96);
+            _offGeoEntries = (long)SafeReadU64(d, 104);
+            _offPools = (long)SafeReadU64(d, 136);
+            _offMeta = (long)SafeReadU64(d, 144);
 
-            _v4NodeCount = ReadU32(d, 152);
-            _v6NodeCount = ReadU32(d, 156);
-            _ipRowSize = (int)ReadU32(d, 160);
+            _v4NodeCount = SafeReadU32(d, 152);
+            _v6NodeCount = SafeReadU32(d, 156);
+            _ipRowSize = (int)SafeReadU32(d, 160);
             if (_ipRowSize < 1 || _ipRowSize > 64)
-                throw new InvalidDataException($"ipRowSize out of range [1,64]: {_ipRowSize}");
-            _geoEntryGroupCount = (int)ReadU32(d, 164);
+                throw new QzdbException(ErrorCode.InvalidParam, $"ipRowSize out of range [1,64]: {_ipRowSize}");
+            _geoEntryGroupCount = (int)SafeReadU32(d, 164);
             if (_geoEntryGroupCount < 1 || _geoEntryGroupCount > 255)
-                throw new InvalidDataException($"geoEntryGroupCount out of range [1,255]: {_geoEntryGroupCount}");
+                throw new QzdbException(ErrorCode.InvalidParam, $"geoEntryGroupCount out of range [1,255]: {_geoEntryGroupCount}");
 
             // Bounds validation for section offsets
             long dlen = d.Length;
@@ -231,19 +277,19 @@ namespace Qqzeng
             long v6JumpSize = (1L << _v6JumpBits) * 4;
 
             if (_offV4Jump > 0 && _offV4Jump + 65536 * 4 > dlen)
-                throw new InvalidDataException("V4 jump table offset out of bounds");
+                throw new QzdbException(ErrorCode.OutOfBounds, "V4 jump table offset out of bounds");
             if (_offV4Nodes > 0 && _offV4Nodes + (long)_v4NodeCount * v4NodeSize > dlen)
-                throw new InvalidDataException("V4 nodes table offset out of bounds");
+                throw new QzdbException(ErrorCode.OutOfBounds, "V4 nodes table offset out of bounds");
             if (_offV6Jump > 0 && _offV6Jump + v6JumpSize > dlen)
-                throw new InvalidDataException("V6 jump table offset out of bounds");
+                throw new QzdbException(ErrorCode.OutOfBounds, "V6 jump table offset out of bounds");
             if (_offV6Nodes > 0 && _offV6Nodes + (long)_v6NodeCount * v6NodeSize > dlen)
-                throw new InvalidDataException("V6 nodes table offset out of bounds");
+                throw new QzdbException(ErrorCode.OutOfBounds, "V6 nodes table offset out of bounds");
             if (_offIPRow > 0 && _offIPRow + (long)_rowCount * _ipRowSize > dlen)
-                throw new InvalidDataException("IP row table offset out of bounds");
+                throw new QzdbException(ErrorCode.OutOfBounds, "IP row table offset out of bounds");
 
             _groupEntryOffsets = new long[4];
             for (int i = 0; i < 4; i++)
-                _groupEntryOffsets[i] = ReadU48(d, 168 + i * 6);
+                _groupEntryOffsets[i] = SafeReadU48(d, 168 + i * 6);
 
             int gmOff = (int)_offGeoEntries;
             int groupCount = d[gmOff];
@@ -265,18 +311,18 @@ namespace Qqzeng
                 gmOff++;
                 if (fmtVer == 1 || fmtVer >= 4)
                 {
-                    _groupEntryCounts[gi] = ReadU32(d, gmOff);
+                    _groupEntryCounts[gi] = SafeReadU32(d, gmOff);
                     gmOff += 4;
                 }
                 else
                 {
-                    _groupEntryCounts[gi] = ReadU16(d, gmOff);
+                    _groupEntryCounts[gi] = SafeReadU16(d, gmOff);
                     gmOff += 2;
                 }
 
                 if (fmtVer == 1 || fmtVer >= 3)
                 {
-                    _groupDimMasks[gi] = ReadU16(d, gmOff);
+                    _groupDimMasks[gi] = SafeReadU16(d, gmOff);
                     gmOff += 2;
                 }
                 else
@@ -296,16 +342,16 @@ namespace Qqzeng
             if (_offGroupSchema > 0)
             {
                 int sp = (int)_offGroupSchema;
-                int gsGroupCount = ReadU16(d, sp);
+                int gsGroupCount = SafeReadU16(d, sp);
                 sp += 2;
                 int maxGsGroups = Math.Min(gsGroupCount, actualGroups);
                 for (int gi = 0; gi < maxGsGroups; gi++)
                 {
                     sp += 2; // skip groupId
-                    int fldCount = ReadU16(d, sp);
+                    int fldCount = SafeReadU16(d, sp);
                     sp += 2;
                     sp += 4; // skip entryCount
-                    int stride = (int)ReadU32(d, sp);
+                    int stride = (int)SafeReadU32(d, sp);
                     sp += 4;
                     sp += 4; // skip flags
 
@@ -320,7 +366,7 @@ namespace Qqzeng
                         var poolSectionIds = new uint[fldCount];
                         for (int fi = 0; fi < fldCount; fi++)
                         {
-                            fieldIds[fi] = ReadU16(d, sp);
+                            fieldIds[fi] = SafeReadU16(d, sp);
                             sp += 2;
                             widths[fi] = d[sp];
                             sp++;
@@ -328,9 +374,9 @@ namespace Qqzeng
                             sp++;
                             natives[fi] = (fieldFlags & 0x01) != 0;
                             natTypes[fi] = (fieldFlags >> 1) & 0x03;
-                            offsets[fi] = (int)ReadU32(d, sp);
+                            offsets[fi] = (int)SafeReadU32(d, sp);
                             sp += 4;
-                            poolSectionIds[fi] = ReadU32(d, sp);
+                            poolSectionIds[fi] = SafeReadU32(d, sp);
                             sp += 4;
                         }
                         _groupFieldWidths[gi] = widths;
@@ -382,7 +428,7 @@ namespace Qqzeng
                 while (pos + 4 <= d.Length)
                 {
                     byte t = d[pos];
-                    ushort length = ReadU16(d, pos + 2);
+                    ushort length = SafeReadU16(d, pos + 2);
                     if (t == 0 || length == 0) break;
                     if (pos + 4 + length > d.Length) break;
                     string val = Encoding.UTF8.GetString(d, pos + 4, length);
@@ -396,6 +442,9 @@ namespace Qqzeng
                 if (fieldNames != null && fieldNames.Length == _groupFieldCounts[0])
                 {
                     _fieldNames = fieldNames;
+                    _fieldNameToIdx = new Dictionary<string, int>(_fieldNames.Length);
+                    for (int i = 0; i < _fieldNames.Length; i++)
+                        _fieldNameToIdx[_fieldNames[i]] = i;
                     _floatFieldIndices.Clear();
                     foreach (var n in fieldNames)
                     {
@@ -409,7 +458,9 @@ namespace Qqzeng
             _fieldNames = new string[_groupFieldCounts[0]];
             for (int i = 0; i < _fieldNames.Length; i++)
                 _fieldNames[i] = $"field_{i}";
-            _floatFieldIndices.Clear();
+            _fieldNameToIdx = new Dictionary<string, int>(_fieldNames.Length);
+            for (int i = 0; i < _fieldNames.Length; i++)
+                _fieldNameToIdx[_fieldNames[i]] = i;
         }
 
         private void EnsurePoolsLoaded()
@@ -446,7 +497,7 @@ namespace Qqzeng
                             groupPoolList[f] = Array.Empty<string>();
                             continue;
                         }
-                        int count = (int)ReadU32(d, poolCursor);
+                        int count = (int)SafeReadU32(d, poolCursor);
                         poolCursor += 4;
                         if (_offRowSchema > 0)
                             poolCursor += 4;
@@ -459,7 +510,7 @@ namespace Qqzeng
                         var offsets = new uint[count + 1];
                         for (int o = 0; o <= count; o++)
                         {
-                            offsets[o] = ReadU32(d, poolCursor);
+                            offsets[o] = SafeReadU32(d, poolCursor);
                             poolCursor += 4;
                         }
 
@@ -492,13 +543,13 @@ namespace Qqzeng
                 long offset = bit == 0 ? nodeOffset : nodeOffset + 3;
                 uint val = (uint)(_data[offset] | (_data[offset + 1] << 8) | (_data[offset + 2] << 16));
                 if ((val & 0x800000) != 0)
-                    return (val & 0x7FFFFF) | SENTINEL;
+                    return (val & SENTINEL_MASK_24) | SENTINEL;
                 return val;
             }
             else
             {
                 long childOff = _offV4Nodes + nodeIdx * 8 + bit * 4;
-                return ReadU32(_data, (int)childOff);
+                return SafeReadU32(_data, (int)childOff);
             }
         }
 
@@ -511,23 +562,23 @@ namespace Qqzeng
                 long offset = bit == 0 ? nodeOffset : nodeOffset + 3;
                 uint val = (uint)(_data[offset] | (_data[offset + 1] << 8) | (_data[offset + 2] << 16));
                 if ((val & 0x800000) != 0)
-                    return (val & 0x7FFFFF) | SENTINEL;
+                    return (val & SENTINEL_MASK_24) | SENTINEL;
                 return val;
             }
             else
             {
                 long childOff = _offV6Nodes + nodeIdx * 8 + bit * 4;
-                return ReadU32(_data, (int)childOff);
+                return SafeReadU32(_data, (int)childOff);
             }
         }
 
         private uint TrieWalkV4(uint ipInt)
         {
             uint hi16 = (ipInt >> 16) & 0xFFFF;
-            uint ptr = ReadU32(_data, (int)(_offV4Jump + hi16 * 4));
+            uint ptr = SafeReadU32(_data, (int)(_offV4Jump + hi16 * 4));
 
             if (ptr == 0) return 0;
-            if ((ptr & SENTINEL) != 0) return ptr & 0x7FFFFFFF;
+            if ((ptr & SENTINEL) != 0) return ptr & SENTINEL_MASK_31;
 
             uint idx = ptr;
             uint suffix = (ipInt & 0xFFFF) << 16;
@@ -540,7 +591,7 @@ namespace Qqzeng
                 uint child = GetV4Child(idx, bit);
 
                 if (child == 0) return 0;
-                if ((child & SENTINEL) != 0) return child & 0x7FFFFFFF;
+                if ((child & SENTINEL) != 0) return child & SENTINEL_MASK_31;
 
                 idx = child;
                 suffix <<= 1;
@@ -550,10 +601,10 @@ namespace Qqzeng
         private uint TrieWalkV6(ulong ipHigh, ulong ipLow)
         {
             uint idxJump = (uint)(ipHigh >>> (64 - _v6JumpBits)) & (uint)((1 << _v6JumpBits) - 1);
-            uint ptr = ReadU32(_data, (int)(_offV6Jump + idxJump * 4));
+            uint ptr = SafeReadU32(_data, (int)(_offV6Jump + idxJump * 4));
 
             if (ptr == 0) return 0;
-            if ((ptr & SENTINEL) != 0) return ptr & 0x7FFFFFFF;
+            if ((ptr & SENTINEL) != 0) return ptr & SENTINEL_MASK_31;
 
             uint idx = ptr;
             int depth = _v6JumpBits;
@@ -566,7 +617,7 @@ namespace Qqzeng
                 uint child = GetV6Child(idx, bit);
 
                 if (child == 0) return 0;
-                if ((child & SENTINEL) != 0) return child & 0x7FFFFFFF;
+                if ((child & SENTINEL) != 0) return child & SENTINEL_MASK_31;
 
                 idx = child;
                 depth += 1;
@@ -580,10 +631,10 @@ namespace Qqzeng
             geoId = 0; asnId = 0; usageTypeId = 0;
             if (rowId <= 0 || rowId >= _rowCount) return;
             long off = _offIPRow + rowId * _ipRowSize;
-            geoId = ReadU24(_data, (int)off);
-            asnId = ReadU24(_data, (int)off + 3);
+            geoId = SafeReadU24(_data, (int)off);
+            asnId = SafeReadU24(_data, (int)off + 3);
             if (_ipRowSize >= 9)
-                usageTypeId = ReadU24(_data, (int)off + 6);
+                usageTypeId = SafeReadU24(_data, (int)off + 6);
         }
 
         private GeoInfo ResolveRowId(uint rowId, int groupIndex)
@@ -622,109 +673,116 @@ namespace Qqzeng
             bool[] natives = _groupFieldNative[groupIndex];
             int[] natTypes = _groupFieldNativeType[groupIndex];
 
-            var fields = new Dictionary<string, string>(fieldCount);
+            var values = new string[fieldCount];
             for (int i = 0; i < fieldCount; i++)
             {
                 int w = widths[i];
                 int fo = (int)(entryOffset + baseOffsets[i]);
                 bool isNative = natives != null && i < natives.Length && natives[i];
 
-                string val;
-                string fname;
                 if (isNative)
                 {
                     int t = (natTypes != null && i < natTypes.Length) ? natTypes[i] : 0;
                     if (t == 1)
                     {
-                        if (w == 4)
-                            val = BitConverter.ToSingle(d, fo).ToString(CultureInfo.InvariantCulture);
-                        else
-                            val = BitConverter.ToDouble(d, fo).ToString(CultureInfo.InvariantCulture);
+                        values[i] = w == 4
+                            ? BitConverter.ToSingle(d, fo).ToString(CultureInfo.InvariantCulture)
+                            : BitConverter.ToDouble(d, fo).ToString(CultureInfo.InvariantCulture);
                     }
                     else
                     {
-                        uint valNum = ReadUintWidth(d, fo, w);
-                        val = valNum.ToString();
+                        values[i] = SafeReadUintWidth(d, fo, w).ToString();
                     }
-                    fname = i < _fieldNames.Length ? _fieldNames[i] : $"field_{i}";
                 }
                 else
                 {
-                    uint idx = ReadUintWidth(d, fo, w);
+                    uint idx = SafeReadUintWidth(d, fo, w);
                     string[][] gp = _groupPools[groupIndex];
-                    
-                    ushort fieldId = 0;
-                    if (_groupFieldIds != null && i < _groupFieldIds[groupIndex]?.Length)
-                    {
-                        fieldId = _groupFieldIds[groupIndex][i];
-                    }
-                    
-                    if (i < _fieldNames.Length && fieldId < _fieldNames.Length)
-                    {
-                        fname = _fieldNames[fieldId];
-                    }
-                    else
-                    {
-                        fname = i < _fieldNames.Length ? _fieldNames[i] : $"field_{i}";
-                    }
-                    
-                    // Pools are indexed by field position, not poolSectionId
                     if (gp != null && i < gp.Length && idx < (uint)gp[i].Length)
                     {
-                        val = gp[i][(int)idx];
+                        values[i] = gp[i][(int)idx];
                     }
                     else
                     {
-                        val = "";
+                        values[i] = "";
                     }
                 }
-
-                fields[fname] = val;
             }
+
+            return new GeoInfo { FieldNames = _fieldNames, FloatIndices = _floatFieldIndices, Values = values };
+        }
+
+        public GeoInfo FindFields(string ipStr, string[] fieldNames)
+        {
+            if (fieldNames == null || fieldNames.Length == 0)
+                return Find(ipStr);
+            var rowId = LookupRowId(ipStr);
+            if (rowId == 0) return null;
+            return ResolveGeoFields(rowId, _groupIndex, fieldNames);
+        }
+
+        private GeoInfo ResolveGeoFields(uint rowId, int groupIndex, string[] fieldNames)
+        {
+            ReadIPRow(rowId, out uint geoId, out uint asnId, out uint usageId);
+            var mask = groupIndex < _groupDimMasks.Length ? _groupDimMasks[groupIndex] : (ushort)0;
+            uint entryId = (mask & 0x02) != 0 ? asnId : (mask & 0x04) != 0 ? usageId : geoId;
+            if (entryId == 0 || groupIndex < 0 || groupIndex >= _groupFieldCounts.Length) return null;
+            if (entryId >= _groupEntryCounts[groupIndex]) return null;
+
+            EnsurePoolsLoaded();
+            int fieldCount = _groupFieldCounts[groupIndex];
+            if (fieldCount <= 0) return null;
+
+            var indices = new List<int>(fieldNames.Length);
+            foreach (var name in fieldNames)
+                if (_fieldNameToIdx.TryGetValue(name, out var idx)) indices.Add(idx);
+
+            if (indices.Count == 0) return null;
+
+            long groupEntryStart = _offGeoEntries + _groupEntryOffsets[groupIndex];
+            int stride = _groupStrides[groupIndex];
+            long entryOffset = groupEntryStart + (long)entryId * stride;
+            byte[] d = _data;
+            int[] widths = _groupFieldWidths[groupIndex];
+            int[] baseOffsets = _groupFieldOffsets[groupIndex];
+            bool[] natives = _groupFieldNative[groupIndex];
+            int[] natTypes = _groupFieldNativeType[groupIndex];
 
             var values = new string[fieldCount];
-            for (int i = 0; i < fieldCount; i++)
+            foreach (int i in indices)
             {
-                string fname = i < _fieldNames.Length ? _fieldNames[i] : $"field_{i}";
-                values[i] = fields[fname];
+                if (i < 0 || i >= fieldCount) continue;
+                int w = widths[i];
+                int fo = (int)(entryOffset + baseOffsets[i]);
+                bool isNative = natives != null && i < natives.Length && natives[i];
+                if (isNative)
+                {
+                    int t = (natTypes != null && i < natTypes.Length) ? natTypes[i] : 0;
+                    values[i] = t == 1
+                        ? (w == 4 ? BitConverter.ToSingle(d, fo).ToString(CultureInfo.InvariantCulture) : BitConverter.ToDouble(d, fo).ToString(CultureInfo.InvariantCulture))
+                        : SafeReadUintWidth(d, fo, w).ToString();
+                }
+                else
+                {
+                    uint idx = SafeReadUintWidth(d, fo, w);
+                    var gp = _groupPools[groupIndex];
+                    values[i] = (gp != null && i < gp.Length && idx < (uint)gp[i].Length) ? gp[i][(int)idx] : "";
+                }
             }
+            return new GeoInfo { FieldNames = _fieldNames, FloatIndices = _floatFieldIndices, Values = values };
+        }
 
-            return new GeoInfo { Fields = fields, FieldNames = _fieldNames, FloatIndices = _floatFieldIndices, Values = values };
+        public void Reload(string path)
+        {
+            Load(path);
         }
 
         public GeoInfo Find(string ipStr)
         {
             if (string.IsNullOrEmpty(ipStr)) return null;
-
-            if (ipStr.Contains(':'))
-            {
-                if (System.Net.IPAddress.TryParse(ipStr, out var addr))
-                {
-                    var bytes = addr.GetAddressBytes();
-                    if (bytes.Length == 4)
-                    {
-                        uint ipInt = BinaryPrimitives.ReadUInt32BigEndian(bytes);
-                        return FindUint(ipInt);
-                    }
-
-                    // Check for IPv4-mapped IPv6
-                    if (bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 0 && bytes[3] == 0 &&
-                        bytes[4] == 0 && bytes[5] == 0 && bytes[6] == 0 && bytes[7] == 0 &&
-                        bytes[8] == 0 && bytes[9] == 0 && bytes[10] == 0xff && bytes[11] == 0xff)
-                    {
-                        uint ipInt = BinaryPrimitives.ReadUInt32BigEndian(bytes.AsSpan(12, 4));
-                        return FindUint(ipInt);
-                    }
-
-                    ulong ipHigh = BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(0, 8));
-                    ulong ipLow = BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(8, 8));
-                    return FindV6Uint(ipHigh, ipLow);
-                }
-                return null;
-            }
-
-            if (!fastParseIpV4(ipStr, out uint v4Int)) return null;
-            return FindUint(v4Int);
+            if (!FastParseIp(ipStr, out var result)) return null;
+            if (result.IsV4) return FindUint(result.V4);
+            return FindV6Uint(result.V6High, result.V6Low);
         }
 
         public GeoInfo FindUint(uint ipInt)
@@ -747,36 +805,9 @@ namespace Qqzeng
         public uint LookupRowId(string ipStr)
         {
             if (string.IsNullOrEmpty(ipStr)) return 0;
-
-            if (ipStr.Contains(':'))
-            {
-                if (System.Net.IPAddress.TryParse(ipStr, out var addr))
-                {
-                    var bytes = addr.GetAddressBytes();
-                    if (bytes.Length == 4)
-                    {
-                        uint ipInt = BinaryPrimitives.ReadUInt32BigEndian(bytes);
-                        return LookupRowIdUint(ipInt);
-                    }
-
-                    // Check for IPv4-mapped IPv6
-                    if (bytes[0] == 0 && bytes[1] == 0 && bytes[2] == 0 && bytes[3] == 0 &&
-                        bytes[4] == 0 && bytes[5] == 0 && bytes[6] == 0 && bytes[7] == 0 &&
-                        bytes[8] == 0 && bytes[9] == 0 && bytes[10] == 0xff && bytes[11] == 0xff)
-                    {
-                        uint ipInt = BinaryPrimitives.ReadUInt32BigEndian(bytes.AsSpan(12, 4));
-                        return LookupRowIdUint(ipInt);
-                    }
-
-                    ulong ipHigh = BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(0, 8));
-                    ulong ipLow = BinaryPrimitives.ReadUInt64BigEndian(bytes.AsSpan(8, 8));
-                    return LookupRowIdV6(ipHigh, ipLow);
-                }
-                return 0;
-            }
-
-            if (!fastParseIpV4(ipStr, out uint v4Int)) return 0;
-            return LookupRowIdUint(v4Int);
+            if (!FastParseIp(ipStr, out var result)) return 0;
+            if (result.IsV4) return LookupRowIdUint(result.V4);
+            return LookupRowIdV6(result.V6High, result.V6Low);
         }
 
         /// <summary>Lookup row_id for a pre-parsed IPv4 integer.</summary>
@@ -820,31 +851,132 @@ namespace Qqzeng
             return stored == computed;
         }
 
-        private static bool fastParseIpV4(string ip, out uint v4Int)
+        private static readonly byte[] HexLUT = new byte[128];
+        static QzdbSearcher()
         {
-            v4Int = 0;
-            uint result = 0;
-            int val = 0, dots = 0;
-            for (int i = 0; i < ip.Length; i++)
+            for (int i = 0; i < 10; i++) HexLUT[48 + i] = (byte)i;
+            for (int i = 0; i < 6; i++) { HexLUT[97 + i] = (byte)(10 + i); HexLUT[65 + i] = (byte)(10 + i); }
+        }
+
+        private readonly struct ParseResult
+        {
+            public readonly uint V4;
+            public readonly ulong V6High, V6Low;
+            public readonly bool IsV4;
+            public ParseResult(uint v4) { V4 = v4; V6High = 0; V6Low = 0; IsV4 = true; }
+            public ParseResult(ulong v6High, ulong v6Low) { V4 = 0; V6High = v6High; V6Low = v6Low; IsV4 = false; }
+        }
+
+        private static bool FastParseIpv4(string s, out uint v4)
+        {
+            v4 = 0;
+            int n = s.Length;
+            if (n == 0 || s[n - 1] == '.') return false;
+            uint result = 0; int val = 0, dots = 0, start = 0;
+            for (int i = 0; i <= n; i++)
             {
-                char c = ip[i];
-                if (c >= '0' && c <= '9')
+                char c = i < n ? s[i] : '.';
+                if (c == '.')
                 {
-                    val = val * 10 + (c - '0');
-                    if (val > 255) return false;
-                }
-                else if (c == '.')
-                {
-                    if (i == 0 || ip[i - 1] == '.') return false;
-                    result = (result << 8) | (uint)val;
+                    int segLen = i - start;
+                    if (segLen == 0 || segLen > 3) return false;
+                    if (segLen > 1 && s[start] == '0') return false;
                     val = 0;
-                    dots++;
+                    for (int j = start; j < i; j++)
+                    {
+                        char d = s[j];
+                        if (d < '0' || d > '9') return false;
+                        val = val * 10 + (d - '0');
+                    }
+                    if (val > 255) return false;
+                    result = (result << 8) | (uint)val;
+                    dots++; start = i + 1;
                 }
-                else return false;
             }
-            if (dots != 3) return false;
-            if (ip.Length > 0 && ip[ip.Length - 1] == '.') return false;
-            v4Int = (result << 8) | (uint)val;
+            if (dots != 4) return false;
+            v4 = result;
+            return true;
+        }
+
+        private static bool FastParseIp(string s, out ParseResult result)
+        {
+            result = default;
+            if (string.IsNullOrEmpty(s)) return false;
+            s = s.Trim();
+            int n = s.Length;
+            if (n == 0 || n > 45) return false;
+            if (!s.Contains(':'))
+            {
+                if (!FastParseIpv4(s, out uint v4)) return false;
+                result = new ParseResult(v4);
+                return true;
+            }
+            if (s.Contains('%')) return false;
+            int dc = s.IndexOf("::");
+            if (dc >= 0 && s.IndexOf("::", dc + 2) >= 0) return false;
+            string lft = dc >= 0 ? s.Substring(0, dc) : s;
+            string rgt = dc >= 0 ? s.Substring(dc + 2) : "";
+            string[] lg = lft.Length > 0 ? lft.Split(':') : Array.Empty<string>();
+            string[] rg = rgt.Length > 0 ? rgt.Split(':') : Array.Empty<string>();
+            if (lg.Length == 1 && lg[0] == "") lg = Array.Empty<string>();
+            if (rg.Length == 1 && rg[0] == "") rg = Array.Empty<string>();
+            foreach (var g in lg) if (g == "") return false;
+            foreach (var g in rg) if (g == "") return false;
+            var allg = new List<string>(lg.Length + rg.Length);
+            allg.AddRange(lg); allg.AddRange(rg);
+            bool hasV4 = false; uint v4Int = 0;
+            int last = allg.Count - 1;
+            if (last >= 0 && allg[last].Contains('.'))
+            {
+                if (!FastParseIpv4(allg[last], out v4Int)) return false;
+                hasV4 = true;
+                allg.RemoveAt(last);
+            }
+            int ng = allg.Count;
+            int v4Slots = hasV4 ? 2 : 0;
+            if (dc >= 0) { if (ng + v4Slots > 7) return false; }
+            else { if (ng + v4Slots != 8) return false; }
+            foreach (var g in allg)
+            {
+                int gl = g.Length;
+                if (gl == 0 || gl > 4) return false;
+                for (int j = 0; j < gl; j++)
+                {
+                    char cc = g[j];
+                    if (cc >= 128 || (HexLUT[cc] == 0 && cc != '0')) return false;
+                }
+            }
+            int zeros = 8 - ng - v4Slots;
+            byte[] buf = new byte[16];
+            int off = 0;
+            foreach (var g in lg)
+            {
+                int v = 0;
+                for (int j = 0; j < g.Length; j++) v = (v << 4) | HexLUT[g[j]];
+                buf[off] = (byte)(v >> 8); buf[off + 1] = (byte)v;
+                off += 2;
+            }
+            off += zeros * 2;
+            foreach (var g in rg)
+            {
+                int v = 0;
+                for (int j = 0; j < g.Length; j++) v = (v << 4) | HexLUT[g[j]];
+                buf[off] = (byte)(v >> 8); buf[off + 1] = (byte)v;
+                off += 2;
+            }
+            if (hasV4) { buf[12] = (byte)(v4Int >> 24); buf[13] = (byte)(v4Int >> 16); buf[14] = (byte)(v4Int >> 8); buf[15] = (byte)v4Int; }
+            if (buf[10] == 0xff && buf[11] == 0xff &&
+                buf[0] == 0 && buf[1] == 0 && buf[2] == 0 && buf[3] == 0 &&
+                buf[4] == 0 && buf[5] == 0 && buf[6] == 0 && buf[7] == 0 &&
+                buf[8] == 0 && buf[9] == 0)
+            {
+                result = new ParseResult((uint)((buf[12] << 24) | (buf[13] << 16) | (buf[14] << 8) | buf[15]));
+                return true;
+            }
+            ulong v6High = 0, v6Low = 0;
+            for (int i = 0; i < 8; i++) v6High = (v6High << 8) | buf[i];
+            for (int i = 8; i < 16; i++) v6Low = (v6Low << 8) | buf[i];
+            result = new ParseResult(v6High, v6Low);
             return true;
         }
 
