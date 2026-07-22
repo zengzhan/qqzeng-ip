@@ -71,10 +71,10 @@ QZDB 引擎核心采用专门定制的 **双阶段 Patricia Trie 树型检索算
 
 ```mermaid
 flowchart LR
-    A[输入目标 IP<br>例如: 114.114.114.114] --> B[阶段1: Jump Table 前缀跳级<br>16-bit 静态表槽位定位]
-    B --> C[阶段2: Patricia Trie LPM 匹配<br>只读内存按位降维遍历]
-    C --> D[阶段3: String Pool 物理偏移<br>O1 无锁直接读取字符数据]
-    D --> E[输出地理结果<br>中国|江苏|南京|中国电信]
+    A["输入目标 IP (如 114.114.114.114)"] --> B["阶段1: Jump Table 前缀跳级 (16-bit 静态表定位)"]
+    B --> C["阶段2: Patricia Trie LPM 匹配 (只读内存按位遍历)"]
+    C --> D["阶段3: String Pool 物理偏移 (O1 无锁读取)"]
+    D --> E["输出结果 (中国|江苏|南京|中国电信)"]
 ```
 
 1. **第一阶段 (Jump Table 快速跳级)**：
