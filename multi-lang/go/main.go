@@ -45,18 +45,28 @@ func main() {
 
 	// Query sample V4 IPs
 	for _, ip := range []string{"114.114.114.114", "223.5.5.5", "8.8.8.8"} {
-		result := searcher.FindStr(ip)
-		fmt.Printf("find(\"%-16s\") => %s\n", ip, result)
+		result, err := searcher.FindStr(ip)
+		if err != nil {
+			fmt.Printf("find(\"%-16s\") => error: %v\n", ip, err)
+		} else {
+			fmt.Printf("find(\"%-16s\") => %s\n", ip, result)
+		}
 	}
 
 	// Query a V6 IP
-	result := searcher.FindStr("2408:8000:9000::1")
-	fmt.Printf("find(\"%-16s\") => %s\n", "2408:8000:9000::1", result)
+	result, err := searcher.FindStr("2408:8000:9000::1")
+	if err != nil {
+		fmt.Printf("find(\"%-16s\") => error: %v\n", "2408:8000:9000::1", err)
+	} else {
+		fmt.Printf("find(\"%-16s\") => %s\n", "2408:8000:9000::1", result)
+	}
 
 	// Get structured fields
 	fmt.Println("\n--- Structured fields for 114.114.114.114 ---")
-	loc := searcher.Find("114.114.114.114")
-	if loc != nil {
+	loc, err := searcher.Find("114.114.114.114")
+	if err != nil {
+		fmt.Printf("  Error: %v\n", err)
+	} else if loc != nil {
 		for i, name := range searcher.FieldNames() {
 			fmt.Printf("  %s: %s\n", name, loc.Values[i])
 		}

@@ -5,7 +5,6 @@ package main
 
 import (
 	"fmt"
-	"math/big"
 	"os"
 	"strconv"
 	"strings"
@@ -41,14 +40,25 @@ func processFile(searcher *qzdb.QzdbSearcher, testPath, outPath string, isV6 boo
 			}
 			high, _ := strconv.ParseUint(parts[0], 10, 64)
 			low, _ := strconv.ParseUint(parts[1], 10, 64)
-			ipInt := new(big.Int).Lsh(new(big.Int).SetUint64(high), 64)
-			ipInt.Or(ipInt, new(big.Int).SetUint64(low))
-			info := searcher.FindV6Uint(ipInt)
-			pipeStr = geoToPipe(info)
+			var ip16 [16]byte
+			for i := 0; i < 8; i++ {
+				ip16[7-i] = byte(high >> (8 * i))
+				ip16[15-i] = byte(low >> (8 * i))
+			}
+			info, err := searcher.FindV6Uint(ip16)
+			if err != nil {
+				pipeStr = ""
+			} else {
+				pipeStr = geoToPipe(info)
+			}
 		} else {
 			ip, _ := strconv.ParseUint(line, 10, 32)
-			info := searcher.FindUint(uint32(ip))
-			pipeStr = geoToPipe(info)
+			info, err := searcher.FindUint(uint32(ip))
+			if err != nil {
+				pipeStr = ""
+			} else {
+				pipeStr = geoToPipe(info)
+			}
 		}
 		results = append(results, fmt.Sprintf("%s|%s", line, pipeStr))
 	}

@@ -15,7 +15,18 @@ static uint32_t rand_u32_mt(uint32_t *state) {
     return *state;
 }
 
-void run_bench(const char* name, const char* db_path) {
+static int try_path(char* buf, size_t size, const char* prefix, const char* name) {
+    snprintf(buf, size, "%s%s", prefix, name);
+    FILE* f = fopen(buf, "r");
+    if (f) { fclose(f); return 1; }
+    return 0;
+}
+
+void run_bench(const char* name, const char* db_rel) {
+    char db_path[512];
+    // Try data/ (multi-lang/) first, then ../data/ (multi-lang/c/)
+    if (!try_path(db_path, sizeof(db_path), "data/", db_rel))
+        snprintf(db_path, sizeof(db_path), "../data/%s", db_rel);
     qzdb_searcher_t ctx;
 
     clock_t load_start = clock();

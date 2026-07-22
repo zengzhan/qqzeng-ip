@@ -48,6 +48,16 @@ multi-lang/tools/batch_go
 *.swp
 *.swo
 
+# Compiled test binaries
+multi-lang/c/bench_qps
+multi-lang/c/qzdb_test
+multi-lang/c/*.o
+multi-lang/rust/bench_qps
+multi-lang/rust/target/
+multi-lang/go/bench_qps
+*.o
+*.obj
+
 # Language specific
 node_modules/
 vendor/
@@ -57,6 +67,17 @@ build/
 *.pyc
 __pycache__/
 *.egg-info/
+
+# Analysis / optimization docs (not part of SDK)
+optimization_analysis.md
+todo.md
+优化.md
+优化方案参考.html
+
+# Compiled Go binary
+multi-lang/go/main
+multi-lang/go/v20_test_helper
+archive/multi-lang-v20/v20_test_helper
 
 # Temp
 tmp/

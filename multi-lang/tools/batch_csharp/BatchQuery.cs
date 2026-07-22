@@ -30,8 +30,7 @@ class BatchQueryCsharp
                         ulong.TryParse(parts[0], out var high) &&
                         ulong.TryParse(parts[1], out var low))
                     {
-                        var ipInt = (new BigInteger(high) << 64) | new BigInteger(low);
-                        var info = searcher.FindV6Uint(ipInt);
+                        var info = searcher.FindV6Uint(high, low);
                         pipeStr = GeoToPipe(info);
                     }
                     else

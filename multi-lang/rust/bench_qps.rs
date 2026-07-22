@@ -1,11 +1,14 @@
 use std::time::Instant;
 
 fn bench(db_name: &str, db_path: &str) {
-    if !std::path::Path::new(db_path).exists() {
-        println!("  {db_name}: not found");
-        return;
-    }
-    let searcher = qzdb_searcher::from_file(db_path);
+   if !std::path::Path::new(db_path).exists() {
+       println!("  {db_name}: not found");
+       return;
+   }
+    let searcher = match qzdb_searcher::from_file(db_path) {
+        Ok(s) => s,
+        Err(_) => { println!("  {db_name}: load failed"); return; }
+    };
 
     // V4
     let count = 3_000_000;
