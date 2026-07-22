@@ -1059,6 +1059,7 @@ func (s *QzdbSearcher) Reload(path string) error {
 	}
 
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.data = ns.data
 	s.fieldNames = ns.fieldNames
 	s.fieldNameToIdx = ns.fieldNameToIdx
@@ -1103,7 +1104,6 @@ func (s *QzdbSearcher) Reload(path string) error {
 	s.groupPoolSectionIds = ns.groupPoolSectionIds
 	s.groupPools = ns.groupPools
 	s.poolsLoaded = ns.poolsLoaded
-	s.mu.Unlock()
 	return nil
 }
 
