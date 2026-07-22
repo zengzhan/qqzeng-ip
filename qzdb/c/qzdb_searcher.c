@@ -48,12 +48,22 @@ static void crc32_init(void) {
     crc32_ready = 1;
 }
 
-static uint32_t crc32_compute(const uint8_t* buf, size_t len) {
+static uint32_t crc32_update(uint32_t crc, const uint8_t* buf, size_t len) {
     if (!crc32_ready) crc32_init();
-    uint32_t crc = 0xFFFFFFFF;
     for (size_t i = 0; i < len; i++) {
         crc = crc32_table[(crc ^ buf[i]) & 0xFF] ^ (crc >> 8);
     }
+    return crc;
+}
+
+/* CRC over whole file with the 4-byte CRC field treated as zero — never mutates mapped memory. */
+static uint32_t crc32_compute_file(const uint8_t* d, size_t size) {
+    if (size < 20) return 0;
+    uint32_t crc = 0xFFFFFFFF;
+    crc = crc32_update(crc, d, 16);              /* [0, 16) */
+    uint8_t zeros[4] = {0, 0, 0, 0};
+    crc = crc32_update(crc, zeros, 4);           /* CRC field counted as zero */
+    crc = crc32_update(crc, d + 20, size - 20);  /* [20, end) */
     return crc ^ 0xFFFFFFFF;
 }
 
@@ -363,14 +373,22 @@ int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
                 ctx->float_field_flags = calloc(ctx->group_field_counts[0], sizeof(int));
                 ctx->field_count = ctx->group_field_counts[0];
                 int idx = 0;
-                char* token = strtok(val, "|");
-                while (token && idx < ctx->group_field_counts[0]) {
-                    ctx->field_names[idx] = strdup(token);
+                const char* p = val;
+                while (idx < ctx->group_field_counts[0]) {
+                    const char* start = p;
+                    while (*p && *p != '|') p++;
+                    size_t tok_len = (size_t)(p - start);
+                    char* token = malloc(tok_len + 1);
+                    if (!token) break;
+                    memcpy(token, start, tok_len);
+                    token[tok_len] = '\0';
+                    ctx->field_names[idx] = token;
                     if (strcmp(token, "longitude") == 0 || strcmp(token, "latitude") == 0) {
                         ctx->float_field_flags[idx] = 1;
                     }
                     idx++;
-                    token = strtok(NULL, "|");
+                    if (*p == '|') p++;
+                    else break;
                 }
                 free(val);
             } else {
@@ -412,6 +430,7 @@ static void ensure_pools_loaded(qzdb_searcher_t* ctx) {
 
     ctx->group_pools = calloc(ctx->actual_groups, sizeof(char***));
     ctx->group_pool_counts = calloc(ctx->actual_groups, sizeof(int*));
+    ctx->pool_arena = NULL;
 
     if (ctx->off_pools <= 0) return;
 
@@ -419,10 +438,22 @@ static void ensure_pools_loaded(qzdb_searcher_t* ctx) {
     uint64_t pool_end = ctx->off_meta > 0 ? ctx->off_meta : ctx->data_size;
     uint8_t* d = ctx->data;
 
+    /* Pass 1: measure total null-terminated string bytes + build pointer tables */
+    size_t arena_need = 0;
+    typedef struct {
+        uint32_t count;
+        uint32_t* offsets;
+        uint64_t data_base; /* absolute offset of string blob in file */
+    } pool_scan_t;
+
+    pool_scan_t** scans = calloc(ctx->actual_groups, sizeof(pool_scan_t*));
+    if (!scans) return;
+
     for (int g = 0; g < ctx->actual_groups; g++) {
         int field_count = ctx->group_field_counts[g];
         ctx->group_pools[g] = calloc(field_count, sizeof(char**));
         ctx->group_pool_counts[g] = calloc(field_count, sizeof(int));
+        scans[g] = calloc(field_count, sizeof(pool_scan_t));
 
         for (int f = 0; f < field_count; f++) {
             if (ctx->group_field_native[g][f]) {
@@ -441,37 +472,88 @@ static void ensure_pools_loaded(qzdb_searcher_t* ctx) {
                 continue;
             }
 
-            ctx->group_pool_counts[g][f] = count;
+            ctx->group_pool_counts[g][f] = (int)count;
             uint32_t* offsets = malloc((count + 1) * sizeof(uint32_t));
             if (!offsets) continue;
             int offsets_ok = 1;
             for (uint32_t o = 0; o <= count; o++) {
-                if (safe_read_u32(d, ctx->data_size, pool_cursor, &offsets[o]) != QZDB_OK) { offsets_ok = 0; break; }
+                if (safe_read_u32(d, ctx->data_size, pool_cursor, &offsets[o]) != QZDB_OK) {
+                    offsets_ok = 0;
+                    break;
+                }
                 pool_cursor += 4;
             }
-            if (!offsets_ok) { free(offsets); continue; }
+            if (!offsets_ok) {
+                free(offsets);
+                continue;
+            }
 
-            ctx->group_pools[g][f] = malloc(count * sizeof(char*));
+            scans[g][f].count = count;
+            scans[g][f].offsets = offsets;
+            scans[g][f].data_base = pool_cursor;
+
+            ctx->group_pools[g][f] = calloc(count, sizeof(char*));
             for (uint32_t s = 0; s < count; s++) {
                 uint32_t start = offsets[s];
                 uint32_t end = offsets[s + 1];
                 if (end < start || pool_cursor + end > ctx->data_size) {
+                    continue;
+                }
+                arena_need += (size_t)(end - start) + 1; /* + NUL */
+            }
+            pool_cursor += offsets[count];
+        }
+    }
+
+    /* Pass 2: single arena allocation, copy all strings once */
+    char* arena = NULL;
+    size_t arena_off = 0;
+    if (arena_need > 0) {
+        arena = malloc(arena_need);
+        if (!arena) {
+            for (int g = 0; g < ctx->actual_groups; g++) {
+                if (!scans[g]) continue;
+                for (int f = 0; f < ctx->group_field_counts[g]; f++) {
+                    free(scans[g][f].offsets);
+                }
+                free(scans[g]);
+            }
+            free(scans);
+            return;
+        }
+        ctx->pool_arena = arena;
+    }
+
+    for (int g = 0; g < ctx->actual_groups; g++) {
+        if (!scans[g]) continue;
+        int field_count = ctx->group_field_counts[g];
+        for (int f = 0; f < field_count; f++) {
+            pool_scan_t* sc = &scans[g][f];
+            if (!sc->offsets || !ctx->group_pools[g][f]) {
+                free(sc->offsets);
+                continue;
+            }
+            for (uint32_t s = 0; s < sc->count; s++) {
+                uint32_t start = sc->offsets[s];
+                uint32_t end = sc->offsets[s + 1];
+                if (end < start || sc->data_base + end > ctx->data_size) {
                     ctx->group_pools[g][f][s] = NULL;
                     continue;
                 }
-                int length = end - start;
-                ctx->group_pools[g][f][s] = malloc(length + 1);
-                if (ctx->group_pools[g][f][s]) {
-                    if (length > 0) {
-                        memcpy(ctx->group_pools[g][f][s], d + pool_cursor + start, length);
-                    }
-                    ctx->group_pools[g][f][s][length] = '\0';
+                uint32_t length = end - start;
+                char* dst = arena + arena_off;
+                if (length > 0) {
+                    memcpy(dst, d + sc->data_base + start, length);
                 }
+                dst[length] = '\0';
+                ctx->group_pools[g][f][s] = dst;
+                arena_off += (size_t)length + 1;
             }
-            pool_cursor += offsets[count];
-            free(offsets);
+            free(sc->offsets);
         }
+        free(scans[g]);
     }
+    free(scans);
 }
 
 static uint32_t get_v4_child(const qzdb_searcher_t* ctx, uint32_t node_idx, uint32_t bit) {
@@ -481,7 +563,7 @@ static uint32_t get_v4_child(const qzdb_searcher_t* ctx, uint32_t node_idx, uint
         uint64_t offset = bit == 0 ? node_offset : node_offset + 3;
         uint32_t val;
         if (safe_read_u24(ctx->data, ctx->data_size, offset, &val) != QZDB_OK) return 0;
-        if (val & 0x800000) {
+        if (val & 0x800000u) {
             return (val & QZDB_SENTINEL_MASK_24) | QZDB_SENTINEL;
         }
         return val;
@@ -500,7 +582,7 @@ static uint32_t get_v6_child(const qzdb_searcher_t* ctx, uint32_t node_idx, uint
         uint64_t offset = bit == 0 ? node_offset : node_offset + 3;
         uint32_t val;
         if (safe_read_u24(ctx->data, ctx->data_size, offset, &val) != QZDB_OK) return 0;
-        if (val & 0x800000) {
+        if (val & 0x800000u) {
             return (val & QZDB_SENTINEL_MASK_24) | QZDB_SENTINEL;
         }
         return val;
@@ -585,9 +667,7 @@ static uint32_t trie_walk_v6(const qzdb_searcher_t* ctx, const uint8_t* ip_bin) 
 static int get_geo_info(qzdb_searcher_t* ctx, uint32_t entry_id, int group_index, qzdb_geo_info_t* result) {
     if (!ctx || !result) return QZDB_ERR_INVALID_PARAM;
     if (group_index < 0 || group_index >= ctx->actual_groups) return QZDB_ERR_INVALID_PARAM;
-    if (entry_id < 0 || entry_id >= ctx->group_entry_counts[group_index]) return QZDB_ERR_INVALID_PARAM;
-
-    ensure_pools_loaded(ctx);
+    if (entry_id >= ctx->group_entry_counts[group_index]) return QZDB_ERR_INVALID_PARAM;
 
     int field_count = ctx->group_field_counts[group_index];
     if (field_count <= 0) return QZDB_ERR_CORRUPTED;
@@ -658,9 +738,7 @@ static int get_geo_info_buf(qzdb_searcher_t* ctx, uint32_t entry_id, int group_i
                               char** values, char (*bufs)[64], int buf_size, int* out_count) {
     if (!ctx || !values || !bufs || !out_count) return QZDB_ERR_INVALID_PARAM;
     if (group_index < 0 || group_index >= ctx->actual_groups) return QZDB_ERR_INVALID_PARAM;
-    if (entry_id < 0 || entry_id >= ctx->group_entry_counts[group_index]) return QZDB_ERR_INVALID_PARAM;
-
-    ensure_pools_loaded(ctx);
+    if (entry_id >= ctx->group_entry_counts[group_index]) return QZDB_ERR_INVALID_PARAM;
 
     int field_count = ctx->group_field_counts[group_index];
     if (field_count <= 0) return QZDB_ERR_CORRUPTED;
@@ -870,11 +948,37 @@ static int fast_parse_ipv4(const char* s, uint32_t* out) {
     return 1;
 }
 
+/* Split colon-separated hextets into parts[][16]. Returns count or -1 on error. */
+static int split_hextets(const char* src, int src_len, char parts[][16], int max_parts) {
+    if (src_len < 0) return -1;
+    if (src_len == 0) return 0;
+    int count = 0;
+    int i = 0;
+    while (i <= src_len) {
+        int start = i;
+        while (i < src_len && src[i] != ':') i++;
+        int seglen = i - start;
+        if (seglen == 0) return -1; /* empty group (consecutive :: handled outside) */
+        if (count >= max_parts) return -1;
+        if (seglen > 15) return -1;
+        memcpy(parts[count], src + start, (size_t)seglen);
+        parts[count][seglen] = '\0';
+        count++;
+        if (i >= src_len) break;
+        i++; /* skip ':' */
+    }
+    return count;
+}
+
 static int fast_parse_ip(const char* s, parse_result_t* res) {
     if (!s) return 0;
-    int n = 0; while (s[n]) n++;
-    while (n > 0 && (s[0] == ' ' || s[0] == '\t')) { s++; n--; }
-    while (n > 0 && (s[n-1] == ' ' || s[n-1] == '\t')) { n--; }
+    int n = 0;
+    while (s[n]) {
+        unsigned char c = (unsigned char)s[n];
+        /* Fail-closed: reject any whitespace (SSRF-safe, cross-lang consistent) */
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f') return 0;
+        n++;
+    }
     if (n == 0 || n > 45) return 0;
     int has_colon = 0;
     for (int i = 0; i < n; i++) { if (s[i] == ':') { has_colon = 1; break; } }
@@ -895,32 +999,17 @@ static int fast_parse_ip(const char* s, parse_result_t* res) {
     const char* rgt = dc_ptr ? dc_ptr + 2 : s + n;
     int lft_len = (int)(dc_ptr ? dc_ptr - s : n);
     int rgt_len = (int)(dc_ptr ? (s + n) - (dc_ptr + 2) : 0);
-    char lg_buf[64], rg_buf[64];
     if (lft_len >= 64 || rgt_len >= 64) return 0;
-    memcpy(lg_buf, s, lft_len); lg_buf[lft_len] = 0;
-    memcpy(rg_buf, rgt, rgt_len); rg_buf[rgt_len] = 0;
     char lg_parts[8][16], rg_parts[8][16];
     int lg_count = 0, rg_count = 0;
     if (lft_len > 0) {
-        char* tok = strtok(lg_buf, ":");
-        while (tok && lg_count < 8) { 
-            strncpy(lg_parts[lg_count], tok, 15);
-            lg_parts[lg_count][15] = 0;
-            lg_count++;
-            tok = strtok(NULL, ":"); 
-        }
+        lg_count = split_hextets(s, lft_len, lg_parts, 8);
+        if (lg_count < 0) return 0;
     }
     if (rgt_len > 0) {
-        char* tok = strtok(rg_buf, ":");
-        while (tok && rg_count < 8) { 
-            strncpy(rg_parts[rg_count], tok, 15);
-            rg_parts[rg_count][15] = 0;
-            rg_count++;
-            tok = strtok(NULL, ":"); 
-        }
+        rg_count = split_hextets(rgt, rgt_len, rg_parts, 8);
+        if (rg_count < 0) return 0;
     }
-    for (int i = 0; i < lg_count; i++) { if (lg_parts[i][0] == 0) return 0; }
-    for (int i = 0; i < rg_count; i++) { if (rg_parts[i][0] == 0) return 0; }
     char allg[10][16];
     int ng = 0;
     for (int i = 0; i < lg_count; i++) { 
@@ -1057,28 +1146,34 @@ qzdb_searcher_t* qzdb_instance(const char* db_path) {
 
 int qzdb_instance_load(const char* db_path) {
     if (!db_path) return QZDB_ERR_INVALID_PARAM;
+    /* Build complete new context first so a failed load leaves the old instance intact. */
+    qzdb_searcher_t tmp;
+    memset(&tmp, 0, sizeof(tmp));
+    int result = qzdb_init(&tmp, db_path);
+    if (result != QZDB_OK) return result;
+
+    pthread_mutex_lock(&g_instance_mutex);
     if (g_instance_inited) {
         qzdb_free(&g_instance);
-        g_instance_inited = 0;
     }
-    int result = qzdb_init(&g_instance, db_path);
-    if (result != QZDB_OK) return result;
+    memcpy(&g_instance, &tmp, sizeof(g_instance));
     g_instance_inited = 1;
+    pthread_mutex_unlock(&g_instance_mutex);
+    /* Note: concurrent queries holding a prior qzdb_instance() pointer during reload
+     * are still racy; prefer per-thread qzdb_init / qzdb_reload contexts under load. */
     return QZDB_OK;
 }
 
 void qzdb_free(qzdb_searcher_t* ctx) {
     if (!ctx->data) return;
+    /* Pool C-strings live in a single arena — free pointer tables, then the arena. */
+    free(ctx->pool_arena);
+    ctx->pool_arena = NULL;
     if (ctx->group_pools) {
         for (int g = 0; g < ctx->actual_groups; g++) {
             if (ctx->group_pools[g]) {
                 for (int f = 0; f < ctx->group_field_counts[g]; f++) {
-                    if (ctx->group_pools[g][f]) {
-                        for (int s = 0; s < ctx->group_pool_counts[g][f]; s++) {
-                            free(ctx->group_pools[g][f][s]);
-                        }
-                        free(ctx->group_pools[g][f]);
-                    }
+                    free(ctx->group_pools[g][f]); /* array of pointers into pool_arena */
                 }
                 free(ctx->group_pools[g]);
             }
@@ -1126,12 +1221,7 @@ int qzdb_verify_crc(qzdb_searcher_t* ctx) {
     if (!ctx) return QZDB_ERR_INVALID_PARAM;
     if (!ctx->data || ctx->data_size < 20) return QZDB_ERR_CORRUPTED;
     uint32_t stored = READ_LE32(ctx->data + 16);
-    uint8_t* buf = malloc(ctx->data_size);
-    if (!buf) return QZDB_ERR_OUT_OF_MEMORY;
-    memcpy(buf, ctx->data, ctx->data_size);
-    memset(buf + 16, 0, 4);
-    uint32_t computed = crc32_compute(buf, ctx->data_size);
-    free(buf);
+    uint32_t computed = crc32_compute_file(ctx->data, ctx->data_size);
     return stored == computed ? QZDB_OK : QZDB_ERR_CORRUPTED;
 }
 
@@ -1158,8 +1248,6 @@ static int resolve_row_id_fields(qzdb_searcher_t* ctx, uint32_t row_id, int grou
 
     if (group_index < 0 || group_index >= ctx->actual_groups) return QZDB_ERR_INVALID_PARAM;
     if (entry_id >= ctx->group_entry_counts[group_index]) return QZDB_ERR_INVALID_PARAM;
-
-    ensure_pools_loaded(ctx);
 
     int total_field_count = ctx->group_field_counts[group_index];
     if (total_field_count <= 0) return QZDB_ERR_CORRUPTED;
@@ -1244,7 +1332,8 @@ int qzdb_find_fields_buf(qzdb_searcher_t* ctx, const char* ip_str,
                          char** values, char (*bufs)[64], int buf_size) {
     if (!ctx || !ip_str || !values || !bufs) return QZDB_ERR_INVALID_PARAM;
     if (field_names == NULL || field_names[0] == NULL) {
-        return qzdb_find(ctx, ip_str, NULL) == QZDB_OK ? 1 : QZDB_ERR_NOT_FOUND;
+        qzdb_geo_info_t tmp;
+        return qzdb_find(ctx, ip_str, &tmp) == QZDB_OK ? 1 : QZDB_ERR_NOT_FOUND;
     }
     parse_result_t res;
     if (!fast_parse_ip(ip_str, &res)) return QZDB_ERR_INVALID_PARAM;

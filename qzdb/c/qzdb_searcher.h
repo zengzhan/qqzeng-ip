@@ -64,6 +64,7 @@ typedef struct {
     char**** group_pools;
     int** group_pool_counts;
     int pools_loaded;
+    char* pool_arena;  /* single backing store for all pool C-strings (null-terminated views) */
 
     char** field_names;
     int* float_field_flags;
