@@ -222,7 +222,13 @@ int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
         if (ctx->off_ip_row > 0 && ctx->off_ip_row + (uint64_t)ctx->row_count * ctx->ip_row_size > ctx->data_size) {
             munmap(ctx->data, ctx->data_size); ctx->data = NULL; return QZDB_ERR_BOUNDS;
         }
-        if (ctx->off_geo_entries > 0 && ctx->off_geo_entries >= ctx->data_size) {
+        if (ctx->off_geo_entries > 0 && ctx->off_geo_entries + 16 > ctx->data_size) {
+            munmap(ctx->data, ctx->data_size); ctx->data = NULL; return QZDB_ERR_BOUNDS;
+        }
+        if (ctx->off_group_schema > 0 && ctx->off_group_schema + 2 > ctx->data_size) {
+            munmap(ctx->data, ctx->data_size); ctx->data = NULL; return QZDB_ERR_BOUNDS;
+        }
+        if (ctx->off_row_schema > 0 && ctx->off_row_schema >= ctx->data_size) {
             munmap(ctx->data, ctx->data_size); ctx->data = NULL; return QZDB_ERR_BOUNDS;
         }
         if (ctx->off_pools > 0 && ctx->off_pools >= ctx->data_size) {
@@ -285,6 +291,19 @@ int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
     ctx->group_field_native_type = calloc(ctx->actual_groups, sizeof(int*));
     ctx->group_field_ids = calloc(ctx->actual_groups, sizeof(uint16_t*));
     ctx->group_pool_section_ids = calloc(ctx->actual_groups, sizeof(uint32_t*));
+
+    if (!ctx->group_strides || !ctx->group_field_widths || !ctx->group_field_offsets ||
+        !ctx->group_field_native || !ctx->group_field_native_type || !ctx->group_field_ids ||
+        !ctx->group_pool_section_ids) {
+        free(ctx->group_strides); free(ctx->group_field_widths);
+        free(ctx->group_field_offsets); free(ctx->group_field_native);
+        free(ctx->group_field_native_type); free(ctx->group_field_ids);
+        free(ctx->group_pool_section_ids);
+        free(ctx->group_field_counts); free(ctx->group_entry_counts);
+        free(ctx->group_dim_masks); free(ctx->group_entry_offsets);
+        munmap(ctx->data, ctx->data_size); ctx->data = NULL;
+        return QZDB_ERR_OUT_OF_MEMORY;
+    }
 
     if (ctx->off_group_schema > 0) {
         uint64_t sp = ctx->off_group_schema;

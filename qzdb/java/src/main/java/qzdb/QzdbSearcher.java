@@ -2,8 +2,6 @@ package qzdb;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
-import java.math.BigDecimal;
-import java.math.RoundingMode;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -141,8 +139,7 @@ public class QzdbSearcher {
         if (d.capacity() < 192) {
             throw new QzdbException(ErrorCode.CORRUPTED, "File too small for QZDB header");
         }
-        if ((d.get(0) != 'Q' || d.get(1) != 'Z' || d.get(2) != 'D' || d.get(3) != 'B') &&
-            (d.get(0) != 'Q' || d.get(1) != 'Z' || d.get(2) != '2' || d.get(3) != '0')) {
+        if (d.get(0) != 'Q' || d.get(1) != 'Z' || d.get(2) != 'D' || d.get(3) != 'B') {
             throw new QzdbException(ErrorCode.BAD_MAGIC, "Invalid magic, expected QZDB");
         }
 
@@ -220,6 +217,21 @@ public class QzdbSearcher {
         }
         if (offIPRow > 0 && offIPRow + (long) rowCount * ipRowSize > dlen) {
             throw new QzdbException(ErrorCode.OUT_OF_BOUNDS, "IP row table offset out of bounds");
+        }
+        if (offGeoEntries > 0 && offGeoEntries + 16 > dlen) {
+            throw new QzdbException(ErrorCode.OUT_OF_BOUNDS, "Geo entries section offset out of bounds");
+        }
+        if (offPools > 0 && offPools >= dlen) {
+            throw new QzdbException(ErrorCode.OUT_OF_BOUNDS, "Pools section offset out of bounds");
+        }
+        if (offMeta > 0 && offMeta >= dlen) {
+            throw new QzdbException(ErrorCode.OUT_OF_BOUNDS, "Meta section offset out of bounds");
+        }
+        if (offRowSchema > 0 && offRowSchema >= dlen) {
+            throw new QzdbException(ErrorCode.OUT_OF_BOUNDS, "Row schema section offset out of bounds");
+        }
+        if (offGroupSchema > 0 && offGroupSchema + 2 > dlen) {
+            throw new QzdbException(ErrorCode.OUT_OF_BOUNDS, "Group schema section offset out of bounds");
         }
 
         groupEntryOffsets = new long[4];
@@ -788,12 +800,19 @@ public class QzdbSearcher {
     public boolean verifyCrc() {
         if (data == null || data.capacity() < 20) return false;
         int stored = safeReadU32(data, 16);
-        byte[] copy = new byte[data.capacity()];
-        data.position(0);
-        data.get(copy);
-        copy[16] = 0; copy[17] = 0; copy[18] = 0; copy[19] = 0;
+        // Segmented CRC to avoid cloning the full buffer
         CRC32 crc = new CRC32();
-        crc.update(copy);
+        byte[] head = new byte[16];
+        data.position(0);
+        data.get(head);
+        crc.update(head);
+        crc.update(new byte[4]);
+        int tailLen = data.capacity() - 20;
+        if (tailLen > 0) {
+            byte[] tail = new byte[tailLen];
+            data.get(tail);
+            crc.update(tail);
+        }
         return stored == (int) crc.getValue();
     }
 
@@ -838,8 +857,13 @@ public class QzdbSearcher {
 
     private static ParseResult fastParseIp(String s) {
         if (s == null) return null;
-        s = s.trim();
         int n = s.length();
+        // Reject whitespace — SSRF-safe, cross-language consistent
+        for (int i = 0; i < n; i++) {
+            char c = s.charAt(i);
+            if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f')
+                return null;
+        }
         if (n == 0 || n > 45) return null;
         if (!s.contains(":")) {
             long v4 = fastParseIpv4(s);

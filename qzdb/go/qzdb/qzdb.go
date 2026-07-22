@@ -554,46 +554,45 @@ func (s *QzdbSearcher) ensurePoolsLoaded() {
 
 			if poolCursor+4 > poolEnd {
 				groupPoolList[f] = []string{}
-				continue;
+				continue
 			}
-		count := safeReadU32(unsafe.Pointer(&d[poolCursor]))
-		poolCursor += 4
-		if s.offRowSchema > 0 {
-			poolCursor += 4
-		}
-		// Cap count to a sane maximum to avoid OOM / OOB on corrupt files.
-		const maxPoolCount = 1 << 26
-		if count == 0 || count > maxPoolCount {
-			groupPoolList[f] = []string{}
-			continue
-		}
-		// Ensure the offset table (count+1 uint32s) stays within the pool region.
-		if poolCursor+uint64(count+1)*4 > poolEnd {
-			groupPoolList[f] = []string{}
-			continue
-		}
 
-		offsets := make([]uint32, count+1)
-		for o := range offsets {
-			offsets[o] = safeReadU32(unsafe.Pointer(&d[poolCursor]))
+			count := safeReadU32(unsafe.Pointer(&d[poolCursor]))
 			poolCursor += 4
-		}
+			if s.offRowSchema > 0 {
+				poolCursor += 4
+			}
+			const maxPoolCount = 1 << 26
+			if count == 0 || count > maxPoolCount {
+				groupPoolList[f] = []string{}
+				continue
+			}
+			if poolCursor+uint64(count+1)*4 > poolEnd {
+				groupPoolList[f] = []string{}
+				continue
+			}
 
-		stringsList := make([]string, count)
-		for idx := uint32(0); idx < count; idx++ {
-			start := offsets[idx]
-			end := offsets[idx+1]
-			length := end - start
-			if length > 0 {
-				segStart := poolCursor + uint64(start)
-				segEnd := poolCursor + uint64(end)
-				if segEnd <= uint64(len(d)) && segStart <= segEnd {
-					stringsList[idx] = string(d[segStart:segEnd])
+			offsets := make([]uint32, count+1)
+			for o := range offsets {
+				offsets[o] = safeReadU32(unsafe.Pointer(&d[poolCursor]))
+				poolCursor += 4
+			}
+
+			stringsList := make([]string, count)
+			for idx := uint32(0); idx < count; idx++ {
+				start := offsets[idx]
+				end := offsets[idx+1]
+				length := end - start
+				if length > 0 {
+					segStart := poolCursor + uint64(start)
+					segEnd := poolCursor + uint64(end)
+					if segEnd <= uint64(len(d)) && segStart <= segEnd {
+						stringsList[idx] = string(d[segStart:segEnd])
+					}
 				}
 			}
-		}
-		poolCursor += uint64(offsets[count])
-		groupPoolList[f] = stringsList
+			poolCursor += uint64(offsets[count])
+			groupPoolList[f] = stringsList
 		}
 		s.groupPools[g] = groupPoolList
 	}
@@ -694,8 +693,8 @@ func (s *QzdbSearcher) trieWalkV6(ip16 [16]byte) (uint32, error) {
 	hi := binary.BigEndian.Uint64(ip16[:8])
 	lo := binary.BigEndian.Uint64(ip16[8:16])
 
-	// Jump index = top v6JumpBits bits of the 128-bit address, held in the top bits of lo.
-	idxJump := (lo >> (64 - uint(s.v6JumpBits))) & uint64((1<<s.v6JumpBits)-1)
+	// Jump index = top v6JumpBits bits of the 128-bit address, held in the top bits of hi.
+	idxJump := (hi >> (64 - uint(s.v6JumpBits))) & uint64((1<<s.v6JumpBits)-1)
 
 	ptr := safeReadU32(unsafe.Pointer(&s.data[s.offV6Jump+idxJump*4]))
 	if ptr == 0 {
@@ -712,9 +711,9 @@ func (s *QzdbSearcher) trieWalkV6(ip16 [16]byte) (uint32, error) {
 	for depth < 128 {
 		var bit uint32
 		if depth < 64 {
-			bit = uint32((lo >> (63 - depth)) & 1)
+			bit = uint32((hi >> (63 - depth)) & 1)
 		} else {
-			bit = uint32((hi >> (127 - depth)) & 1)
+			bit = uint32((lo >> (127 - depth)) & 1)
 		}
 		child := s.getV6Child(idx, bit)
 
@@ -1081,16 +1080,12 @@ func (s *QzdbSearcher) VerifyCRC() bool {
 		return false
 	}
 	stored := binary.LittleEndian.Uint32(s.data[16:20])
-	
-	tmp := make([]byte, len(s.data))
-	copy(tmp, s.data)
-	tmp[16] = 0
-	tmp[17] = 0
-	tmp[18] = 0
-	tmp[19] = 0
-	
-	computed := crc32.ChecksumIEEE(tmp)
-	return stored == computed
+
+	// Segmented CRC: process bytes 0-15, then 4 zero bytes, then bytes 20+
+	crc := crc32.Update(0, crc32.IEEETable, s.data[:16])
+	crc = crc32.Update(crc, crc32.IEEETable, []byte{0, 0, 0, 0})
+	crc = crc32.Update(crc, crc32.IEEETable, s.data[20:])
+	return stored == crc
 }
 
 var hexLUT [128]byte
@@ -1154,8 +1149,14 @@ type parseResult struct {
 }
 
 func fastParseIp(s string) (*parseResult, bool) {
-	s = strings.TrimSpace(s)
 	n := len(s)
+	// Reject whitespace — SSRF-safe, cross-language consistent
+	for i := 0; i < n; i++ {
+		c := s[i]
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f' {
+			return nil, false
+		}
+	}
 	if n == 0 || n > 45 {
 		return nil, false
 	}

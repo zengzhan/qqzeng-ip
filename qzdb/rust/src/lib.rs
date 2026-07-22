@@ -358,9 +358,15 @@ impl QzdbSearcher {
         check_offset(data_len, off_v6_jump, v6_jump_size, "off_v6_jump")?;
         check_offset(data_len, off_v6_nodes, v6_node_count as u64 * v6_node_size, "off_v6_nodes")?;
         check_offset(data_len, off_ip_row, row_count as u64 * ip_row_size as u64, "off_ip_row")?;
-        check_offset(data_len, off_geo_entries, 1, "off_geo_entries")?;
+        check_offset(data_len, off_geo_entries, 16, "off_geo_entries")?;
         check_offset(data_len, off_pools, 4, "off_pools")?;
         check_offset(data_len, off_meta, 4, "off_meta")?;
+        if off_group_schema > 0 {
+            check_offset(data_len, off_group_schema, 2, "off_group_schema")?;
+        }
+        if off_row_schema > 0 {
+            check_offset(data_len, off_row_schema, 1, "off_row_schema")?;
+        }
 
         let mut group_entry_offsets = Vec::with_capacity(4);
         for i in 0..4 {
@@ -1072,8 +1078,13 @@ fn fast_parse_ip_v4(s: &str) -> Option<u32> {
 }
 
 fn fast_parse_ip(s: &str) -> Option<ParseIpResult> {
-    let s = s.trim();
     let n = s.len();
+    // Reject whitespace — SSRF-safe, cross-language consistent
+    for &b in s.as_bytes() {
+        if b == b' ' || b == b'\t' || b == b'\n' || b == b'\r' || b == 0x0B || b == 0x0C {
+            return None;
+        }
+    }
     if n == 0 || n > 45 { return None; }
     if !s.contains(':') {
         return fast_parse_ip_v4(s).map(ParseIpResult::V4);

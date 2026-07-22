@@ -845,10 +845,11 @@ namespace Qqzeng
         {
             if (_data == null || _data.Length < 20) return false;
             uint stored = BinaryPrimitives.ReadUInt32LittleEndian(_data.AsSpan(16, 4));
-            byte[] copy = (byte[])_data.Clone();
-            Array.Clear(copy, 16, 4);
-            uint computed = Crc32Table.Compute(copy);
-            return stored == computed;
+            // Segmented CRC to avoid cloning the full buffer
+            uint crc = Crc32Table.Update(0xFFFFFFFF, _data, 0, 16);
+            crc = Crc32Table.Update(crc, new byte[4], 0, 4);
+            crc = Crc32Table.Update(crc, _data, 20, _data.Length - 20);
+            return stored == (crc ^ 0xFFFFFFFF);
         }
 
         private static readonly byte[] HexLUT = new byte[128];
@@ -902,8 +903,14 @@ namespace Qqzeng
         {
             result = default;
             if (string.IsNullOrEmpty(s)) return false;
-            s = s.Trim();
             int n = s.Length;
+            // Reject whitespace — SSRF-safe, cross-language consistent
+            for (int i = 0; i < n; i++)
+            {
+                char c = s[i];
+                if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f')
+                    return false;
+            }
             if (n == 0 || n > 45) return false;
             if (!s.Contains(':'))
             {
@@ -997,10 +1004,13 @@ namespace Qqzeng
             }
             public static uint Compute(byte[] buffer)
             {
-                uint crc = 0xffffffff;
-                for (int i = 0; i < buffer.Length; i++)
+                return Update(0xffffffff, buffer, 0, buffer.Length) ^ 0xffffffff;
+            }
+            public static uint Update(uint crc, byte[] buffer, int offset, int count)
+            {
+                for (int i = offset; i < offset + count; i++)
                     crc = Table[(crc ^ buffer[i]) & 0xFF] ^ (crc >> 8);
-                return crc ^ 0xffffffff;
+                return crc;
             }
         }
     }

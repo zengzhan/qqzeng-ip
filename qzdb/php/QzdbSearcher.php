@@ -11,53 +11,77 @@ class QzdbException extends \Exception
 
 class GeoInfo implements \ArrayAccess
 {
-    private $fields;
+    private $values;
     private $fieldNames;
     private $floatIndices;
 
-    public function __construct(array $fields = [], array $fieldNames = [], array $floatIndices = [])
+    public function __construct(array $values = [], array $fieldNames = [], array $floatIndices = [])
     {
-        $this->fields = $fields;
+        $this->values = $values;
         $this->fieldNames = $fieldNames;
         $this->floatIndices = array_flip($floatIndices);
     }
 
     public function __get($name)
     {
-        return $this->fields[$name] ?? '';
+        $idx = array_search($name, $this->fieldNames, true);
+        return ($idx !== false && $idx < count($this->values)) ? $this->values[$idx] : '';
     }
 
     public function get($name)
     {
-        return $this->fields[$name] ?? '';
+        $idx = array_search($name, $this->fieldNames, true);
+        return ($idx !== false && $idx < count($this->values)) ? $this->values[$idx] : '';
     }
 
     public function offsetExists($offset): bool
     {
-        return isset($this->fields[$offset]);
+        if (is_int($offset)) {
+            return $offset >= 0 && $offset < count($this->values);
+        }
+        $idx = array_search($offset, $this->fieldNames, true);
+        return $idx !== false;
     }
 
     #[\ReturnTypeWillChange]
     public function offsetGet($offset)
     {
-        return $this->fields[$offset] ?? '';
+        if (is_int($offset)) {
+            return $this->values[$offset] ?? '';
+        }
+        $idx = array_search($offset, $this->fieldNames, true);
+        return ($idx !== false && $idx < count($this->values)) ? $this->values[$idx] : '';
     }
 
     public function offsetSet($offset, $value): void
     {
-        $this->fields[$offset] = $value;
+        if (is_int($offset)) {
+            $this->values[$offset] = $value;
+        } else {
+            $idx = array_search($offset, $this->fieldNames, true);
+            if ($idx !== false) {
+                $this->values[$idx] = $value;
+            }
+        }
     }
 
     public function offsetUnset($offset): void
     {
-        unset($this->fields[$offset]);
+        if (is_int($offset)) {
+            unset($this->values[$offset]);
+        } else {
+            $idx = array_search($offset, $this->fieldNames, true);
+            if ($idx !== false) {
+                unset($this->values[$idx]);
+            }
+        }
     }
 
     public function toPipe()
     {
         $parts = [];
-        foreach ($this->fieldNames as $fname) {
-            $val = $this->fields[$fname] ?? '';
+        foreach ($this->fieldNames as $i => $fname) {
+            $val = $this->values[$i] ?? '';
             if (isset($this->floatIndices[$fname]) && $val !== '') {
                 $val = sprintf('%.6f', (float)$val);
             }
@@ -584,7 +608,6 @@ class QzdbSearcher
         $steps = 0;
 
         while (true) {
-            if (++$steps > 32) return 0;
             $bit = ($suffix >> 31) & 1;
             $child = $this->getV4Child($idx, $bit);
 
@@ -597,7 +620,8 @@ class QzdbSearcher
 
             $idx = $child;
             $suffix <<= 1;
-            if (++$steps > 32) return 0;
+            $steps++;
+            if ($steps >= self::MAX_TRIE_WALK_STEPS) return 0;
         }
     }
 
@@ -722,11 +746,8 @@ class QzdbSearcher
         $baseOffsets = $this->groupFieldOffsets[$groupIndex];
         $natives = $this->groupFieldNative[$groupIndex];
         $natTypes = $this->groupFieldNativeType[$groupIndex];
-        $fieldIds = isset($this->groupFieldIds[$groupIndex]) ? $this->groupFieldIds[$groupIndex] : null;
-        $poolSectionIds = isset($this->groupPoolSectionIds[$groupIndex]) ? $this->groupPoolSectionIds[$groupIndex] : null;
 
-        $fields = [];
-        $resolvedFieldNames = [];
+        $values = [];
         for ($i = 0; $i < $fieldCount; $i++) {
             $w = $widths[$i];
             $fo = $entryOffset + $baseOffsets[$i];
@@ -759,14 +780,10 @@ class QzdbSearcher
                 }
             }
 
-            // Use fieldId for field name if available
-            $fieldId = ($fieldIds && $i < count($fieldIds)) ? $fieldIds[$i] : $i;
-            $fname = $fieldId < count($this->fieldNames) ? $this->fieldNames[$fieldId] : "field_{$fieldId}";
-            $fields[$fname] = $val;
-            $resolvedFieldNames[$i] = $fname;
+            $values[] = $val;
         }
 
-        return new GeoInfo($fields, $resolvedFieldNames, $this->floatFieldIndices);
+        return new GeoInfo($values, $this->fieldNames, $this->floatFieldIndices);
     }
 
     public function find($ipStr)
@@ -882,7 +899,6 @@ class QzdbSearcher
         $baseOffsets = $this->groupFieldOffsets[$groupIndex];
         $natives = $this->groupFieldNative[$groupIndex];
         $natTypes = $this->groupFieldNativeType[$groupIndex];
-        $fieldIds = isset($this->groupFieldIds[$groupIndex]) ? $this->groupFieldIds[$groupIndex] : null;
 
         $resolved = [];
         foreach ($indices as $i) {
@@ -905,16 +921,11 @@ class QzdbSearcher
             }
         }
 
-        $fields = [];
-        $resolvedFieldNames = [];
+        $values = [];
         for ($i = 0; $i < $fieldCount; $i++) {
-            $fieldId = ($fieldIds && $i < count($fieldIds)) ? $fieldIds[$i] : $i;
-            $fname = $fieldId < count($this->fieldNames) ? $this->fieldNames[$fieldId] : "field_{$fieldId}";
-            $val = isset($resolved[$i]) ? $resolved[$i] : '';
-            $fields[$fname] = $val;
-            $resolvedFieldNames[$i] = $fname;
+            $values[] = isset($resolved[$i]) ? $resolved[$i] : '';
         }
-        return new GeoInfo($fields, $resolvedFieldNames, $this->floatFieldIndices);
+        return new GeoInfo($values, $this->fieldNames, $this->floatFieldIndices);
     }
 
     public function reload($dbPath)
@@ -938,25 +949,70 @@ class QzdbSearcher
         return $this->poolCount;
     }
 
+    private static function crc32bInitTable(): void
+    {
+        if (self::$crc32bTable !== null) return;
+        $table = [];
+        for ($i = 0; $i < 256; $i++) {
+            $crc = $i;
+            for ($j = 0; $j < 8; $j++) {
+                $crc = ($crc & 1) ? (0xEDB88320 ^ ($crc >> 1)) : ($crc >> 1);
+            }
+            $table[$i] = $crc;
+        }
+        self::$crc32bTable = $table;
+    }
+
+    private static function crc32bUpdate(int $crc, string $data): int
+    {
+        self::crc32bInitTable();
+        $table = self::$crc32bTable;
+        $len = strlen($data);
+        for ($i = 0; $i < $len; $i++) {
+            $crc = $table[($crc ^ ord($data[$i])) & 0xFF] ^ ($crc >> 8);
+        }
+        return $crc;
+    }
+
+    private static function crc32bCompute(string $data): int
+    {
+        return self::crc32bUpdate(0xFFFFFFFF, $data) ^ 0xFFFFFFFF;
+    }
+
+    private static function crc32bComputeFile(string $data): int
+    {
+        self::crc32bInitTable();
+        $table = self::$crc32bTable;
+        $crc = 0xFFFFFFFF;
+        $len = strlen($data);
+        // CRC bytes [0, 16)
+        for ($i = 0; $i < 16; $i++) {
+            $crc = $table[($crc ^ ord($data[$i])) & 0xFF] ^ ($crc >> 8);
+        }
+        // CRC field counted as zero (4 zero bytes, XOR with 0 is identity)
+        $crc = $table[$crc & 0xFF] ^ ($crc >> 8);
+        $crc = $table[$crc & 0xFF] ^ ($crc >> 8);
+        $crc = $table[$crc & 0xFF] ^ ($crc >> 8);
+        $crc = $table[$crc & 0xFF] ^ ($crc >> 8);
+        // CRC bytes [20, end)
+        for ($i = 20; $i < $len; $i++) {
+            $crc = $table[($crc ^ ord($data[$i])) & 0xFF] ^ ($crc >> 8);
+        }
+        return $crc ^ 0xFFFFFFFF;
+    }
+
     public function verifyCrc(): bool
     {
         if (strlen($this->data) < 20) {
             return false;
         }
         $stored = unpack('V', substr($this->data, 16, 4))[1];
-        
-        $copy = $this->data;
-        $copy[16] = "\x00";
-        $copy[17] = "\x00";
-        $copy[18] = "\x00";
-        $copy[19] = "\x00";
-        
-        $computed = hexdec(hash('crc32b', $copy));
-        
+        $computed = self::crc32bComputeFile($this->data);
         return $stored === $computed;
     }
 
     private static $HEX = null;
+    private static $crc32bTable = null;
 
     private static function initHex()
     {
