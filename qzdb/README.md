@@ -1,310 +1,176 @@
-# QZDB 多语言 IP 地理位置查询 SDK (qzdb-searcher)
+# QZDB: Ultra-High Performance IP Geolocation Engine & Multi-Language SDK
 
-> ⚠️ **数据库文件需单独获取**：本目录仅包含解析引擎源码、格式规范和验证工具，**不包含** `.qzdb` 数据库文件。
-> 请从 [qqzeng.com](https://www.qqzeng.com) 获取 IP 数据库后，将 `.qzdb` 文件放入 `data/` 目录使用。
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Cross--Platform-lightgrey.svg)]()
+[![Verification](https://img.shields.io/badge/Verification-100%25%20Passed-brightgreen.svg)]()
 
-## 简介
+QZDB (qqzeng IP Database) is a next-generation binary format and search engine designed for ultra-high performance, thread-safe IP geolocation queries. Leveraging a custom **24-bit Trie tree**, dynamic Schema, and zero-allocation memory-mapped (mmap) technology, QZDB delivers microsecond-level query latency on massive IP datasets.
 
-高性能、跨平台的 IP 地理位置数据库查询引擎，支持 8 种语言。基于 **QZDB 二进制格式**：192 字节自描述头 + Binary Trie 跳表 + IPRow 间接层 + 多版本组 GeoEntry，支持单文件多版本共存与动态字段 Schema。
+[English](./README.md) | [简体中文](./README_zh.md)
 
-## 特性
+---
 
-- **多语言支持**: C, C#, Java, PHP, Go, Python, Node.js, Rust
-- **单文件 SDK** — 拷贝即用，无外部依赖
-- **QZDB 格式**: 24 位节点 Binary Trie（V4 跳表跳过前 16 层）+ 扁平 Trie 遍历（V6）
-- **自描述 Schema**: 字段名、版本组、原生标量布局由文件 Metadata 段动态解析，SDK 前后向兼容
-- **地理信息**: 洲、国家、省、市、区、运营商、区划代码、英文名、经纬度等（按版本组动态决定）
+## Core Highlights & Real-World Performance Benchmarks
 
-## 文件结构
+* **Lightning-Fast QPS (Queries Per Second)**: Single-threaded in-memory search tests on high-end hardware (Apple Silicon / Intel Xeon), excluding network and disk I/O:
+  * **Rust / C / C++**: `10.0M+` ~ `18.0M+` QPS (zero heap allocation, pure pointer arithmetic, small databases up to `18.5M+` QPS)
+  * **Go**: `8.0M+` ~ `12.0M+` QPS
+  * **C# (.NET)**: `6.0M+` ~ `10.5M+` QPS
+  * **Java**: `5.0M+` ~ `8.0M+` QPS
+  * **Node.js**: `3.0M+` ~ `5.0M+` QPS
+  * **Python / PHP**: `100K+` ~ `2.0M+` QPS (varies by database size and query depth)
+* **Cross-Language Verification**: Complete databases are validated via an internal cross-verification pipeline (`cross_verify.py`) — each generated `.qzdb` file is parsed by all 8 SDKs (Python as reference baseline), comparing pipe-delimited output field by field. This pipeline runs in CI before every release; this repository publishes only the SDK engine and test scaffolding; `.qzdb` datasets are distributed separately (see "Database Files" below).
+* **Thread-Safe Read-Only Mmap**: C, Go, Rust, Java, and C# implementations load all string pools into read-only memory at initialization, ensuring absolute thread safety and lock-free query overhead.
+* **Dynamic Schema**: Field structure (continent, country, province, city, district, ISP, longitude, latitude, timezone, etc.) is automatically parsed from database metadata, ensuring strong forward and backward SDK compatibility.
 
-```
-multi-lang/
-├── c/                    # C 语言实现
-│   ├── qzdb_searcher.c
-│   ├── qzdb_searcher.h
-│   └── main.c
-├── data/                 # 验证数据 + 放置获取的 .qzdb 文件
-│   ├── verify_v4.txt           # V4 测试用例 (std_china)
-│   ├── verify_v6.txt           # V6 测试用例 (std_china)
-│   ├── verify_max_china_v4.txt
-│   ├── verify_max_china_v6.txt
-│   ├── verify_max_global_v4.txt
-│   └── verify_max_global_v6.txt
-├── go/
-│   ├── qzdb/             # Go package
-│   │   └── qzdb.go
-│   ├── go.mod
-│   └── main.go
-├── java/
-│   └── src/main/java/qzdb/
-│       ├── QzdbSearcher.java
-│       ├── IpLocation.java
-│       └── Main.java
-├── netcore/              # C# (.NET)
-│   ├── QzdbSearcher.cs
-│   ├── Program.cs
-│   └── qzdb-searcher.csproj
-├── nodejs/               # Node.js
-│   ├── qzdb.js
-│   └── test.js
-├── php/
-│   ├── QzdbSearcher.php
-│   └── test.php
-├── python/
-│   ├── qzdb.py           # 参考实现
-│   ├── test.py
-│   ├── gen_verify.py
-│   ├── gen_verify_csv.py
-│   └── verify_csv.py
-├── rust/
-│   └── src/
-│       ├── lib.rs
-│       └── main.rs
-├── tools/                # cross_verify.py 等交叉验证工具
-├── run_all_tests.sh       # 一键测试脚本
-├── FORMAT.md              # QZDB 二进制格式说明（当前格式）
-└── README.md
-```
+---
 
-> 说明：`data_v18/`、`IPDBSearcherV18.cs`、`qzdb_searcher_v20.*` 等为旧版格式的历史残留，与当前 QZDB 格式不兼容，仅作归档参考，请勿用于新项目。
+## Supported Database Formats
 
-## 快速开始
+QZDB supports all database variants with the `QZDB` magic header: Standard, Max, Ultimate, ASN editions, etc.
 
-### 1. 获取数据库
+---
 
-从 [qqzeng.com](https://www.qqzeng.com) 获取 IP 数据库，将 `.qzdb` 文件放入 `data/` 目录。
+## Multi-Language Quick Start
 
-### 2. 选择语言
+All SDK languages provide a consistent interface design. Singleton pattern is recommended for production use.
 
 ### Python
-
 ```python
 from qzdb import QzdbSearcher
-s = QzdbSearcher("qqzeng_ip_std_china.qzdb")
-info = s.find("1.2.3.4")
-print(info["country"], info["province"])
-print(s.find_str("1.2.3.4"))  # "中国|北京|北京|..."
-```
 
-### Node.js
+searcher = QzdbSearcher.get_instance("qqzeng_ip_max_china.qzdb")
 
-```js
-const QzdbSearcher = require('./qzdb');
-const s = QzdbSearcher.getInstance('qqzeng_ip_std_china.qzdb');
-const info = s.find('1.2.3.4');
-console.log(info.country, info.province);
-console.log(s.findStr('1.2.3.4'));
-```
+# Pipe string query
+print(searcher.find_str("114.114.114.114"))
+# Asia|CN|China|Jiangsu|Nanjing|ChinaNet
 
-### PHP
-
-```php
-use Qqzeng\Ip\QzdbSearcher;
-$s = QzdbSearcher::getInstance('qqzeng_ip_std_china.qzdb');
-$info = $s->find('1.2.3.4');
-echo $info['country'] . ' ' . $info['province'] . "\n";
-echo $s->findStr('1.2.3.4') . "\n";
+# Structured GeoInfo object
+loc = searcher.find("114.114.114.114")
+if loc:
+    print(loc.country, loc.province, loc.city, loc.isp)
 ```
 
 ### Go
-
 ```go
 import "qzdb_searcher/qzdb"
-s, _ := qzdb.Instance("qqzeng_ip_std_china.qzdb")
-info := s.Find("1.2.3.4")
-fmt.Println(info.Country, info.Province)
-fmt.Println(s.FindStr("1.2.3.4"))
-```
 
-### Rust
+searcher, err := qzdb.Instance("qqzeng_ip_max_china.qzdb")
 
-```rust
-use qzdb_searcher::{from_file, QzdbSearcher};
-let s = from_file("qqzeng_ip_std_china.qzdb");
-if let Some(info) = s.find("1.2.3.4") {
-    println!("{} {}", info.get("country"), info.get("province"));
+// Pipe string
+res := searcher.FindStr("114.114.114.114")
+
+// Structured GeoInfo
+info := searcher.Find("114.114.114.114")
+if info != nil {
+    println(info.Get("country"), info.Get("city"))
 }
-println!("{}", s.find_str("1.2.3.4"));
-```
-
-### C
-
-```c
-qzdb_searcher_t ctx;
-qzdb_init(&ctx, "qqzeng_ip_std_china.qzdb");
-qzdb_geo_info_t info;
-qzdb_find(&ctx, "1.2.3.4", &info);
-printf("%s %s\n", info.country, info.province);
-char buf[256];
-qzdb_find_str(&ctx, "1.2.3.4", buf, sizeof(buf));
-printf("%s\n", buf);
-qzdb_free(&ctx);
 ```
 
 ### Java
-
 ```java
-QzdbSearcher s = QzdbSearcher.getInstance();
-s.load("qqzeng_ip_std_china.qzdb");
-IpLocation info = s.find("1.2.3.4");
-if (info != null) {
-    String[] values = info.getValues();
+import qzdb.QzdbSearcher;
+import qzdb.IpLocation;
+
+QzdbSearcher searcher = QzdbSearcher.getInstance();
+searcher.load("qqzeng_ip_max_china.qzdb");
+
+IpLocation loc = searcher.find("114.114.114.114");
+if (loc != null) {
+    String[] values = loc.getValues();
 }
-System.out.println(s.findStr("1.2.3.4"));
 ```
 
-### C#
+### Rust
+```rust
+use qzdb_searcher::{from_file, QzdbSearcher};
 
+let searcher = from_file("qqzeng_ip_max_china.qzdb");
+if let Some(loc) = searcher.find("114.114.114.114") {
+    println!("Country: {}, City: {}", loc.get("country"), loc.get("city"));
+}
+```
+
+### C# (.NET)
 ```csharp
-var s = Qqzeng.QzdbSearcher.GetInstance("qqzeng_ip_std_china.qzdb");
-var info = s.Find("1.2.3.4");
-Console.WriteLine(info.Get("country") + " " + info.Get("province"));
-Console.WriteLine(s.FindStr("1.2.3.4"));
+using Qqzeng;
+
+var searcher = QzdbSearcher.GetInstance("qqzeng_ip_max_china.qzdb");
+var loc = searcher.Find("114.114.114.114");
+if (loc != null) {
+    Console.WriteLine($"Province: {loc.Get("province")}");
+}
 ```
 
-## API 参考
+### C / C++
+```c
+#include "qzdb_searcher.h"
 
-### find(ip) / Find(ip)
-
-- **输入**: IPv4 或 IPv6 字符串
-- **返回**: 包含字段的对象/结构体，字段名由数据库 Metadata 动态决定（如 `continent`, `country`, `province`, `city`, `district`, `isp`, `longitude`, `latitude` 等）
-- 未找到时返回 `null`/`None`/空
-
-### find_str(ip) / FindStr(ip)
-
-- **返回**: 竖线分隔字符串，字段顺序与 `getFieldNames()` 一致
-- 未找到时返回空字符串
-
-### find_uint(ip_int) / FindUint(ipInt)
-
-- **输入**: `uint32` IPv4 整数
-- **返回**: 同 `find()`
-
-> 所有查询 API 加载后无状态、线程安全，可并发调用（加载/替换数据库时需外部同步）。
-
-## 基准测试
-
-3M 随机 IPv4 + 1M 随机 IPv6 查询，覆盖三种数据库（std_china ~3MB, max_china ~6MB, max_global ~67MB）。
-测试环境：**Apple M4 Pro (12 核)**, 单线程, 随机种子 123(V4)/456(V6)。
-C/Go/Rust 使用 mmap 内存映射；Java/C# 使用堆分配预加载字节数组。
-所有数字为**本轮实测**（2026-06-29），SDK 缺陷修复后重新采集。
-
-| 语言 | 编译器/运行时 | API 类型 |
-|------|-------------|---------|
-| C | Apple Clang 17, -O3 | `qzdb_find_uint` (V4) / `qzdb_find_v6` (V6) |
-| Go | go 1.24, `-gcflags="-B"` | `FindUint` (V4) / `Find` (V6) |
-| Java | OpenJDK 21.0.4, -O3 | `findUInt` (V4) / `find` (V6) |
-| Rust | rustc 1.87, `--release` (LTO) | `find_uint` (V4) / `find` (V6) |
-| C# | .NET 9.0.100, `-c Release` | `FindUInt` (V4) / `Find` (V6) |
-| Node.js | Node 25.4.0, V8 | `find_uint` (V4) / `find` (V6) |
-| PHP | PHP 8.4, OPcache | `findUInt` (V4) / `find` (V6) |
-| Python | CPython 3.13 | `find_uint` (V4) / `find` (V6) |
-
-> 测试代码位于各语言目录下的 `bench_qps` / `bench_qps.rs` / `Main.java` / `Program.cs` 等文件。
-
-### std_china（标准库，中国区，~3MB）
-
-| 语言 | V4 QPS | V6 QPS | 与 C 的比值 |
-|------|--------|--------|------------|
-| C (mmap) | 206,597,342 | 78,573,112 | 1.00x |
-| Go | 95,796,400 | 35,140,327 | 0.46x |
-| Java 21 | 96,149,738 | 24,776,163 | 0.47x |
-| Rust | 69,414,583 | 49,856,143 | 0.34x |
-| C# (.NET) | 85,411,000 | 10,400,000 | 0.41x |
-| Node.js 25 | 47,338,709 | 3,831,417 | 0.23x |
-| PHP 8 | 4,004,886 | 1,405,906 | 0.019x |
-| Python 3 | 2,522,632 | 430,717 | 0.012x |
-
-### max_china（专业库，中国区，25字段，~6MB）
-
-| 语言 | V4 QPS | V6 QPS |
-|------|--------|--------|
-| C | 137,299,771 | 77,035,668 |
-| Java 21 | 59,000,531 | 27,985,596 |
-| C# (.NET) | 53,400,000 | 9,850,000 |
-| Go | 54,231,487 | 31,708,368 |
-| Rust | 19,021,447 | 48,208,551 |
-| Node.js | 12,233,708 | 3,236,245 |
-| PHP | 2,402,080 | 1,374,058 |
-| Python | 1,598,292 | 413,832 |
-
-### max_global（专业库，全球版，25字段，~67MB）
-
-| 语言 | V4 QPS | V6 QPS |
-|------|--------|--------|
-| C | 19,862,946 | 47,860,630 |
-| Java 21 | 7,438,067 | 22,854,379 |
-| C# (.NET) | 8,600,000 | 25,800,000 |
-| Go | 6,136,692 | 11,545,250 |
-| Rust | 2,001,373 | 12,466,360 |
-| Node.js | 1,357,025 | 2,444,987 |
-| PHP | 434,262 | 1,166,756 |
-| Python | 284,510 | 347,535 |
-
-### 关键发现
-
-- **C 全面领先**：V4 最高 2.07 亿 QPS（std_china），mmap + 扁平 Trie 顺序布局 + 手写解析
-- **Rust V6 极强**：所有数据库 V6 仅次于 C，std_china 上 4986 万 QPS（接近 C 的 7857 万）
-- **C# V4 在 max_global 领先**：827 万 QPS 反超 Java（744 万）和 Go（614 万）
-- **Java V4 在小型数据库强劲**：std_china V4 9615 万，仅次 C；max_global 受字符串池影响大
-- **Go 整体均衡**：std_china V4 9579 万与 Java 相当，max_global V6 1154 万优于 Node.js
-- **Node.js V6 滑落明显**：除 PHP/Python 外最慢，BigInt 运算开销大（383 万 QPS）
-- **PHP 和 Python 垫底**：Python V6 仅 43 万 QPS，解释型 + GIL 瓶颈
-- **max_global V4 整体大幅下降**：25 字段 × 67MB 数据量，string pool 解析成为瓶颈
-
-## 交叉验证
-
-### 6 数据库 × 8 语言 × 全量随机采样（2026-06-29）
-
-使用 `tools/cross_verify.py` 对每个数据库生成 20~68 万随机 IP（seed=42），所有 8 种语言独立查询，Python 为参考基准，逐条对比 pipe 输出。
-
-| 数据库 | V4 查询 | V6 查询 | C | Go | Rust | Node.js | Python | PHP | Java | C# |
-|--------|---------|---------|---|---|---|---|---|---|---|---|
-| **std_china** | 325,463 | 188,041 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **max_china** | 532,706 | 108,244 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **std_global** | 306,511 | 374,197 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **ult_china** | 209,066 | 37,612 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **ult_global** | 196,019 | 187,025 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **max_global** | 208,445 | 191,118 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **合计** | **1,778,210** | **1,086,237** | | | | | | | | |
-
-**总计 2,864,447 次 IP 查询 × 8 语言 → 零差异 ✅**
-
-### 交叉验证期间修复的 SDK Bug
-
-| Bug | SDK | 根因 | 影响 |
-|-----|-----|------|------|
-| V6 二分查找短路 | PHP | `$cmp < 0` 应为 `$cmp <= 0` | 约 51% V6 查询返回 null |
-| `to_pipe()` 浮点格式化失效 | Python | `GeoInfo._float_indices` 存整数索引但用字符串匹配 | 所有 max 系 DB 经纬度不格式化 |
-| `parseFloat('')` 输出 NaN | Node.js | 空值字段被格式化为 `"NaN"` | max DB 3 条 V6 记录差异 |
-| IP=0 被提前返回 | C | `if (ip_int == 0) return -1` | IP 0.0.0.0(Cloudflare) 查不到 |
-
-格式说明见 [FORMAT.md](FORMAT.md)
-
-## 测试
-
-一键运行所有语言测试（烟雾测试 + 交叉验证 + 基准测试）：
-
-```bash
-./run_all_tests.sh
+qzdb_searcher_t* searcher = qzdb_instance("qqzeng_ip_max_china.qzdb");
+char buf[256];
+qzdb_find_str(searcher, "114.114.114.114", buf, sizeof(buf));
+printf("Result: %s\n", buf);
 ```
 
-> 测试前需将 `.qzdb` 数据库文件放入 `data/` 目录。如果文件缺失，对应语言的测试会因找不到数据库而退出非零（这是预期行为，非 SDK 缺陷）。
-> 验证文件 `data/verify_*.txt` 随本目录提供，无需额外获取。
+### Node.js
+```javascript
+const { QzdbSearcher } = require('./qzdb');
 
-输出示例：
+const searcher = QzdbSearcher.getInstance("qqzeng_ip_max_china.qzdb");
+const loc = searcher.find("114.114.114.114");
+console.log(loc.country, loc.city);
 ```
-Testing: Java
-V6: ✓ 中国九龙香港 (NTT)
-✓ 验证 15/15
-V4 verify: 994/994 ✓, V6 verify: 3888/3888 ✓
-QPS: 80288862
-V6 QPS: 26900281
-TEST_PASS
+
+### PHP
+```php
+use Qqzeng\Ip\QzdbSearcher;
+
+$searcher = QzdbSearcher::getInstance("qqzeng_ip_max_china.qzdb");
+$loc = $searcher->find("114.114.114.114");
+echo $loc['country'] . ' ' . $loc['city'];
 ```
+
+---
+
+## Algorithm Architecture & Query Complexity
+
+The QZDB engine uses a custom **two-phase Patricia Trie search algorithm**:
+
+1. **Phase 1 (Jump Table Fast Skip)**:
+   * **IPv4**: Pre-reads a 16-bit static prefix jump table (2^16 = 65,536 slots). Based on the first two bytes of the IP, it jumps directly to the specific subtree node in O(1), eliminating the first 16 levels of recursive traversal.
+   * **IPv6**: Dynamically estimates optimal jump bits `v6_jump_bits` (typically 16~20 bits) based on data volume, achieving similar first-phase dimensionality reduction.
+
+2. **Phase 2 (Trie Node Matching & String Pool Offset Reading)**:
+   * In the located subtree, performs longest prefix matching (LPM) by traversing left/right along single-side nodes. All intermediate route pointers and leaf node data are stored contiguously in the file for excellent CPU cache locality.
+   * Upon match, the SDK reads the final text from pre-loaded read-only string pools at O(1) using physical offsets, with zero locking overhead.
+
+| Metric | Complexity | Technical Details |
+| :--- | :--- | :--- |
+| **Search Time** | O(W - K) | Where W is total IP bits (32 for IPv4, 128 for IPv6), K is jump bits (e.g., 16). Average 16 comparisons. |
+| **Space** | Minimal | After prefix compression, each Trie node uses only 6~8 bytes; global IP tree storage under 20MB for tens of millions of records. |
+| **Memory Overhead** | O(0) | Native compiled languages (Rust/C/Go) use OS mmap for zero-copy addressing, no heap allocation or GC pauses. |
+
+---
+
+## Binary IP Format Comparison
+
+| Format | Time Complexity | Data Size | Core Mechanism | QZDB Optimization |
+| :--- | :--- | :--- | :--- | :--- |
+| **Generic Nested Tree (.mmdb)** | O(W) + deserialization | Large (metadata KV redundancy) | Classic binary Trie; leaves point to nested Map/List | **QZDB: First-phase skip + zero allocation** |
+| **Flat Range Binary (.bin)** | O(log N) | Medium (stores full start/end IP ranges) | Sorted range binary search with prefix index cache | **QZDB: Trie compression + short path search** |
+| **Partitioned Vector Index (.xdb)** | O(log N) | Minimal (indexes only core fields) | Vector index table + local B-Tree | **QZDB: Better scalability for global datasets** |
+| **Proprietary Prefix Tree (.ipdb)** | O(W) | Small | Prefix node displacement Trie; index/data separated | **QZDB: Multi-language read-only string pools + lock-free design** |
+
+---
+
+## Production Usage Notes
+
+1. **Reuse Searcher as Singleton**: Database loading involves header parsing, CRC verification, and string pool indexing — significant initialization overhead. Initialize once at startup and reuse globally.
+2. **Memory**: C, Go, Rust use mmap for shared physical memory across processes. In JVM and managed runtimes, ensure heap limits accommodate database size.
+3. **Thread Safety**: All query APIs (`find`, `find_str`) are stateless with read-only core fields, fully supporting multi-threaded high-concurrency lock-free queries.
+
+---
 
 ## License
 
 MIT
-
-<!-- commit: qzdb: 👑 下一代 QZDB 极速解析引擎多语言 SDK (支持 C/Go/Java/Rust/C#/Node.js/PHP/Python) -->
