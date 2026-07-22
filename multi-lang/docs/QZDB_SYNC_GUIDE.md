@@ -79,7 +79,33 @@ GitHub 上每个语言子目录有自己的 `README.md`，用于在目录浏览�
 
 ## 同步步骤
 
-### Step 1: 同步 SDK 核心文件
+### ⚠️ Step 0: 先在 dev 仓库提交改动（这一步最容易被遗漏）
+
+**每次修改 SDK 后，不要直接在 GitHub 仓库改，要先在 dev 仓库提交。**
+
+```bash
+# 切换到 dev 仓库
+cd "/Users/zengxiangzhan/ZengData/IP数据库/qzdb"
+
+# 按语言独立提交（参考 git log 风格）
+git add multi-lang/go/qzdb/qzdb.go
+git commit -m "fix(go): 具体改动描述"
+
+git add multi-lang/python/qzdb.py
+git commit -m "perf(python): 具体改动描述"
+
+git add multi-lang/rust/src/lib.rs
+git commit -m "perf(rust): 具体改动描述"
+
+# 检查 dev 仓库状态干净后再继续
+git status --short
+```
+
+> **为什么先提交 dev 仓库？** 因为 `cp` 只复制文件，不复制 git 历史。dev 仓库的提交记录用于本地回溯和问题排查。忘记这一步 = 丢失改动历史。
+
+---
+
+### Step 1: 同步 SDK 核心文件（cp 到 GitHub 仓库）
 
 使用精准的 `cp` 命令（不要用 `rsync --delete`，它会删掉 GitHub 独有的文件）：
 
