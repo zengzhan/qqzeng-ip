@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 memmap2 = "0.9"
 regex-lite = "0.1"
+serde = { version = "1", default-features = false, features = ["alloc"] }
 
 [[bin]]
 name = "bench_qps"
