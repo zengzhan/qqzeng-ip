@@ -3,6 +3,8 @@ use std::fs;
 
 use std::sync::{Arc, OnceLock};
 
+use serde::ser::{Serialize, SerializeMap, Serializer};
+
 const MAX_TRIE_WALK_STEPS: usize = 1000;
 
 #[derive(Debug)]
@@ -111,6 +113,24 @@ impl GeoInfo {
             parts.push(val);
         }
         parts.join("|")
+    }
+
+    /// Direct attribute access for the 6 most common fields.
+    pub fn country(&self) -> &str { self.get("country") }
+    pub fn province(&self) -> &str { self.get("province") }
+    pub fn city(&self) -> &str { self.get("city") }
+    pub fn isp(&self) -> &str { self.get("isp") }
+    pub fn longitude(&self) -> &str { self.get("longitude") }
+    pub fn latitude(&self) -> &str { self.get("latitude") }
+}
+
+impl Serialize for GeoInfo {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(self.field_names.len()))?;
+        for (name, val) in self.field_names.iter().zip(self.values.iter()) {
+            map.serialize_entry(name, val)?;
+        }
+        map.end()
     }
 }
 

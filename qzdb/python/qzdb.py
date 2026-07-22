@@ -210,6 +210,37 @@ class GeoInfo:
             return self._values[i] if i < len(self._values) else ''
         return ''
 
+    # ── 6 field properties for direct attribute access ────────────
+    @property
+    def country(self):
+        i = self._name_idx.get('country')
+        return self._values[i] if i is not None and i < len(self._values) else ''
+
+    @property
+    def province(self):
+        i = self._name_idx.get('province')
+        return self._values[i] if i is not None and i < len(self._values) else ''
+
+    @property
+    def city(self):
+        i = self._name_idx.get('city')
+        return self._values[i] if i is not None and i < len(self._values) else ''
+
+    @property
+    def isp(self):
+        i = self._name_idx.get('isp')
+        return self._values[i] if i is not None and i < len(self._values) else ''
+
+    @property
+    def longitude(self):
+        i = self._name_idx.get('longitude')
+        return self._values[i] if i is not None and i < len(self._values) else ''
+
+    @property
+    def latitude(self):
+        i = self._name_idx.get('latitude')
+        return self._values[i] if i is not None and i < len(self._values) else ''
+
     def to_dict(self):
         return {fname: self._values[i] if i < len(self._values) else ''
                 for i, fname in enumerate(self._field_names)}
