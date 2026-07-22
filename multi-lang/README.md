@@ -1,19 +1,19 @@
-# QZDB: IP 解析引擎与多语言 SDK
+# QZDB: 极速 IP 解析引擎与多语言 SDK
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Cross--Platform-lightgrey.svg)]()
 [![Verification](https://img.shields.io/badge/Verification-100%25%20Passed-brightgreen.svg)]()
 
-QZDB (qqzeng IP 数据库) 是一款面向生产环境的 IP 地理位置查询二进制格式与搜索引擎。采用 **Jump Table + Patricia Trie 双阶段检索**、动态 Schema 以及零分配内存映射（mmap）技术，在海量 IP 数据集上提供微秒级的查询延迟。
+QZDB (qqzeng IP 数据库) 是一款面向生产环境的 IP 地理位置查询二进制格式与搜索引擎。采用 **Jump Table + Patricia Trie 双阶段检索**、动态 Schema 以及零分配内存映射（mmap）技术，在海量 IP 数据集上提供**单机微秒级**查询延迟。
 
 [简体中文](./README_zh.md) | [English](./README.md)
 
 ---
 
-## 核心能力
+## 💡 核心能力
 
 * **🔬 跨语言验证**：完整数据库经由内部交叉验证流水线（`cross_verify.py`）校验——将每个生成的 `.qzdb` 文件依次交由全部 8 种 SDK 解析（以 Python 为参考基线），逐字段比对竖线分隔输出。该流水线在每次发布前的 CI 中执行；本仓库仅发布 SDK 引擎与测试脚手架，`.qzdb` 数据集单独分发（见下文「数据库文件」）。
-* **⚙️ 线程安全与只读 Mmap**：C、Go、Rust、Java 和 C# 实现均在加载时将所有字符串池装载进只读内存，确保绝对的线程安全与查询时零锁（Lock-free）开销。
+* **⚙️ 线程安全与只读 Mmap**：C、Go、Rust、Java 和 C# 实现均在加载时将所有字符串池装载进只读内存，确保多线程并发查询无锁竞争。
 * **🌐 动态 Schema**：自动从数据库元数据解析字段结构（例如大洲、国家、省份、城市、区县、ISP、经纬度、时区），保证 SDK 具有极强的向前与向后兼容性。
 
 ---
