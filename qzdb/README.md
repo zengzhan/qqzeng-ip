@@ -1,27 +1,31 @@
-# QZDB: Ultra-High Performance IP Geolocation Engine & Multi-Language SDK
+# QZDB: Next-Gen IP Geolocation Engine & Multi-Language SDK
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Cross--Platform-lightgrey.svg)]()
 [![Verification](https://img.shields.io/badge/Verification-100%25%20Passed-brightgreen.svg)]()
 
-QZDB (qqzeng IP Database) is a next-generation binary format and search engine designed for ultra-high performance, thread-safe IP geolocation queries. Leveraging a custom **24-bit Trie tree**, dynamic Schema, and zero-allocation memory-mapped (mmap) technology, QZDB delivers microsecond-level query latency on massive IP datasets.
+QZDB (qqzeng IP Database) is a production-grade IP geolocation binary format and search engine. Leveraging a custom **24-bit Trie tree**, dynamic Schema, and zero-allocation memory-mapped (mmap) technology, QZDB delivers microsecond-level query latency on massive IP datasets.
 
 [English](./README.md) | [简体中文](./README_zh.md)
 
 ---
 
-## Core Highlights & Real-World Performance Benchmarks
+## Highlights
 
-* **Lightning-Fast QPS (Queries Per Second)**: Single-threaded in-memory search tests on high-end hardware (Apple Silicon / Intel Xeon), excluding network and disk I/O:
-  * **Rust / C / C++**: `10.0M+` ~ `18.0M+` QPS (zero heap allocation, pure pointer arithmetic, small databases up to `18.5M+` QPS)
-  * **Go**: `8.0M+` ~ `12.0M+` QPS
-  * **C# (.NET)**: `6.0M+` ~ `10.5M+` QPS
-  * **Java**: `5.0M+` ~ `8.0M+` QPS
-  * **Node.js**: `3.0M+` ~ `5.0M+` QPS
-  * **Python / PHP**: `100K+` ~ `2.0M+` QPS (varies by database size and query depth)
-* **Cross-Language Verification**: Complete databases are validated via an internal cross-verification pipeline (`cross_verify.py`) — each generated `.qzdb` file is parsed by all 8 SDKs (Python as reference baseline), comparing pipe-delimited output field by field. This pipeline runs in CI before every release; this repository publishes only the SDK engine and test scaffolding; `.qzdb` datasets are distributed separately (see "Database Files" below).
-* **Thread-Safe Read-Only Mmap**: C, Go, Rust, Java, and C# implementations load all string pools into read-only memory at initialization, ensuring absolute thread safety and lock-free query overhead.
-* **Dynamic Schema**: Field structure (continent, country, province, city, district, ISP, longitude, latitude, timezone, etc.) is automatically parsed from database metadata, ensuring strong forward and backward SDK compatibility.
+* **Cross-Language Verified**: Complete databases are validated via an internal cross-verification pipeline (`cross_verify.py`) — each generated `.qzdb` file is parsed by all 8 SDKs (Python as reference baseline), comparing pipe-delimited output field by field.
+* **Thread-Safe Read-Only Mmap**: C, Go, Rust, Java, and C# implementations load all string pools into read-only memory at initialization, ensuring lock-free concurrent queries.
+* **Dynamic Schema**: Field structure (continent, country, province, city, district, ISP, coordinates, timezone, etc.) is automatically parsed from database metadata, supporting forward and backward compatibility.
+
+| Language | Query Mode | Performance Characteristics | Recommended Use |
+|:---|:---|:---|:---|
+| **Rust** | Read-Only Mmap | Zero-allocation, mmap zero-copy | High-concurrency services, embedded, security-sensitive |
+| **C / C++** | Read-Only Mmap | Minimal footprint, mmap zero-copy | IoT, gateways, kernel modules, resource-constrained |
+| **Go** | Read-Only Mmap | Goroutine-safe, low-latency | Web services, API gateways, microservices |
+| **C#** | Eager-load Once | .NET native integration | Enterprise .NET applications |
+| **Java** | Eager-load Once | JVM cross-platform | Spring Boot, big data ecosystem |
+| **Node.js** | Eager-load Once | Async non-blocking | Full-stack JavaScript |
+| **PHP** | Dynamic Parsed | Zero-config drop-in | Web project rapid integration |
+| **Python** | Dynamic Parsed | Quick prototyping | Data analysis, scripting, proof-of-concept |
 
 ---
 

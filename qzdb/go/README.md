@@ -1,6 +1,6 @@
 # Go SDK
 
-Go QZDB 极速解析引擎，mmap，9500 万+ QPS。
+Go 实现，mmap 零拷贝，goroutine 安全。
 
-<!-- commit: go: Go 语言极速解析引擎 (mmap, 9500 万+ QPS) -->
+<!-- commit: go: Go 语言极速解析引擎 (mmap 零拷贝) -->
 
