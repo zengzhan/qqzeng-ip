@@ -4,7 +4,7 @@
 [![Platform](https://img.shields.io/badge/platform-Cross--Platform-lightgrey.svg)]()
 [![Verification](https://img.shields.io/badge/Verification-100%25%20Passed-brightgreen.svg)]()
 
-QZDB (qqzeng IP 数据库) 是专为超高性能、线程安全的 IP 地理位置查询设计的下一代二进制格式和搜索引擎。利用定制的 **24位 Trie 树**、动态 Schema 以及零分配内存映射（mmap）技术，QZDB 在海量 IP 数据集上提供了微秒级的查询延迟。
+QZDB (qqzeng IP 数据库) 是专为超高性能、线程安全的 IP 地理位置查询设计的下一代二进制格式和搜索引擎。采用 **Jump Table + Patricia Trie 双阶段检索**、动态 Schema 以及零分配内存映射（mmap）技术，QZDB 在海量 IP 数据集上提供了微秒级的查询延迟。
 
 [简体中文](./README_zh.md) | [English](./README.md)
 
@@ -151,7 +151,7 @@ QZDB 引擎核心采用专门定制的 **双阶段 Patricia Trie 树型检索算
 | :--- | :--- | :--- |
 | **检索时间复杂度** | $\mathcal{O}(W - K)$ | 其中 $W$ 为 IP 地址总位数（IPv4 为 32 位，IPv6 为 128 位），$K$ 为首阶段跳转位数（如 16 位）。平均只需 16 次比对即可完成检索。 |
 | **空间复杂度** | 极小量级 | 经过前缀压路机压缩，每个 Trie 节点仅占用 6~8 字节，千万级全球 IP 树存储开销低于 20MB。 |
-| **内存开销 (Memory)** | $\mathcal{O}(0)$ | 原生编译型语言（Rust/C/Go）直接借助操作系统 `mmap` 进行零拷贝（Zero-copy）寻址，无堆分配与 GC 停顿。 |
+| **内存开销 (Memory)** | $\mathcal{O}(F)$ 映射地址空间 / $\mathcal{O}(1)$ 单次查询 | 原生编译型语言（Rust/C/Go）直接借助操作系统 `mmap` 进行零拷贝（Zero-copy）寻址，初始化后查询路径无堆分配与 GC 停顿。 |
 
 ---
 

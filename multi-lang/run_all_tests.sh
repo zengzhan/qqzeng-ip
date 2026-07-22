@@ -1,4 +1,5 @@
 #!/bin/bash
+set -Euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
@@ -15,7 +16,7 @@ run_test() {
     echo "  Testing: $name"
     echo "=========================================="
     if [ -n "$dir" ]; then
-        pushd "$dir" > /dev/null
+        pushd "$dir" > /dev/null || { echo "ERROR: pushd $dir failed"; FAILED=1; return 1; }
     fi
     eval "$cmd" > "$tmp" 2>&1
     local ec=$?
@@ -23,10 +24,10 @@ run_test() {
         popd > /dev/null
     fi
     cat "$tmp"
-    if grep -q "TEST_PASS" "$tmp" 2>/dev/null; then
+    if [ "$ec" -eq 0 ] && grep -q "TEST_PASS" "$tmp" 2>/dev/null; then
         RESULTS="${RESULTS}✓ $name passed\n"
     else
-        RESULTS="${RESULTS}✗ $name FAILED\n"
+        RESULTS="${RESULTS}✗ $name FAILED (exit=$ec)\n"
         FAILED=1
     fi
     rm -f "$tmp"
@@ -52,15 +53,19 @@ fi
 
 # Rust
 if command -v cargo &> /dev/null; then
-    run_test "Rust" "cargo run --release --bin main --quiet 2>/dev/null" "rust"
+    run_test "Rust" "cargo run --release --bin main --quiet" "rust"
 fi
 
 # C
 if command -v gcc &> /dev/null || command -v clang &> /dev/null; then
     CC="gcc"
     command -v clang &> /dev/null && CC="clang"
-    (cd c && $CC -O3 -o qzdb_test qzdb_searcher.c main.c -lm 2>/dev/null)
-    run_test "C" "./c/qzdb_test" ""
+    if ! (cd c && $CC -O3 -o qzdb_test qzdb_searcher.c main.c -lm); then
+        RESULTS="${RESULTS}✗ C (compile failed)\n"
+        FAILED=1
+    else
+        run_test "C" "./c/qzdb_test" ""
+    fi
 fi
 
 # Java
@@ -85,8 +90,12 @@ JAVA_HOME=$(find_java_home)
 if [ -n "$JAVA_HOME" ]; then
     export JAVA_HOME
     mkdir -p java/build
-    $JAVA_HOME/bin/javac -d java/build java/src/main/java/qzdb/QzdbSearcher.java java/src/main/java/qzdb/IpLocation.java java/src/main/java/Main.java 2>/dev/null
-    run_test "Java" "$JAVA_HOME/bin/java -cp java/build Main" ""
+    if ! $JAVA_HOME/bin/javac -d java/build java/src/main/java/qzdb/QzdbSearcher.java java/src/main/java/qzdb/IpLocation.java java/src/main/java/Main.java; then
+        RESULTS="${RESULTS}✗ Java (compile failed)\n"
+        FAILED=1
+    else
+        run_test "Java" "$JAVA_HOME/bin/java -cp java/build Main" ""
+    fi
 else
     echo "[SKIP] Java (JDK not found)"
     SKIPPED=$((SKIPPED + 1))
