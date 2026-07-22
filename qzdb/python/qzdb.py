@@ -12,12 +12,13 @@ FLOAT_FIELDS = frozenset(['longitude', 'latitude'])
 
 # ── strict IP parsing (SEC-05 / CODE-03) ───────────────────────────
 
-_HEX = {}
+# bytearray[256]: index-ASCII → hex value (0xFF = invalid)
+_HEX = bytearray([0xFF] * 256)
 for _i in range(10):
-    _HEX[chr(48 + _i)] = _i
+    _HEX[48 + _i] = _i
 for _i in range(6):
-    _HEX[chr(97 + _i)] = 10 + _i
-    _HEX[chr(65 + _i)] = 10 + _i
+    _HEX[97 + _i] = 10 + _i
+    _HEX[65 + _i] = 10 + _i
 
 
 def _fast_parse_ip(s):
@@ -124,7 +125,7 @@ def _fast_parse_ipv6(s):
         if gl == 0 or gl > 4:
             return None
         for c in g:
-            if c not in _HEX:
+            if _HEX[ord(c)] == 0xFF:
                 return None
     zeros = 8 - ng - v4_slots
     if zeros < 0:
@@ -134,7 +135,7 @@ def _fast_parse_ipv6(s):
     for g in lg:
         v = 0
         for c in g:
-            v = (v << 4) | _HEX[c]
+            v = (v << 4) | _HEX[ord(c)]
         buf[off] = v >> 8
         buf[off + 1] = v & 0xFF
         off += 2
@@ -142,7 +143,7 @@ def _fast_parse_ipv6(s):
     for g in rg:
         v = 0
         for c in g:
-            v = (v << 4) | _HEX[c]
+            v = (v << 4) | _HEX[ord(c)]
         buf[off] = v >> 8
         buf[off + 1] = v & 0xFF
         off += 2
@@ -182,28 +183,29 @@ class QzdbError(Exception):
 
 
 class GeoInfo:
-    __slots__ = ('_values', '_field_names', '_float_indices')
+    __slots__ = ('_values', '_field_names', '_float_indices', '_name_idx')
 
     def __init__(self, values=None, field_names=None, float_indices=None):
         self._values = values or []
         self._field_names = field_names or []
         self._float_indices = set()
+        self._name_idx = {}
         if field_names and float_indices:
             self._float_indices = {field_names[i] for i in float_indices if i < len(field_names)}
+        if field_names:
+            self._name_idx = {n: i for i, n in enumerate(field_names)}
 
     def __getattr__(self, name):
-        try:
-            i = self._field_names.index(name)
+        i = self._name_idx.get(name)
+        if i is not None:
             return self._values[i] if i < len(self._values) else ''
-        except ValueError:
-            raise AttributeError(name)
+        raise AttributeError(name)
 
     def get(self, name):
-        try:
-            i = self._field_names.index(name)
+        i = self._name_idx.get(name)
+        if i is not None:
             return self._values[i] if i < len(self._values) else ''
-        except ValueError:
-            return ''
+        return ''
 
     def to_dict(self):
         return {fname: self._values[i] if i < len(self._values) else ''
