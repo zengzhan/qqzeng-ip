@@ -185,15 +185,18 @@ class QzdbError(Exception):
 class GeoInfo:
     __slots__ = ('_values', '_field_names', '_float_indices', '_name_idx')
 
-    def __init__(self, values=None, field_names=None, float_indices=None):
+    def __init__(self, values=None, field_names=None, float_indices=None, name_idx=None):
         self._values = values or []
         self._field_names = field_names or []
         self._float_indices = set()
-        self._name_idx = {}
+        if name_idx is not None:
+            self._name_idx = name_idx
+        else:
+            self._name_idx = {}
+            if field_names:
+                self._name_idx = {n: i for i, n in enumerate(field_names)}
         if field_names and float_indices:
             self._float_indices = {field_names[i] for i in float_indices if i < len(field_names)}
-        if field_names:
-            self._name_idx = {n: i for i, n in enumerate(field_names)}
 
     def __getattr__(self, name):
         i = self._name_idx.get(name)
@@ -561,6 +564,7 @@ class QzdbSearcher:
 
             if field_names and len(field_names) == self._group_field_counts[0]:
                 self._field_names = field_names
+                self._name_idx = {n: i for i, n in enumerate(field_names)}
                 self._float_field_indices = {
                     i for i, n in enumerate(field_names)
                     if n in FLOAT_FIELDS
@@ -569,6 +573,7 @@ class QzdbSearcher:
 
         # Fallback placeholder names
         self._field_names = [f'field_{i}' for i in range(self._group_field_counts[0])]
+        self._name_idx = {n: i for i, n in enumerate(self._field_names)}
         self._float_field_indices = set()
 
     def _ensure_pools_loaded(self):
@@ -813,7 +818,8 @@ class QzdbSearcher:
             values.append(val)
 
         return GeoInfo(values=values, field_names=self._field_names,
-                       float_indices=self._float_field_indices)
+                       float_indices=self._float_field_indices,
+                       name_idx=self._name_idx)
 
     # ── bytes-based IPv6 helpers ──────────────────────────────────────
 
