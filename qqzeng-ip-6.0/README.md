@@ -1,4 +1,6 @@
-# qqzeng-ip 6.0 多语言极速解析 SDK
+# qqzeng-ip v6.0 多语言解析 SDK
+
+🗂️ IP 引擎 v6.0——旧版多语言解析实现（归档）
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Build Status](https://github.com/zengzhan/qqzeng-ip/actions/workflows/ci.yml/badge.svg)](https://github.com/zengzhan/qqzeng-ip/actions/workflows/ci.yml)
