@@ -2,10 +2,10 @@ package qzdb
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"math"
-	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -14,7 +14,21 @@ import (
 	"unsafe"
 )
 
+// Unified error codes for QZDB operations
+var (
+	ErrNotFound     = errors.New("not found")
+	ErrCorrupted    = errors.New("corrupted data")
+	ErrOutOfBounds  = errors.New("out of bounds")
+	ErrInvalidParam = errors.New("invalid parameter")
+	ErrBadHeader    = errors.New("bad header")
+	ErrBadMagic     = errors.New("bad magic")
+	ErrUnsupported  = errors.New("unsupported format")
+)
+
 const SENTINEL uint32 = 0x80000000
+const SENTINEL_MASK_24 uint32 = 0x7FFFFF
+const SENTINEL_MASK_31 uint32 = 0x7FFFFFFF
+const maxTrieWalkSteps = 1000
 
 var floatFields = map[string]bool{
 	"longitude": true,
@@ -22,15 +36,16 @@ var floatFields = map[string]bool{
 }
 
 type GeoInfo struct {
-	fields       map[string]string
 	FieldNames   []string
-	floatIndices map[string]bool
 	Values       []string
+	floatIndices map[string]bool
 }
 
 func (g *GeoInfo) Get(name string) string {
-	if val, ok := g.fields[name]; ok {
-		return val
+	for i, n := range g.FieldNames {
+		if n == name && i < len(g.Values) {
+			return g.Values[i]
+		}
 	}
 	return ""
 }
@@ -38,7 +53,10 @@ func (g *GeoInfo) Get(name string) string {
 func (g *GeoInfo) ToPipe() string {
 	parts := make([]string, len(g.FieldNames))
 	for i, fname := range g.FieldNames {
-		val := g.fields[fname]
+		val := ""
+		if i < len(g.Values) {
+			val = g.Values[i]
+		}
 		if g.floatIndices[fname] && val != "" {
 			if f, err := strconv.ParseFloat(val, 64); err == nil {
 				parts[i] = fmt.Sprintf("%.6f", f)
@@ -50,10 +68,21 @@ func (g *GeoInfo) ToPipe() string {
 	return strings.Join(parts, "|")
 }
 
+func (g *GeoInfo) ToMap() map[string]string {
+	m := make(map[string]string, len(g.FieldNames))
+	for i, n := range g.FieldNames {
+		if i < len(g.Values) {
+			m[n] = g.Values[i]
+		}
+	}
+	return m
+}
+
 type QzdbSearcher struct {
 	data                []byte
 	groupIndex          int
 	fieldNames          []string
+	fieldNameToIdx      map[string]int
 	floatFieldIndices   map[string]bool
 	versionName         string
 
@@ -119,7 +148,10 @@ func Instance(dbPath ...string) (*QzdbSearcher, error) {
 		}
 		instance, initErr = NewSearcher(path, 0)
 	})
-	return instance, initErr
+	if initErr != nil {
+		return nil, initErr
+	}
+	return instance, nil
 }
 
 func NewSearcher(dbPath string, groupIndex int) (*QzdbSearcher, error) {
@@ -156,44 +188,44 @@ func (s *QzdbSearcher) Close() {
 }
 
 //go:nosplit
-func readU16(p unsafe.Pointer) uint16 {
+func safeReadU16(p unsafe.Pointer) uint16 {
 	b := (*[2]byte)(p)
 	return uint16(b[0]) | uint16(b[1])<<8
 }
 
 //go:nosplit
-func readU32(p unsafe.Pointer) uint32 {
+func safeReadU32(p unsafe.Pointer) uint32 {
 	b := (*[4]byte)(p)
 	return uint32(b[0]) | uint32(b[1])<<8 | uint32(b[2])<<16 | uint32(b[3])<<24
 }
 
 //go:nosplit
-func readU64(p unsafe.Pointer) uint64 {
+func safeReadU64(p unsafe.Pointer) uint64 {
 	b := (*[8]byte)(p)
 	return uint64(b[0]) | uint64(b[1])<<8 | uint64(b[2])<<16 | uint64(b[3])<<24 |
 		uint64(b[4])<<32 | uint64(b[5])<<40 | uint64(b[6])<<48 | uint64(b[7])<<56
 }
 
-func (s *QzdbSearcher) readU24(off uint64) uint32 {
+func (s *QzdbSearcher) safeReadU24(off uint64) uint32 {
 	d := s.data
 	return uint32(d[off]) | uint32(d[off+1])<<8 | uint32(d[off+2])<<16
 }
 
-func (s *QzdbSearcher) readU48(off uint64) uint64 {
+func (s *QzdbSearcher) safeReadU48(off uint64) uint64 {
 	d := s.data
 	return uint64(d[off]) | uint64(d[off+1])<<8 | uint64(d[off+2])<<16 |
 		uint64(d[off+3])<<24 | uint64(d[off+4])<<32 | uint64(d[off+5])<<40
 }
 
-func (s *QzdbSearcher) readUintWidth(off uint64, width int) uint32 {
+func (s *QzdbSearcher) safeReadUintWidth(off uint64, width int) uint32 {
 	if width <= 1 {
 		return uint32(s.data[off])
 	} else if width == 2 {
-		return uint32(readU16(unsafe.Pointer(&s.data[off])))
+		return uint32(safeReadU16(unsafe.Pointer(&s.data[off])))
 	} else if width == 3 {
-		return s.readU24(off)
+		return s.safeReadU24(off)
 	} else {
-		return readU32(unsafe.Pointer(&s.data[off]))
+		return safeReadU32(unsafe.Pointer(&s.data[off]))
 	}
 }
 
@@ -213,7 +245,7 @@ func (s *QzdbSearcher) parseHeader() error {
 		return fmt.Errorf("unsupported format version: %d", fmtVer)
 	}
 
-	s.flags = readU16(unsafe.Pointer(&d[8]))
+	s.flags = safeReadU16(unsafe.Pointer(&d[8]))
 	s.hasV4 = s.flags&1 != 0
 	s.hasV6 = s.flags&2 != 0
 	s.v4Node24 = s.flags&0x10 != 0
@@ -232,34 +264,34 @@ func (s *QzdbSearcher) parseHeader() error {
 	if s.poolIdxSize != 2 && s.poolIdxSize != 3 {
 		return fmt.Errorf("poolIdxSize must be 2 or 3, got %d", s.poolIdxSize)
 	}
-	s.geoCount = int(readU16(unsafe.Pointer(&d[14])))
-	s.rowCount = int(readU32(unsafe.Pointer(&d[20])))
-	s.v4RecCount = readU32(unsafe.Pointer(&d[24]))
-	s.v6RecCount = readU32(unsafe.Pointer(&d[28]))
+	s.geoCount = int(safeReadU16(unsafe.Pointer(&d[14])))
+	s.rowCount = int(safeReadU32(unsafe.Pointer(&d[20])))
+	s.v4RecCount = safeReadU32(unsafe.Pointer(&d[24]))
+	s.v6RecCount = safeReadU32(unsafe.Pointer(&d[28]))
 
-	hs := readU32(unsafe.Pointer(&d[36]))
+	hs := safeReadU32(unsafe.Pointer(&d[36]))
 	if hs != 192 {
 		return fmt.Errorf("unexpected header size: %d", hs)
 	}
 
-	s.offRowSchema = readU64(unsafe.Pointer(&d[40]))
-	s.offGroupSchema = readU64(unsafe.Pointer(&d[48]))
-	s.offV4Jump = readU64(unsafe.Pointer(&d[64]))
-	s.offV4Nodes = readU64(unsafe.Pointer(&d[72]))
-	s.offV6Jump = readU64(unsafe.Pointer(&d[80]))
-	s.offV6Nodes = readU64(unsafe.Pointer(&d[88]))
-	s.offIPRow = readU64(unsafe.Pointer(&d[96]))
-	s.offGeoEntries = readU64(unsafe.Pointer(&d[104]))
-	s.offPools = readU64(unsafe.Pointer(&d[136]))
-	s.offMeta = readU64(unsafe.Pointer(&d[144]))
+	s.offRowSchema = safeReadU64(unsafe.Pointer(&d[40]))
+	s.offGroupSchema = safeReadU64(unsafe.Pointer(&d[48]))
+	s.offV4Jump = safeReadU64(unsafe.Pointer(&d[64]))
+	s.offV4Nodes = safeReadU64(unsafe.Pointer(&d[72]))
+	s.offV6Jump = safeReadU64(unsafe.Pointer(&d[80]))
+	s.offV6Nodes = safeReadU64(unsafe.Pointer(&d[88]))
+	s.offIPRow = safeReadU64(unsafe.Pointer(&d[96]))
+	s.offGeoEntries = safeReadU64(unsafe.Pointer(&d[104]))
+	s.offPools = safeReadU64(unsafe.Pointer(&d[136]))
+	s.offMeta = safeReadU64(unsafe.Pointer(&d[144]))
 
-	s.v4NodeCount = readU32(unsafe.Pointer(&d[152]))
-	s.v6NodeCount = readU32(unsafe.Pointer(&d[156]))
-	s.ipRowSize = int(readU32(unsafe.Pointer(&d[160])))
+	s.v4NodeCount = safeReadU32(unsafe.Pointer(&d[152]))
+	s.v6NodeCount = safeReadU32(unsafe.Pointer(&d[156]))
+	s.ipRowSize = int(safeReadU32(unsafe.Pointer(&d[160])))
 	if s.ipRowSize < 1 || s.ipRowSize > 64 {
 		return fmt.Errorf("ipRowSize out of range [1,64]: %d", s.ipRowSize)
 	}
-	s.geoEntryGroupCount = int(readU32(unsafe.Pointer(&d[164])))
+	s.geoEntryGroupCount = int(safeReadU32(unsafe.Pointer(&d[164])))
 	if s.geoEntryGroupCount < 1 || s.geoEntryGroupCount > 255 {
 		return fmt.Errorf("geoEntryGroupCount out of range [1,255]: %d", s.geoEntryGroupCount)
 	}
@@ -305,7 +337,7 @@ func (s *QzdbSearcher) parseHeader() error {
 		if off+6 > uint64(len(d)) {
 			return fmt.Errorf("group entry offsets out of bounds")
 		}
-		s.groupEntryOffsets[i] = s.readU48(off)
+		s.groupEntryOffsets[i] = s.safeReadU48(off)
 	}
 
 	gmOff := s.offGeoEntries
@@ -334,15 +366,15 @@ func (s *QzdbSearcher) parseHeader() error {
 		s.groupFieldCounts[gi] = int(d[gmOff])
 		gmOff++
 		if fmtVer == 1 || fmtVer >= 4 {
-			s.groupEntryCounts[gi] = readU32(unsafe.Pointer(&d[gmOff]))
+			s.groupEntryCounts[gi] = safeReadU32(unsafe.Pointer(&d[gmOff]))
 			gmOff += 4
 		} else {
-			s.groupEntryCounts[gi] = uint32(readU16(unsafe.Pointer(&d[gmOff])))
+			s.groupEntryCounts[gi] = uint32(safeReadU16(unsafe.Pointer(&d[gmOff])))
 			gmOff += 2
 		}
 
 		if fmtVer == 1 || fmtVer >= 3 {
-			s.groupDimMasks[gi] = readU16(unsafe.Pointer(&d[gmOff]))
+			s.groupDimMasks[gi] = safeReadU16(unsafe.Pointer(&d[gmOff]))
 			gmOff += 2
 		} else {
 			if gi != 2 {
@@ -363,7 +395,7 @@ func (s *QzdbSearcher) parseHeader() error {
 
 	if s.offGroupSchema > 0 {
 		sp := s.offGroupSchema
-		gsGroupCount := int(readU16(unsafe.Pointer(&d[sp])))
+		gsGroupCount := int(safeReadU16(unsafe.Pointer(&d[sp])))
 		sp += 2
 		maxGsGroups := gsGroupCount
 		if actualGroups < maxGsGroups {
@@ -371,10 +403,10 @@ func (s *QzdbSearcher) parseHeader() error {
 		}
 		for gi := 0; gi < maxGsGroups; gi++ {
 			sp += 2 // skip groupId
-			fldCount := int(readU16(unsafe.Pointer(&d[sp])))
+			fldCount := int(safeReadU16(unsafe.Pointer(&d[sp])))
 			sp += 2
 			sp += 4 // skip entryCount
-			stride := int(readU32(unsafe.Pointer(&d[sp])))
+			stride := int(safeReadU32(unsafe.Pointer(&d[sp])))
 			sp += 4
 			sp += 4 // skip flags
 
@@ -387,7 +419,7 @@ func (s *QzdbSearcher) parseHeader() error {
 				fieldIds := make([]uint16, fldCount)
 				poolSectionIds := make([]uint32, fldCount)
 				for fi := 0; fi < fldCount; fi++ {
-					fieldIds[fi] = readU16(unsafe.Pointer(&d[sp]))
+					fieldIds[fi] = safeReadU16(unsafe.Pointer(&d[sp]))
 					sp += 2
 					widths[fi] = int(d[sp])
 					sp++
@@ -395,9 +427,9 @@ func (s *QzdbSearcher) parseHeader() error {
 					sp++
 					natives[fi] = (fieldFlags & 0x01) != 0
 					natTypes[fi] = int((fieldFlags >> 1) & 0x03)
-					offsets[fi] = int(readU32(unsafe.Pointer(&d[sp])))
+					offsets[fi] = int(safeReadU32(unsafe.Pointer(&d[sp])))
 					sp += 4
-					poolSectionIds[fi] = readU32(unsafe.Pointer(&d[sp]))
+					poolSectionIds[fi] = safeReadU32(unsafe.Pointer(&d[sp]))
 					sp += 4
 				}
 				s.groupFieldWidths[gi] = widths
@@ -451,7 +483,7 @@ func (s *QzdbSearcher) resolveFieldNames() {
 		size := uint64(len(d))
 		for pos+4 <= size {
 			t := d[pos]
-			length := uint64(readU16(unsafe.Pointer(&d[pos+2])))
+			length := uint64(safeReadU16(unsafe.Pointer(&d[pos+2])))
 			if t == 0 || length == 0 {
 				break
 			}
@@ -467,7 +499,9 @@ func (s *QzdbSearcher) resolveFieldNames() {
 		if fieldNames != nil && len(fieldNames) == s.groupFieldCounts[0] {
 			s.fieldNames = fieldNames
 			s.floatFieldIndices = make(map[string]bool)
-			for _, n := range fieldNames {
+			s.fieldNameToIdx = make(map[string]int, len(fieldNames))
+			for i, n := range fieldNames {
+				s.fieldNameToIdx[n] = i
 				if floatFields[n] {
 					s.floatFieldIndices[n] = true
 				}
@@ -481,6 +515,11 @@ func (s *QzdbSearcher) resolveFieldNames() {
 		s.fieldNames[i] = fmt.Sprintf("field_%d", i)
 	}
 	s.floatFieldIndices = make(map[string]bool)
+	// Build reverse name→index cache for FindFields projection
+	s.fieldNameToIdx = make(map[string]int, len(s.fieldNames))
+	for i, n := range s.fieldNames {
+		s.fieldNameToIdx[n] = i
+	}
 }
 
 func (s *QzdbSearcher) ensurePoolsLoaded() {
@@ -517,7 +556,7 @@ func (s *QzdbSearcher) ensurePoolsLoaded() {
 				groupPoolList[f] = []string{}
 				continue;
 			}
-		count := readU32(unsafe.Pointer(&d[poolCursor]))
+		count := safeReadU32(unsafe.Pointer(&d[poolCursor]))
 		poolCursor += 4
 		if s.offRowSchema > 0 {
 			poolCursor += 4
@@ -536,7 +575,7 @@ func (s *QzdbSearcher) ensurePoolsLoaded() {
 
 		offsets := make([]uint32, count+1)
 		for o := range offsets {
-			offsets[o] = readU32(unsafe.Pointer(&d[poolCursor]))
+			offsets[o] = safeReadU32(unsafe.Pointer(&d[poolCursor]))
 			poolCursor += 4
 		}
 
@@ -576,7 +615,7 @@ func (s *QzdbSearcher) getV4Child(nodeIdx uint32, bit uint32) uint32 {
 		}
 		val := uint32(d[offset]) | uint32(d[offset+1])<<8 | uint32(d[offset+2])<<16
 		if val&0x800000 != 0 {
-			return (val & 0x7FFFFF) | SENTINEL
+			return (val & SENTINEL_MASK_24) | SENTINEL
 		}
 		return val
 	} else {
@@ -584,7 +623,7 @@ func (s *QzdbSearcher) getV4Child(nodeIdx uint32, bit uint32) uint32 {
 		if childOff+4 > uint64(len(d)) {
 			return 0
 		}
-		return readU32(unsafe.Pointer(&d[childOff]))
+		return safeReadU32(unsafe.Pointer(&d[childOff]))
 	}
 }
 
@@ -604,7 +643,7 @@ func (s *QzdbSearcher) getV6Child(nodeIdx uint32, bit uint32) uint32 {
 		}
 		val := uint32(d[offset]) | uint32(d[offset+1])<<8 | uint32(d[offset+2])<<16
 		if val&0x800000 != 0 {
-			return (val & 0x7FFFFF) | SENTINEL
+			return (val & SENTINEL_MASK_24) | SENTINEL
 		}
 		return val
 	} else {
@@ -612,19 +651,19 @@ func (s *QzdbSearcher) getV6Child(nodeIdx uint32, bit uint32) uint32 {
 		if childOff+4 > uint64(len(d)) {
 			return 0
 		}
-		return readU32(unsafe.Pointer(&d[childOff]))
+		return safeReadU32(unsafe.Pointer(&d[childOff]))
 	}
 }
 
-func (s *QzdbSearcher) trieWalkV4(ipInt uint32) uint32 {
+func (s *QzdbSearcher) trieWalkV4(ipInt uint32) (uint32, error) {
 	hi16 := (ipInt >> 16) & 0xFFFF
-	ptr := readU32(unsafe.Pointer(&s.data[s.offV4Jump+uint64(hi16)*4]))
+	ptr := safeReadU32(unsafe.Pointer(&s.data[s.offV4Jump+uint64(hi16)*4]))
 
 	if ptr == 0 {
-		return 0
+		return 0, nil
 	}
 	if ptr&SENTINEL != 0 {
-		return ptr & 0x7FFFFFFF
+		return ptr & SENTINEL_MASK_31, nil
 	}
 
 	idx := ptr
@@ -636,38 +675,39 @@ func (s *QzdbSearcher) trieWalkV4(ipInt uint32) uint32 {
 		child := s.getV4Child(idx, bit)
 
 		if child == 0 {
-			return 0
+			return 0, nil
 		}
 		if child&SENTINEL != 0 {
-			return child & 0x7FFFFFFF
+			return child & SENTINEL_MASK_31, nil
 		}
 
 		idx = child
 		suffix <<= 1
 		steps++
-		if steps > 32 {
-			return 0
+		if steps >= maxTrieWalkSteps {
+			return 0, ErrCorrupted
 		}
 	}
 }
 
-func (s *QzdbSearcher) trieWalkV6(ip16 [16]byte) uint32 {
+func (s *QzdbSearcher) trieWalkV6(ip16 [16]byte) (uint32, error) {
 	hi := binary.BigEndian.Uint64(ip16[:8])
 	lo := binary.BigEndian.Uint64(ip16[8:16])
 
 	// Jump index = top v6JumpBits bits of the 128-bit address, held in the top bits of lo.
 	idxJump := (lo >> (64 - uint(s.v6JumpBits))) & uint64((1<<s.v6JumpBits)-1)
 
-	ptr := readU32(unsafe.Pointer(&s.data[s.offV6Jump+idxJump*4]))
+	ptr := safeReadU32(unsafe.Pointer(&s.data[s.offV6Jump+idxJump*4]))
 	if ptr == 0 {
-		return 0
+		return 0, nil
 	}
 	if ptr&SENTINEL != 0 {
-		return ptr & 0x7FFFFFFF
+		return ptr & SENTINEL_MASK_31, nil
 	}
 
 	idx := ptr
 	depth := s.v6JumpBits
+	steps := 0
 
 	for depth < 128 {
 		var bit uint32
@@ -679,17 +719,21 @@ func (s *QzdbSearcher) trieWalkV6(ip16 [16]byte) uint32 {
 		child := s.getV6Child(idx, bit)
 
 		if child == 0 {
-			return 0
+			return 0, nil
 		}
 		if child&SENTINEL != 0 {
-			return child & 0x7FFFFFFF
+			return child & SENTINEL_MASK_31, nil
 		}
 
 		idx = child
 		depth++
+		steps++
+		if steps >= maxTrieWalkSteps {
+			return 0, ErrCorrupted
+		}
 	}
 
-	return 0
+	return 0, nil
 }
 
 func (s *QzdbSearcher) readIPRow(rowID uint32) (uint32, uint32, uint32) {
@@ -697,18 +741,21 @@ func (s *QzdbSearcher) readIPRow(rowID uint32) (uint32, uint32, uint32) {
 		return 0, 0, 0
 	}
 	off := s.offIPRow + uint64(rowID)*uint64(s.ipRowSize)
-	geoID := s.readU24(off)
-	asnID := s.readU24(off + 3)
+	geoID := s.safeReadU24(off)
+	asnID := s.safeReadU24(off + 3)
 
 	var usageTypeID uint32
 	if s.ipRowSize >= 9 {
-		usageTypeID = s.readU24(off + 6)
+		usageTypeID = s.safeReadU24(off + 6)
 	}
 
 	return geoID, asnID, usageTypeID
 }
 
-func (s *QzdbSearcher) resolveRowID(rowID uint32, groupIndex int) *GeoInfo {
+func (s *QzdbSearcher) resolveRowID(rowID uint32, groupIndex int) (*GeoInfo, error) {
+	if s == nil {
+		return nil, ErrInvalidParam
+	}
 	geoID, asnID, usageTypeID := s.readIPRow(rowID)
 	var mask uint16
 	if groupIndex < len(s.groupDimMasks) {
@@ -725,27 +772,28 @@ func (s *QzdbSearcher) resolveRowID(rowID uint32, groupIndex int) *GeoInfo {
 	}
 
 	if entryID == 0 {
-		return nil
+		return nil, ErrNotFound
 	}
 	return s.resolveGeo(entryID, groupIndex)
 }
 
-func (s *QzdbSearcher) resolveGeo(entryID uint32, groupIndex int) *GeoInfo {
+func (s *QzdbSearcher) resolveGeo(entryID uint32, groupIndex int) (*GeoInfo, error) {
+	if s == nil {
+		return nil, ErrInvalidParam
+	}
 	if groupIndex < 0 || groupIndex >= len(s.groupFieldCounts) {
-		return nil
+		return nil, ErrInvalidParam
 	}
-	if entryID < 0 {
-		return nil
-	}
+	_ = entryID
 	if entryID >= s.groupEntryCounts[groupIndex] {
-		return nil
+		return nil, ErrOutOfBounds
 	}
 
 	s.ensurePoolsLoaded()
 
 	fieldCount := s.groupFieldCounts[groupIndex]
 	if fieldCount <= 0 {
-		return nil
+		return nil, ErrCorrupted
 	}
 
 	groupEntryStart := s.offGeoEntries + s.groupEntryOffsets[groupIndex]
@@ -758,13 +806,12 @@ func (s *QzdbSearcher) resolveGeo(entryID uint32, groupIndex int) *GeoInfo {
 	natives := s.groupFieldNative[groupIndex]
 	natTypes := s.groupFieldNativeType[groupIndex]
 
-	fields := make(map[string]string)
+	values := make([]string, fieldCount)
 	for i := 0; i < fieldCount; i++ {
 		w := widths[i]
 		fo := entryOffset + uint64(baseOffsets[i])
 		isNative := natives != nil && i < len(natives) && natives[i]
 
-		var val string
 		if isNative {
 			t := 0
 			if natTypes != nil && i < len(natTypes) {
@@ -772,98 +819,76 @@ func (s *QzdbSearcher) resolveGeo(entryID uint32, groupIndex int) *GeoInfo {
 			}
 			if t == 1 {
 				if w == 4 {
-					bits := readU32(unsafe.Pointer(&d[fo]))
-					val = strconv.FormatFloat(float64(math.Float32frombits(bits)), 'f', -1, 32)
+					bits := safeReadU32(unsafe.Pointer(&d[fo]))
+					values[i] = strconv.FormatFloat(float64(math.Float32frombits(bits)), 'f', -1, 32)
 				} else {
-					bits := readU64(unsafe.Pointer(&d[fo]))
-					val = strconv.FormatFloat(math.Float64frombits(bits), 'f', -1, 64)
+					bits := safeReadU64(unsafe.Pointer(&d[fo]))
+					values[i] = strconv.FormatFloat(math.Float64frombits(bits), 'f', -1, 64)
 				}
 			} else {
-				valNum := s.readUintWidth(fo, w)
-				val = strconv.FormatUint(uint64(valNum), 10)
+				valNum := s.safeReadUintWidth(fo, w)
+				values[i] = strconv.FormatUint(uint64(valNum), 10)
 			}
 		} else {
-			idx := s.readUintWidth(fo, w)
+			idx := s.safeReadUintWidth(fo, w)
 			groupPool := s.groupPools[groupIndex]
 			if groupPool != nil && i < len(groupPool) && int(idx) < len(groupPool[i]) {
-				val = groupPool[i][idx]
+				values[i] = groupPool[i][idx]
 			}
 		}
-
-		var fname string
-		if i < len(s.fieldNames) {
-			fname = s.fieldNames[i]
-		} else {
-			fname = fmt.Sprintf("field_%d", i)
-		}
-		fields[fname] = val
 	}
 
-	values := make([]string, fieldCount)
-	for i := 0; i < fieldCount; i++ {
-		var fname string
-		if i < len(s.fieldNames) {
-			fname = s.fieldNames[i]
-		} else {
-			fname = fmt.Sprintf("field_%d", i)
-		}
-		values[i] = fields[fname]
-	}
-
-	return &GeoInfo{fields: fields, FieldNames: s.fieldNames, floatIndices: s.floatFieldIndices, Values: values}
+	return &GeoInfo{FieldNames: s.fieldNames, floatIndices: s.floatFieldIndices, Values: values}, nil
 }
 
-func (s *QzdbSearcher) Find(ipStr string) *GeoInfo {
+func (s *QzdbSearcher) Find(ipStr string) (*GeoInfo, error) {
+	if s == nil {
+		return nil, ErrInvalidParam
+	}
 	if ipStr == "" {
-		return nil
+		return nil, ErrInvalidParam
 	}
 
-	if strings.Contains(ipStr, ":") {
-		ip := net.ParseIP(ipStr)
-		if ip == nil {
-			return nil
-		}
-		ip16 := ip.To16()
-		if ip16 == nil {
-			return nil
-		}
-		// Check for IPv4-mapped IPv6 (::ffff:x.x.x.x)
-		if ip16[0] == 0 && ip16[1] == 0 && ip16[2] == 0 && ip16[3] == 0 &&
-			ip16[4] == 0 && ip16[5] == 0 && ip16[6] == 0 && ip16[7] == 0 &&
-			ip16[8] == 0 && ip16[9] == 0 && ip16[10] == 0xff && ip16[11] == 0xff {
-			return s.FindUint(binary.BigEndian.Uint32(ip16[12:16]))
-		}
-
-		var ip16arr [16]byte
-		copy(ip16arr[:], ip16)
-		return s.FindV6Uint(ip16arr)
-	}
-
-	ipInt, ok := fastParseIpV4(ipStr)
+	result, ok := fastParseIp(ipStr)
 	if !ok {
-		return nil
+		return nil, ErrInvalidParam
 	}
-	return s.FindUint(ipInt)
+	if result.isV4 {
+		return s.FindUint(result.v4)
+	}
+	return s.FindV6Uint(result.v6)
 }
 
-func (s *QzdbSearcher) FindUint(ipInt uint32) *GeoInfo {
-	if !s.hasV4 {
-		return nil
+func (s *QzdbSearcher) FindUint(ipInt uint32) (*GeoInfo, error) {
+	if s == nil {
+		return nil, ErrInvalidParam
 	}
-	rowID := s.trieWalkV4(ipInt)
+	if !s.hasV4 {
+		return nil, ErrNotFound
+	}
+	rowID, err := s.trieWalkV4(ipInt)
+	if err != nil {
+		return nil, err
+	}
 	if rowID == 0 {
-		return nil
+		return nil, ErrNotFound
 	}
 	return s.resolveRowID(rowID, s.groupIndex)
 }
 
-func (s *QzdbSearcher) FindV6Uint(ip16 [16]byte) *GeoInfo {
-	if !s.hasV6 {
-		return nil
+func (s *QzdbSearcher) FindV6Uint(ip16 [16]byte) (*GeoInfo, error) {
+	if s == nil {
+		return nil, ErrInvalidParam
 	}
-	rowID := s.trieWalkV6(ip16)
+	if !s.hasV6 {
+		return nil, ErrNotFound
+	}
+	rowID, err := s.trieWalkV6(ip16)
+	if err != nil {
+		return nil, err
+	}
 	if rowID == 0 {
-		return nil
+		return nil, ErrNotFound
 	}
 	return s.resolveRowID(rowID, s.groupIndex)
 }
@@ -874,33 +899,18 @@ func (s *QzdbSearcher) LookupRowId(ipStr string) uint32 {
 	if ipStr == "" {
 		return 0
 	}
-	if strings.Contains(ipStr, ":") {
-		ip := net.ParseIP(ipStr)
-		if ip == nil {
-			return 0
-		}
-		ip16 := ip.To16()
-		if ip16 == nil {
-			return 0
-		}
-		// Check for IPv4-mapped IPv6 (::ffff:x.x.x.x)
-		if ip16[0] == 0 && ip16[1] == 0 && ip16[2] == 0 && ip16[3] == 0 &&
-			ip16[4] == 0 && ip16[5] == 0 && ip16[6] == 0 && ip16[7] == 0 &&
-			ip16[8] == 0 && ip16[9] == 0 && ip16[10] == 0xff && ip16[11] == 0xff {
-			return s.LookupRowIdUint(binary.BigEndian.Uint32(ip16[12:16]))
-		}
-		if !s.hasV6 {
-			return 0
-		}
-		var ip16arr [16]byte
-		copy(ip16arr[:], ip16)
-		return s.trieWalkV6(ip16arr)
-	}
-	ipInt, ok := fastParseIpV4(ipStr)
+	result, ok := fastParseIp(ipStr)
 	if !ok {
 		return 0
 	}
-	return s.LookupRowIdUint(ipInt)
+	if result.isV4 {
+		return s.LookupRowIdUint(result.v4)
+	}
+	if !s.hasV6 {
+		return 0
+	}
+	rowID, _ := s.trieWalkV6(result.v6)
+	return rowID
 }
 
 // LookupRowIdUint returns the raw row_id for a pre-parsed IPv4 integer.
@@ -908,7 +918,8 @@ func (s *QzdbSearcher) LookupRowIdUint(ipInt uint32) uint32 {
 	if !s.hasV4 {
 		return 0
 	}
-	return s.trieWalkV4(ipInt)
+	rowID, _ := s.trieWalkV4(ipInt)
+	return rowID
 }
 
 // LookupRowIdV6 returns the raw row_id for a 128-bit IPv6 integer.
@@ -916,7 +927,8 @@ func (s *QzdbSearcher) LookupRowIdV6(ip16 [16]byte) uint32 {
 	if !s.hasV6 {
 		return 0
 	}
-	return s.trieWalkV6(ip16)
+	rowID, _ := s.trieWalkV6(ip16)
+	return rowID
 }
 
 // LookupIds returns the raw entry IDs (geoId, asnId, usageId) for a row_id.
@@ -929,12 +941,127 @@ func (s *QzdbSearcher) LookupIds(rowId uint32) (geoId, asnId, usageId uint32, ok
 	return geoId, asnId, usageId, true
 }
 
-func (s *QzdbSearcher) FindStr(ipStr string) string {
-	info := s.Find(ipStr)
-	if info == nil {
-		return ""
+func (s *QzdbSearcher) FindStr(ipStr string) (string, error) {
+	if s == nil {
+		return "", ErrInvalidParam
 	}
-	return info.ToPipe()
+	info, err := s.Find(ipStr)
+	if err != nil {
+		return "", err
+	}
+	if info == nil {
+		return "", ErrNotFound
+	}
+	return info.ToPipe(), nil
+}
+
+// FindFields resolves only the specified fields for an IP.
+// fieldNames=nil or empty returns full GeoInfo (backward compatible).
+func (s *QzdbSearcher) FindFields(ipStr string, fieldNames []string) (*GeoInfo, error) {
+	if s == nil {
+		return nil, ErrInvalidParam
+	}
+	if len(fieldNames) == 0 {
+		return s.Find(ipStr)
+	}
+	rowID := s.LookupRowId(ipStr)
+	if rowID == 0 {
+		return nil, ErrNotFound
+	}
+	return s.resolveGeoFields(rowID, s.groupIndex, fieldNames)
+}
+
+func (s *QzdbSearcher) resolveGeoFields(rowID uint32, groupIndex int, fieldNames []string) (*GeoInfo, error) {
+	if s == nil {
+		return nil, ErrInvalidParam
+	}
+	geoID, asnID, usageTypeID := s.readIPRow(rowID)
+	var mask uint16
+	if groupIndex < len(s.groupDimMasks) {
+		mask = s.groupDimMasks[groupIndex]
+	}
+	var entryID uint32
+	if mask&0x02 != 0 {
+		entryID = asnID
+	} else if mask&0x04 != 0 {
+		entryID = usageTypeID
+	} else {
+		entryID = geoID
+	}
+	if entryID == 0 || groupIndex < 0 || groupIndex >= len(s.groupFieldCounts) {
+		return nil, ErrNotFound
+	}
+	if entryID >= s.groupEntryCounts[groupIndex] {
+		return nil, ErrOutOfBounds
+	}
+	s.ensurePoolsLoaded()
+	fieldCount := s.groupFieldCounts[groupIndex]
+	if fieldCount <= 0 {
+		return nil, ErrCorrupted
+	}
+	// Collect requested field indices using cached map
+	indices := make([]int, 0, len(fieldNames))
+	for _, name := range fieldNames {
+		if idx, ok := s.fieldNameToIdx[name]; ok {
+			indices = append(indices, idx)
+		}
+	}
+	if len(indices) == 0 {
+		return nil, ErrInvalidParam
+	}
+	groupEntryStart := s.offGeoEntries + s.groupEntryOffsets[groupIndex]
+	stride := uint64(s.groupStrides[groupIndex])
+	entryOffset := groupEntryStart + uint64(entryID)*stride
+	d := s.data
+	widths := s.groupFieldWidths[groupIndex]
+	baseOffsets := s.groupFieldOffsets[groupIndex]
+	natives := s.groupFieldNative[groupIndex]
+	natTypes := s.groupFieldNativeType[groupIndex]
+
+	values := make([]string, fieldCount)
+	for _, i := range indices {
+		if i < 0 || i >= fieldCount {
+			continue
+		}
+		w := widths[i]
+		fo := entryOffset + uint64(baseOffsets[i])
+		isNative := natives != nil && i < len(natives) && natives[i]
+		if isNative {
+			t := 0
+			if natTypes != nil && i < len(natTypes) {
+				t = natTypes[i]
+			}
+			if t == 1 {
+				if w == 4 {
+					bits := safeReadU32(unsafe.Pointer(&d[fo]))
+					values[i] = strconv.FormatFloat(float64(math.Float32frombits(bits)), 'f', -1, 32)
+				} else {
+					bits := safeReadU64(unsafe.Pointer(&d[fo]))
+					values[i] = strconv.FormatFloat(math.Float64frombits(bits), 'f', -1, 64)
+				}
+			} else {
+				valNum := s.safeReadUintWidth(fo, w)
+				values[i] = strconv.FormatUint(uint64(valNum), 10)
+			}
+		} else {
+			idx := s.safeReadUintWidth(fo, w)
+			groupPool := s.groupPools[groupIndex]
+			if groupPool != nil && i < len(groupPool) && int(idx) < len(groupPool[i]) {
+				values[i] = groupPool[i][idx]
+			}
+		}
+	}
+	return &GeoInfo{FieldNames: s.fieldNames, floatIndices: s.floatFieldIndices, Values: values}, nil
+}
+
+// Reload atomically replaces the database state with a fresh load from path.
+func (s *QzdbSearcher) Reload(path string) error {
+	ns, err := NewSearcher(path, s.groupIndex)
+	if err != nil {
+		return err
+	}
+	*s = *ns // atomic struct copy (all fields replaced at once)
+	return nil
 }
 
 func (s *QzdbSearcher) FieldNames() []string {
@@ -966,32 +1093,184 @@ func (s *QzdbSearcher) VerifyCRC() bool {
 	return stored == computed
 }
 
-func fastParseIpV4(ip string) (uint32, bool) {
+var hexLUT [128]byte
+
+func init() {
+	for i := 0; i < 10; i++ {
+		hexLUT[48+i] = byte(i)
+	}
+	for i := 0; i < 6; i++ {
+		hexLUT[97+i] = byte(10 + i)
+		hexLUT[65+i] = byte(10 + i)
+	}
+}
+
+func fastParseIpv4(s string) (uint32, bool) {
+	n := len(s)
+	if n == 0 || s[n-1] == '.' {
+		return 0, false
+	}
 	var result, val uint32
-	parts := 0
-	for i := 0; i < len(ip); i++ {
-		c := ip[i]
-		if c >= '0' && c <= '9' {
-			val = val*10 + uint32(c-'0')
+	dots, start := 0, 0
+	for i := 0; i <= n; i++ {
+		var c byte = '.'
+		if i < n {
+			c = s[i]
+		}
+		if c == '.' {
+			segLen := i - start
+			if segLen == 0 || segLen > 3 {
+				return 0, false
+			}
+			if segLen > 1 && s[start] == '0' {
+				return 0, false
+			}
+			val = 0
+			for j := start; j < i; j++ {
+				d := s[j]
+				if d < '0' || d > '9' {
+					return 0, false
+				}
+				val = val*10 + uint32(d-'0')
+			}
 			if val > 255 {
 				return 0, false
 			}
-		} else if c == '.' {
-			if i == 0 || ip[i-1] == '.' {
-				return 0, false
-			}
 			result = (result << 8) | val
-			val = 0
-			parts++
-		} else {
-			return 0, false
+			dots++
+			start = i + 1
 		}
 	}
-	if parts != 3 {
+	if dots != 4 {
 		return 0, false
 	}
-	if len(ip) > 0 && ip[len(ip)-1] == '.' {
-		return 0, false
+	return result, true
+}
+
+type parseResult struct {
+	v4 uint32
+	v6 [16]byte
+	isV4 bool
+}
+
+func fastParseIp(s string) (*parseResult, bool) {
+	s = strings.TrimSpace(s)
+	n := len(s)
+	if n == 0 || n > 45 {
+		return nil, false
 	}
-	return (result << 8) | val, true
+	if !strings.Contains(s, ":") {
+		v4, ok := fastParseIpv4(s)
+		if !ok {
+			return nil, false
+		}
+		return &parseResult{v4: v4, isV4: true}, true
+	}
+	if strings.Contains(s, "%") {
+		return nil, false
+	}
+	dc := strings.Index(s, "::")
+	if dc >= 0 && strings.Index(s[dc+2:], "::") >= 0 {
+		return nil, false
+	}
+	var lft, rgt string
+	if dc >= 0 {
+		lft = s[:dc]
+		rgt = s[dc+2:]
+	} else {
+		lft = s
+	}
+	lg := strings.Split(lft, ":")
+	rg := strings.Split(rgt, ":")
+	if lft == "" {
+		lg = nil
+	}
+	if rgt == "" {
+		rg = nil
+	}
+	for _, g := range lg {
+		if g == "" {
+			return nil, false
+		}
+	}
+	for _, g := range rg {
+		if g == "" {
+			return nil, false
+		}
+	}
+	allg := make([]string, 0, len(lg)+len(rg))
+	allg = append(allg, lg...)
+	allg = append(allg, rg...)
+	hasV4 := false
+	var v4Int uint32
+	if len(allg) > 0 && strings.Contains(allg[len(allg)-1], ".") {
+		v, ok := fastParseIpv4(allg[len(allg)-1])
+		if !ok {
+			return nil, false
+		}
+		v4Int = v
+		hasV4 = true
+		allg = allg[:len(allg)-1]
+	}
+	ng := len(allg)
+	v4Slots := 0
+	if hasV4 {
+		v4Slots = 2
+	}
+	if dc >= 0 {
+		if ng+v4Slots > 7 {
+			return nil, false
+		}
+	} else {
+		if ng+v4Slots != 8 {
+			return nil, false
+		}
+	}
+	for _, g := range allg {
+		gl := len(g)
+		if gl == 0 || gl > 4 {
+			return nil, false
+		}
+		for j := 0; j < gl; j++ {
+			cc := g[j]
+			if cc >= 128 || (hexLUT[cc] == 0 && cc != '0') {
+				return nil, false
+			}
+		}
+	}
+	zeros := 8 - ng - v4Slots
+	var buf [16]byte
+	off := 0
+	for _, g := range lg {
+		v := uint16(0)
+		for j := 0; j < len(g); j++ {
+			v = (v << 4) | uint16(hexLUT[g[j]])
+		}
+		buf[off] = byte(v >> 8)
+		buf[off+1] = byte(v)
+		off += 2
+	}
+	off += zeros * 2
+	for _, g := range rg {
+		v := uint16(0)
+		for j := 0; j < len(g); j++ {
+			v = (v << 4) | uint16(hexLUT[g[j]])
+		}
+		buf[off] = byte(v >> 8)
+		buf[off+1] = byte(v)
+		off += 2
+	}
+	if hasV4 {
+		buf[12] = byte(v4Int >> 24)
+		buf[13] = byte(v4Int >> 16)
+		buf[14] = byte(v4Int >> 8)
+		buf[15] = byte(v4Int)
+	}
+	if buf[10] == 0xff && buf[11] == 0xff &&
+		buf[0] == 0 && buf[1] == 0 && buf[2] == 0 && buf[3] == 0 &&
+		buf[4] == 0 && buf[5] == 0 && buf[6] == 0 && buf[7] == 0 &&
+		buf[8] == 0 && buf[9] == 0 {
+		return &parseResult{v4: uint32(buf[12])<<24 | uint32(buf[13])<<16 | uint32(buf[14])<<8 | uint32(buf[15]), isV4: true}, true
+	}
+	return &parseResult{v6: buf}, true
 }
