@@ -558,6 +558,8 @@
     const PREVIEW_LIMIT = 100;
     const CHUNK_LINE_SIZE = 50000;
     const PROGRESS_INTERVAL = 20000;
+    const EST_BYTES_PER_LINE = 14;
+    const MAX_DOWNLOAD_FILE_BYTES = 180 * 1024 * 1024;
 
     function parseCsvLine(line) {
       if (!line.includes('"')) {
@@ -911,6 +913,16 @@
       downloadBlob(filename, new Blob([text], { type: "text/plain;charset=utf-8" }));
     }
 
+    function buildPartFilename(filename, partIndex, totalParts) {
+      if (totalParts <= 1) return filename;
+      const i = filename.lastIndexOf(".");
+      const suffix = ".part" + partIndex;
+      if (i <= 0) {
+        return filename + suffix;
+      }
+      return filename.slice(0, i) + suffix + filename.slice(i);
+    }
+
     function renderPreview(list) {
       previewBody.innerHTML = "";
       list.slice(0, PREVIEW_LIMIT).forEach((n, idx) => {
@@ -1047,10 +1059,43 @@
 
       const deduper = dedup ? createTailDeduper() : null;
       const preview = [];
-      const blobParts = [];
       let chunkLines = [];
-      let hasChunk = false;
+
+      const fileParts = [];
+      let currentFileTextParts = [];
+      let currentFileBytes = 0;
+      let fileHasChunk = false;
       let generated = 0;
+
+      const estimatedBytes = target * EST_BYTES_PER_LINE;
+      if (estimatedBytes > 1024 * 1024 * 1024) {
+        warnings.push("预计下载体积约 " + (estimatedBytes / 1024 / 1024).toFixed(0) + " MB，浏览器可能较慢，已自动分卷下载。");
+      }
+
+      const finalizeCurrentFile = () => {
+        if (!currentFileTextParts.length) return;
+        fileParts.push(new Blob(currentFileTextParts, { type: "text/plain;charset=utf-8" }));
+        currentFileTextParts = [];
+        currentFileBytes = 0;
+        fileHasChunk = false;
+      };
+
+      const appendChunkToFile = chunk => {
+        const extraNewLineBytes = fileHasChunk ? 1 : 0;
+        const chunkBytes = chunk.length + extraNewLineBytes;
+
+        if (currentFileBytes > 0 && currentFileBytes + chunkBytes > MAX_DOWNLOAD_FILE_BYTES) {
+          finalizeCurrentFile();
+        }
+
+        if (fileHasChunk) {
+          currentFileTextParts.push("\n");
+          currentFileBytes += 1;
+        }
+        currentFileTextParts.push(chunk);
+        currentFileBytes += chunk.length;
+        fileHasChunk = true;
+      };
 
       const pushLine = phone => {
         if (preview.length < PREVIEW_LIMIT) {
@@ -1061,20 +1106,14 @@
         generated++;
 
         if (chunkLines.length >= CHUNK_LINE_SIZE) {
-          const chunk = chunkLines.join("\n");
-          if (hasChunk) blobParts.push("\n");
-          blobParts.push(chunk);
-          hasChunk = true;
+          appendChunkToFile(chunkLines.join("\n"));
           chunkLines = [];
         }
       };
 
       const flushChunk = () => {
         if (!chunkLines.length) return;
-        const chunk = chunkLines.join("\n");
-        if (hasChunk) blobParts.push("\n");
-        blobParts.push(chunk);
-        hasChunk = true;
+        appendChunkToFile(chunkLines.join("\n"));
         chunkLines = [];
       };
 
@@ -1141,13 +1180,27 @@
       flushChunk();
       await maybeYield(true);
 
-      const blob = new Blob(blobParts, { type: "text/plain;charset=utf-8" });
-      downloadBlob(outputName, blob);
+      finalizeCurrentFile();
+      if (!fileParts.length) {
+        fileParts.push(new Blob([], { type: "text/plain;charset=utf-8" }));
+      }
+
+      if (fileParts.length > 1) {
+        warnings.push("已按浏览器容量限制拆分为 " + fileParts.length + " 个文件下载（可能需要浏览器允许多文件下载）。");
+      }
+
+      for (let i = 0; i < fileParts.length; i++) {
+        const name = buildPartFilename(outputName, i + 1, fileParts.length);
+        setMsg(msgGenerate, "正在下载：第 " + (i + 1) + " / " + fileParts.length + " 个文件", "warn");
+        downloadBlob(name, fileParts[i]);
+        await nextFrame();
+      }
 
       return {
         count: generated,
         preview,
-        warnings
+        warnings,
+        fileCount: fileParts.length
       };
     }
 
@@ -1248,11 +1301,13 @@
         const warningText = result.warnings.length ? " " + result.warnings.join(" ") : "";
         setMsg(
           msgGenerate,
-          "已生成 " + formatNum(result.count) + " 个号码，耗时 " + ((t1 - t0) / 1000).toFixed(3) + " 秒，已下载 " + outputName + "。" + (preferRealistic ? " 当前为真实度优先模式。" : "") + warningText,
+          "已生成 " + formatNum(result.count) + " 个号码，耗时 " + ((t1 - t0) / 1000).toFixed(3) + " 秒，已下载 " + (result.fileCount > 1 ? (result.fileCount + " 个分卷文件") : outputName) + "。" + (preferRealistic ? " 当前为真实度优先模式。" : "") + warningText,
           "ok"
         );
       } catch (err) {
-        setMsg(msgGenerate, "生成失败：" + String(err.message || err), "err");
+        const errText = String(err && (err.message || err)) || "未知错误";
+        const hint = " 请降低生成数量（如先试 100 万），或关闭去重/真实度优先后重试。";
+        setMsg(msgGenerate, "生成失败：" + errText + hint, "err");
       } finally {
         state.isGenerating = false;
         btnGenerate.disabled = false;
