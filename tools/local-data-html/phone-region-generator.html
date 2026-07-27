@@ -331,6 +331,11 @@
         </div>
 
         <div class="row">
+          <label>号段</label>
+          <div id="prefixOptions" class="multi-pick"></div>
+        </div>
+
+        <div class="row">
           <label>导出文件名</label>
           <input id="outputName" type="text" value="generated_phones.txt" />
         </div>
@@ -428,7 +433,8 @@
     const state = {
       rows: [],
       filtered: [],
-      lastGenerated: []
+      lastGenerated: [],
+      isGenerating: false
     };
 
     const fileInput = document.getElementById("fileInput");
@@ -438,6 +444,7 @@
     const provinceOptions = document.getElementById("provinceOptions");
     const cityOptions = document.getElementById("cityOptions");
     const ispOptions = document.getElementById("ispOptions");
+    const prefixOptions = document.getElementById("prefixOptions");
 
     const stLoaded = document.getElementById("stLoaded");
     const stMatched = document.getElementById("stMatched");
@@ -448,11 +455,13 @@
     const msgGenerate = document.getElementById("msgGenerate");
     const summaryBody = document.getElementById("summaryBody");
     const previewBody = document.getElementById("previewBody");
+    const btnGenerate = document.getElementById("btnGenerate");
 
     state.filters = {
       provinces: new Set(),
       cities: new Set(),
-      isps: new Set()
+      isps: new Set(),
+      prefixes: new Set()
     };
 
     function setMsg(el, text, type) {
@@ -546,6 +555,9 @@
     }
 
     const PREFERRED_TAIL_POOL = buildPreferredTailPool(72);
+    const PREVIEW_LIMIT = 100;
+    const CHUNK_LINE_SIZE = 50000;
+    const PROGRESS_INTERVAL = 20000;
 
     function parseCsvLine(line) {
       if (!line.includes('"')) {
@@ -657,11 +669,13 @@
       const provinces = state.filters.provinces;
       const cities = state.filters.cities;
       const isps = state.filters.isps;
+      const prefixes = state.filters.prefixes;
 
       state.filtered = state.rows.filter(r => {
         if (provinces.size && !provinces.has(r.province)) return false;
         if (cities.size && !cities.has(r.city)) return false;
         if (isps.size && !isps.has(r.isp)) return false;
+        if (prefixes.size && !prefixes.has(r.segment7.slice(0, 3))) return false;
         return true;
       });
 
@@ -671,6 +685,32 @@
       stRegions.textContent = formatNum(regions.size);
 
       renderSummary();
+      updatePrefixOptions();
+    }
+
+    function updatePrefixOptions() {
+      const provinces = state.filters.provinces;
+      const cities = state.filters.cities;
+      const isps = state.filters.isps;
+      const prefixes = new Set();
+
+      state.rows.forEach(r => {
+        if (provinces.size && !provinces.has(r.province)) return;
+        if (cities.size && !cities.has(r.city)) return;
+        if (isps.size && !isps.has(r.isp)) return;
+        prefixes.add(r.segment7.slice(0, 3));
+      });
+
+      const prefixList = sortZh(prefixes);
+      Array.from(state.filters.prefixes).forEach(prefix => {
+        if (!prefixes.has(prefix)) state.filters.prefixes.delete(prefix);
+      });
+
+      renderMultiPick(prefixOptions, prefixList, state.filters.prefixes, "暂无号段可选", value => {
+        toggleSetValue(state.filters.prefixes, value);
+        updatePrefixOptions();
+        applyFilters();
+      });
     }
 
     function updateCityOptions() {
@@ -700,20 +740,24 @@
       state.filters.provinces.clear();
       state.filters.cities.clear();
       state.filters.isps.clear();
+      state.filters.prefixes.clear();
 
       const provinces = new Set();
       const cities = new Set();
       const isps = new Set();
+      const prefixes = new Set();
 
       state.rows.forEach(r => {
         provinces.add(r.province);
         cities.add(r.city);
         isps.add(r.isp);
+        prefixes.add(r.segment7.slice(0, 3));
       });
 
       const provinceList = sortZh(provinces);
       const cityList = sortZh(cities);
       const ispList = sortZh(isps);
+      const prefixList = sortZh(prefixes);
 
       const renderProvinces = () => renderMultiPick(provinceOptions, provinceList, state.filters.provinces, "暂无省份可选", value => {
         toggleSetValue(state.filters.provinces, value);
@@ -728,8 +772,15 @@
         applyFilters();
       });
 
+      const renderPrefixes = () => renderMultiPick(prefixOptions, prefixList, state.filters.prefixes, "暂无号段可选", value => {
+        toggleSetValue(state.filters.prefixes, value);
+        renderPrefixes();
+        applyFilters();
+      });
+
       renderProvinces();
       renderIsps();
+      renderPrefixes();
       updateCityOptions();
     }
 
@@ -744,6 +795,7 @@
       provinceOptions.innerHTML = "";
       cityOptions.innerHTML = "";
       ispOptions.innerHTML = "";
+      prefixOptions.innerHTML = "";
       summaryBody.innerHTML = "";
       previewBody.innerHTML = "";
       renderSummary();
@@ -844,8 +896,7 @@
       throw lastErr || new Error("所有候选路径均加载失败");
     }
 
-    function downloadText(filename, text) {
-      const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+    function downloadBlob(filename, blob) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -856,9 +907,13 @@
       URL.revokeObjectURL(url);
     }
 
+    function downloadText(filename, text) {
+      downloadBlob(filename, new Blob([text], { type: "text/plain;charset=utf-8" }));
+    }
+
     function renderPreview(list) {
       previewBody.innerHTML = "";
-      list.slice(0, 100).forEach((n, idx) => {
+      list.slice(0, PREVIEW_LIMIT).forEach((n, idx) => {
         const tr = document.createElement("tr");
         tr.innerHTML = "<td>" + (idx + 1) + "</td><td>" + n + "</td>";
         previewBody.appendChild(tr);
@@ -938,6 +993,164 @@
       return out;
     }
 
+    function createTailDeduper() {
+      const bitsets = new Map();
+      return {
+        mark(segment7, tailNumber) {
+          let bits = bitsets.get(segment7);
+          if (!bits) {
+            bits = new Uint8Array(1250);
+            bitsets.set(segment7, bits);
+          }
+
+          const bitIndex = tailNumber;
+          const byteIndex = bitIndex >> 3;
+          const mask = 1 << (bitIndex & 7);
+
+          if (bits[byteIndex] & mask) {
+            return false;
+          }
+
+          bits[byteIndex] |= mask;
+          return true;
+        }
+      };
+    }
+
+    function nextFrame() {
+      return new Promise(resolve => setTimeout(resolve, 0));
+    }
+
+    async function generateAndDownload(options) {
+      const total = options.total;
+      const mode = options.mode;
+      const perSegment = options.perSegment;
+      const dedup = options.dedup;
+      const preferRealistic = options.preferRealistic;
+      const outputName = options.outputName;
+
+      const segs = state.filtered.map(r => r.segment7);
+      const uniqueSegs = dedup ? Array.from(new Set(segs)) : segs;
+      const tailPool = preferRealistic && PREFERRED_TAIL_POOL.length ? PREFERRED_TAIL_POOL : null;
+
+      let target = total;
+      const warnings = [];
+
+      if (dedup) {
+        const maxByTail = tailPool ? tailPool.length : 10000;
+        const maxUnique = uniqueSegs.length * maxByTail;
+        if (target > maxUnique) {
+          target = maxUnique;
+          warnings.push("生成数量超过当前模式下可去重上限，已自动调整到 " + formatNum(target) + "。");
+        }
+      }
+
+      const deduper = dedup ? createTailDeduper() : null;
+      const preview = [];
+      const blobParts = [];
+      let chunkLines = [];
+      let hasChunk = false;
+      let generated = 0;
+
+      const pushLine = phone => {
+        if (preview.length < PREVIEW_LIMIT) {
+          preview.push(phone);
+        }
+
+        chunkLines.push(phone);
+        generated++;
+
+        if (chunkLines.length >= CHUNK_LINE_SIZE) {
+          const chunk = chunkLines.join("\n");
+          if (hasChunk) blobParts.push("\n");
+          blobParts.push(chunk);
+          hasChunk = true;
+          chunkLines = [];
+        }
+      };
+
+      const flushChunk = () => {
+        if (!chunkLines.length) return;
+        const chunk = chunkLines.join("\n");
+        if (hasChunk) blobParts.push("\n");
+        blobParts.push(chunk);
+        hasChunk = true;
+        chunkLines = [];
+      };
+
+      let nextProgress = PROGRESS_INTERVAL;
+      const maybeYield = async force => {
+        if (force || generated >= nextProgress) {
+          setMsg(msgGenerate, "正在生成：" + formatNum(generated) + " / " + formatNum(target), "warn");
+          await nextFrame();
+          while (generated >= nextProgress) {
+            nextProgress += PROGRESS_INTERVAL;
+          }
+        }
+      };
+
+      if (mode === "random") {
+        const segPool = dedup ? uniqueSegs : segs;
+        let retryCount = 0;
+        const retryLimit = dedup ? Math.max(target * 5, 1000000) : Number.MAX_SAFE_INTEGER;
+
+        while (generated < target && segPool.length) {
+          const seg = segPool[randomInt(segPool.length)];
+          const tailText = tailPool ? tailPool[randomInt(tailPool.length)] : String(randomInt(10000)).padStart(4, "0");
+          const tailNumber = Number(tailText);
+
+          if (dedup && !deduper.mark(seg, tailNumber)) {
+            retryCount++;
+            if (retryCount > retryLimit) {
+              warnings.push("随机去重命中率过低，已提前结束生成。可以关闭去重或降低生成量。");
+              break;
+            }
+            if (retryCount % PROGRESS_INTERVAL === 0) {
+              await maybeYield(false);
+            }
+            continue;
+          }
+
+          retryCount = 0;
+          pushLine(withCountryCode(seg + tailText));
+          await maybeYield(false);
+        }
+      } else {
+        const segPool = dedup ? uniqueSegs : segs;
+        for (let segIndex = 0; segIndex < segPool.length && generated < target; segIndex++) {
+          const seg = segPool[segIndex];
+          let local = 0;
+
+          for (let tail = 0; tail < 10000 && local < perSegment && generated < target; tail++) {
+            const tailText = String(tail).padStart(4, "0");
+            if (preferRealistic && tailRealismScore(tailText) < 72) {
+              continue;
+            }
+
+            if (dedup && !deduper.mark(seg, tail)) {
+              continue;
+            }
+
+            pushLine(withCountryCode(seg + tailText));
+            local++;
+            await maybeYield(false);
+          }
+        }
+      }
+
+      flushChunk();
+      await maybeYield(true);
+
+      const blob = new Blob(blobParts, { type: "text/plain;charset=utf-8" });
+      downloadBlob(outputName, blob);
+
+      return {
+        count: generated,
+        preview,
+        warnings
+      };
+    }
+
     fileInput.addEventListener("change", async (e) => {
       setMsg(msgFilter, "", "");
       setMsg(msgGenerate, "", "");
@@ -984,8 +1197,12 @@
       setMsg(msgFilter, "筛选号段已导出。", "ok");
     });
 
-    document.getElementById("btnGenerate").addEventListener("click", () => {
+    btnGenerate.addEventListener("click", async () => {
       setMsg(msgGenerate, "", "");
+      if (state.isGenerating) {
+        setMsg(msgGenerate, "正在生成中，请稍候。", "warn");
+        return;
+      }
       if (!state.filtered.length) {
         setMsg(msgGenerate, "没有命中号段，请先加载数据或调整筛选条件。", "warn");
         return;
@@ -1008,24 +1225,39 @@
         return;
       }
 
-      let list;
-      const t0 = performance.now();
-      if (mode === "random") {
-        list = generateRandom(total, dedup, preferRealistic);
-      } else {
-        list = generateExpand(total, perSegment, dedup, preferRealistic);
+      state.isGenerating = true;
+      btnGenerate.disabled = true;
+      const oldText = btnGenerate.textContent;
+      btnGenerate.textContent = "生成中...";
+
+      try {
+        const t0 = performance.now();
+        const result = await generateAndDownload({
+          total,
+          mode,
+          perSegment,
+          dedup,
+          preferRealistic,
+          outputName
+        });
+        const t1 = performance.now();
+
+        state.lastGenerated = result.preview;
+        renderPreview(result.preview);
+
+        const warningText = result.warnings.length ? " " + result.warnings.join(" ") : "";
+        setMsg(
+          msgGenerate,
+          "已生成 " + formatNum(result.count) + " 个号码，耗时 " + ((t1 - t0) / 1000).toFixed(3) + " 秒，已下载 " + outputName + "。" + (preferRealistic ? " 当前为真实度优先模式。" : "") + warningText,
+          "ok"
+        );
+      } catch (err) {
+        setMsg(msgGenerate, "生成失败：" + String(err.message || err), "err");
+      } finally {
+        state.isGenerating = false;
+        btnGenerate.disabled = false;
+        btnGenerate.textContent = oldText;
       }
-      const t1 = performance.now();
-
-      state.lastGenerated = list;
-      renderPreview(list);
-      downloadText(outputName, list.join("\n"));
-
-      setMsg(
-        msgGenerate,
-        "已生成 " + formatNum(list.length) + " 个号码，耗时 " + ((t1 - t0) / 1000).toFixed(3) + " 秒，已下载 " + outputName + "。" + (preferRealistic ? " 当前为真实度优先模式。" : ""),
-        "ok"
-      );
     });
 
     renderSummary();

@@ -294,6 +294,11 @@
         </div>
 
         <div class="row">
+          <label>号段</label>
+          <select id="prefixSelect"><option value="">全部</option></select>
+        </div>
+
+        <div class="row">
           <label>导出文件名</label>
           <input id="outputName" type="text" value="generated_phones.txt" />
         </div>
@@ -518747,6 +518752,7 @@ window.__PHONE_OFFLINE_DATA__ = {
     const provinceSelect = document.getElementById("provinceSelect");
     const citySelect = document.getElementById("citySelect");
     const ispSelect = document.getElementById("ispSelect");
+    const prefixSelect = document.getElementById("prefixSelect");
 
     const stLoaded = document.getElementById("stLoaded");
     const stMatched = document.getElementById("stMatched");
@@ -518927,11 +518933,13 @@ window.__PHONE_OFFLINE_DATA__ = {
       const p = provinceSelect.value;
       const c = citySelect.value;
       const i = ispSelect.value;
+      const x = prefixSelect.value;
 
       state.filtered = state.rows.filter(r => {
         if (p && r.province !== p) return false;
         if (c && r.city !== c) return false;
         if (i && r.isp !== i) return false;
+        if (x && r.segment7.slice(0, 3) !== x) return false;
         return true;
       });
 
@@ -518941,6 +518949,7 @@ window.__PHONE_OFFLINE_DATA__ = {
       stRegions.textContent = formatNum(regions.size);
 
       renderSummary();
+      updatePrefixOptions();
     }
 
     function updateCityOptions() {
@@ -518955,24 +518964,48 @@ window.__PHONE_OFFLINE_DATA__ = {
       addOptions(citySelect, Array.from(cities).sort((a, b) => a.localeCompare(b, "zh-Hans-CN")));
     }
 
+    function updatePrefixOptions() {
+      clearSelect(prefixSelect);
+      const p = provinceSelect.value;
+      const c = citySelect.value;
+      const i = ispSelect.value;
+      const prefixes = new Set();
+
+      state.rows.forEach(r => {
+        if (p && r.province !== p) return;
+        if (c && r.city !== c) return;
+        if (i && r.isp !== i) return;
+        prefixes.add(r.segment7.slice(0, 3));
+      });
+
+      addOptions(prefixSelect, Array.from(prefixes).sort((a, b) => a.localeCompare(b, "zh-Hans-CN")));
+      if (prefixSelect.value && !prefixes.has(prefixSelect.value)) {
+        prefixSelect.value = "";
+      }
+    }
+
     function updateOptionsFromRows() {
       clearSelect(provinceSelect);
       clearSelect(citySelect);
       clearSelect(ispSelect);
+      clearSelect(prefixSelect);
 
       const provinces = new Set();
       const cities = new Set();
       const isps = new Set();
+      const prefixes = new Set();
 
       state.rows.forEach(r => {
         provinces.add(r.province);
         cities.add(r.city);
         isps.add(r.isp);
+        prefixes.add(r.segment7.slice(0, 3));
       });
 
       addOptions(provinceSelect, Array.from(provinces).sort((a, b) => a.localeCompare(b, "zh-Hans-CN")));
       addOptions(citySelect, Array.from(cities).sort((a, b) => a.localeCompare(b, "zh-Hans-CN")));
       addOptions(ispSelect, Array.from(isps).sort((a, b) => a.localeCompare(b, "zh-Hans-CN")));
+      addOptions(prefixSelect, Array.from(prefixes).sort((a, b) => a.localeCompare(b, "zh-Hans-CN")));
     }
 
     function resetEmptyState() {
@@ -519213,6 +519246,7 @@ window.__PHONE_OFFLINE_DATA__ = {
     });
     citySelect.addEventListener("change", applyFilters);
     ispSelect.addEventListener("change", applyFilters);
+    prefixSelect.addEventListener("change", applyFilters);
 
     document.getElementById("btnExportSegments").addEventListener("click", () => {
       if (!state.filtered.length) {
