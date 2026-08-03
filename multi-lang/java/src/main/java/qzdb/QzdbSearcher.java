@@ -50,6 +50,17 @@ public class QzdbSearcher {
     private int ipRowSize = 6;
     private int geoEntryGroupCount;
 
+    // Row field widths (bytes) derived from ROW_SCHEMA (header offset 40).
+    // Storage order of an IP row is [geo][asn][usage]; legacy v5/v2 rows are
+    // [geo u24][asn u24][usage u24 when ipRowSize>=9].
+    private int rowGeoWidth = 3;
+    private int rowAsnWidth = 3;
+    private int rowUsageWidth = 0;
+
+    public int getRowGeoWidth() { return rowGeoWidth; }
+    public int getRowAsnWidth() { return rowAsnWidth; }
+    public int getRowUsageWidth() { return rowUsageWidth; }
+
     // Offsets
     private long offV4Jump;
     private long offV4Nodes;
@@ -196,6 +207,8 @@ public class QzdbSearcher {
         if (geoEntryGroupCount < 1 || geoEntryGroupCount > 255) {
             throw new QzdbException(ErrorCode.INVALID_PARAM, "geoEntryGroupCount out of range [1,255]: " + geoEntryGroupCount);
         }
+
+        parseRowSchema(d);
 
         // Bounds validation for section offsets
         long dlen = d.capacity();
@@ -463,7 +476,7 @@ public class QzdbSearcher {
             int offset = bit == 0 ? nodeOffset : nodeOffset + 3;
             int val = (data.get(offset) & 0xFF) | ((data.get(offset + 1) & 0xFF) << 8) | ((data.get(offset + 2) & 0xFF) << 16);
             if ((val & 0x800000) != 0) {
-                return (val & SENTINEL_MASK_24) | SENTINEL;
+                return (val & 0x7FFFFF) | SENTINEL;
             }
             return val;
         } else {
@@ -478,7 +491,7 @@ public class QzdbSearcher {
             int offset = bit == 0 ? nodeOffset : nodeOffset + 3;
             int val = (data.get(offset) & 0xFF) | ((data.get(offset + 1) & 0xFF) << 8) | ((data.get(offset + 2) & 0xFF) << 16);
             if ((val & 0x800000) != 0) {
-                return (val & SENTINEL_MASK_24) | SENTINEL;
+                return (val & 0x7FFFFF) | SENTINEL;
             }
             return val;
         } else {
@@ -538,15 +551,73 @@ public class QzdbSearcher {
         return 0;
     }
 
+    private void parseRowSchema(MappedByteBuffer d) {
+        rowGeoWidth = 3;
+        rowAsnWidth = 3;
+        rowUsageWidth = 0;
+        if (offRowSchema <= 0) return;
+        int sp = (int) offRowSchema;
+        if (sp + 10 > d.capacity()) return;
+        int schemaVersion = d.get(sp) & 0xFF;
+        if (schemaVersion != 2) return;
+        int schemaRowSize = d.get(sp + 1) & 0xFF;
+        if (schemaRowSize != ipRowSize) return;
+        int fieldCount = d.get(sp + 5) & 0xFF;
+        if (fieldCount < 1 || fieldCount > 8) return;
+        if (sp + 9 + fieldCount > d.capacity()) return;
+
+        int[] widths = new int[fieldCount];
+        int total = 0;
+        for (int i = 0; i < fieldCount; i++) {
+            widths[i] = d.get(sp + 9 + i) & 0xFF;
+            total += widths[i];
+        }
+        if (total != ipRowSize) return;
+
+        rowAsnWidth = fieldCount >= 1 ? widths[0] : 0;
+        rowGeoWidth = fieldCount >= 2 ? widths[1] : 0;
+        rowUsageWidth = fieldCount >= 3 ? widths[2] : 0;
+        if (rowGeoWidth < 1 || rowGeoWidth > 4 || rowAsnWidth > 4 || rowUsageWidth > 4) {
+            rowGeoWidth = 3;
+            rowAsnWidth = 3;
+            rowUsageWidth = 0;
+        }
+    }
+
+    private int readVarWidth(MappedByteBuffer d, int off, int width) {
+        switch (width) {
+            case 1: return d.get(off) & 0xFF;
+            case 2: return safeReadU16(d, off);
+            case 3: return safeReadU24(d, off);
+            case 4: return safeReadU32(d, off);
+            default: return 0;
+        }
+    }
+
     private int[] readIPRow(int rowId) {
         if (rowId <= 0 || rowId >= rowCount) return new int[]{0, 0, 0};
         int off = (int) offIPRow + rowId * ipRowSize;
-        int geoId = safeReadU24(data, off);
-        int asnId = safeReadU24(data, off + 3);
-
+        int geoId = 0;
+        int asnId = 0;
         int usageTypeId = 0;
-        if (ipRowSize >= 9) {
-            usageTypeId = safeReadU24(data, off + 6);
+
+        if (offRowSchema > 0) {
+            int p = off;
+            geoId = readVarWidth(data, p, rowGeoWidth);
+            p += rowGeoWidth;
+            if (rowAsnWidth > 0) {
+                asnId = readVarWidth(data, p, rowAsnWidth);
+                p += rowAsnWidth;
+            }
+            if (rowUsageWidth > 0) {
+                usageTypeId = readVarWidth(data, p, rowUsageWidth);
+            }
+        } else {
+            geoId = safeReadU24(data, off);
+            asnId = safeReadU24(data, off + 3);
+            if (ipRowSize >= 9) {
+                usageTypeId = safeReadU24(data, off + 6);
+            }
         }
         return new int[]{geoId, asnId, usageTypeId};
     }
@@ -861,7 +932,7 @@ public class QzdbSearcher {
         // Reject whitespace — SSRF-safe, cross-language consistent
         for (int i = 0; i < n; i++) {
             char c = s.charAt(i);
-            if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f')
+            if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\u000B' || c == '\f')
                 return null;
         }
         if (n == 0 || n > 45) return null;

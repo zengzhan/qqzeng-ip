@@ -130,6 +130,10 @@ class QzdbSearcher
     private $offRowSchema = 0;
     private $offGroupSchema = 0;
 
+    private $rowGeoWidth = 3;
+    private $rowAsnWidth = 3;
+    private $rowUsageWidth = 0;
+
     // Schema and layout cache
     private $groupFieldCounts = [];
     private $groupEntryCounts = [];
@@ -302,6 +306,8 @@ class QzdbSearcher
         if ($this->geoEntryGroupCount < 1 || $this->geoEntryGroupCount > 255) {
             throw new QzdbException("geoEntryGroupCount out of range [1,255]: {$this->geoEntryGroupCount}", self::ERROR_CORRUPTED);
         }
+
+        $this->parseRowSchema();
 
         $d = $this->data;
         $len = strlen($d);
@@ -564,7 +570,7 @@ class QzdbSearcher
             $d = $this->data;
             $val = ord($d[$offset]) | (ord($d[$offset + 1]) << 8) | (ord($d[$offset + 2]) << 16);
             if ($val & 0x800000) {
-                return ($val & self::SENTINEL_MASK_24) | self::SENTINEL;
+                return ($val & 0x7FFFFF) | self::SENTINEL;
             }
             return $val;
         } else {
@@ -582,7 +588,7 @@ class QzdbSearcher
             $d = $this->data;
             $val = ord($d[$offset]) | (ord($d[$offset + 1]) << 8) | (ord($d[$offset + 2]) << 16);
             if ($val & 0x800000) {
-                return ($val & self::SENTINEL_MASK_24) | self::SENTINEL;
+                return ($val & 0x7FFFFF) | self::SENTINEL;
             }
             return $val;
         } else {
@@ -682,18 +688,53 @@ class QzdbSearcher
         return 0;
     }
 
+    private function parseRowSchema()
+    {
+        $this->rowGeoWidth = 3;
+        $this->rowAsnWidth = 3;
+        $this->rowUsageWidth = 0;
+        if ($this->offRowSchema <= 0) return;
+        $d = $this->data;
+        $sp = $this->offRowSchema;
+        $fCount = ord($d[$sp]);
+        $pos = $sp + 4;
+        for ($i = 0; $i < $fCount; $i++) {
+            $fid = ord($d[$pos]);
+            $w = ord($d[$pos + 1]);
+            if ($fid === 0) $this->rowGeoWidth = $w;
+            elseif ($fid === 1) $this->rowAsnWidth = $w;
+            elseif ($fid === 2) $this->rowUsageWidth = $w;
+            $pos += 4;
+        }
+    }
+
     private function readIPRow($rowId)
     {
         if ($rowId <= 0 || $rowId >= $this->rowCount) {
             return [0, 0, 0];
         }
         $off = $this->offIPRow + $rowId * $this->ipRowSize;
-        $geoId = $this->safeReadU24($off);
-        $asnId = $this->safeReadU24($off + 3);
-
+        $geoId = 0;
+        $asnId = 0;
         $usageTypeId = 0;
-        if ($this->ipRowSize >= 9) {
-            $usageTypeId = $this->safeReadU24($off + 6);
+
+        if ($this->offRowSchema > 0) {
+            $p = $off;
+            $geoId = $this->safeReadUintWidth($p, $this->rowGeoWidth);
+            $p += $this->rowGeoWidth;
+            if ($this->rowAsnWidth > 0) {
+                $asnId = $this->safeReadUintWidth($p, $this->rowAsnWidth);
+                $p += $this->rowAsnWidth;
+            }
+            if ($this->rowUsageWidth > 0) {
+                $usageTypeId = $this->safeReadUintWidth($p, $this->rowUsageWidth);
+            }
+        } else {
+            $geoId = $this->safeReadU24($off);
+            $asnId = $this->safeReadU24($off + 3);
+            if ($this->ipRowSize >= 9) {
+                $usageTypeId = $this->safeReadU24($off + 6);
+            }
         }
 
         return [$geoId, $asnId, $usageTypeId];

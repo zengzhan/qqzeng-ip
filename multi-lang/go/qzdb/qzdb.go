@@ -116,6 +116,10 @@ type QzdbSearcher struct {
 	offRowSchema        uint64
 	offGroupSchema      uint64
 
+	rowGeoWidth         int
+	rowAsnWidth         int
+	rowUsageWidth       int
+
 	// Schema and layout cache
 	groupFieldCounts    []int
 	groupEntryCounts    []uint32
@@ -290,6 +294,8 @@ func (s *QzdbSearcher) parseHeader() error {
 	if s.geoEntryGroupCount < 1 || s.geoEntryGroupCount > 255 {
 		return fmt.Errorf("geoEntryGroupCount out of range [1,255]: %d", s.geoEntryGroupCount)
 	}
+
+	s.parseRowSchema()
 
 	// Validate section offsets are within bounds
 	if s.offV4Jump+65536*4 > uint64(len(d)) {
@@ -609,7 +615,7 @@ func (s *QzdbSearcher) getV4Child(nodeIdx uint32, bit uint32) uint32 {
 		}
 		val := uint32(d[offset]) | uint32(d[offset+1])<<8 | uint32(d[offset+2])<<16
 		if val&0x800000 != 0 {
-			return (val & SENTINEL_MASK_24) | SENTINEL
+			return (val & 0x7FFFFF) | SENTINEL
 		}
 		return val
 	} else {
@@ -637,7 +643,7 @@ func (s *QzdbSearcher) getV6Child(nodeIdx uint32, bit uint32) uint32 {
 		}
 		val := uint32(d[offset]) | uint32(d[offset+1])<<8 | uint32(d[offset+2])<<16
 		if val&0x800000 != 0 {
-			return (val & SENTINEL_MASK_24) | SENTINEL
+			return (val & 0x7FFFFF) | SENTINEL
 		}
 		return val
 	} else {
@@ -730,17 +736,58 @@ func (s *QzdbSearcher) trieWalkV6(ip16 [16]byte) (uint32, error) {
 	return 0, nil
 }
 
+func (s *QzdbSearcher) parseRowSchema() {
+	s.rowGeoWidth = 3
+	s.rowAsnWidth = 3
+	s.rowUsageWidth = 0
+	if s.offRowSchema <= 0 {
+		return
+	}
+	d := s.data
+	sp := s.offRowSchema
+	if sp >= uint64(len(d)) {
+		return
+	}
+	fCount := int(d[sp])
+	pos := sp + 4
+	for i := 0; i < fCount && pos+4 <= uint64(len(d)); i++ {
+		fid := d[pos]
+		w := int(d[pos+1])
+		if fid == 0 {
+			s.rowGeoWidth = w
+		} else if fid == 1 {
+			s.rowAsnWidth = w
+		} else if fid == 2 {
+			s.rowUsageWidth = w
+		}
+		pos += 4
+	}
+}
+
 func (s *QzdbSearcher) readIPRow(rowID uint32) (uint32, uint32, uint32) {
 	if rowID <= 0 || rowID >= uint32(s.rowCount) {
 		return 0, 0, 0
 	}
 	off := s.offIPRow + uint64(rowID)*uint64(s.ipRowSize)
-	geoID := s.safeReadU24(off)
-	asnID := s.safeReadU24(off + 3)
+	var geoID, asnID, usageTypeID uint32
 
-	var usageTypeID uint32
-	if s.ipRowSize >= 9 {
-		usageTypeID = s.safeReadU24(off + 6)
+	if s.offRowSchema > 0 {
+		p := off
+		geoID = s.safeReadUintWidth(p, s.rowGeoWidth)
+		p += uint64(s.rowGeoWidth)
+		if s.rowAsnWidth > 0 {
+			asnID = s.safeReadUintWidth(p, s.rowAsnWidth)
+			p += uint64(s.rowAsnWidth)
+		}
+		if s.rowUsageWidth > 0 {
+			usageTypeID = s.safeReadUintWidth(p, s.rowUsageWidth)
+		}
+	} else {
+		geoID = s.safeReadU24(off)
+		asnID = s.safeReadU24(off + 3)
+		if s.ipRowSize >= 9 {
+			usageTypeID = s.safeReadU24(off + 6)
+		}
 	}
 
 	return geoID, asnID, usageTypeID

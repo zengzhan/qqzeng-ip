@@ -485,6 +485,25 @@ class QzdbSearcher:
         if self._off_meta > 0 and self._off_meta > dlen:
             raise QzdbError('Section meta out of bounds', QzdbError.CORRUPTED)
 
+        # ROW_SCHEMA parsing
+        self._row_geo_width = 3
+        self._row_asn_width = 3
+        self._row_usage_width = 0
+        if self._off_row_schema > 0:
+            sp = self._off_row_schema
+            f_count = d[sp]
+            sp += 4  # fieldCount (1B), stride (1B), reserved (2B)
+            for _ in range(f_count):
+                fid = d[sp]
+                w = d[sp + 1]
+                if fid == 0:
+                    self._row_geo_width = w
+                elif fid == 1:
+                    self._row_asn_width = w
+                elif fid == 2:
+                    self._row_usage_width = w
+                sp += 4
+
         # GeoEntryOffsets[4]
         self._group_entry_offsets = []
         for i in range(4):
@@ -703,7 +722,7 @@ class QzdbSearcher:
                 off = noff if bit == 0 else noff + 3
                 child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
                 if child & 0x800000:
-                    return child & SENTINEL_MASK_24
+                    return (child & 0x7FFFFF) | SENTINEL
                 if child == 0:
                     return 0
                 idx = child
@@ -754,7 +773,7 @@ class QzdbSearcher:
                 off = noff if bit == 0 else noff + 3
                 child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
                 if child & 0x800000:
-                    return child & SENTINEL_MASK_24
+                    return (child & 0x7FFFFF) | SENTINEL
                 if child == 0:
                     return 0
                 idx = child
@@ -777,12 +796,21 @@ class QzdbSearcher:
         if row_id <= 0 or row_id >= self._row_count:
             return 0, 0, 0
         off = self._off_ip_row + row_id * self._ip_row_size
-        geo_id = self.safe_read_u24(off)
-        asn_id = self.safe_read_u24(off + 3)
-
-        usage_type_id = 0
-        if self._ip_row_size >= 9:
-            usage_type_id = self.safe_read_u24(off + 6)
+        if self._off_row_schema > 0:
+            p = off
+            geo_id = self.safe_read_uint_width(p, self._row_geo_width)
+            p += self._row_geo_width
+            asn_id = 0
+            if self._row_asn_width > 0:
+                asn_id = self.safe_read_uint_width(p, self._row_asn_width)
+                p += self._row_asn_width
+            usage_type_id = 0
+            if self._row_usage_width > 0:
+                usage_type_id = self.safe_read_uint_width(p, self._row_usage_width)
+        else:
+            geo_id = self.safe_read_u24(off)
+            asn_id = self.safe_read_u24(off + 3)
+            usage_type_id = self.safe_read_u24(off + 6) if self._ip_row_size >= 9 else 0
 
         return geo_id, asn_id, usage_type_id
 
@@ -890,7 +918,7 @@ class QzdbSearcher:
                 off = noff if bit == 0 else noff + 3
                 child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
                 if child & 0x800000:
-                    return child & SENTINEL_MASK_24
+                    return (child & 0x7FFFFF) | SENTINEL
                 if child == 0:
                     return 0
                 idx = child
@@ -928,7 +956,7 @@ class QzdbSearcher:
         row_id = self._trie_walk_v4(ip_int)
         if row_id == 0:
             return None
-        return self._resolve_row_id(row_id, self._group_index)
+        return self._resolve_row_id(row_id & SENTINEL_MASK_31, self._group_index)
 
     def find_v6_bytes(self, ip_bytes):
         """IPv6 lookup using 16-byte packed representation (zero BigInteger alloc)."""

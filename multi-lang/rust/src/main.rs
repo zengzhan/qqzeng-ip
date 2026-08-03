@@ -8,45 +8,27 @@ fn family(ip: &str) -> &'static str {
     else { "?" }
 }
 
-fn test(db: &str, label: &str, ip: &str) {
-    let path = format!("{}/{}", DATA, db);
-    if !Path::new(&path).exists() {
-        println!("  ⚠ {} not found", db);
+fn test(path: &str, ip: &str) {
+    if !Path::new(path).exists() {
+        println!("  ⚠ {} not found", path);
         return;
     }
-    let searcher = match qzdb_searcher::from_file(&path) {
+    let searcher = match qzdb_searcher::from_file(path) {
         Ok(s) => s,
         Err(e) => {
-            println!("  ⚠ {} load error: {:?}", db, e);
+            println!("  ⚠ {} load error: {:?}", path, e);
             return;
         }
     };
     let s = searcher.find_str(ip);
-    if !s.is_empty() {
-        println!("  ✅ {} {:<42} → {}", family(ip), label, s);
-    } else {
-        println!("  ⬜ {} {:<42} → (None)", family(ip), label);
-    }
+    println!("Rust Output: {}", s);
 }
 
 fn main() {
-    println!("{}", "=".repeat(90));
-    println!("【Rust】");
-    println!("{}", "=".repeat(90));
-    test("qqzeng_ip_std_china.qzdb", "114.114.114.114 (安徽)", "114.114.114.114");
-    test("qqzeng_ip_std_china.qzdb", "223.5.5.5 (阿里DNS)", "223.5.5.5");
-    test("qqzeng_ip_std_china.qzdb", "8.8.8.8 (Google 国外)", "8.8.8.8");
-    test("qqzeng_ip_std_china.qzdb", "2408:8000:9000::1 (联通V6)", "2408:8000:9000::1");
-    test("qqzeng_ip_std_china.qzdb", "2001:4860:4860::8888 (GoogleV6)", "2001:4860:4860::8888");
-    test("qqzeng_ip_std_china.qzdb", "127.0.0.1 (回环)", "127.0.0.1");
-    test("qqzeng_ip_std_china.qzdb", "192.168.1.1 (私网)", "192.168.1.1");
-    test("qqzeng_ip_std_china.qzdb", "not-an-ip (非法)", "not-an-ip");
-    test("qqzeng_ip_max_china.qzdb", "114.114.114.114", "114.114.114.114");
-    test("qqzeng_ip_max_china.qzdb", "8.8.8.8 (国外)", "8.8.8.8");
-    test("qqzeng_ip_max_global.qzdb", "8.8.8.8 (Google)", "8.8.8.8");
-    test("qqzeng_ip_max_global.qzdb", "1.1.1.1 (Cloudflare)", "1.1.1.1");
-    test("qqzeng_ip_max_global.qzdb", "114.114.114.114 (中国)", "114.114.114.114");
-    test("qqzeng_ip_max_global.qzdb", "2001:4860:4860::8888 (GoogleV6)", "2001:4860:4860::8888");
-    test("qqzeng_ip_max_global.qzdb", "not-an-ip", "not-an-ip");
-    println!("TEST_PASS");
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 2 {
+        test(&args[1], &args[2]);
+    } else {
+        println!("Usage: cargo run -- <db_path> <ip_str>");
+    }
 }

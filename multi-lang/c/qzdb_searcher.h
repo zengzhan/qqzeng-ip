@@ -33,7 +33,10 @@ typedef struct {
     int ip_row_size;
     int geo_entry_group_count;
 
-    // Offsets
+    int row_geo_width;
+    int row_asn_width;
+    int row_usage_width;
+
     uint64_t off_v4_jump;
     uint64_t off_v4_nodes;
     uint64_t off_v6_jump;

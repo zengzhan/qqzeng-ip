@@ -23,42 +23,23 @@ class Program
         return null;
     }
 
-    static void Main()
+    static void Main(string[] args)
     {
-        var dbPath = FindDb();
+        var dbPath = args.Length > 0 ? args[0] : FindDb();
+        var ipQuery = args.Length > 1 ? args[1] : "114.114.114.114";
         if (dbPath == null)
         {
             Console.WriteLine("Database file not found");
             return;
         }
 
-        var searcher = Qqzeng.QzdbSearcher.Instance;
+        var searcher = new Qqzeng.QzdbSearcher();
         searcher.Load(dbPath);
 
         Console.WriteLine($"Version: {searcher.Version}");
         Console.WriteLine($"Fields ({searcher.FieldNames.Length}): {string.Join(", ", searcher.FieldNames)}\n");
 
-        // Query sample V4 IPs
-        foreach (var ip in new[] { "114.114.114.114", "223.5.5.5", "8.8.8.8" })
-        {
-            var result = searcher.FindStr(ip);
-            Console.WriteLine($"find(\"{ip}\") => {result}");
-        }
-
-        // Query a V6 IP
-        var v6 = searcher.FindStr("2408:8000:9000::1");
-        Console.WriteLine($"find(\"2408:8000:9000::1\") => {v6}");
-
-        // Get structured fields
-        Console.WriteLine("\n--- Structured fields for 114.114.114.114 ---");
-        var loc = searcher.Find("114.114.114.114");
-        if (loc != null)
-        {
-            for (int i = 0; i < searcher.FieldNames.Length; i++)
-            {
-                Console.WriteLine($"  {searcher.FieldNames[i]}: {loc.Values[i]}");
-            }
-        }
-        Console.WriteLine("TEST_PASS");
+        var result = searcher.FindStr(ipQuery);
+        Console.WriteLine($"find(\"{ipQuery}\") => {result}");
     }
 }

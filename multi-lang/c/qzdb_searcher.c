@@ -239,6 +239,23 @@ int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
         }
     }
 
+    ctx->row_geo_width = 3;
+    ctx->row_asn_width = 3;
+    ctx->row_usage_width = 0;
+    if (ctx->off_row_schema > 0 && ctx->off_row_schema + 4 <= ctx->data_size) {
+        uint64_t sp = ctx->off_row_schema;
+        uint8_t f_count = d[sp];
+        sp += 4;
+        for (uint8_t i = 0; i < f_count && sp + 4 <= ctx->data_size; i++) {
+            uint8_t fid = d[sp];
+            uint8_t w = d[sp + 1];
+            if (fid == 0) ctx->row_geo_width = w;
+            else if (fid == 1) ctx->row_asn_width = w;
+            else if (fid == 2) ctx->row_usage_width = w;
+            sp += 4;
+        }
+    }
+
     ctx->group_entry_offsets = malloc(4 * sizeof(uint64_t));
     if (!ctx->group_entry_offsets) {
         munmap(ctx->data, ctx->data_size); ctx->data = NULL; return QZDB_ERR_OUT_OF_MEMORY;
@@ -583,7 +600,7 @@ static uint32_t get_v4_child(const qzdb_searcher_t* ctx, uint32_t node_idx, uint
         uint32_t val;
         if (safe_read_u24(ctx->data, ctx->data_size, offset, &val) != QZDB_OK) return 0;
         if (val & 0x800000u) {
-            return (val & QZDB_SENTINEL_MASK_24) | QZDB_SENTINEL;
+            return (val & 0x7FFFFFu) | QZDB_SENTINEL;
         }
         return val;
     } else {
@@ -602,7 +619,7 @@ static uint32_t get_v6_child(const qzdb_searcher_t* ctx, uint32_t node_idx, uint
         uint32_t val;
         if (safe_read_u24(ctx->data, ctx->data_size, offset, &val) != QZDB_OK) return 0;
         if (val & 0x800000u) {
-            return (val & QZDB_SENTINEL_MASK_24) | QZDB_SENTINEL;
+            return (val & 0x7FFFFFu) | QZDB_SENTINEL;
         }
         return val;
     } else {
@@ -812,18 +829,37 @@ static int get_geo_info_buf(qzdb_searcher_t* ctx, uint32_t entry_id, int group_i
     return QZDB_OK;
 }
 
+static int read_ip_row(qzdb_searcher_t* ctx, uint32_t row_id, uint32_t* geo_id, uint32_t* asn_id, uint32_t* usage_id) {
+    if (!ctx || row_id == 0 || row_id >= (uint32_t)ctx->row_count) return QZDB_ERR_INVALID_PARAM;
+    uint64_t off = ctx->off_ip_row + (uint64_t)row_id * ctx->ip_row_size;
+    *geo_id = 0; *asn_id = 0; *usage_id = 0;
+    if (ctx->off_row_schema > 0) {
+        uint64_t p = off;
+        if (safe_read_uint_width(ctx->data, ctx->data_size, p, ctx->row_geo_width, geo_id) != QZDB_OK) return QZDB_ERR_BOUNDS;
+        p += ctx->row_geo_width;
+        if (ctx->row_asn_width > 0) {
+            if (safe_read_uint_width(ctx->data, ctx->data_size, p, ctx->row_asn_width, asn_id) != QZDB_OK) return QZDB_ERR_BOUNDS;
+            p += ctx->row_asn_width;
+        }
+        if (ctx->row_usage_width > 0) {
+            if (safe_read_uint_width(ctx->data, ctx->data_size, p, ctx->row_usage_width, usage_id) != QZDB_OK) return QZDB_ERR_BOUNDS;
+        }
+    } else {
+        if (safe_read_u24(ctx->data, ctx->data_size, off, geo_id) != QZDB_OK) return QZDB_ERR_BOUNDS;
+        if (safe_read_u24(ctx->data, ctx->data_size, off + 3, asn_id) != QZDB_OK) return QZDB_ERR_BOUNDS;
+        if (ctx->ip_row_size >= 9) {
+            if (safe_read_u24(ctx->data, ctx->data_size, off + 6, usage_id) != QZDB_OK) return QZDB_ERR_BOUNDS;
+        }
+    }
+    return QZDB_OK;
+}
+
 static int resolve_row_id_buf(qzdb_searcher_t* ctx, uint32_t row_id, int group_index,
                                 char** values, char (*bufs)[64], int buf_size, int* out_count) {
     if (!ctx || !values || !bufs || !out_count) return QZDB_ERR_INVALID_PARAM;
-    if (row_id <= 0 || row_id >= (uint32_t)ctx->row_count) return QZDB_ERR_INVALID_PARAM;
-    uint64_t off = ctx->off_ip_row + (uint64_t)row_id * ctx->ip_row_size;
-    uint32_t geo_id, asn_id;
-    if (safe_read_u24(ctx->data, ctx->data_size, off, &geo_id) != QZDB_OK) return QZDB_ERR_BOUNDS;
-    if (safe_read_u24(ctx->data, ctx->data_size, off + 3, &asn_id) != QZDB_OK) return QZDB_ERR_BOUNDS;
-    uint32_t usage_id = 0;
-    if (ctx->ip_row_size >= 9) {
-        if (safe_read_u24(ctx->data, ctx->data_size, off + 6, &usage_id) != QZDB_OK) return QZDB_ERR_BOUNDS;
-    }
+    uint32_t geo_id, asn_id, usage_id;
+    int err = read_ip_row(ctx, row_id, &geo_id, &asn_id, &usage_id);
+    if (err != QZDB_OK) return err;
 
     uint16_t mask = group_index < ctx->actual_groups ? ctx->group_dim_masks[group_index] : 0;
     uint32_t entry_id = geo_id;
@@ -839,15 +875,9 @@ static int resolve_row_id_buf(qzdb_searcher_t* ctx, uint32_t row_id, int group_i
 
 static int resolve_row_id(qzdb_searcher_t* ctx, uint32_t row_id, int group_index, qzdb_geo_info_t* result) {
     if (!ctx || !result) return QZDB_ERR_INVALID_PARAM;
-    if (row_id <= 0 || row_id >= (uint32_t)ctx->row_count) return QZDB_ERR_INVALID_PARAM;
-    uint64_t off = ctx->off_ip_row + (uint64_t)row_id * ctx->ip_row_size;
-    uint32_t geo_id, asn_id;
-    if (safe_read_u24(ctx->data, ctx->data_size, off, &geo_id) != QZDB_OK) return QZDB_ERR_BOUNDS;
-    if (safe_read_u24(ctx->data, ctx->data_size, off + 3, &asn_id) != QZDB_OK) return QZDB_ERR_BOUNDS;
-    uint32_t usage_id = 0;
-    if (ctx->ip_row_size >= 9) {
-        if (safe_read_u24(ctx->data, ctx->data_size, off + 6, &usage_id) != QZDB_OK) return QZDB_ERR_BOUNDS;
-    }
+    uint32_t geo_id, asn_id, usage_id;
+    int err = read_ip_row(ctx, row_id, &geo_id, &asn_id, &usage_id);
+    if (err != QZDB_OK) return err;
 
     uint16_t mask = group_index < ctx->actual_groups ? ctx->group_dim_masks[group_index] : 0;
     uint32_t entry_id = geo_id;

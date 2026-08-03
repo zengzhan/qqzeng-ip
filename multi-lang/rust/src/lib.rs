@@ -160,6 +160,10 @@ pub struct QzdbSearcher {
     ip_row_size: usize,
     geo_entry_group_count: usize,
 
+    row_geo_width: usize,
+    row_asn_width: usize,
+    row_usage_width: usize,
+
     // Offsets
     off_v4_jump: u64,
     off_v4_nodes: u64,
@@ -388,6 +392,24 @@ impl QzdbSearcher {
             check_offset(data_len, off_row_schema, 1, "off_row_schema")?;
         }
 
+        let mut row_geo_width = 3;
+        let mut row_asn_width = 3;
+        let mut row_usage_width = 0;
+        if off_row_schema > 0 && (off_row_schema as usize) + 4 <= data.len() {
+            let sp = off_row_schema as usize;
+            let f_count = data[sp] as usize;
+            let mut pos = sp + 4;
+            for _ in 0..f_count {
+                if pos + 4 > data.len() { break; }
+                let fid = data[pos];
+                let w = data[pos + 1] as usize;
+                if fid == 0 { row_geo_width = w; }
+                else if fid == 1 { row_asn_width = w; }
+                else if fid == 2 { row_usage_width = w; }
+                pos += 4;
+            }
+        }
+
         let mut group_entry_offsets = Vec::with_capacity(4);
         for i in 0..4 {
             group_entry_offsets.push(unsafe { read_u48_le_unchecked(&data, 168 + i * 6) });
@@ -513,6 +535,9 @@ impl QzdbSearcher {
             v6_node_count,
             ip_row_size,
             geo_entry_group_count,
+            row_geo_width,
+            row_asn_width,
+            row_usage_width,
             off_v4_jump,
             off_v4_nodes,
             off_v6_jump,
@@ -678,7 +703,7 @@ impl QzdbSearcher {
                 None => return 0,
             };
             if val & 0x800000 != 0 {
-                return (val & SENTINEL_MASK_24) | SENTINEL;
+                return (val & 0x7FFFFF) | SENTINEL;
             }
             val
         } else {
@@ -699,7 +724,7 @@ impl QzdbSearcher {
                 None => return 0,
             };
             if val & 0x800000 != 0 {
-                return (val & SENTINEL_MASK_24) | SENTINEL;
+                return (val & 0x7FFFFF) | SENTINEL;
             }
             val
         } else {
@@ -787,15 +812,30 @@ impl QzdbSearcher {
             return (0, 0, 0);
         }
         let off = (self.off_ip_row as usize) + (row_id as usize) * self.ip_row_size;
-        let geo_id = safe_read_u24(&self.data, off).unwrap_or(0);
-        let asn_id = safe_read_u24(&self.data, off + 3).unwrap_or(0);
 
-        let mut usage_type_id = 0;
-        if self.ip_row_size >= 9 {
-            usage_type_id = safe_read_u24(&self.data, off + 6).unwrap_or(0);
+        if self.off_row_schema > 0 {
+            let mut p = off;
+            let geo_id = safe_read_uint_width(&self.data, p, self.row_geo_width).unwrap_or(0);
+            p += self.row_geo_width;
+            let mut asn_id = 0;
+            if self.row_asn_width > 0 {
+                asn_id = safe_read_uint_width(&self.data, p, self.row_asn_width).unwrap_or(0);
+                p += self.row_asn_width;
+            }
+            let mut usage_type_id = 0;
+            if self.row_usage_width > 0 {
+                usage_type_id = safe_read_uint_width(&self.data, p, self.row_usage_width).unwrap_or(0);
+            }
+            (geo_id, asn_id, usage_type_id)
+        } else {
+            let geo_id = safe_read_u24(&self.data, off).unwrap_or(0);
+            let asn_id = safe_read_u24(&self.data, off + 3).unwrap_or(0);
+            let mut usage_type_id = 0;
+            if self.ip_row_size >= 9 {
+                usage_type_id = safe_read_u24(&self.data, off + 6).unwrap_or(0);
+            }
+            (geo_id, asn_id, usage_type_id)
         }
-
-        (geo_id, asn_id, usage_type_id)
     }
 
     fn resolve_row_id(&self, row_id: u32, group_index: usize) -> Option<GeoInfo> {

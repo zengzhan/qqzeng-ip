@@ -1,8 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
+
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
-    <RootNamespace>qzdb_searcher</RootNamespace>
-    <TieredPGO>true</TieredPGO>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <StartupObject>Qqzeng.BatchProgram</StartupObject>
   </PropertyGroup>
+
 </Project>

@@ -109,6 +109,10 @@ namespace Qqzeng
         private int _ipRowSize = 6;
         private int _geoEntryGroupCount;
 
+        private int _rowGeoWidth = 3;
+        private int _rowAsnWidth = 3;
+        private int _rowUsageWidth = 0;
+
         // Offsets
         private long _offV4Jump;
         private long _offV4Nodes;
@@ -269,6 +273,8 @@ namespace Qqzeng
             _geoEntryGroupCount = (int)SafeReadU32(d, 164);
             if (_geoEntryGroupCount < 1 || _geoEntryGroupCount > 255)
                 throw new QzdbException(ErrorCode.InvalidParam, $"geoEntryGroupCount out of range [1,255]: {_geoEntryGroupCount}");
+
+            ParseRowSchema(d);
 
             // Bounds validation for section offsets
             long dlen = d.Length;
@@ -543,7 +549,7 @@ namespace Qqzeng
                 long offset = bit == 0 ? nodeOffset : nodeOffset + 3;
                 uint val = (uint)(_data[offset] | (_data[offset + 1] << 8) | (_data[offset + 2] << 16));
                 if ((val & 0x800000) != 0)
-                    return (val & SENTINEL_MASK_24) | SENTINEL;
+                    return (val & 0x7FFFFF) | SENTINEL;
                 return val;
             }
             else
@@ -562,7 +568,7 @@ namespace Qqzeng
                 long offset = bit == 0 ? nodeOffset : nodeOffset + 3;
                 uint val = (uint)(_data[offset] | (_data[offset + 1] << 8) | (_data[offset + 2] << 16));
                 if ((val & 0x800000) != 0)
-                    return (val & SENTINEL_MASK_24) | SENTINEL;
+                    return (val & 0x7FFFFF) | SENTINEL;
                 return val;
             }
             else
@@ -625,16 +631,54 @@ namespace Qqzeng
             return 0;
         }
 
+        private void ParseRowSchema(byte[] d)
+        {
+            _rowGeoWidth = 3;
+            _rowAsnWidth = 3;
+            _rowUsageWidth = 0;
+            if (_offRowSchema <= 0) return;
+            int sp = (int)_offRowSchema;
+            int fCount = d[sp];
+            int pos = sp + 4;
+            for (int i = 0; i < fCount; i++)
+            {
+                int fid = d[pos];
+                int w = d[pos + 1];
+                if (fid == 0) _rowGeoWidth = w;
+                else if (fid == 1) _rowAsnWidth = w;
+                else if (fid == 2) _rowUsageWidth = w;
+                pos += 4;
+            }
+        }
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private void ReadIPRow(uint rowId, out uint geoId, out uint asnId, out uint usageTypeId)
         {
             geoId = 0; asnId = 0; usageTypeId = 0;
             if (rowId <= 0 || rowId >= _rowCount) return;
             long off = _offIPRow + rowId * _ipRowSize;
-            geoId = SafeReadU24(_data, (int)off);
-            asnId = SafeReadU24(_data, (int)off + 3);
-            if (_ipRowSize >= 9)
-                usageTypeId = SafeReadU24(_data, (int)off + 6);
+            if (_offRowSchema > 0)
+            {
+                int p = (int)off;
+                geoId = SafeReadUintWidth(_data, p, _rowGeoWidth);
+                p += _rowGeoWidth;
+                if (_rowAsnWidth > 0)
+                {
+                    asnId = SafeReadUintWidth(_data, p, _rowAsnWidth);
+                    p += _rowAsnWidth;
+                }
+                if (_rowUsageWidth > 0)
+                {
+                    usageTypeId = SafeReadUintWidth(_data, p, _rowUsageWidth);
+                }
+            }
+            else
+            {
+                geoId = SafeReadU24(_data, (int)off);
+                asnId = SafeReadU24(_data, (int)off + 3);
+                if (_ipRowSize >= 9)
+                    usageTypeId = SafeReadU24(_data, (int)off + 6);
+            }
         }
 
         private GeoInfo ResolveRowId(uint rowId, int groupIndex)

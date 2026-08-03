@@ -298,6 +298,8 @@ class QzdbSearcher {
       throw new QzdbError(`geoEntryGroupCount out of range [1,255]: ${this._geoEntryGroupCount}`, QzdbError.INVALID_PARAM);
     }
 
+    this._parseRowSchema();
+
     // Bounds validation for section offsets
     const dlen = d.length;
     const v4NodeSize = this._v4Node24 ? 6 : 8;
@@ -556,7 +558,7 @@ class QzdbSearcher {
       const offset = bit === 0 ? nodeOffset : nodeOffset + 3;
       const val = this._data[offset] | (this._data[offset + 1] << 8) | (this._data[offset + 2] << 16);
       if (val & 0x800000) {
-        return (val & SENTINEL_MASK_24) | SENTINEL;
+        return (val & 0x7FFFFF) | SENTINEL;
       }
       return val;
     } else {
@@ -571,7 +573,7 @@ class QzdbSearcher {
       const offset = bit === 0 ? nodeOffset : nodeOffset + 3;
       const val = this._data[offset] | (this._data[offset + 1] << 8) | (this._data[offset + 2] << 16);
       if (val & 0x800000) {
-        return (val & SENTINEL_MASK_24) | SENTINEL;
+        return (val & 0x7FFFFF) | SENTINEL;
       }
       return val;
     } else {
@@ -652,17 +654,51 @@ class QzdbSearcher {
     return 0;
   }
 
+  _parseRowSchema() {
+    this._rowGeoWidth = 3;
+    this._rowAsnWidth = 3;
+    this._rowUsageWidth = 0;
+    if (this._offRowSchema <= 0) return;
+    const d = this._data;
+    const sp = this._offRowSchema;
+    const fCount = d[sp];
+    let pos = sp + 4;
+    for (let i = 0; i < fCount; i++) {
+      const fid = d[pos];
+      const w = d[pos + 1];
+      if (fid === 0) this._rowGeoWidth = w;
+      else if (fid === 1) this._rowAsnWidth = w;
+      else if (fid === 2) this._rowUsageWidth = w;
+      pos += 4;
+    }
+  }
+
   _readIPRow(rowId) {
     if (rowId <= 0 || rowId >= this._rowCount) {
       return [0, 0, 0];
     }
     const off = this._offIPRow + rowId * this._ipRowSize;
-    const geoId = this.safeReadU24(off);
-    const asnId = this.safeReadU24(off + 3);
-
+    let geoId = 0;
+    let asnId = 0;
     let usageTypeId = 0;
-    if (this._ipRowSize >= 9) {
-      usageTypeId = this.safeReadU24(off + 6);
+
+    if (this._offRowSchema > 0) {
+      let p = off;
+      geoId = this.safeReadUintWidth(p, this._rowGeoWidth);
+      p += this._rowGeoWidth;
+      if (this._rowAsnWidth > 0) {
+        asnId = this.safeReadUintWidth(p, this._rowAsnWidth);
+        p += this._rowAsnWidth;
+      }
+      if (this._rowUsageWidth > 0) {
+        usageTypeId = this.safeReadUintWidth(p, this._rowUsageWidth);
+      }
+    } else {
+      geoId = this.safeReadU24(off);
+      asnId = this.safeReadU24(off + 3);
+      if (this._ipRowSize >= 9) {
+        usageTypeId = this.safeReadU24(off + 6);
+      }
     }
 
     return [geoId, asnId, usageTypeId];

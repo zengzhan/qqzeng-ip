@@ -1,10 +1,3 @@
-/**
- * QzdbSearcher - Java SDK calling example
- *
- * Usage: java Main.java
- * Place qqzeng_ip_std_china.qzdb in the same directory or specify the path.
- */
-
 import qzdb.QzdbSearcher;
 import qzdb.IpLocation;
 import java.io.File;
@@ -24,13 +17,14 @@ public class Main {
 
     public static void main(String[] args) throws Exception {
         String dbPath = findDb();
-        if (dbPath == null) {
-            System.out.println("Database file not found");
+        String customPath = args.length > 0 ? args[0] : dbPath;
+        if (customPath == null || !new File(customPath).exists()) {
+            System.out.println("Database file not found: " + customPath);
             return;
         }
 
         QzdbSearcher searcher = QzdbSearcher.getInstance();
-        searcher.load(dbPath);
+        searcher.load(customPath);
 
         System.out.println("Version code: " + searcher.getVersionCode()
             + ", pools: " + searcher.getPoolCount());
@@ -39,22 +33,15 @@ public class Main {
         for (String f : fields) System.out.print(" " + f);
         System.out.println("\n");
 
-        // Query sample V4 IPs
-        for (String ip : new String[]{"114.114.114.114", "223.5.5.5", "8.8.8.8"}) {
-            String result = searcher.findStr(ip);
-            System.out.println("find(\"" + ip + "\") => " + (result != null ? result : "(null)"));
-        }
+        String queryIp = args.length > 1 ? args[1] : "223.85.243.88";
+        String result = searcher.findStr(queryIp);
+        System.out.println("find(\"" + queryIp + "\") => " + (result != null ? result : "(null)"));
 
-        // Query a V6 IP
-        String result = searcher.findStr("2408:8000:9000::1");
-        System.out.println("find(\"2408:8000:9000::1\") => " + (result != null ? result : "(null)"));
-
-        // Get structured fields
-        System.out.println("\n--- Structured fields for 114.114.114.114 ---");
-        IpLocation loc = searcher.find("114.114.114.114");
+        System.out.println("\n--- Structured fields for " + queryIp + " ---");
+        IpLocation loc = searcher.find(queryIp);
         if (loc != null) {
             String[] vals = loc.getValues();
-            for (int i = 0; i < fields.length; i++) {
+            for (int i = 0; i < fields.length && i < vals.length; i++) {
                 System.out.println("  " + fields[i] + ": " + vals[i]);
             }
         }
