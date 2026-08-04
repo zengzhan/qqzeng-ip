@@ -17,7 +17,7 @@
 │   ├── data/           ← 放置购买的 .qzdb 数据库文件
 │   ├── FORMAT.md       二进制格式规范
 │   └── run_all_tests.sh 一键测试
-├── FORMAT.md              V18 二进制格式规
+├── FORMAT.md              QZDB 二进制格式规范
 ├── LICENSE                 MIT
 └── .gitignore
 ```
