@@ -103,7 +103,9 @@ class GeoInfo implements \ArrayAccess
 class QzdbSearcher
 {
     private static $instance = null;
-    private $data;
+    private $data;            // in-memory buffer (null when streaming)
+    private $stream = null;   // fopen() handle when file is too large to buffer
+    private $fileSize = 0;    // total file size in bytes
     private $groupIndex = 0;
     private $fieldNames = [];
     private $floatFieldIndices = [];
@@ -157,7 +159,9 @@ class QzdbSearcher
     private $groupFieldIds = [];
     private $groupPoolSectionIds = [];
 
-    private $groupPools = null;
+    // Lazy pool model: per (group, field) descriptor [ot, db, count] or null for native fields.
+    // Strings are resolved on demand via poolString() — never materialized into PHP arrays.
+    private $groupPoolDescs = null;
     private $poolsLoaded = false;
 
     const SENTINEL = 0x80000000;
@@ -197,51 +201,145 @@ class QzdbSearcher
         }
     }
 
+    public function __destruct()
+    {
+        if ($this->stream !== null && is_resource($this->stream)) {
+            @fclose($this->stream);
+            $this->stream = null;
+        }
+    }
+
     public function load($dbPath)
     {
-        $this->data = file_get_contents($dbPath);
-        if ($this->data === false) {
-            throw new QzdbException("Cannot read database file: " . $dbPath, self::ERROR_INVALID_PARAM);
+        $size = @filesize($dbPath);
+        if ($size === false) {
+            throw new QzdbException("Cannot stat database file: " . $dbPath, self::ERROR_INVALID_PARAM);
         }
+        $this->fileSize = $size;
+
+        // Adaptive storage: if the file is larger than half the PHP memory_limit,
+        // buffering it in memory would risk OOM (files now routinely exceed 128MB).
+        // In that case we keep only a stream handle and read on demand via fseek/fread,
+        // so peak memory stays O(1) regardless of file size. Smaller files are buffered
+        // for speed (the previous behaviour) — both paths go through readBytes(), so the
+        // parsed result is byte-identical.
+        $memLimit = $this->parseMemoryLimitBytes();
+        if ($memLimit > 0 && $size > (int)($memLimit * 0.5)) {
+            $this->stream = @fopen($dbPath, 'rb');
+            if ($this->stream === false || $this->stream === null) {
+                throw new QzdbException("Cannot open database file: " . $dbPath, self::ERROR_INVALID_PARAM);
+            }
+            $this->data = null;
+        } else {
+            $this->data = @file_get_contents($dbPath);
+            if ($this->data === false) {
+                throw new QzdbException("Cannot read database file: " . $dbPath, self::ERROR_INVALID_PARAM);
+            }
+            $this->stream = null;
+        }
+
         $this->parseHeader();
         if (!$this->verifyCrc()) {
             throw new QzdbException('CRC32 checksum mismatch — the .qzdb file is corrupted or truncated', self::ERROR_CORRUPTED);
         }
     }
 
+    /**
+     * Resolve PHP memory_limit (e.g. "128M", "2G", "-1") to bytes.
+     * Returns 0 when unlimited (-1) so the caller falls back to buffering.
+     */
+    private function parseMemoryLimitBytes()
+    {
+        $raw = trim((string)ini_get('memory_limit'));
+        if ($raw === '' || $raw === '-1') {
+            return 0;
+        }
+        $unit = strtolower($raw[strlen($raw) - 1]);
+        $num = (int)$raw;
+        switch ($unit) {
+            case 'g': $num *= 1024; break;
+            case 'm': $num *= 1024; break;
+            case 'k': $num *= 1024; break;
+        }
+        return $num;
+    }
+
+    /**
+     * Unified byte reader. When streaming, reads [$off, $off+$len) from the file
+     * handle; otherwise slices the in-memory buffer. Single source of truth so the
+     * parse logic is identical whether or not the file is buffered.
+     */
+    private function readBytes($off, $len)
+    {
+        if ($len <= 0) {
+            return '';
+        }
+        if ($this->stream !== null) {
+            if ($off < 0) {
+                return '';
+            }
+            if (@fseek($this->stream, $off, SEEK_SET) !== 0) {
+                return '';
+            }
+            $b = @fread($this->stream, $len);
+            return ($b === false) ? '' : $b;
+        }
+        if ($this->data === null || $off < 0) {
+            return '';
+        }
+        $avail = strlen($this->data) - $off;
+        if ($avail <= 0) {
+            return '';
+        }
+        if ($len > $avail) {
+            $len = $avail;
+        }
+        return substr($this->data, $off, $len);
+    }
+
+    private function readByte($off)
+    {
+        $b = $this->readBytes($off, 1);
+        return $b === '' ? 0 : ord($b);
+    }
+
     private function safeReadU16($off)
     {
-        return unpack('v', substr($this->data, $off, 2))[1];
+        $b = $this->readBytes($off, 2);
+        return strlen($b) === 2 ? unpack('v', $b)[1] : 0;
     }
 
     private function safeReadU32($off)
     {
-        return unpack('V', substr($this->data, $off, 4))[1];
+        $b = $this->readBytes($off, 4);
+        return strlen($b) === 4 ? unpack('V', $b)[1] : 0;
     }
 
     private function safeReadU64($off)
     {
-        return unpack('P', substr($this->data, $off, 8))[1];
+        $b = $this->readBytes($off, 8);
+        return strlen($b) === 8 ? unpack('P', $b)[1] : 0;
     }
 
     private function safeReadU24($off)
     {
-        $d = $this->data;
-        return ord($d[$off]) | (ord($d[$off + 1]) << 8) | (ord($d[$off + 2]) << 16);
+        $b0 = $this->readByte($off);
+        $b1 = $this->readByte($off + 1);
+        $b2 = $this->readByte($off + 2);
+        return $b0 | ($b1 << 8) | ($b2 << 16);
     }
 
     private function safeReadU48($off)
     {
-        $d = $this->data;
-        $low = unpack('V', substr($d, $off, 4))[1];
-        $high = unpack('v', substr($d, $off + 4, 2))[1];
+        $low = $this->safeReadU32($off);
+        $high = $this->safeReadU16($off + 4);
         return $low + ($high * 4294967296);
     }
 
     private function safeReadUintWidth($off, $width)
     {
         if ($width <= 1) {
-            return ord($this->data[$off]);
+            return $this->readByte($off);
         } elseif ($width == 2) {
             return $this->safeReadU16($off);
         } elseif ($width == 3) {
@@ -253,19 +351,18 @@ class QzdbSearcher
 
     private function parseHeader()
     {
-        $d = $this->data;
-        if (strlen($d) < 192) {
+        if ($this->fileSize < 192) {
             throw new QzdbException('File too small for QZDB header', self::ERROR_CORRUPTED);
         }
 
-        $magic = substr($d, 0, 4);
+        $magic = $this->readBytes(0, 4);
         if ($magic !== 'QZDB') {
             throw new QzdbException('Invalid magic, expected QZDB', self::ERROR_BAD_MAGIC);
         }
 
         // Spec §10.1: QZDBReader accepts only format version 1.
         // All in-repo real QZDB fixtures are v1; reject anything else.
-        $fmtVer = ord($d[4]);
+        $fmtVer = $this->readByte(4);
         if ($fmtVer !== 1) {
             throw new QzdbException("Unsupported format version: {$fmtVer} (only version 1 is supported)", self::ERROR_UNSUPPORTED);
         }
@@ -277,7 +374,7 @@ class QzdbSearcher
         $this->v6Node24 = (bool)($this->flags & 0x20);
 
         // Spec §4.2: v6JumpBits valid range is [8,20]. Real .qzdb fixtures use up to 20.
-        $this->v6JumpBits = ord($d[11]);
+        $this->v6JumpBits = $this->readByte(11);
         if ($this->v6JumpBits === 0) {
             $this->v6JumpBits = 16;
         }
@@ -285,8 +382,8 @@ class QzdbSearcher
             throw new QzdbException("v6JumpBits out of range [8,20]: {$this->v6JumpBits}", self::ERROR_CORRUPTED);
         }
 
-        $this->poolCount = ord($d[12]);
-        $this->poolIdxSize = ord($d[13]);
+        $this->poolCount = $this->readByte(12);
+        $this->poolIdxSize = $this->readByte(13);
         if ($this->poolIdxSize !== 2 && $this->poolIdxSize !== 3) {
             throw new QzdbException("poolIdxSize must be 2 or 3, got {$this->poolIdxSize}", self::ERROR_CORRUPTED);
         }
@@ -325,8 +422,7 @@ class QzdbSearcher
 
         $this->parseRowSchema();
 
-        $d = $this->data;
-        $len = strlen($d);
+        $len = $this->fileSize;
         $v4NodeSize = $this->v4Node24 ? 6 : 8;
         $v6NodeSize = $this->v6Node24 ? 6 : 8;
         $v6JumpSize = (1 << $this->v6JumpBits) * 4;
@@ -355,7 +451,7 @@ class QzdbSearcher
 
         // Parse GroupMetadataTable (at offGeoEntries)
         $gmOff = $this->offGeoEntries;
-        $groupCount = ord($d[$gmOff]);
+        $groupCount = $this->readByte($gmOff);
         $gmOff += 1;
 
         $actualGroups = min($groupCount, max(1, $this->geoEntryGroupCount));
@@ -372,7 +468,7 @@ class QzdbSearcher
         // ($gi !== 2) ? 0x01 : 0x02 mask that is wrong for ASN databases; we now
         // read the layout verbatim and repair a zero mask from metadata (see repairDimMasks).
         for ($gi = 0; $gi < $actualGroups; $gi++) {
-            $this->groupFieldCounts[$gi] = ord($d[$gmOff]);
+            $this->groupFieldCounts[$gi] = $this->readByte($gmOff);
             $gmOff += 1;
             $this->groupEntryCounts[$gi] = $this->safeReadU32($gmOff);
             $gmOff += 4;
@@ -413,9 +509,9 @@ class QzdbSearcher
                     for ($fi = 0; $fi < $fldCount; $fi++) {
                         $fieldIds[$fi] = $this->safeReadU16($sp);
                         $sp += 2;
-                        $widths[$fi] = ord($d[$sp]);
+                        $widths[$fi] = $this->readByte($sp);
                         $sp += 1;
-                        $fieldFlags = ord($d[$sp]);
+                        $fieldFlags = $this->readByte($sp);
                         $sp += 1;
                         $natives[$fi] = ($fieldFlags & 0x01) !== 0;
                         $natTypes[$fi] = ($fieldFlags >> 1) & 0x03;
@@ -462,23 +558,22 @@ class QzdbSearcher
         $this->resolveFieldNames();
         $this->repairDimMasks();
         $this->poolsLoaded = false;
-        $this->groupPools = null;
+        $this->groupPoolDescs = null;
     }
 
     private function resolveFieldNames()
     {
-        $d = $this->data;
         $offMeta = $this->offMeta;
-        if (($this->flags & 4) && $offMeta > 0 && $offMeta + 4 <= strlen($d)) {
+        if (($this->flags & 4) && $offMeta > 0 && $offMeta + 4 <= $this->fileSize) {
             $fieldNames = null;
             $pos = $offMeta;
-            while ($pos + 4 <= strlen($d)) {
-                $t = ord($d[$pos]);
+            while ($pos + 4 <= $this->fileSize) {
+                $t = $this->readByte($pos);
                 $length = $this->safeReadU16($pos + 2);
                 if ($t === 0 || $length === 0) {
                     break;
                 }
-                $val = substr($d, $pos + 4, $length);
+                $val = $this->readBytes($pos + 4, $length);
                 if ($t === 1) {
                     $this->versionName = $val;
                 } elseif ($t === 2) {
@@ -551,28 +646,28 @@ class QzdbSearcher
         $this->poolsLoaded = true;
 
         $groupCount = count($this->groupFieldCounts);
-        $this->groupPools = array_fill(0, $groupCount, null);
+        $this->groupPoolDescs = array_fill(0, $groupCount, []);
 
         if ($this->offPools <= 0) {
             return;
         }
 
         $poolCursor = $this->offPools;
-        $poolEnd = $this->offMeta > 0 ? $this->offMeta : strlen($this->data);
-        $d = $this->data;
+        $poolEnd = $this->offMeta > 0 ? $this->offMeta : $this->fileSize;
 
         for ($g = 0; $g < $groupCount; $g++) {
             $fieldCount = $this->groupFieldCounts[$g];
-            $groupPoolList = [];
+            $groupDescs = [];
             $natives = $this->groupFieldNative[$g];
             for ($f = 0; $f < $fieldCount; $f++) {
                 if ($natives && $f < count($natives) && $natives[$f]) {
-                    $groupPoolList[] = [];
+                    // Native field: value is stored inline in the GeoEntry row, no pool.
+                    $groupDescs[] = null;
                     continue;
                 }
 
                 if ($poolCursor + 4 > $poolEnd) {
-                    $groupPoolList[] = [];
+                    $groupDescs[] = null;
                     continue;
                 }
                 $count = $this->safeReadU32($poolCursor);
@@ -582,34 +677,57 @@ class QzdbSearcher
                 }
                 // Security guard: unbounded count would OOM on count+1 offsets.
                 if ($count === 0 || $count > self::MAX_POOL_COUNT) {
-                    $groupPoolList[] = [];
+                    $groupDescs[] = null;
                     continue;
                 }
 
-                // Read string offsets
-                $offsets = [];
-                for ($o = 0; $o <= $count; $o++) {
-                    $offsets[] = $this->safeReadU32($poolCursor);
-                    $poolCursor += 4;
-                }
-
-                // Read string data
-                $strings = [];
-                for ($s = 0; $s < $count; $s++) {
-                    $start = $offsets[$s];
-                    $end = $offsets[$s + 1];
-                    $length = $end - $start;
-                    if ($length > 0) {
-                        $strings[] = substr($d, $poolCursor + $start, $length);
-                    } else {
-                        $strings[] = '';
-                    }
-                }
-                $poolCursor += $offsets[$count];
-                $groupPoolList[] = $strings;
+                // Lazy model: keep only the offset-table base, string-data base and entry count.
+                // Strings are resolved on demand by poolString() — never copied into PHP arrays,
+                // so peak memory stays at O(file buffer) instead of O(file + all pools). This is
+                // what lets 100MB+ libraries load under the default 128MB memory_limit.
+                $offsetTableBase = $poolCursor;                  // absolute offset of the (count+1) u32 offsets
+                $poolCursor += ($count + 1) * 4;
+                $dataBase = $poolCursor;                         // absolute offset of the raw string bytes
+                $totalLen = $this->safeReadU32($offsetTableBase + $count * 4);  // offsets[count] = total region length
+                $poolCursor = $dataBase + $totalLen;
+                $groupDescs[] = ['ot' => $offsetTableBase, 'db' => $dataBase, 'count' => $count];
             }
-            $this->groupPools[$g] = $groupPoolList;
+            $this->groupPoolDescs[$g] = $groupDescs;
         }
+    }
+
+    /**
+     * Resolve a single pool string on demand.
+     * Reads offsets[idx] / offsets[idx+1] from the offset table and slices the raw
+     * bytes via readBytes() (buffered or streamed) — O(1) memory, no eager materialization.
+     *
+     * @param int $g   group index
+     * @param int $f   field index within the group
+     * @param int $idx pool entry index
+     * @return string
+     */
+    private function poolString($g, $f, $idx)
+    {
+        if ($g < 0 || $g >= count($this->groupPoolDescs)) {
+            return '';
+        }
+        if ($f < 0 || $f >= count($this->groupPoolDescs[$g])) {
+            return '';
+        }
+        $desc = $this->groupPoolDescs[$g][$f];
+        if ($desc === null) {
+            return '';
+        }
+        if ($idx < 0 || $idx >= $desc['count']) {
+            return '';
+        }
+        $start = $this->safeReadU32($desc['ot'] + $idx * 4);
+        $end = $this->safeReadU32($desc['ot'] + ($idx + 1) * 4);
+        $length = $end - $start;
+        if ($length <= 0) {
+            return '';
+        }
+        return $this->readBytes($desc['db'] + $start, $length);
     }
 
     private function getV4Child($nodeIdx, $bit)
@@ -618,8 +736,10 @@ class QzdbSearcher
         if ($this->v4Node24) {
             $nodeOffset = $this->offV4Nodes + $nodeIdx * 6;
             $offset = $bit === 0 ? $nodeOffset : $nodeOffset + 3;
-            $d = $this->data;
-            $val = ord($d[$offset]) | (ord($d[$offset + 1]) << 8) | (ord($d[$offset + 2]) << 16);
+            $b0 = $this->readByte($offset);
+            $b1 = $this->readByte($offset + 1);
+            $b2 = $this->readByte($offset + 2);
+            $val = $b0 | ($b1 << 8) | ($b2 << 16);
             if ($val & 0x800000) {
                 return ($val & 0x7FFFFF) | self::SENTINEL;
             }
@@ -636,8 +756,10 @@ class QzdbSearcher
         if ($this->v6Node24) {
             $nodeOffset = $this->offV6Nodes + $nodeIdx * 6;
             $offset = $bit === 0 ? $nodeOffset : $nodeOffset + 3;
-            $d = $this->data;
-            $val = ord($d[$offset]) | (ord($d[$offset + 1]) << 8) | (ord($d[$offset + 2]) << 16);
+            $b0 = $this->readByte($offset);
+            $b1 = $this->readByte($offset + 1);
+            $b2 = $this->readByte($offset + 2);
+            $val = $b0 | ($b1 << 8) | ($b2 << 16);
             if ($val & 0x800000) {
                 return ($val & 0x7FFFFF) | self::SENTINEL;
             }
@@ -745,24 +867,23 @@ class QzdbSearcher
         $this->rowAsnWidth = 3;
         $this->rowUsageWidth = 0;
         if ($this->offRowSchema <= 0) return;
-        $d = $this->data;
         $sp = $this->offRowSchema;
         // Canonical ROW_SCHEMA layout (matches the QZDB builder / QZDBReader):
         //   byte[sp+0]=fieldCount, byte[sp+1]=stride, bytes[sp+2..3]=reserved,
         //   then fieldCount x 4-byte records: { fieldId, width, offset, flags }.
         //   fieldId: 0=geo, 1=asn, 2=usage.
-        $fCount = ord($d[$sp]);
-        $stride = ord($d[$sp + 1]);
+        $fCount = $this->readByte($sp);
+        $stride = $this->readByte($sp + 1);
         if ($fCount < 1 || $fCount > 8) return;
-        if ($sp + 4 + $fCount * 4 > strlen($d)) return;
+        if ($sp + 4 + $fCount * 4 > $this->fileSize) return;
         if ($stride != $this->ipRowSize) return;
 
         $geoW = 0; $asnW = 0; $usageW = 0; $total = 0;
         $wpos = $sp + 4;
         $ok = true;
         for ($i = 0; $i < $fCount; $i++) {
-            $fid = ord($d[$wpos]);
-            $w = ord($d[$wpos + 1]);
+            $fid = $this->readByte($wpos);
+            $w = $this->readByte($wpos + 1);
             if ($fid === 0) $geoW = $w;
             else if ($fid === 1) $asnW = $w;
             else if ($fid === 2) $usageW = $w;
@@ -850,7 +971,6 @@ class QzdbSearcher
         $groupEntryStart = $this->offGeoEntries + $this->groupEntryOffsets[$groupIndex];
         $stride = $this->groupStrides[$groupIndex];
         $entryOffset = $groupEntryStart + $entryId * $stride;
-        $d = $this->data;
 
         $widths = $this->groupFieldWidths[$groupIndex];
         $baseOffsets = $this->groupFieldOffsets[$groupIndex];
@@ -868,9 +988,9 @@ class QzdbSearcher
                 if ($t === 1) {
                     // float
                     if ($w === 4) {
-                        $valNum = unpack('f', substr($d, $fo, 4))[1];
+                        $valNum = unpack('f', $this->readBytes($fo, 4))[1];
                     } else {
-                        $valNum = unpack('d', substr($d, $fo, 8))[1];
+                        $valNum = unpack('d', $this->readBytes($fo, 8))[1];
                     }
                     $val = GeoInfo::formatFloatValue($valNum);
                 } else {
@@ -880,14 +1000,7 @@ class QzdbSearcher
                 }
             } else {
                 $idx = $this->safeReadUintWidth($fo, $w);
-                $groupPool = $this->groupPools[$groupIndex];
-                
-                // Use positional index for pool lookup (poolSectionId is metadata only)
-                if ($groupPool && $i < count($groupPool) && $idx < count($groupPool[$i])) {
-                    $val = $groupPool[$i][$idx];
-                } else {
-                    $val = '';
-                }
+                $val = $this->poolString($groupIndex, $i, $idx);
             }
 
             $values[] = $val;
@@ -1004,7 +1117,6 @@ class QzdbSearcher
         $groupEntryStart = $this->offGeoEntries + $this->groupEntryOffsets[$groupIndex];
         $stride = $this->groupStrides[$groupIndex];
         $entryOffset = $groupEntryStart + $entryId * $stride;
-        $d = $this->data;
         $widths = $this->groupFieldWidths[$groupIndex];
         $baseOffsets = $this->groupFieldOffsets[$groupIndex];
         $natives = $this->groupFieldNative[$groupIndex];
@@ -1019,15 +1131,14 @@ class QzdbSearcher
             if ($isNative) {
                 $t = $natTypes && $i < count($natTypes) ? $natTypes[$i] : 0;
                 if ($t === 1) {
-                    $valNum = $w === 4 ? unpack('f', substr($d, $fo, 4))[1] : unpack('d', substr($d, $fo, 8))[1];
+                    $valNum = $w === 4 ? unpack('f', $this->readBytes($fo, 4))[1] : unpack('d', $this->readBytes($fo, 8))[1];
                     $resolved[$i] = GeoInfo::formatFloatValue($valNum);
                 } else {
                     $resolved[$i] = (string)$this->safeReadUintWidth($fo, $w);
                 }
             } else {
                 $idx = $this->safeReadUintWidth($fo, $w);
-                $groupPool = $this->groupPools[$groupIndex];
-                $resolved[$i] = ($groupPool && $i < count($groupPool) && $idx < count($groupPool[$i])) ? $groupPool[$i][$idx] : '';
+                $resolved[$i] = $this->poolString($groupIndex, $i, $idx);
             }
         }
 
@@ -1089,11 +1200,45 @@ class QzdbSearcher
         return self::crc32bUpdate(0xFFFFFFFF, $data) ^ 0xFFFFFFFF;
     }
 
-    private static function crc32bComputeFile(string $data): int
+    /**
+     * CRC32-B over the whole file, treating the stored CRC field at [16,20) as
+     * zero (XOR with 0 is identity). When $stream is provided (large-file mode)
+     * the bytes are read in chunks so the file never has to be buffered in memory.
+     */
+    private static function crc32bComputeFile(string $data, $stream = null, int $size = 0): int
     {
         self::crc32bInitTable();
         $table = self::$crc32bTable;
         $crc = 0xFFFFFFFF;
+
+        if ($stream !== null) {
+            // Header [0, 16)
+            fseek($stream, 0, SEEK_SET);
+            $head = fread($stream, 16);
+            for ($i = 0; $i < 16 && $i < strlen($head); $i++) {
+                $crc = $table[($crc ^ ord($head[$i])) & 0xFF] ^ ($crc >> 8);
+            }
+            // CRC field [16, 20) counted as zero
+            for ($i = 0; $i < 4; $i++) {
+                $crc = $table[$crc & 0xFF] ^ ($crc >> 8);
+            }
+            // Tail [20, size)
+            fseek($stream, 20, SEEK_SET);
+            $remaining = $size - 20;
+            while ($remaining > 0) {
+                $chunk = fread($stream, min(65536, $remaining));
+                if ($chunk === false || $chunk === '') {
+                    break;
+                }
+                $clen = strlen($chunk);
+                for ($i = 0; $i < $clen; $i++) {
+                    $crc = $table[($crc ^ ord($chunk[$i])) & 0xFF] ^ ($crc >> 8);
+                }
+                $remaining -= $clen;
+            }
+            return $crc ^ 0xFFFFFFFF;
+        }
+
         $len = strlen($data);
         // CRC bytes [0, 16)
         for ($i = 0; $i < 16; $i++) {
@@ -1113,11 +1258,11 @@ class QzdbSearcher
 
     public function verifyCrc(): bool
     {
-        if (strlen($this->data) < 20) {
+        if ($this->fileSize < 20) {
             return false;
         }
-        $stored = unpack('V', substr($this->data, 16, 4))[1];
-        $computed = self::crc32bComputeFile($this->data);
+        $stored = unpack('V', $this->readBytes(16, 4))[1];
+        $computed = self::crc32bComputeFile((string)$this->data, $this->stream, $this->fileSize);
         return $stored === $computed;
     }
 
