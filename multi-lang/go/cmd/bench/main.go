@@ -19,7 +19,7 @@ func highLowTo16(high, low uint64) [16]byte {
 }
 
 func run(name, path string, count, count6 int) {
-	s, err := qzdb.NewSearcher(path, 0)
+	s, err := qzdb.NewSearcher(path, 0, true)
 	if err != nil {
 		fmt.Printf("  %s: load failed (%v)\n", name, err)
 		return

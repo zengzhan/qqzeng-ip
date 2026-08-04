@@ -120,6 +120,12 @@ static int safe_read_uint_width(const uint8_t* data, size_t data_size, uint64_t 
 }
 
 int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
+    // §10.6: CRC32 verification is ON by default at open time. Pass verify_crc=0
+    // (via qzdb_init_ex) only for diagnostics/benchmarks on trusted data.
+    return qzdb_init_ex(ctx, db_path, 1);
+}
+
+int qzdb_init_ex(qzdb_searcher_t* ctx, const char* db_path, int verify_crc) {
     if (!ctx || !db_path) return QZDB_ERR_INVALID_PARAM;
     memset(ctx, 0, sizeof(*ctx));
     setlocale(LC_NUMERIC, "C");
@@ -148,7 +154,11 @@ int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
     }
 
     int fmt_ver = d[4];
-    if (fmt_ver < 1 || fmt_ver > 6) {
+    // §10.1: QZDB's unified HeaderVersion is always 1 (carries GROUP_SCHEMA
+    // dynamic-width schema + native scalar support). Older experimental
+    // layouts never shipped and are intentionally unsupported — rejecting them
+    // here avoids silently mis-parsing a legacy file.
+    if (fmt_ver != 1) {
         munmap(ctx->data, ctx->data_size); ctx->data = NULL; return QZDB_ERR_UNSUPPORTED;
     }
 
@@ -160,7 +170,8 @@ int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
 
     ctx->v6_jump_bits = d[11];
     if (ctx->v6_jump_bits == 0) ctx->v6_jump_bits = 16;
-    if (ctx->v6_jump_bits < 16 || ctx->v6_jump_bits > 20) {
+    // §4.2: V6JumpBits is dynamically estimated in the range 8~20.
+    if (ctx->v6_jump_bits < 8 || ctx->v6_jump_bits > 20) {
         munmap(ctx->data, ctx->data_size); ctx->data = NULL; return QZDB_ERR_BAD_HEADER;
     }
 
@@ -242,17 +253,34 @@ int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
     ctx->row_geo_width = 3;
     ctx->row_asn_width = 3;
     ctx->row_usage_width = 0;
-    if (ctx->off_row_schema > 0 && ctx->off_row_schema + 4 <= ctx->data_size) {
+    if (ctx->off_row_schema > 0) {
         uint64_t sp = ctx->off_row_schema;
+        /* Canonical ROW_SCHEMA layout (matches the QZDB builder / QZDBReader):
+           byte[sp+0]=fieldCount, byte[sp+1]=stride, bytes[sp+2..3]=reserved,
+           then fieldCount x 4-byte records: { fieldId, width, offset, flags }.
+           fieldId: 0=geo, 1=asn, 2=usage. */
         uint8_t f_count = d[sp];
-        sp += 4;
-        for (uint8_t i = 0; i < f_count && sp + 4 <= ctx->data_size; i++) {
-            uint8_t fid = d[sp];
-            uint8_t w = d[sp + 1];
-            if (fid == 0) ctx->row_geo_width = w;
-            else if (fid == 1) ctx->row_asn_width = w;
-            else if (fid == 2) ctx->row_usage_width = w;
-            sp += 4;
+        uint8_t stride = d[sp + 1];
+        if (f_count >= 1 && f_count <= 8 &&
+            sp + 4 + (uint64_t)f_count * 4 <= ctx->data_size &&
+            stride == ctx->ip_row_size) {
+            uint64_t wpos = sp + 4;
+            int geo_w = 0, asn_w = 0, usage_w = 0, total = 0, ok = 1;
+            for (uint8_t i = 0; i < f_count; i++) {
+                uint8_t fid = d[wpos];
+                uint8_t w = d[wpos + 1];
+                if (fid == 0) geo_w = w;
+                else if (fid == 1) asn_w = w;
+                else if (fid == 2) usage_w = w;
+                wpos += 4;
+                total += w;
+                if (w < 1 || w > 4) ok = 0;
+            }
+            if (ok && total == (int)ctx->ip_row_size) {
+                ctx->row_geo_width = geo_w;
+                ctx->row_asn_width = asn_w;
+                ctx->row_usage_width = usage_w;
+            }
         }
     }
 
@@ -283,22 +311,19 @@ int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
         munmap(ctx->data, ctx->data_size); ctx->data = NULL; return QZDB_ERR_OUT_OF_MEMORY;
     }
 
+    // §6.2: current format stores, per group, a 1-byte fieldCount, a uint32 LE
+    // entryCount and a uint16 LE dimensionMask — fixed widths, no version-dependent
+    // layout. (HeaderVersion != 1 is rejected above, so no legacy width branching.)
     for (int gi = 0; gi < ctx->actual_groups; gi++) {
         ctx->group_field_counts[gi] = d[gm_off];
         gm_off++;
-        if (fmt_ver == 1 || fmt_ver >= 4) {
-            ctx->group_entry_counts[gi] = READ_LE32(d + gm_off);
-            gm_off += 4;
-        } else {
-            ctx->group_entry_counts[gi] = READ_LE16(d + gm_off);
-            gm_off += 2;
-        }
-        if (fmt_ver == 1 || fmt_ver >= 3) {
-            ctx->group_dim_masks[gi] = READ_LE16(d + gm_off);
-            gm_off += 2;
-        } else {
-            ctx->group_dim_masks[gi] = (gi != 2) ? 0x01 : 0x02;
-        }
+        ctx->group_entry_counts[gi] = READ_LE32(d + gm_off);
+        gm_off += 4;
+        // dimensionMask is always present (uint16 LE). A value of 0 only occurs
+        // in a malformed/legacy file and is repaired below from the group's
+        // actual field composition (no groupIndex hardcoding).
+        ctx->group_dim_masks[gi] = READ_LE16(d + gm_off);
+        gm_off += 2;
     }
 
     ctx->group_strides = calloc(ctx->actual_groups, sizeof(int));
@@ -445,6 +470,27 @@ int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
         }
     }
 
+    // Metadata-driven dimensionMask repair (§5.4 / §6.2). A valid current-format
+    // file always stores a non-zero mask, so this is normally a no-op. If a
+    // group's mask is 0 (malformed/legacy), derive it from the group's *actual*
+    // fields rather than any hardcoded groupIndex→version assumption — the real
+    // asn file keeps its asn group at GroupMetadataTable index 0 with a stored
+    // mask of 0x02, so an index-based rule would be wrong.
+    for (int g = 0; g < ctx->actual_groups; g++) {
+        if (ctx->group_dim_masks[g] != 0) continue;
+        int has_asn = 0;
+        if (ctx->group_field_ids[g]) {
+            for (int fi = 0; fi < ctx->group_field_counts[g]; fi++) {
+                if (ctx->group_field_ids[g][fi] == 1) { has_asn = 1; break; }
+            }
+        } else if (g == 0 && ctx->field_names) {
+            for (int fi = 0; fi < ctx->field_count; fi++) {
+                if (ctx->field_names[fi] && strcmp(ctx->field_names[fi], "asn") == 0) { has_asn = 1; break; }
+            }
+        }
+        ctx->group_dim_masks[g] = has_asn ? 0x02 : 0x01;
+    }
+
     ctx->pools_loaded = 0;
     ctx->group_pools = NULL;
     ctx->group_pool_counts = NULL;
@@ -457,6 +503,14 @@ int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
         default: ctx->version_code = 3; break;
     }
 
+    // §10.6: verify CRC32 by default. A mismatch means the file is corrupted or
+    // truncated — fail open loudly rather than return silently wrong data.
+    // NOTE: qzdb_verify_crc returns QZDB_OK (0) on success, an error code on
+    // mismatch, so test against QZDB_OK (not a boolean negation).
+    if (verify_crc && qzdb_verify_crc(ctx) != QZDB_OK) {
+        munmap(ctx->data, ctx->data_size); ctx->data = NULL;
+        return QZDB_ERR_CORRUPTED;
+    }
     return QZDB_OK;
 }
 
@@ -700,6 +754,47 @@ static uint32_t trie_walk_v6(const qzdb_searcher_t* ctx, const uint8_t* ip_bin) 
     return 0;
 }
 
+/* Format a double like Java Double.toString / Python str / Go FormatFloat(f,'f',-1,64):
+ * the shortest decimal that round-trips to the same double, in fixed-point form.
+ * Integer values are printed without a fractional part (Go-compatible, matches
+ * the cross-language reference output). */
+static void format_float_value(double dv, char* buf, size_t buf_size) {
+    if (dv == floor(dv) && dv >= -9007199254740992.0 && dv <= 9007199254740992.0) {
+        snprintf(buf, buf_size, "%ld", (long)dv);
+        return;
+    }
+    char tmp[64];
+    for (int prec = 0; prec <= 17; prec++) {
+        snprintf(tmp, sizeof(tmp), "%.*f", prec, dv);
+        if (strtod(tmp, NULL) == dv) {
+            snprintf(buf, buf_size, "%s", tmp);
+            return;
+        }
+    }
+    /* fallback: 17 significant digits always round-trips for a double */
+    snprintf(buf, buf_size, "%.17g", dv);
+}
+
+/* Format a float32 like Java Float.toString / Go FormatFloat(f,'f',-1,32):
+ * shortest decimal that round-trips to the same float32. */
+static void format_float32_value(float fv, char* buf, size_t buf_size) {
+    double dv = (double)fv;
+    if (dv == floor(dv) && dv >= -9007199254740992.0 && dv <= 9007199254740992.0) {
+        snprintf(buf, buf_size, "%ld", (long)dv);
+        return;
+    }
+    char tmp[64];
+    for (int prec = 0; prec <= 9; prec++) {
+        snprintf(tmp, sizeof(tmp), "%.*f", prec, dv);
+        if (strtof(tmp, NULL) == fv) {
+            snprintf(buf, buf_size, "%s", tmp);
+            return;
+        }
+    }
+    /* fallback: 9 significant digits always round-trips for a float32 */
+    snprintf(buf, buf_size, "%.9g", dv);
+}
+
 static int get_geo_info(qzdb_searcher_t* ctx, uint32_t entry_id, int group_index, qzdb_geo_info_t* result) {
     if (!ctx || !result) return QZDB_ERR_INVALID_PARAM;
     if (group_index < 0 || group_index >= ctx->actual_groups) return QZDB_ERR_INVALID_PARAM;
@@ -732,13 +827,13 @@ static int get_geo_info(qzdb_searcher_t* ctx, uint32_t entry_id, int group_index
                     if (safe_read_u32(ctx->data, ctx->data_size, fo, &bits) != QZDB_OK) return QZDB_ERR_BOUNDS;
                     union { uint32_t u; float f; } u;
                     u.u = bits;
-                    snprintf(buf, sizeof(buf), "%.6f", u.f);
+                    format_float32_value(u.f, buf, sizeof(buf));
                 } else {
                     uint64_t bits;
                     if (safe_read_u64(ctx->data, ctx->data_size, fo, &bits) != QZDB_OK) return QZDB_ERR_BOUNDS;
                     union { uint64_t u; double d; } u;
                     u.u = bits;
-                    snprintf(buf, sizeof(buf), "%.6f", u.d);
+                    format_float_value(u.d, buf, sizeof(buf));
                 }
             } else {
                 uint32_t val;
@@ -801,13 +896,13 @@ static int get_geo_info_buf(qzdb_searcher_t* ctx, uint32_t entry_id, int group_i
                     if (safe_read_u32(ctx->data, ctx->data_size, fo, &bits) != QZDB_OK) { values[i] = ""; continue; }
                     union { uint32_t u; float f; } u;
                     u.u = bits;
-                    snprintf(bufs[i], buf_size, "%.6f", u.f);
+                    format_float32_value(u.f, bufs[i], buf_size);
                 } else {
                     uint64_t bits;
                     if (safe_read_u64(ctx->data, ctx->data_size, fo, &bits) != QZDB_OK) { values[i] = ""; continue; }
                     union { uint64_t u; double d; } u;
                     u.u = bits;
-                    snprintf(bufs[i], buf_size, "%.6f", u.d);
+                    format_float_value(u.d, bufs[i], buf_size);
                 }
             } else {
                 uint32_t val;
@@ -869,7 +964,7 @@ static int resolve_row_id_buf(qzdb_searcher_t* ctx, uint32_t row_id, int group_i
         entry_id = usage_id;
     }
 
-    if (entry_id == 0) return QZDB_ERR_CORRUPTED;
+    if (entry_id == 0) return QZDB_ERR_NOT_FOUND;
     return get_geo_info_buf(ctx, entry_id, group_index, values, bufs, buf_size, out_count);
 }
 
@@ -887,7 +982,7 @@ static int resolve_row_id(qzdb_searcher_t* ctx, uint32_t row_id, int group_index
         entry_id = usage_id;
     }
 
-    if (entry_id == 0) return QZDB_ERR_CORRUPTED;
+    if (entry_id == 0) return QZDB_ERR_NOT_FOUND;
     return get_geo_info(ctx, entry_id, group_index, result);
 }
 
@@ -1150,7 +1245,8 @@ int qzdb_find_str(qzdb_searcher_t* ctx, const char* ip_str, char* out, size_t ou
         char float_buf[64];
         if (ctx->float_field_flags && ctx->float_field_flags[i] && val[0] != '\0') {
             double f = atof(val);
-            int flen = snprintf(float_buf, sizeof(float_buf), "%.6f", f);
+            format_float_value(f, float_buf, sizeof(float_buf));
+            int flen = (int)strlen(float_buf);
             val = float_buf;
             size_t wlen = (size_t)flen < out_size - pos - 1 ? (size_t)flen : out_size - pos - 1;
             if (wlen > 0) {
@@ -1336,11 +1432,11 @@ static int resolve_row_id_fields(qzdb_searcher_t* ctx, uint32_t row_id, int grou
                 if (w == 4) {
                     union { uint32_t u; float f; } u;
                     if (safe_read_u32(ctx->data, ctx->data_size, fo, &u.u) != QZDB_OK) return QZDB_ERR_BOUNDS;
-                    snprintf(bufs[i], buf_size, "%.6f", (double)u.f);
+                    format_float32_value(u.f, bufs[i], buf_size);
                 } else {
                     union { uint64_t u; double d; } u;
                     if (safe_read_u64(ctx->data, ctx->data_size, fo, &u.u) != QZDB_OK) return QZDB_ERR_BOUNDS;
-                    snprintf(bufs[i], buf_size, "%.6f", u.d);
+                    format_float_value(u.d, bufs[i], buf_size);
                 }
             } else {
                 uint32_t val;

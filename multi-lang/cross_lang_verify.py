@@ -327,9 +327,9 @@ int main() {{
 
 
 def run_go(ip_list):
-    go_bin = "/tmp/go_cross_verify"
+    go_bin = os.path.join(SCRIPT_DIR, "test_runner_bin", "go_cross_verify")
     if not os.path.exists(go_bin):
-        print(f"  [SKIP Go: binary not found]")
+        print(f"  [SKIP Go: binary not found at {go_bin}]")
         return None
     try:
         cmd = [go_bin, DB_PATH] + ip_list
@@ -341,9 +341,9 @@ def run_go(ip_list):
 
 
 def run_csharp(ip_list):
-    cs_exe = "/tmp/cs_cross_verify/CrossVerify"
+    cs_exe = os.path.join(SCRIPT_DIR, "test_runner_bin", "cs_cross_verify", "CrossVerify")
     if not os.path.exists(cs_exe):
-        print(f"  [SKIP C#: binary not found]")
+        print(f"  [SKIP C#: binary not found at {cs_exe}]")
         return None
     try:
         cmd = [cs_exe, DB_PATH] + ip_list

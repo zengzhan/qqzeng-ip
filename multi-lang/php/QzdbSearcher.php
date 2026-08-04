@@ -77,13 +77,22 @@ class GeoInfo implements \ArrayAccess
         }
     }
 
+    public static function formatFloatValue($val)
+    {
+        if (is_finite($val) && floor($val) == $val) {
+            return (string)(int)$val;
+        }
+        $s = json_encode($val);
+        return ($s === false) ? (string)$val : $s;
+    }
+
     public function toPipe()
     {
         $parts = [];
         foreach ($this->fieldNames as $i => $fname) {
             $val = $this->values[$i] ?? '';
             if (isset($this->floatIndices[$fname]) && $val !== '') {
-                $val = sprintf('%.6f', (float)$val);
+                $val = self::formatFloatValue((float)$val);
             }
             $parts[] = (string)$val;
         }
@@ -156,6 +165,7 @@ class QzdbSearcher
     const SENTINEL_MASK_31 = 0x7FFFFFFF;
     const FLOAT_FIELDS = ['longitude' => true, 'latitude' => true];
     const MAX_TRIE_WALK_STEPS = 1000;
+    const MAX_POOL_COUNT = 1 << 26;
 
     // Error codes
     const ERROR_NOT_FOUND = 1;
@@ -194,6 +204,9 @@ class QzdbSearcher
             throw new QzdbException("Cannot read database file: " . $dbPath, self::ERROR_INVALID_PARAM);
         }
         $this->parseHeader();
+        if (!$this->verifyCrc()) {
+            throw new QzdbException('CRC32 checksum mismatch — the .qzdb file is corrupted or truncated', self::ERROR_CORRUPTED);
+        }
     }
 
     private function safeReadU16($off)
@@ -250,9 +263,11 @@ class QzdbSearcher
             throw new QzdbException('Invalid magic, expected QZDB', self::ERROR_BAD_MAGIC);
         }
 
+        // Spec §10.1: QZDBReader accepts only format version 1.
+        // All in-repo real QZDB fixtures are v1; reject anything else.
         $fmtVer = ord($d[4]);
-        if ($fmtVer < 1 || $fmtVer > 6) {
-            throw new QzdbException("Unsupported format version: {$fmtVer}", self::ERROR_UNSUPPORTED);
+        if ($fmtVer !== 1) {
+            throw new QzdbException("Unsupported format version: {$fmtVer} (only version 1 is supported)", self::ERROR_UNSUPPORTED);
         }
 
         $this->flags = $this->safeReadU16(8);
@@ -261,12 +276,13 @@ class QzdbSearcher
         $this->v4Node24 = (bool)($this->flags & 0x10);
         $this->v6Node24 = (bool)($this->flags & 0x20);
 
+        // Spec §4.2: v6JumpBits valid range is [8,20]. Real .qzdb fixtures use up to 20.
         $this->v6JumpBits = ord($d[11]);
         if ($this->v6JumpBits === 0) {
             $this->v6JumpBits = 16;
         }
-        if ($this->v6JumpBits < 16 || $this->v6JumpBits > 20) {
-            throw new QzdbException("v6JumpBits out of range [16,20]: {$this->v6JumpBits}", self::ERROR_CORRUPTED);
+        if ($this->v6JumpBits < 8 || $this->v6JumpBits > 20) {
+            throw new QzdbException("v6JumpBits out of range [8,20]: {$this->v6JumpBits}", self::ERROR_CORRUPTED);
         }
 
         $this->poolCount = ord($d[12]);
@@ -348,23 +364,20 @@ class QzdbSearcher
         $this->groupEntryCounts = array_fill(0, $actualGroups, 0);
         $this->groupDimMasks = array_fill(0, $actualGroups, 0);
 
+        // §6.2 GroupMetadataTable FIXED layout per group (no version-dependent widths):
+        //   1 byte  fieldCount
+        //   4 bytes uint32 LE entryCount
+        //   2 bytes uint16 LE dimensionMask
+        // The old code branched on fmtVer and fell back to a hard-coded
+        // ($gi !== 2) ? 0x01 : 0x02 mask that is wrong for ASN databases; we now
+        // read the layout verbatim and repair a zero mask from metadata (see repairDimMasks).
         for ($gi = 0; $gi < $actualGroups; $gi++) {
             $this->groupFieldCounts[$gi] = ord($d[$gmOff]);
             $gmOff += 1;
-            if ($fmtVer === 1 || $fmtVer >= 4) {
-                $this->groupEntryCounts[$gi] = $this->safeReadU32($gmOff);
-                $gmOff += 4;
-            } else {
-                $this->groupEntryCounts[$gi] = $this->safeReadU16($gmOff);
-                $gmOff += 2;
-            }
-
-            if ($fmtVer === 1 || $fmtVer >= 3) {
-                $this->groupDimMasks[$gi] = $this->safeReadU16($gmOff);
-                $gmOff += 2;
-            } else {
-                $this->groupDimMasks[$gi] = ($gi !== 2) ? 0x01 : 0x02;
-            }
+            $this->groupEntryCounts[$gi] = $this->safeReadU32($gmOff);
+            $gmOff += 4;
+            $this->groupDimMasks[$gi] = $this->safeReadU16($gmOff);
+            $gmOff += 2;
         }
 
         // Initialize schema and widths
@@ -447,6 +460,7 @@ class QzdbSearcher
         }
 
         $this->resolveFieldNames();
+        $this->repairDimMasks();
         $this->poolsLoaded = false;
         $this->groupPools = null;
     }
@@ -493,6 +507,42 @@ class QzdbSearcher
         $this->floatFieldIndices = [];
     }
 
+    /**
+     * Derives a sensible dimensionMask for any group whose mask was stored as 0
+     * (should not happen in valid files). Bit0(0x01)=geo, Bit1(0x02)=asn. A group
+     * is treated as ASN-addressed when its group schema or field names expose an
+     * "asn" field (fieldId 1); otherwise geo-addressed. This replaces the old
+     * hard-coded ($gi !== 2) ? 0x01 : 0x02 fallback that produced wrong results on
+     * ASN databases.
+     */
+    private function repairDimMasks()
+    {
+        $n = count($this->groupDimMasks);
+        for ($g = 0; $g < $n; $g++) {
+            if ($this->groupDimMasks[$g] !== 0) {
+                continue;
+            }
+            $hasAsn = false;
+            if (isset($this->groupFieldIds[$g]) && is_array($this->groupFieldIds[$g])) {
+                foreach ($this->groupFieldIds[$g] as $fid) {
+                    if ($fid == 1) {
+                        $hasAsn = true;
+                        break;
+                    }
+                }
+            }
+            if (!$hasAsn && is_array($this->fieldNames)) {
+                foreach ($this->fieldNames as $n2) {
+                    if ($n2 === 'asn') {
+                        $hasAsn = true;
+                        break;
+                    }
+                }
+            }
+            $this->groupDimMasks[$g] = $hasAsn ? 0x02 : 0x01;
+        }
+    }
+
     private function ensurePoolsLoaded()
     {
         if ($this->poolsLoaded) {
@@ -530,7 +580,8 @@ class QzdbSearcher
                 if ($this->offRowSchema > 0) {
                     $poolCursor += 4;
                 }
-                if ($count === 0) {
+                // Security guard: unbounded count would OOM on count+1 offsets.
+                if ($count === 0 || $count > self::MAX_POOL_COUNT) {
                     $groupPoolList[] = [];
                     continue;
                 }
@@ -696,15 +747,33 @@ class QzdbSearcher
         if ($this->offRowSchema <= 0) return;
         $d = $this->data;
         $sp = $this->offRowSchema;
+        // Canonical ROW_SCHEMA layout (matches the QZDB builder / QZDBReader):
+        //   byte[sp+0]=fieldCount, byte[sp+1]=stride, bytes[sp+2..3]=reserved,
+        //   then fieldCount x 4-byte records: { fieldId, width, offset, flags }.
+        //   fieldId: 0=geo, 1=asn, 2=usage.
         $fCount = ord($d[$sp]);
-        $pos = $sp + 4;
+        $stride = ord($d[$sp + 1]);
+        if ($fCount < 1 || $fCount > 8) return;
+        if ($sp + 4 + $fCount * 4 > strlen($d)) return;
+        if ($stride != $this->ipRowSize) return;
+
+        $geoW = 0; $asnW = 0; $usageW = 0; $total = 0;
+        $wpos = $sp + 4;
+        $ok = true;
         for ($i = 0; $i < $fCount; $i++) {
-            $fid = ord($d[$pos]);
-            $w = ord($d[$pos + 1]);
-            if ($fid === 0) $this->rowGeoWidth = $w;
-            elseif ($fid === 1) $this->rowAsnWidth = $w;
-            elseif ($fid === 2) $this->rowUsageWidth = $w;
-            $pos += 4;
+            $fid = ord($d[$wpos]);
+            $w = ord($d[$wpos + 1]);
+            if ($fid === 0) $geoW = $w;
+            else if ($fid === 1) $asnW = $w;
+            else if ($fid === 2) $usageW = $w;
+            $wpos += 4;
+            $total += $w;
+            if ($w < 1 || $w > 4) $ok = false;
+        }
+        if ($ok && $total === $this->ipRowSize) {
+            $this->rowGeoWidth = $geoW;
+            $this->rowAsnWidth = $asnW;
+            $this->rowUsageWidth = $usageW;
         }
     }
 
@@ -803,7 +872,7 @@ class QzdbSearcher
                     } else {
                         $valNum = unpack('d', substr($d, $fo, 8))[1];
                     }
-                    $val = sprintf('%.6f', $valNum);
+                    $val = GeoInfo::formatFloatValue($valNum);
                 } else {
                     // int
                     $valNum = $this->safeReadUintWidth($fo, $w);
@@ -951,7 +1020,7 @@ class QzdbSearcher
                 $t = $natTypes && $i < count($natTypes) ? $natTypes[$i] : 0;
                 if ($t === 1) {
                     $valNum = $w === 4 ? unpack('f', substr($d, $fo, 4))[1] : unpack('d', substr($d, $fo, 8))[1];
-                    $resolved[$i] = sprintf('%.6f', $valNum);
+                    $resolved[$i] = GeoInfo::formatFloatValue($valNum);
                 } else {
                     $resolved[$i] = (string)$this->safeReadUintWidth($fo, $w);
                 }

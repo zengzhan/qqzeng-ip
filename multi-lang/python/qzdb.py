@@ -8,6 +8,7 @@ SENTINEL = 0x80000000
 SENTINEL_MASK_24 = 0x7FFFFF
 SENTINEL_MASK_31 = 0x7FFFFFFF
 MAX_TRIE_WALK_STEPS = 1000
+MAX_POOL_COUNT = 1 << 26
 FLOAT_FIELDS = frozenset(['longitude', 'latitude'])
 
 # ── strict IP parsing (SEC-05 / CODE-03) ───────────────────────────
@@ -255,7 +256,11 @@ class GeoInfo:
             val = self._values[i] if i < len(self._values) else ''
             if fname in self._float_indices and val != '':
                 try:
-                    val = f'{float(val):.6f}'
+                    fv = float(val)
+                    if fv.is_integer():
+                        val = str(int(fv))
+                    else:
+                        val = str(fv)
                 except (ValueError, TypeError):
                     pass
             parts.append(str(val))
@@ -290,10 +295,13 @@ class QzdbSearcher:
     def __del__(self):
         self.close()
 
-    def __init__(self, db_path=None, group_index=0):
+    def __init__(self, db_path=None, group_index=0, verify_crc=True):
         self._data = b''
         self._is_mmap = False
         self._group_index = group_index
+        # §10.6: CRC32 verification is ON by default at open time. Pass
+        # verify_crc=False only for diagnostics/benchmarks on trusted data.
+        self._verify_crc = verify_crc
         self._field_names = []
         self._float_field_indices = set()
         self._version_name = ''
@@ -347,7 +355,9 @@ class QzdbSearcher:
         if db_path is not None:
             self.load(db_path)
 
-    def load(self, db_path):
+    def load(self, db_path, verify_crc=None):
+        if verify_crc is not None:
+            self._verify_crc = verify_crc
         try:
             f = open(db_path, 'rb')
         except FileNotFoundError:
@@ -370,6 +380,12 @@ class QzdbSearcher:
         finally:
             f.close()
         self._parse_header()
+        if self._verify_crc:
+            if not self.verify_crc():
+                raise QzdbError(
+                    'CRC32 checksum mismatch — the .qzdb file is corrupted or truncated',
+                    QzdbError.CORRUPTED,
+                )
 
     def safe_read_u16(self, off):
         return struct.unpack_from('<H', self._data, off)[0]
@@ -413,9 +429,15 @@ class QzdbSearcher:
             raise QzdbError('Invalid magic, expected QZDB', QzdbError.BAD_MAGIC)
 
         fmt_ver = d[4]
-        # Accept version 1 (new unified) as well as 2-6 (old V20 development versions)
-        if fmt_ver not in (1, 2, 3, 4, 5, 6):
-            raise QzdbError(f'Unsupported format version: {fmt_ver}', QzdbError.UNSUPPORTED)
+        # §10.1: QZDB's unified HeaderVersion is always 1 (carries GROUP_SCHEMA
+        # dynamic-width schema + native scalar support). Older experimental
+        # layouts never shipped and are intentionally unsupported — rejecting
+        # them here avoids silently mis-parsing a legacy file.
+        if fmt_ver != 1:
+            raise QzdbError(
+                f'Unsupported HeaderVersion: {fmt_ver} (QZDB requires version 1, see FORMAT.md §10.1)',
+                QzdbError.UNSUPPORTED,
+            )
 
         self._flags = self.safe_read_u16(8)
         self._has_v4 = bool(self._flags & 1)
@@ -426,8 +448,9 @@ class QzdbSearcher:
         self._v6_jump_bits = d[11]
         if self._v6_jump_bits == 0:
             self._v6_jump_bits = 16
-        if self._v6_jump_bits < 16 or self._v6_jump_bits > 20:
-            raise QzdbError(f'v6_jump_bits out of range [16,20]: {self._v6_jump_bits}', QzdbError.INVALID_PARAM)
+        # §4.2: V6JumpBits is dynamically estimated in the range 8~20.
+        if self._v6_jump_bits < 8 or self._v6_jump_bits > 20:
+            raise QzdbError(f'v6_jump_bits out of range [8,20]: {self._v6_jump_bits}', QzdbError.INVALID_PARAM)
 
         self._pool_count = d[12]
         self._pool_idx_size = d[13]
@@ -485,31 +508,54 @@ class QzdbSearcher:
         if self._off_meta > 0 and self._off_meta > dlen:
             raise QzdbError('Section meta out of bounds', QzdbError.CORRUPTED)
 
-        # ROW_SCHEMA parsing
+        # ROW_SCHEMA parsing (v5 dynamic-width IPRow schema).
+        # On-disk layout (matches C# QZDBReader.ParseRowSchema AND the builder's
+        # WriteQzdbFile serialization):
+        #   byte[sp+0]     = fieldCount
+        #   byte[sp+1]     = stride (== IPRowSize)
+        #   byte[sp+2..3]  = reserved (uint16)
+        #   then per field (4 bytes): FieldId(1) | Width(1) | FieldOffset(1) | flags(1)
+        # Field ids: 0 = geo_id, 1 = asn_id, 2 = usage_type_id.
+        #
+        # NOTE: an earlier parser read fieldCount at sp+5 and the first field at
+        # sp+9, which skipped the geo dimension (fid=0) and mis-read the asn row
+        # width. That collapsed every real ASN to the default 56554 entry — the
+        # "解析不对" regression that caused customer refunds.
         self._row_geo_width = 3
         self._row_asn_width = 3
         self._row_usage_width = 0
         if self._off_row_schema > 0:
             sp = self._off_row_schema
-            f_count = d[sp]
-            sp += 4  # fieldCount (1B), stride (1B), reserved (2B)
+            f_count = d[sp] & 0xFF
+            schema_stride = d[sp + 1] & 0xFF
+            wpos = sp + 4
+            geo_w, asn_w, usage_w = 0, 0, 0
             for _ in range(f_count):
-                fid = d[sp]
-                w = d[sp + 1]
+                fid = d[wpos]
+                w = d[wpos + 1]
                 if fid == 0:
-                    self._row_geo_width = w
+                    geo_w = w
                 elif fid == 1:
-                    self._row_asn_width = w
+                    asn_w = w
                 elif fid == 2:
-                    self._row_usage_width = w
-                sp += 4
+                    usage_w = w
+                wpos += 4
+            if schema_stride == self._ip_row_size and (geo_w + asn_w + usage_w) == self._ip_row_size:
+                self._row_geo_width = geo_w
+                self._row_asn_width = asn_w
+                self._row_usage_width = usage_w
+            # else (schema absent or inconsistent): keep fallback defaults (geo=3, asn=3, usage=0)
 
         # GeoEntryOffsets[4]
         self._group_entry_offsets = []
         for i in range(4):
             self._group_entry_offsets.append(self.safe_read_u48(168 + i * 6))
 
-        # Parse GroupMetadataTable (at off_geo_entries)
+        # Parse GroupMetadataTable (at off_geo_entries).
+        # §6.2: current format stores, per group, a 1-byte fieldCount, a
+        # uint32 LE entryCount, and a uint16 LE dimensionMask — fixed widths,
+        # no version-dependent layout. (HeaderVersion != 1 is already rejected
+        # above, so no legacy width branching is needed here.)
         gm_off = self._off_geo_entries
         group_count = d[gm_off]
         gm_off += 1
@@ -520,22 +566,21 @@ class QzdbSearcher:
         self._group_field_counts = [0] * actual_groups
         self._group_entry_counts = [0] * actual_groups
         self._group_dim_masks = [0] * actual_groups
+        # Field ids declared by GROUP_SCHEMA per group (used for the
+        # metadata-driven dimensionMask fallback when the stored mask is 0).
+        self._group_schema_field_ids = [None] * actual_groups
 
         for gi in range(actual_groups):
             self._group_field_counts[gi] = d[gm_off]
             gm_off += 1
-            if fmt_ver == 1 or fmt_ver >= 4:
-                self._group_entry_counts[gi] = self.safe_read_u32(gm_off)
-                gm_off += 4
-            else:
-                self._group_entry_counts[gi] = self.safe_read_u16(gm_off)
-                gm_off += 2
-            
-            if fmt_ver == 1 or fmt_ver >= 3:
-                self._group_dim_masks[gi] = self.safe_read_u16(gm_off)
-                gm_off += 2
-            else:
-                self._group_dim_masks[gi] = 0x01 if gi != 2 else 0x02
+            # §6.2: entryCount is always uint32 LE in the current format.
+            self._group_entry_counts[gi] = self.safe_read_u32(gm_off)
+            gm_off += 4
+            # §6.2: dimensionMask is always present (uint16 LE). A value of 0
+            # only occurs in a malformed/legacy file and is repaired below from
+            # the group's actual field composition (no groupIndex hardcoding).
+            self._group_dim_masks[gi] = self.safe_read_u16(gm_off)
+            gm_off += 2
 
         # Initialize schema and widths
         self._group_strides = [0] * actual_groups
@@ -565,8 +610,11 @@ class QzdbSearcher:
                     offsets = [0] * fld_count
                     natives = [False] * fld_count
                     nat_types = [0] * fld_count
+                    fids = [0] * fld_count
                     for fi in range(fld_count):
-                        sp += 2  # skip fieldId
+                        fid = self.safe_read_u16(sp)  # fieldId (was skipped)
+                        sp += 2
+                        fids[fi] = fid
                         widths[fi] = d[sp]
                         sp += 1
                         field_flags = d[sp]
@@ -580,6 +628,7 @@ class QzdbSearcher:
                     self._group_field_offsets[gi] = offsets
                     self._group_field_native[gi] = natives
                     self._group_field_native_type[gi] = nat_types
+                    self._group_schema_field_ids[gi] = fids
                 else:
                     sp += fld_count * 12
 
@@ -597,6 +646,28 @@ class QzdbSearcher:
                 self._group_field_native_type[g] = [0] * self._group_field_counts[g]
 
         self._resolve_field_names()
+        self._repair_dim_masks()
+
+    def _repair_dim_masks(self):
+        """Metadata-driven fallback for dimensionMask (§5.4 / §6.2).
+
+        A valid current-format file always stores a non-zero dimensionMask in
+        GroupMetadataTable, so this normally does nothing. If a group's mask is
+        0 (malformed/legacy), we derive it from the group's *actual* fields
+        rather than any hardcoded ``groupIndex == 2 → asn`` assumption — the
+        real asn file keeps its asn group at GroupMetadataTable index 0 with a
+        stored mask of 0x02, so an index-based rule would be wrong.
+        """
+        for g in range(len(self._group_dim_masks)):
+            if self._group_dim_masks[g] != 0:
+                continue
+            has_asn = False
+            fids = self._group_schema_field_ids[g]
+            if fids:
+                has_asn = 1 in fids  # fieldId 1 = asn_id
+            elif g == 0 and self._field_names:
+                has_asn = 'asn' in self._field_names
+            self._group_dim_masks[g] = 0x02 if has_asn else 0x01
 
     def _resolve_field_names(self):
         d = self._data
@@ -663,7 +734,8 @@ class QzdbSearcher:
                     pool_cursor += 4
                     if self._off_row_schema > 0:
                         pool_cursor += 4
-                    if count == 0:
+                    # Security guard: unbounded count would OOM on count+1 offsets.
+                    if count == 0 or count > MAX_POOL_COUNT:
                         group_pool_list.append([])
                         continue
 
@@ -965,7 +1037,8 @@ class QzdbSearcher:
         row_id = self._trie_walk_v6_bytes(ip_bytes)
         if row_id == 0:
             return None
-        return self._resolve_row_id(row_id, self._group_index)
+        # FIX: strip sentinel bit (same as find_uint for V4)
+        return self._resolve_row_id(row_id & SENTINEL_MASK_31, self._group_index)
 
     def find_v6_uint(self, ip_int):
         if not self._has_v6:
@@ -973,7 +1046,8 @@ class QzdbSearcher:
         row_id = self._trie_walk_v6(ip_int)
         if row_id == 0:
             return None
-        return self._resolve_row_id(row_id, self._group_index)
+        # FIX: strip sentinel bit (same as find_uint for V4)
+        return self._resolve_row_id(row_id & SENTINEL_MASK_31, self._group_index)
 
     # ── field projection (only resolve requested fields) ─────────────
 
@@ -1066,17 +1140,24 @@ class QzdbSearcher:
     def lookup_row_id_uint(self, ip_int):
         if not self._has_v4:
             return 0
-        return self._trie_walk_v4(ip_int)
+        # Strip the sentinel bit so the returned value is a clean 0-based row_id
+        # (0 = not found). Mirrors find_uint(), which strips before _resolve_row_id.
+        # Without this, callers like lookup_ids()/find_fields() see a huge value
+        # (row_id | 0x80000000) and treat it as out-of-bounds → (0,0,0).
+        rid = self._trie_walk_v4(ip_int)
+        return (rid & SENTINEL_MASK_31) if rid != 0 else 0
 
     def lookup_row_id_v6(self, ip_int):
         if not self._has_v6:
             return 0
-        return self._trie_walk_v6(ip_int)
+        rid = self._trie_walk_v6(ip_int)
+        return (rid & SENTINEL_MASK_31) if rid != 0 else 0
 
     def lookup_row_id_v6_bytes(self, ip_bytes):
         if not self._has_v6:
             return 0
-        return self._trie_walk_v6_bytes(ip_bytes)
+        rid = self._trie_walk_v6_bytes(ip_bytes)
+        return (rid & SENTINEL_MASK_31) if rid != 0 else 0
 
     def lookup_ids(self, row_id):
         if row_id <= 0 or row_id >= self._row_count:

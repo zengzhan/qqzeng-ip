@@ -103,6 +103,8 @@ typedef enum {
 const char* qzdb_strerror(int error_code);
 
 int qzdb_init(qzdb_searcher_t* ctx, const char* db_path);
+/* Like qzdb_init, but verify_crc=0 skips the default §10.6 CRC32 check. */
+int qzdb_init_ex(qzdb_searcher_t* ctx, const char* db_path, int verify_crc);
 void qzdb_free(qzdb_searcher_t* ctx);
 qzdb_searcher_t* qzdb_instance(const char* db_path);
 int qzdb_instance_load(const char* db_path);

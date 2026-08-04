@@ -106,7 +106,13 @@ impl GeoInfo {
             let val = self.values.get(i).cloned().unwrap_or_default();
             if self.float_field_indices.contains(&i) && !val.is_empty() {
                 if let Ok(f) = val.parse::<f64>() {
-                    parts.push(format!("{:.6}", f));
+                    if f == f.floor() {
+                        // Java-compatible: integer values print without ".0".
+                        parts.push(format!("{}", f as i64));
+                    } else {
+                        // Shortest representation, like Java's Float/Double.toString.
+                        parts.push(format!("{}", f));
+                    }
                     continue;
                 }
             }
@@ -180,6 +186,7 @@ pub struct QzdbSearcher {
     group_field_counts: Vec<usize>,
     group_entry_counts: Vec<u32>,
     group_dim_masks: Vec<u16>,
+    group_field_ids: Vec<Vec<u16>>,
     group_entry_offsets: Vec<u64>,
 
     group_strides: Vec<usize>,
@@ -295,9 +302,11 @@ impl QzdbSearcher {
             return Err(QzdbError::BadMagic);
         }
 
+        // Spec §10.1: QZDBReader accepts only format version 1.
+        // All in-repo real QZDB fixtures are v1; reject anything else.
         let fmt_ver = data[4];
-        if fmt_ver < 1 || fmt_ver > 6 {
-            return Err(QzdbError::Unsupported(format!("Unsupported version: {}", fmt_ver)));
+        if fmt_ver != 1 {
+            return Err(QzdbError::Unsupported(format!("Unsupported version: {} (only version 1 is supported)", fmt_ver)));
         }
 
         let flags = unsafe { read_u16_le_unchecked(&data, 8) };
@@ -306,12 +315,13 @@ impl QzdbSearcher {
         let v4_node_24 = flags & 0x10 != 0;
         let v6_node_24 = flags & 0x20 != 0;
 
+        // Spec §4.2: v6_jump_bits valid range is [8,20]. Real .qzdb fixtures use up to 20.
         let mut v6_jump_bits = data[11] as usize;
         if v6_jump_bits == 0 {
             v6_jump_bits = 16;
         }
-        if v6_jump_bits < 16 || v6_jump_bits > 20 {
-            return Err(QzdbError::OutOfBounds { offset: v6_jump_bits as u64, required: 0, field: "v6_jump_bits must be 16..20" });
+        if v6_jump_bits < 8 || v6_jump_bits > 20 {
+            return Err(QzdbError::OutOfBounds { offset: v6_jump_bits as u64, required: 0, field: "v6_jump_bits must be 8..20" });
         }
 
         let pool_count = data[12] as usize;
@@ -395,18 +405,42 @@ impl QzdbSearcher {
         let mut row_geo_width = 3;
         let mut row_asn_width = 3;
         let mut row_usage_width = 0;
-        if off_row_schema > 0 && (off_row_schema as usize) + 4 <= data.len() {
+        if off_row_schema > 0 {
+            // Canonical ROW_SCHEMA layout (matches the QZDB builder / QZDBReader):
+            //   byte[sp+0]=fieldCount, byte[sp+1]=stride, bytes[sp+2..3]=reserved,
+            //   then fieldCount x 4-byte records: { fieldId, width, offset, flags }.
+            //   fieldId: 0=geo, 1=asn, 2=usage.
             let sp = off_row_schema as usize;
             let f_count = data[sp] as usize;
-            let mut pos = sp + 4;
-            for _ in 0..f_count {
-                if pos + 4 > data.len() { break; }
-                let fid = data[pos];
-                let w = data[pos + 1] as usize;
-                if fid == 0 { row_geo_width = w; }
-                else if fid == 1 { row_asn_width = w; }
-                else if fid == 2 { row_usage_width = w; }
-                pos += 4;
+            let stride = data[sp + 1] as usize;
+            if f_count >= 1 && f_count <= 8 && sp + 4 + f_count * 4 <= data.len() && stride == ip_row_size {
+                let mut wpos = sp + 4;
+                let mut geo_w = 0usize;
+                let mut asn_w = 0usize;
+                let mut usage_w = 0usize;
+                let mut total = 0usize;
+                let mut ok = true;
+                for _ in 0..f_count {
+                    let fid = data[wpos];
+                    let w = data[wpos + 1] as usize;
+                    if fid == 0 {
+                        geo_w = w;
+                    } else if fid == 1 {
+                        asn_w = w;
+                    } else if fid == 2 {
+                        usage_w = w;
+                    }
+                    wpos += 4;
+                    total += w;
+                    if w < 1 || w > 4 {
+                        ok = false;
+                    }
+                }
+                if ok && total == ip_row_size {
+                    row_geo_width = geo_w;
+                    row_asn_width = asn_w;
+                    row_usage_width = usage_w;
+                }
             }
         }
 
@@ -426,24 +460,22 @@ impl QzdbSearcher {
         let mut group_field_counts = vec![0; actual_groups];
         let mut group_entry_counts = vec![0; actual_groups];
         let mut group_dim_masks = vec![0; actual_groups];
+        let mut group_field_ids = vec![Vec::new(); actual_groups];
 
+        // §6.2 GroupMetadataTable FIXED layout per group (no version-dependent widths):
+        //   1 byte  fieldCount
+        //   4 bytes uint32 LE entryCount
+        //   2 bytes uint16 LE dimensionMask
+        // The old code branched on fmt_ver and fell back to a hard-coded
+        // (gi != 2) ? 0x01 : 0x02 mask that is wrong for ASN databases; we now
+        // read the layout verbatim and repair a zero mask from metadata (see repair_dim_masks).
         for gi in 0..actual_groups {
             group_field_counts[gi] = data[gm_off as usize] as usize;
             gm_off += 1;
-            if fmt_ver == 1 || fmt_ver >= 4 {
-                group_entry_counts[gi] = unsafe { read_u32_le_unchecked(&data, gm_off as usize) };
-                gm_off += 4;
-            } else {
-                group_entry_counts[gi] = unsafe { read_u16_le_unchecked(&data, gm_off as usize) } as u32;
-                gm_off += 2;
-            }
-
-            if fmt_ver == 1 || fmt_ver >= 3 {
-                group_dim_masks[gi] = unsafe { read_u16_le_unchecked(&data, gm_off as usize) };
-                gm_off += 2;
-            } else {
-                group_dim_masks[gi] = if gi != 2 { 0x01 } else { 0x02 };
-            }
+            group_entry_counts[gi] = unsafe { read_u32_le_unchecked(&data, gm_off as usize) };
+            gm_off += 4;
+            group_dim_masks[gi] = unsafe { read_u16_le_unchecked(&data, gm_off as usize) };
+            gm_off += 2;
         }
 
         let mut group_strides = vec![0; actual_groups];
@@ -472,8 +504,11 @@ impl QzdbSearcher {
                     let mut offsets = vec![0; fld_count];
                     let mut natives = vec![false; fld_count];
                     let mut nat_types = vec![0; fld_count];
+                    let mut field_ids = Vec::with_capacity(fld_count);
                     for fi in 0..fld_count {
-                        sp += 2; // skip fieldId
+                        let field_id = unsafe { read_u16_le_unchecked(&data, sp) };
+                        field_ids.push(field_id);
+                        sp += 2;
                         widths[fi] = data[sp] as usize;
                         sp += 1;
                         let field_flags = data[sp];
@@ -484,6 +519,7 @@ impl QzdbSearcher {
                         sp += 4;
                         sp += 4; // skip poolSectionId
                     }
+                    group_field_ids[gi] = field_ids;
                     group_field_widths[gi] = Some(widths);
                     group_field_offsets[gi] = Some(offsets);
                     group_field_native[gi] = Some(natives);
@@ -551,6 +587,7 @@ impl QzdbSearcher {
             group_field_counts,
             group_entry_counts,
             group_dim_masks,
+            group_field_ids,
             group_entry_offsets,
             group_strides,
             group_field_widths: group_field_widths.into_iter().map(|o| o.unwrap()).collect(),
@@ -560,6 +597,10 @@ impl QzdbSearcher {
             group_pools: OnceLock::new(),
         };
         s.resolve_field_names();
+        s.repair_dim_masks();
+        if !s.verify_crc() {
+            return Err(QzdbError::Corrupted);
+        }
         Ok(s)
     }
 
@@ -607,6 +648,39 @@ impl QzdbSearcher {
         self.field_name_to_idx = Arc::new(self.field_names.iter().enumerate()
             .map(|(i, n)| (n.clone(), i)).collect());
         self.float_field_indices = Arc::new(Vec::new());
+    }
+
+    /// Derives a sensible dimensionMask for any group whose mask was stored as 0
+    /// (should not happen in valid files). Bit0(0x01)=geo, Bit1(0x02)=asn. A group
+    /// is treated as ASN-addressed when its group schema or field names expose an
+    /// "asn" field (fieldId 1); otherwise geo-addressed. This replaces the old
+    /// hard-coded (gi != 2) ? 0x01 : 0x02 fallback that produced wrong results on
+    /// ASN databases.
+    fn repair_dim_masks(&mut self) {
+        let n = self.group_dim_masks.len();
+        for g in 0..n {
+            if self.group_dim_masks[g] != 0 {
+                continue;
+            }
+            let mut has_asn = false;
+            if let Some(ids) = self.group_field_ids.get(g) {
+                for &fid in ids {
+                    if fid == 1 {
+                        has_asn = true;
+                        break;
+                    }
+                }
+            }
+            if !has_asn {
+                for n in self.field_names.iter() {
+                    if n == "asn" {
+                        has_asn = true;
+                        break;
+                    }
+                }
+            }
+            self.group_dim_masks[g] = if has_asn { 0x02 } else { 0x01 };
+        }
     }
 
     fn ensure_pools_loaded(&self) -> &Vec<Vec<Vec<String>>> {
@@ -1087,7 +1161,10 @@ impl QzdbSearcher {
         for &b in &self.data[..16] {
             crc = table[((crc ^ b as u32) & 0xFF) as usize] ^ (crc >> 8);
         }
-        // Skip bytes 16..20 (CRC slot, treated as zero)
+        // CRC field (bytes 16..20) counts as 4 zero bytes in the checksum
+        for _ in 0..4 {
+            crc = table[(crc & 0xFF) as usize] ^ (crc >> 8);
+        }
         for &b in &self.data[20..] {
             crc = table[((crc ^ b as u32) & 0xFF) as usize] ^ (crc >> 8);
         }

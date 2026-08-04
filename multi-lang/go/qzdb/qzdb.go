@@ -58,7 +58,11 @@ func (g *GeoInfo) ToPipe() string {
 		}
 		if g.floatIndices[fname] && val != "" {
 			if f, err := strconv.ParseFloat(val, 64); err == nil {
-				parts[i] = fmt.Sprintf("%.6f", f)
+				if f == math.Floor(f) {
+					parts[i] = strconv.FormatInt(int64(f), 10)
+				} else {
+					parts[i] = strconv.FormatFloat(f, 'f', -1, 64)
+				}
 				continue
 			}
 		}
@@ -139,26 +143,57 @@ type QzdbSearcher struct {
 }
 
 var (
-	instance *QzdbSearcher
-	once     sync.Once
-	initErr  error
+	instMu      sync.RWMutex
+	instance    *QzdbSearcher
+	instanceErr error
 )
 
+// Instance returns the process-wide singleton searcher.
+// A failed load is NOT cached: the next call retries from scratch.
+// Passing a dbPath re-loads that path (Python/Node/C# singleton semantics);
+// omitting it returns the current state.
 func Instance(dbPath ...string) (*QzdbSearcher, error) {
-	once.Do(func() {
-		path := "qqzeng_ip_std_china.qzdb"
-		if len(dbPath) > 0 {
-			path = dbPath[0]
+	instMu.RLock()
+	inst := instance
+	err := instanceErr
+	instMu.RUnlock()
+	if inst != nil && err == nil {
+		if len(dbPath) == 0 {
+			return inst, nil
 		}
-		instance, initErr = NewSearcher(path, 0)
-	})
-	if initErr != nil {
-		return nil, initErr
+		if rerr := inst.Reload(dbPath[0]); rerr != nil {
+			return nil, rerr
+		}
+		return inst, nil
 	}
-	return instance, nil
+
+	instMu.Lock()
+	defer instMu.Unlock()
+	if instance != nil && instanceErr == nil {
+		if len(dbPath) == 0 {
+			return instance, nil
+		}
+		if rerr := instance.Reload(dbPath[0]); rerr != nil {
+			return nil, rerr
+		}
+		return instance, nil
+	}
+	path := "qqzeng_ip_std_china.qzdb"
+	if len(dbPath) > 0 {
+		path = dbPath[0]
+	}
+	s, err := NewSearcher(path, 0, true)
+	if err != nil {
+		instance = nil
+		instanceErr = err
+		return nil, err
+	}
+	instance = s
+	instanceErr = nil
+	return s, nil
 }
 
-func NewSearcher(dbPath string, groupIndex int) (*QzdbSearcher, error) {
+func NewSearcher(dbPath string, groupIndex int, verifyCrc bool) (*QzdbSearcher, error) {
 	f, err := os.Open(dbPath)
 	if err != nil {
 		return nil, err
@@ -179,6 +214,10 @@ func NewSearcher(dbPath string, groupIndex int) (*QzdbSearcher, error) {
 	if err := s.parseHeader(); err != nil {
 		syscall.Munmap(data)
 		return nil, err
+	}
+	if verifyCrc && !s.VerifyCRC() {
+		syscall.Munmap(data)
+		return nil, fmt.Errorf("crc32 checksum mismatch: %w", ErrCorrupted)
 	}
 	s.ensurePoolsLoaded()
 	return s, nil
@@ -239,9 +278,10 @@ func (s *QzdbSearcher) parseHeader() error {
 		return fmt.Errorf("invalid magic, expected QZDB")
 	}
 
-	fmtVer := d[4]
-	if fmtVer < 1 || fmtVer > 6 {
-		return fmt.Errorf("unsupported format version: %d", fmtVer)
+	// Spec §10.1: QZDBReader accepts only format version 1.
+	// All in-repo real QZDB fixtures are v1; reject anything else.
+	if d[4] != 1 {
+		return fmt.Errorf("unsupported format version: %d (only version 1 is supported)", d[4])
 	}
 
 	s.flags = safeReadU16(d, 8)
@@ -254,8 +294,8 @@ func (s *QzdbSearcher) parseHeader() error {
 	if s.v6JumpBits == 0 {
 		s.v6JumpBits = 16
 	}
-	if s.v6JumpBits < 16 || s.v6JumpBits > 20 {
-		return fmt.Errorf("v6JumpBits out of range [16,20]: %d", s.v6JumpBits)
+	if s.v6JumpBits < 8 || s.v6JumpBits > 20 {
+		return fmt.Errorf("v6JumpBits out of range [8,20]: %d", s.v6JumpBits)
 	}
 
 	s.poolCount = int(d[12])
@@ -366,24 +406,10 @@ func (s *QzdbSearcher) parseHeader() error {
 	for gi := 0; gi < actualGroups; gi++ {
 		s.groupFieldCounts[gi] = int(d[gmOff])
 		gmOff++
-		if fmtVer == 1 || fmtVer >= 4 {
-			s.groupEntryCounts[gi] = safeReadU32(d, gmOff)
-			gmOff += 4
-		} else {
-			s.groupEntryCounts[gi] = uint32(safeReadU16(d, gmOff))
-			gmOff += 2
-		}
-
-		if fmtVer == 1 || fmtVer >= 3 {
-			s.groupDimMasks[gi] = safeReadU16(d, gmOff)
-			gmOff += 2
-		} else {
-			if gi != 2 {
-				s.groupDimMasks[gi] = 0x01
-			} else {
-				s.groupDimMasks[gi] = 0x02
-			}
-		}
+		s.groupEntryCounts[gi] = safeReadU32(d, gmOff)
+		gmOff += 4
+		s.groupDimMasks[gi] = safeReadU16(d, gmOff)
+		gmOff += 2
 	}
 
 	s.groupStrides = make([]int, actualGroups)
@@ -470,6 +496,7 @@ func (s *QzdbSearcher) parseHeader() error {
 	}
 
 	s.resolveFieldNames()
+	s.repairDimMasks()
 	s.poolsLoaded = false
 	s.groupPools = nil
 	return nil
@@ -520,6 +547,40 @@ func (s *QzdbSearcher) resolveFieldNames() {
 	s.fieldNameToIdx = make(map[string]int, len(s.fieldNames))
 	for i, n := range s.fieldNames {
 		s.fieldNameToIdx[n] = i
+	}
+}
+
+// repairDimMasks derives a sensible dimensionMask for any group whose mask was
+// stored as 0 (should not happen in valid files). Bit0(0x01)=geo,
+// Bit1(0x02)=asn. A group is treated as ASN-addressed when its group schema or
+// field names expose an "asn" field (fieldId 1); otherwise geo-addressed.
+func (s *QzdbSearcher) repairDimMasks() {
+	for g := 0; g < len(s.groupDimMasks); g++ {
+		if s.groupDimMasks[g] != 0 {
+			continue
+		}
+		hasAsn := false
+		if g < len(s.groupFieldIds) && s.groupFieldIds[g] != nil {
+			for _, fid := range s.groupFieldIds[g] {
+				if fid == 1 {
+					hasAsn = true
+					break
+				}
+			}
+		}
+		if !hasAsn {
+			for _, n := range s.fieldNames {
+				if n == "asn" {
+					hasAsn = true
+					break
+				}
+			}
+		}
+		if hasAsn {
+			s.groupDimMasks[g] = 0x02
+		} else {
+			s.groupDimMasks[g] = 0x01
+		}
 	}
 }
 
@@ -745,22 +806,46 @@ func (s *QzdbSearcher) parseRowSchema() {
 	}
 	d := s.data
 	sp := s.offRowSchema
-	if sp >= uint64(len(d)) {
+	// Canonical ROW_SCHEMA layout (matches the QZDB builder / QZDBReader):
+	//   byte[sp+0]=fieldCount, byte[sp+1]=stride, bytes[sp+2..3]=reserved,
+	//   then fieldCount x 4-byte records: { fieldId, width, offset, flags }.
+	//   fieldId: 0=geo, 1=asn, 2=usage.
+	fCount := int(d[sp])
+	stride := int(d[sp+1])
+	if fCount < 1 || fCount > 8 {
 		return
 	}
-	fCount := int(d[sp])
-	pos := sp + 4
-	for i := 0; i < fCount && pos+4 <= uint64(len(d)); i++ {
-		fid := d[pos]
-		w := int(d[pos+1])
-		if fid == 0 {
-			s.rowGeoWidth = w
-		} else if fid == 1 {
-			s.rowAsnWidth = w
-		} else if fid == 2 {
-			s.rowUsageWidth = w
+	if sp+4+uint64(fCount)*4 > uint64(len(d)) {
+		return
+	}
+	if stride != s.ipRowSize {
+		return
+	}
+	geoW, asnW, usageW := 0, 0, 0
+	total := 0
+	wpos := sp + 4
+	ok := true
+	for i := 0; i < fCount; i++ {
+		fid := int(d[wpos])
+		w := int(d[wpos+1])
+		switch fid {
+		case 0:
+			geoW = w
+		case 1:
+			asnW = w
+		case 2:
+			usageW = w
 		}
-		pos += 4
+		wpos += 4
+		total += w
+		if w < 1 || w > 4 {
+			ok = false
+		}
+	}
+	if ok && total == s.ipRowSize {
+		s.rowGeoWidth = geoW
+		s.rowAsnWidth = asnW
+		s.rowUsageWidth = usageW
 	}
 }
 
@@ -1100,7 +1185,7 @@ func (s *QzdbSearcher) resolveGeoFields(rowID uint32, groupIndex int, fieldNames
 
 // Reload atomically replaces the database state with a fresh load from path.
 func (s *QzdbSearcher) Reload(path string) error {
-	ns, err := NewSearcher(path, s.groupIndex)
+	ns, err := NewSearcher(path, s.groupIndex, true)
 	if err != nil {
 		return err
 	}

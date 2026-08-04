@@ -169,16 +169,30 @@ def main():
     ip_list = [c.ip for c in cases]
     print(f"[+] 成功构建 {len(cases)} 条全维度测试用例 (Start IP, End IP, Mid IP, Random IP)")
 
+    SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+    def _find_java_home():
+        import glob
+        candidates = glob.glob("/opt/homebrew/Cellar/openjdk@21/*/libexec/openjdk.jdk/Contents/Home") + \
+                     glob.glob("/opt/homebrew/opt/openjdk@21") + \
+                     glob.glob("/opt/homebrew/opt/openjdk") + \
+                     glob.glob("/Library/Java/JavaVirtualMachines/*/Contents/Home")
+        for h in candidates:
+            if os.path.exists(os.path.join(h, "bin", "javac")):
+                return h
+        return None
+
     adapters = [
-        BatchProcessAdapter("Python", ["python3", "/Users/zengxiangzhan/ZengData/IP数据库/qzdb/multi-lang/python/batch_cli.py"], args.db),
-        BatchProcessAdapter("Java", ["/opt/homebrew/Cellar/openjdk@21/21.0.12/libexec/openjdk.jdk/Contents/Home/bin/java", "-cp", "/tmp/java_qzdb_bin", "BatchMain"], args.db),
-        BatchProcessAdapter("Node.js", ["node", "/Users/zengxiangzhan/ZengData/IP数据库/qzdb/multi-lang/nodejs/batch_cli.js"], args.db),
-        BatchProcessAdapter("PHP", ["php", "/Users/zengxiangzhan/ZengData/IP数据库/qzdb/multi-lang/php/batch_cli.php"], args.db),
-        BatchProcessAdapter("C", ["/Users/zengxiangzhan/ZengData/IP数据库/qzdb/multi-lang/test_runner_bin/c_batch"], args.db),
-        BatchProcessAdapter("C#", ["dotnet", "/Users/zengxiangzhan/ZengData/IP数据库/qzdb/multi-lang/test_runner_bin/netcore_bin/qzdb-searcher.dll"], args.db),
-        BatchProcessAdapter("Go", ["/Users/zengxiangzhan/ZengData/IP数据库/qzdb/multi-lang/test_runner_bin/go_batch"], args.db),
-        BatchProcessAdapter("Rust", ["/Users/zengxiangzhan/ZengData/IP数据库/qzdb/multi-lang/test_runner_bin/rust_batch"], args.db),
+        BatchProcessAdapter("Python", ["python3", os.path.join(SCRIPT_DIR, "python", "batch_cli.py")], args.db),
+        BatchProcessAdapter("Java", [os.path.join(_find_java_home(), "bin", "java"), "-cp", os.path.join(SCRIPT_DIR, "java_build"), "BatchMain"], args.db) if _find_java_home() else None,
+        BatchProcessAdapter("Node.js", ["node", os.path.join(SCRIPT_DIR, "nodejs", "batch_cli.js")], args.db),
+        BatchProcessAdapter("PHP", ["php", os.path.join(SCRIPT_DIR, "php", "batch_cli.php")], args.db),
+        BatchProcessAdapter("C", [os.path.join(SCRIPT_DIR, "test_runner_bin", "c_batch")], args.db),
+        BatchProcessAdapter("C#", ["dotnet", os.path.join(SCRIPT_DIR, "test_runner_bin", "netcore_bin", "qzdb-searcher.dll")], args.db),
+        BatchProcessAdapter("Go", [os.path.join(SCRIPT_DIR, "test_runner_bin", "go_batch")], args.db),
+        BatchProcessAdapter("Rust", [os.path.join(SCRIPT_DIR, "test_runner_bin", "rust_batch")], args.db),
     ]
+    adapters = [a for a in adapters if a is not None]
 
     print("\n[+] 正在预启动 8 种语言 SDK 常驻批量子进程 (Stream Process)...")
     for a in adapters:

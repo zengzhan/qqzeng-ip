@@ -18,6 +18,7 @@ public class QzdbSearcher {
     private static final int SENTINEL_MASK_24 = 0x7FFFFF;
     private static final int SENTINEL_MASK_31 = 0x7FFFFFFF;
     private static final int MAX_TRIE_WALK_STEPS = 1000;
+    private static final int MAX_POOL_COUNT = 1 << 26;
     private static final HashSet<String> FLOAT_FIELDS = new HashSet<>();
     static {
         FLOAT_FIELDS.add("longitude");
@@ -84,6 +85,7 @@ public class QzdbSearcher {
     private volatile int[][] groupFieldOffsets;
     private volatile boolean[][] groupFieldNative;
     private volatile int[][] groupFieldNativeType;
+    private volatile int[][] groupFieldIds;
 
     private volatile String[][][] groupPools;
     private boolean poolsLoaded;
@@ -104,6 +106,9 @@ public class QzdbSearcher {
         }
         parseHeader(mapped);
         data = mapped;
+        if (!verifyCrc()) {
+            throw new QzdbException(ErrorCode.CORRUPTED, "CRC32 checksum mismatch — the .qzdb file is corrupted or truncated");
+        }
         poolsLoaded = false;
         ensurePoolsLoaded();
     }
@@ -154,9 +159,11 @@ public class QzdbSearcher {
             throw new QzdbException(ErrorCode.BAD_MAGIC, "Invalid magic, expected QZDB");
         }
 
+        // Spec §10.1: QZDBReader accepts only format version 1.
+        // All in-repo real QZDB fixtures are v1; reject anything else.
         int fmtVer = d.get(4) & 0xFF;
-        if (fmtVer < 1 || fmtVer > 6) {
-            throw new QzdbException(ErrorCode.UNSUPPORTED, "Unsupported format version: " + fmtVer);
+        if (fmtVer != 1) {
+            throw new QzdbException(ErrorCode.UNSUPPORTED, "Unsupported format version: " + fmtVer + " (only version 1 is supported)");
         }
 
         flags = safeReadU16(d, 8);
@@ -165,10 +172,11 @@ public class QzdbSearcher {
         v4Node24 = (flags & 0x10) != 0;
         v6Node24 = (flags & 0x20) != 0;
 
+        // Spec §4.2: v6JumpBits valid range is [8,20]. Real .qzdb fixtures use up to 20.
         v6JumpBits = d.get(11) & 0xFF;
         if (v6JumpBits == 0) v6JumpBits = 16;
-        if (v6JumpBits < 16 || v6JumpBits > 20) {
-            throw new QzdbException(ErrorCode.INVALID_PARAM, "v6JumpBits out of range [16,20]: " + v6JumpBits);
+        if (v6JumpBits < 8 || v6JumpBits > 20) {
+            throw new QzdbException(ErrorCode.INVALID_PARAM, "v6JumpBits out of range [8,20]: " + v6JumpBits);
         }
 
         poolCount = d.get(12) & 0xFF;
@@ -262,22 +270,20 @@ public class QzdbSearcher {
         groupEntryCounts = new long[actualGroups];
         groupDimMasks = new int[actualGroups];
 
+        // §6.2 GroupMetadataTable FIXED layout per group (no version-dependent widths):
+        //   1 byte  fieldCount
+        //   4 bytes uint32 LE entryCount
+        //   2 bytes uint16 LE dimensionMask
+        // The old code branched on fmtVer and fell back to a hard-coded
+        // (gi != 2) ? 0x01 : 0x02 mask that is wrong for ASN databases; we now
+        // read the layout verbatim and repair a zero mask from metadata (see repairDimMasks).
         for (int gi = 0; gi < actualGroups; gi++) {
             groupFieldCounts[gi] = d.get(gmOff) & 0xFF;
             gmOff++;
-            if (fmtVer == 1 || fmtVer >= 4) {
-                groupEntryCounts[gi] = safeReadU32(d, gmOff) & 0xFFFFFFFFL;
-                gmOff += 4;
-            } else {
-                groupEntryCounts[gi] = safeReadU16(d, gmOff) & 0xFFFFL;
-                gmOff += 2;
-            }
-            if (fmtVer == 1 || fmtVer >= 3) {
-                groupDimMasks[gi] = safeReadU16(d, gmOff);
-                gmOff += 2;
-            } else {
-                groupDimMasks[gi] = (gi != 2) ? 0x01 : 0x02;
-            }
+            groupEntryCounts[gi] = safeReadU32(d, gmOff) & 0xFFFFFFFFL;
+            gmOff += 4;
+            groupDimMasks[gi] = safeReadU16(d, gmOff);
+            gmOff += 2;
         }
 
         groupStrides = new int[actualGroups];
@@ -335,6 +341,7 @@ public class QzdbSearcher {
                 }
             }
         }
+        this.groupFieldIds = groupFieldIds;
 
         for (int g = 0; g < actualGroups; g++) {
             if (groupStrides[g] == 0) {
@@ -359,6 +366,7 @@ public class QzdbSearcher {
         }
 
         resolveFieldNames(d);
+        repairDimMasks();
         poolsLoaded = false;
         groupPools = null;
     }
@@ -403,6 +411,40 @@ public class QzdbSearcher {
         floatFieldIndices.clear();
     }
 
+    /**
+     * Derives a sensible dimensionMask for any group whose mask was stored as 0
+     * (should not happen in valid files). Bit0(0x01)=geo, Bit1(0x02)=asn. A group
+     * is treated as ASN-addressed when its group schema or field names expose an
+     * "asn" field (fieldId 1); otherwise geo-addressed. This replaces the old
+     * hard-coded (gi != 2) ? 0x01 : 0x02 fallback that produced wrong results on
+     * ASN databases.
+     */
+    private void repairDimMasks() {
+        for (int g = 0; g < groupDimMasks.length; g++) {
+            if (groupDimMasks[g] != 0) {
+                continue;
+            }
+            boolean hasAsn = false;
+            if (groupFieldIds != null && g < groupFieldIds.length && groupFieldIds[g] != null) {
+                for (int fid : groupFieldIds[g]) {
+                    if (fid == 1) {
+                        hasAsn = true;
+                        break;
+                    }
+                }
+            }
+            if (!hasAsn && fieldNames != null) {
+                for (String n : fieldNames) {
+                    if ("asn".equals(n)) {
+                        hasAsn = true;
+                        break;
+                    }
+                }
+            }
+            groupDimMasks[g] = hasAsn ? 0x02 : 0x01;
+        }
+    }
+
     private synchronized void ensurePoolsLoaded() throws QzdbException {
         if (poolsLoaded) return;
         poolsLoaded = true;
@@ -439,7 +481,8 @@ public class QzdbSearcher {
                     groupPoolList[f] = new String[0];
                     continue;
                 }
-                if (count < 0) {
+                if (count < 0 || count > MAX_POOL_COUNT) {
+                    // Security guard: unbounded count would OOM on count+1 offsets.
                     throw new QzdbException(ErrorCode.CORRUPTED, "Invalid pool count: " + count);
                 }
 
@@ -557,30 +600,33 @@ public class QzdbSearcher {
         rowUsageWidth = 0;
         if (offRowSchema <= 0) return;
         int sp = (int) offRowSchema;
-        if (sp + 10 > d.capacity()) return;
-        int schemaVersion = d.get(sp) & 0xFF;
-        if (schemaVersion != 2) return;
-        int schemaRowSize = d.get(sp + 1) & 0xFF;
-        if (schemaRowSize != ipRowSize) return;
-        int fieldCount = d.get(sp + 5) & 0xFF;
-        if (fieldCount < 1 || fieldCount > 8) return;
-        if (sp + 9 + fieldCount > d.capacity()) return;
+        // Canonical ROW_SCHEMA layout (matches the QZDB builder / QZDBReader):
+        //   byte[sp+0]=fieldCount, byte[sp+1]=stride, bytes[sp+2..3]=reserved,
+        //   then fieldCount x 4-byte records: { fieldId, width, offset, flags }.
+        //   fieldId: 0=geo, 1=asn, 2=usage.
+        int fCount = d.get(sp) & 0xFF;
+        int stride = d.get(sp + 1) & 0xFF;
+        if (fCount < 1 || fCount > 8) return;
+        if (sp + 4 + (long) fCount * 4 > d.capacity()) return;
+        if (stride != ipRowSize) return;
 
-        int[] widths = new int[fieldCount];
-        int total = 0;
-        for (int i = 0; i < fieldCount; i++) {
-            widths[i] = d.get(sp + 9 + i) & 0xFF;
-            total += widths[i];
+        int geoW = 0, asnW = 0, usageW = 0, total = 0;
+        int wpos = sp + 4;
+        boolean ok = true;
+        for (int i = 0; i < fCount; i++) {
+            int fid = d.get(wpos) & 0xFF;
+            int w = d.get(wpos + 1) & 0xFF;
+            if (fid == 0) geoW = w;
+            else if (fid == 1) asnW = w;
+            else if (fid == 2) usageW = w;
+            wpos += 4;
+            total += w;
+            if (w < 1 || w > 4) ok = false;
         }
-        if (total != ipRowSize) return;
-
-        rowAsnWidth = fieldCount >= 1 ? widths[0] : 0;
-        rowGeoWidth = fieldCount >= 2 ? widths[1] : 0;
-        rowUsageWidth = fieldCount >= 3 ? widths[2] : 0;
-        if (rowGeoWidth < 1 || rowGeoWidth > 4 || rowAsnWidth > 4 || rowUsageWidth > 4) {
-            rowGeoWidth = 3;
-            rowAsnWidth = 3;
-            rowUsageWidth = 0;
+        if (ok && total == ipRowSize) {
+            rowGeoWidth = geoW;
+            rowAsnWidth = asnW;
+            rowUsageWidth = usageW;
         }
     }
 
@@ -672,12 +718,18 @@ public class QzdbSearcher {
                 if (t == 1) {
                     if (w == 4) {
                         int bits = (d.get(fo) & 0xFF) | ((d.get(fo + 1) & 0xFF) << 8) | ((d.get(fo + 2) & 0xFF) << 16) | ((d.get(fo + 3) & 0xFF) << 24);
-                        val = Float.toString(Float.intBitsToFloat(bits));
+                        float f = Float.intBitsToFloat(bits);
+                        val = (f == Math.floor(f) && !Float.isInfinite(f))
+                                ? Long.toString((long) f)
+                                : Float.toString(f);
                     } else {
                         byte[] bytes = new byte[8];
                         d.position(fo);
                         d.get(bytes);
-                        val = Double.toString(ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).getDouble());
+                        double dv = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).getDouble();
+                        val = (dv == Math.floor(dv) && !Double.isInfinite(dv))
+                                ? Long.toString((long) dv)
+                                : Double.toString(dv);
                     }
                 } else {
                     int valNum = safeReadUintWidth(d, fo, w);
@@ -696,11 +748,6 @@ public class QzdbSearcher {
             }
 
             String fname = i < fieldNames.length ? fieldNames[i] : "field_" + i;
-            if (floatFieldIndices.contains(fname) && !val.isEmpty()) {
-                try {
-                    val = String.format(Locale.US, "%.6f", Double.parseDouble(val));
-                } catch (NumberFormatException ignored) {}
-            }
             values[i] = val;
         }
 
@@ -881,6 +928,7 @@ public class QzdbSearcher {
         int tailLen = data.capacity() - 20;
         if (tailLen > 0) {
             byte[] tail = new byte[tailLen];
+            data.position(20);
             data.get(tail);
             crc.update(tail);
         }

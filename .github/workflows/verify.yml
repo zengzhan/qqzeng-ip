@@ -1,0 +1,94 @@
+name: QZDB Verification
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Install PHP
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y php-cli
+
+      - name: Install C compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc clang
+
+      - name: Validate data directory
+        run: |
+          if [ ! -d "multi-lang/data" ]; then
+            echo "ERROR: multi-lang/data/ directory not found"
+            exit 1
+          fi
+          DB_COUNT=$(find multi-lang/data -name "*.qzdb" | wc -l)
+          if [ "$DB_COUNT" -eq 0 ]; then
+            echo "ERROR: No .qzdb files found in multi-lang/data/"
+            echo "Place a .qzdb database file in multi-lang/data/ before running tests."
+            exit 1
+          fi
+          echo "Found $DB_COUNT .qzdb file(s) in multi-lang/data/"
+
+      - name: Run unified verification
+        working-directory: multi-lang
+        run: |
+          chmod +x run_all.sh
+          ./run_all.sh
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-results
+          path: multi-lang/.test_results/
+          retention-days: 30
+        continue-on-error: true
+
+      - name: Run smoke tests only (fast feedback)
+        if: github.event_name == 'pull_request'
+        working-directory: multi-lang
+        run: |
+          chmod +x run_all_tests.sh
+          ./run_all_tests.sh

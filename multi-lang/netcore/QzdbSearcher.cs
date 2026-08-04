@@ -65,7 +65,9 @@ namespace Qqzeng
                 if (FloatIndices.Contains(FieldNames[i]) && val.Length > 0)
                 {
                     if (double.TryParse(val, NumberStyles.Float, CultureInfo.InvariantCulture, out double f))
-                        val = f.ToString("F6", CultureInfo.InvariantCulture);
+                        val = f == Math.Floor(f)
+                            ? ((long)f).ToString(CultureInfo.InvariantCulture)
+                            : f.ToString(CultureInfo.InvariantCulture);
                 }
                 parts[i] = val;
             }
@@ -82,6 +84,7 @@ namespace Qqzeng
         private const uint SENTINEL_MASK_24 = 0x7FFFFF;
         private const uint SENTINEL_MASK_31 = 0x7FFFFFFF;
         private const int MaxTrieWalkSteps = 1000;
+        private const int MaxPoolCount = 1 << 26;
         private static readonly HashSet<string> FloatFields = new() { "longitude", "latitude" };
 
         private byte[] _data;
@@ -174,6 +177,10 @@ namespace Qqzeng
                 }
                 _data = raw;
                 ParseHeader(raw);
+                if (!VerifyCrc())
+                {
+                    throw new QzdbException(ErrorCode.Corrupted, "CRC32 checksum mismatch — the .qzdb file is corrupted or truncated");
+                }
             }
         }
 
@@ -226,9 +233,11 @@ namespace Qqzeng
             if (magic != "QZDB")
                 throw new QzdbException(ErrorCode.BadMagic, "Invalid magic, expected QZDB");
 
+            // Spec §10.1: QZDBReader accepts only format version 1.
+            // All in-repo real QZDB fixtures are v1; reject anything else.
             int fmtVer = d[4];
-            if (fmtVer < 1 || fmtVer > 6)
-                throw new QzdbException(ErrorCode.Unsupported, $"Unsupported format version: {fmtVer}");
+            if (fmtVer != 1)
+                throw new QzdbException(ErrorCode.Unsupported, $"Unsupported format version: {fmtVer} (only version 1 is supported)");
 
             _flags = SafeReadU16(d, 8);
             _hasV4 = (_flags & 1) != 0;
@@ -236,10 +245,11 @@ namespace Qqzeng
             _v4Node24 = (_flags & 0x10) != 0;
             _v6Node24 = (_flags & 0x20) != 0;
 
+            // Spec §4.2: v6JumpBits valid range is [8,20]. Real .qzdb fixtures use up to 20.
             _v6JumpBits = d[11];
             if (_v6JumpBits == 0) _v6JumpBits = 16;
-            if (_v6JumpBits < 16 || _v6JumpBits > 20)
-                throw new QzdbException(ErrorCode.InvalidParam, $"v6JumpBits out of range [16,20]: {_v6JumpBits}");
+            if (_v6JumpBits < 8 || _v6JumpBits > 20)
+                throw new QzdbException(ErrorCode.InvalidParam, $"v6JumpBits out of range [8,20]: {_v6JumpBits}");
 
             _poolCount = d[12];
             _poolIdxSize = d[13];
@@ -311,30 +321,21 @@ namespace Qqzeng
             _groupEntryCounts = new uint[actualGroups];
             _groupDimMasks = new ushort[actualGroups];
 
+            // §6.2 GroupMetadataTable FIXED layout per group (no version-dependent widths):
+            //   1 byte  fieldCount
+            //   4 bytes uint32 LE entryCount
+            //   2 bytes uint16 LE dimensionMask
+            // The old code branched on fmtVer and fell back to a hard-coded
+            // (gi != 2) ? 0x01 : 0x02 mask that is wrong for ASN databases; we now
+            // read the layout verbatim and repair a zero mask from metadata (see RepairDimMasks).
             for (int gi = 0; gi < actualGroups; gi++)
             {
                 _groupFieldCounts[gi] = d[gmOff];
                 gmOff++;
-                if (fmtVer == 1 || fmtVer >= 4)
-                {
-                    _groupEntryCounts[gi] = SafeReadU32(d, gmOff);
-                    gmOff += 4;
-                }
-                else
-                {
-                    _groupEntryCounts[gi] = SafeReadU16(d, gmOff);
-                    gmOff += 2;
-                }
-
-                if (fmtVer == 1 || fmtVer >= 3)
-                {
-                    _groupDimMasks[gi] = SafeReadU16(d, gmOff);
-                    gmOff += 2;
-                }
-                else
-                {
-                    _groupDimMasks[gi] = (gi != 2) ? (ushort)0x01 : (ushort)0x02;
-                }
+                _groupEntryCounts[gi] = SafeReadU32(d, gmOff);
+                gmOff += 4;
+                _groupDimMasks[gi] = SafeReadU16(d, gmOff);
+                gmOff += 2;
             }
 
             _groupStrides = new int[actualGroups];
@@ -421,6 +422,7 @@ namespace Qqzeng
             }
 
             ResolveFieldNames(d);
+            RepairDimMasks();
             _poolsLoaded = false;
             _groupPools = null;
         }
@@ -469,6 +471,38 @@ namespace Qqzeng
                 _fieldNameToIdx[_fieldNames[i]] = i;
         }
 
+        /// <summary>
+        /// Derives a sensible dimensionMask for any group whose mask was stored as 0
+        /// (should not happen in valid files). Bit0(0x01)=geo, Bit1(0x02)=asn. A group
+        /// is treated as ASN-addressed when its group schema or field names expose an
+        /// "asn" field (fieldId 1); otherwise geo-addressed. This replaces the old
+        /// hard-coded (gi != 2) ? 0x01 : 0x02 fallback that produced wrong results on
+        /// ASN databases.
+        /// </summary>
+        private void RepairDimMasks()
+        {
+            for (int g = 0; g < _groupDimMasks.Length; g++)
+            {
+                if (_groupDimMasks[g] != 0) continue;
+                bool hasAsn = false;
+                if (_groupFieldIds != null && g < _groupFieldIds.Length && _groupFieldIds[g] != null)
+                {
+                    foreach (ushort fid in _groupFieldIds[g])
+                    {
+                        if (fid == 1) { hasAsn = true; break; }
+                    }
+                }
+                if (!hasAsn && _fieldNames != null)
+                {
+                    foreach (string n in _fieldNames)
+                    {
+                        if (n == "asn") { hasAsn = true; break; }
+                    }
+                }
+                _groupDimMasks[g] = hasAsn ? (ushort)0x02 : (ushort)0x01;
+            }
+        }
+
         private void EnsurePoolsLoaded()
         {
             if (_poolsLoaded) return;
@@ -507,7 +541,8 @@ namespace Qqzeng
                         poolCursor += 4;
                         if (_offRowSchema > 0)
                             poolCursor += 4;
-                        if (count == 0)
+                        // Security guard: unbounded count would OOM on count+1 offsets.
+                        if (count == 0 || count > MaxPoolCount)
                         {
                             groupPoolList[f] = Array.Empty<string>();
                             continue;
@@ -638,16 +673,35 @@ namespace Qqzeng
             _rowUsageWidth = 0;
             if (_offRowSchema <= 0) return;
             int sp = (int)_offRowSchema;
+            // Canonical ROW_SCHEMA layout (matches the QZDB builder / QZDBReader):
+            //   byte[sp+0]=fieldCount, byte[sp+1]=stride, bytes[sp+2..3]=reserved,
+            //   then fieldCount x 4-byte records: { fieldId, width, offset, flags }.
+            //   fieldId: 0=geo, 1=asn, 2=usage.
             int fCount = d[sp];
-            int pos = sp + 4;
+            int stride = d[sp + 1];
+            if (fCount < 1 || fCount > 8) return;
+            if (sp + 4 + (long)fCount * 4 > d.Length) return;
+            if (stride != _ipRowSize) return;
+
+            int geoW = 0, asnW = 0, usageW = 0, total = 0;
+            int wpos = sp + 4;
+            bool ok = true;
             for (int i = 0; i < fCount; i++)
             {
-                int fid = d[pos];
-                int w = d[pos + 1];
-                if (fid == 0) _rowGeoWidth = w;
-                else if (fid == 1) _rowAsnWidth = w;
-                else if (fid == 2) _rowUsageWidth = w;
-                pos += 4;
+                int fid = d[wpos];
+                int w = d[wpos + 1];
+                if (fid == 0) geoW = w;
+                else if (fid == 1) asnW = w;
+                else if (fid == 2) usageW = w;
+                wpos += 4;
+                total += w;
+                if (w < 1 || w > 4) ok = false;
+            }
+            if (ok && total == _ipRowSize)
+            {
+                _rowGeoWidth = geoW;
+                _rowAsnWidth = asnW;
+                _rowUsageWidth = usageW;
             }
         }
 

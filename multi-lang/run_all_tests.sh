@@ -3,41 +3,66 @@ set -Euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-RESULTS=""
-FAILED=0
-SKIPPED=0
+DATA_DIR="$SCRIPT_DIR/data"
+RESULTS_DIR="$SCRIPT_DIR/.test_results"
+mkdir -p "$RESULTS_DIR"
+
+# --- Data directory validation ---
+if [ ! -d "$DATA_DIR" ]; then
+    echo "ERROR: Data directory not found: $DATA_DIR"
+    echo "Place .qzdb files in multi-lang/data/ before running tests."
+    exit 1
+fi
+
+DB_FILES=("$DATA_DIR"/*.qzdb)
+if [ ${#DB_FILES[@]} -eq 0 ]; then
+    echo "ERROR: No .qzdb files found in $DATA_DIR"
+    echo "Download a database from qqzeng.com and place it here."
+    exit 1
+fi
+
+echo "Using DB: ${DB_FILES[0]}"
+echo ""
+
+# --- Parallel test runner ---
+# Plain arrays + indexed loops instead of `declare -A`: macOS ships bash 3.2,
+# which does not support associative arrays (bash 4+ only).
+TEST_PIDS=()
+TEST_NAMES=()
 
 run_test() {
     local name="$1"
     local cmd="$2"
     local dir="$3"
-    local tmp="/tmp/qzdb_test_$$.txt"
-    echo "=========================================="
-    echo "  Testing: $name"
-    echo "=========================================="
-    if [ -n "$dir" ]; then
-        pushd "$dir" > /dev/null || { echo "ERROR: pushd $dir failed"; FAILED=1; return 1; }
-    fi
-    eval "$cmd" > "$tmp" 2>&1
-    local ec=$?
-    if [ -n "$dir" ]; then
-        popd > /dev/null
-    fi
-    cat "$tmp"
-    if [ "$ec" -eq 0 ] && grep -q "TEST_PASS" "$tmp" 2>/dev/null; then
-        RESULTS="${RESULTS}✓ $name passed\n"
-    else
-        RESULTS="${RESULTS}✗ $name FAILED (exit=$ec)\n"
-        FAILED=1
-    fi
-    rm -f "$tmp"
-    echo ""
+    local result_file="$RESULTS_DIR/${name}.result"
+
+    (
+        if [ -n "$dir" ]; then
+            pushd "$dir" > /dev/null
+        fi
+        eval "$cmd" > "$result_file" 2>&1
+        ec=$?
+        if [ -n "$dir" ]; then
+            popd > /dev/null
+        fi
+        if [ "$ec" -eq 0 ] && grep -q "TEST_PASS" "$result_file" 2>/dev/null; then
+            echo "PASS" > "${result_file}.status"
+        else
+            echo "FAIL" > "${result_file}.status"
+        fi
+    ) &
+    TEST_NAMES+=("$name")
+    TEST_PIDS+=($!)
 }
+
+# --- Run all tests in parallel ---
+echo "Running tests in parallel..."
+echo ""
 
 # Python
 run_test "Python" "python3 test.py" "python"
 
-# CSV Verify (Python reference against source CSV)
+# CSV Verify
 run_test "CSV Verify" "python3 ../python/verify_csv.py" "python"
 
 # Node.js
@@ -48,12 +73,12 @@ run_test "PHP" "php test.php" "php"
 
 # Go
 if command -v go &> /dev/null; then
-    run_test "Go" "go run main.go" "go"
+    run_test "Go" "go run ./cmd/demo" "go"
 fi
 
 # Rust
 if command -v cargo &> /dev/null; then
-    run_test "Rust" "cargo run --release --bin main --quiet" "rust"
+    run_test "Rust" "cargo run --release --bin demo --quiet" "rust"
 fi
 
 # C
@@ -61,10 +86,11 @@ if command -v gcc &> /dev/null || command -v clang &> /dev/null; then
     CC="gcc"
     command -v clang &> /dev/null && CC="clang"
     if ! (cd c && $CC -O3 -o qzdb_test qzdb_searcher.c main.c -lm); then
-        RESULTS="${RESULTS}✗ C (compile failed)\n"
-        FAILED=1
+        echo "✗ C (compile failed)" > "$RESULTS_DIR/C.result.status"
+        TEST_NAMES+=("C")
+        TEST_PIDS+=(0)
     else
-        run_test "C" "./c/qzdb_test" ""
+        run_test "C" "./qzdb_test" "c"
     fi
 fi
 
@@ -90,15 +116,20 @@ JAVA_HOME=$(find_java_home)
 if [ -n "$JAVA_HOME" ]; then
     export JAVA_HOME
     mkdir -p java/build
-    if ! $JAVA_HOME/bin/javac -d java/build java/src/main/java/qzdb/QzdbSearcher.java java/src/main/java/qzdb/IpLocation.java java/src/main/java/Main.java; then
-        RESULTS="${RESULTS}✗ Java (compile failed)\n"
-        FAILED=1
+    if ! $JAVA_HOME/bin/javac -d java/build \
+        java/src/main/java/qzdb/QzdbSearcher.java \
+        java/src/main/java/qzdb/IpLocation.java \
+        java/src/main/java/qzdb/ErrorCode.java \
+        java/src/main/java/qzdb/QzdbException.java \
+        java/src/main/java/Main.java; then
+        echo "✗ Java (compile failed)" > "$RESULTS_DIR/Java.result.status"
+        TEST_NAMES+=("Java")
+        TEST_PIDS+=(0)
     else
         run_test "Java" "$JAVA_HOME/bin/java -cp java/build Main" ""
     fi
 else
     echo "[SKIP] Java (JDK not found)"
-    SKIPPED=$((SKIPPED + 1))
 fi
 
 # .NET/C#
@@ -106,15 +137,48 @@ if command -v dotnet &> /dev/null; then
     run_test "C#" "dotnet run --configuration Release" "netcore"
 else
     echo "[SKIP] C# (.NET SDK not found)"
-    SKIPPED=$((SKIPPED + 1))
 fi
 
+# --- Wait for all tests ---
+echo ""
+echo "Waiting for tests to complete..."
+for i in "${!TEST_PIDS[@]}"; do
+    wait "${TEST_PIDS[$i]}" 2>/dev/null || true
+done
+
+# --- Collect results ---
 echo ""
 echo "=========================================="
-echo "  Summary"
+echo "  Test Summary"
 echo "=========================================="
-echo -e "$RESULTS"
-echo "($SKIPPED skipped)"
+
+PASSED=0
+FAILED=0
+SKIPPED=0
+
+for i in "${!TEST_NAMES[@]}"; do
+    name="${TEST_NAMES[$i]}"
+    status_file="$RESULTS_DIR/${name}.result.status"
+    if [ -f "$status_file" ]; then
+        status=$(cat "$status_file")
+        if [ "$status" = "PASS" ]; then
+            echo "  ✓ $name passed"
+            PASSED=$((PASSED + 1))
+        else
+            echo "  ✗ $name FAILED"
+            FAILED=$((FAILED + 1))
+        fi
+    else
+        echo "  ✗ $name FAILED (no result file)"
+        FAILED=$((FAILED + 1))
+    fi
+done
+
+echo ""
+echo "Results: $PASSED passed, $FAILED failed"
+
+# --- Cleanup ---
+rm -rf "$RESULTS_DIR"
 
 if [ "$FAILED" -eq 0 ]; then
     echo "All tests passed!"

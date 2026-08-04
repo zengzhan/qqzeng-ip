@@ -29,6 +29,15 @@ tools/test_cases/
 multi-lang/go/test_v20_helper/main
 multi-lang/go/v20_test_helper
 multi-lang/tools/batch_go
+multi-lang/tools/batch_c
+multi-lang/tools/batch_rust
+multi-lang/tools/bench_c
+multi-lang/test_runner_bin/
+multi-lang/tools/batch_csharp_out/
+multi-lang/c/qzdb_demo
+multi-lang/c/bench_qps
+archive/multi-lang-v20/main_v20_test
+archive/multi-lang-v20/qzdb_v20_test
 *.exe
 
 
@@ -36,6 +45,11 @@ multi-lang/tools/batch_go
 .agent/
 .omc/
 .omo/
+.workbuddy/
+
+# Paid data derived dumps (never commit query results of purchased DBs)
+multi-lang/data/verify_*.txt
+multi-lang/data/test.txt
 
 # Backups
 *.bak

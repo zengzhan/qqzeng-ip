@@ -79,7 +79,7 @@ func main() {
 	v6Test := os.Args[4]
 	v6Out := os.Args[5]
 	
-	searcher, err := qzdb.NewSearcher(dbPath, 0)
+	searcher, err := qzdb.NewSearcher(dbPath, 0, true)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Go: Failed to load database: %v\n", err)
 		os.Exit(1)

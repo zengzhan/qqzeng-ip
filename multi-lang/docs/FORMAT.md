@@ -2,7 +2,7 @@
 
 > **当前格式**：`QZDB`（magic `QZDB`），统一写入 `HeaderVersion = 1`。
 > 本文件描述生成器 `QZDBBuilder.cs` 实际输出的磁盘格式，供多语言 SDK 解析参考。
-> 权威规范以 `QQzeng.MergeEngine.Core/QZDBBuilder.cs` 源码为准。
+> 权威规范以 `QQzeng.MergeEngine.Core/QZDBBuilder.cs` 源码为准（位于生成器仓库 `qqzeng-ipdb-workspace`，非本仓库）。
 
 ---
 

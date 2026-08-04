@@ -6,6 +6,7 @@ const SENTINEL = 0x80000000;
 const SENTINEL_MASK_24 = 0x7FFFFF;
 const SENTINEL_MASK_31 = 0x7FFFFFFF;
 const MAX_TRIE_WALK_STEPS = 1000;
+const MAX_POOL_COUNT = 1 << 26;
 
 class QzdbError extends Error {
   constructor(message, code) {
@@ -85,7 +86,7 @@ class GeoInfo {
       let val = vals[i] !== undefined ? vals[i] : '';
       if (flags && flags[i] && val !== '') {
         const num = parseFloat(val);
-        val = !isNaN(num) ? num.toFixed(6) : val;
+        val = !isNaN(num) ? (num === Math.floor(num) ? String(num) : num.toString()) : val;
       }
       out[i] = String(val);
     }
@@ -102,9 +103,12 @@ class GeoInfo {
 }
 
 class QzdbSearcher {
-  constructor(dbPath = null, groupIndex = 0) {
+  constructor(dbPath = null, groupIndex = 0, verifyCrc = true) {
     this._data = Buffer.alloc(0);
     this._groupIndex = groupIndex;
+    // §10.6: CRC32 verification is ON by default at open time. Pass
+    // verifyCrc=false only for diagnostics/benchmarks on trusted data.
+    this._verifyCrc = verifyCrc;
     this._fieldNames = [];
     this._fieldNameToIdx = {};
     this._floatFieldIndices = new Set();
@@ -185,9 +189,18 @@ class QzdbSearcher {
     return QzdbSearcher._instance;
   }
 
-  load(dbPath) {
+  load(dbPath, verifyCrc = null) {
+    if (verifyCrc !== null) this._verifyCrc = verifyCrc;
     this._data = fs.readFileSync(dbPath);
     this._parseHeader();
+    if (this._verifyCrc) {
+      if (!this.verifyCrc()) {
+        throw new QzdbError(
+          'CRC32 checksum mismatch — the .qzdb file is corrupted or truncated',
+          QzdbError.CORRUPTED,
+        );
+      }
+    }
     return this;
   }
 
@@ -242,8 +255,12 @@ class QzdbSearcher {
     }
 
     const fmtVer = d[4];
-    if (fmtVer < 1 || fmtVer > 6) {
-      throw new QzdbError(`Unsupported format version: ${fmtVer}`, QzdbError.UNSUPPORTED);
+    // §10.1: QZDB's unified HeaderVersion is always 1 (carries GROUP_SCHEMA
+    // dynamic-width schema + native scalar support). Older experimental
+    // layouts never shipped and are intentionally unsupported — rejecting
+    // them here avoids silently mis-parsing a legacy file.
+    if (fmtVer !== 1) {
+      throw new QzdbError(`Unsupported HeaderVersion: ${fmtVer} (QZDB requires version 1, see FORMAT.md §10.1)`, QzdbError.UNSUPPORTED);
     }
 
     this._flags = this.safeReadU16(8);
@@ -256,8 +273,9 @@ class QzdbSearcher {
     if (this._v6JumpBits === 0) {
       this._v6JumpBits = 16;
     }
-    if (this._v6JumpBits < 16 || this._v6JumpBits > 20) {
-      throw new QzdbError(`v6JumpBits out of range [16,20]: ${this._v6JumpBits}`, QzdbError.INVALID_PARAM);
+    // §4.2: V6JumpBits is dynamically estimated in the range 8~20.
+    if (this._v6JumpBits < 8 || this._v6JumpBits > 20) {
+      throw new QzdbError(`v6JumpBits out of range [8,20]: ${this._v6JumpBits}`, QzdbError.INVALID_PARAM);
     }
 
     this._poolCount = d[12];
@@ -339,23 +357,19 @@ class QzdbSearcher {
     this._groupEntryCounts = new Array(actualGroups).fill(0);
     this._groupDimMasks = new Array(actualGroups).fill(0);
 
+    // §6.2: current format stores, per group, a 1-byte fieldCount, a uint32 LE
+    // entryCount and a uint16 LE dimensionMask — fixed widths, no version-dependent
+    // layout. (HeaderVersion != 1 is rejected above, so no legacy width branching.)
     for (let gi = 0; gi < actualGroups; gi++) {
       this._groupFieldCounts[gi] = d[gmOff];
       gmOff += 1;
-      if (fmtVer === 1 || fmtVer >= 4) {
-        this._groupEntryCounts[gi] = this.safeReadU32(gmOff);
-        gmOff += 4;
-      } else {
-        this._groupEntryCounts[gi] = this.safeReadU16(gmOff);
-        gmOff += 2;
-      }
-
-      if (fmtVer === 1 || fmtVer >= 3) {
-        this._groupDimMasks[gi] = this.safeReadU16(gmOff);
-        gmOff += 2;
-      } else {
-        this._groupDimMasks[gi] = (gi !== 2) ? 0x01 : 0x02;
-      }
+      this._groupEntryCounts[gi] = this.safeReadU32(gmOff);
+      gmOff += 4;
+      // dimensionMask is always present (uint16 LE). A value of 0 only occurs in
+      // a malformed/legacy file and is repaired below from the group's actual
+      // field composition (no groupIndex hardcoding).
+      this._groupDimMasks[gi] = this.safeReadU16(gmOff);
+      gmOff += 2;
     }
 
     // Initialize schema and widths
@@ -436,8 +450,30 @@ class QzdbSearcher {
     }
 
     this._resolveFieldNames();
+    this._repairDimMasks();
     this._poolsLoaded = false;
     this._groupPools = null;
+  }
+
+  // Metadata-driven fallback for dimensionMask (§5.4 / §6.2). A valid
+  // current-format file always stores a non-zero dimensionMask in
+  // GroupMetadataTable, so this normally does nothing. If a group's mask is 0
+  // (malformed/legacy), we derive it from the group's *actual* fields rather
+  // than any hardcoded groupIndex === 2 → asn assumption — the real asn file
+  // keeps its asn group at GroupMetadataTable index 0 with a stored mask of
+  // 0x02, so an index-based rule would be wrong.
+  _repairDimMasks() {
+    for (let g = 0; g < this._groupDimMasks.length; g++) {
+      if (this._groupDimMasks[g] !== 0) continue;
+      let hasAsn = false;
+      const fids = this._groupFieldIds[g];
+      if (fids) {
+        hasAsn = fids.includes(1); // fieldId 1 = asn_id
+      } else if (g === 0 && this._fieldNames.length) {
+        hasAsn = this._fieldNames.includes('asn');
+      }
+      this._groupDimMasks[g] = hasAsn ? 0x02 : 0x01;
+    }
   }
 
   _resolveFieldNames() {
@@ -521,7 +557,8 @@ class QzdbSearcher {
         if (this._offRowSchema > 0) {
           poolCursor += 4;
         }
-        if (count === 0) {
+        // Security guard: unbounded count would OOM on count+1 offsets.
+        if (count === 0 || count > MAX_POOL_COUNT) {
           groupPoolList.push([]);
           continue;
         }
@@ -661,15 +698,33 @@ class QzdbSearcher {
     if (this._offRowSchema <= 0) return;
     const d = this._data;
     const sp = this._offRowSchema;
-    const fCount = d[sp];
-    let pos = sp + 4;
-    for (let i = 0; i < fCount; i++) {
-      const fid = d[pos];
-      const w = d[pos + 1];
-      if (fid === 0) this._rowGeoWidth = w;
-      else if (fid === 1) this._rowAsnWidth = w;
-      else if (fid === 2) this._rowUsageWidth = w;
-      pos += 4;
+    // Canonical ROW_SCHEMA layout (matches the QZDB builder / QZDBReader):
+    //   byte[sp+0]=fieldCount, byte[sp+1]=stride, bytes[sp+2..3]=reserved,
+    //   then fieldCount x 4-byte records: { fieldId, width, offset, flags }.
+    //   fieldId: 0=geo, 1=asn, 2=usage.
+    const fieldCount = d[sp];
+    const stride = d[sp + 1];
+    if (fieldCount < 1 || fieldCount > 8) return;
+    if (sp + 4 + fieldCount * 4 > d.length) return;
+    if (stride !== this._ipRowSize) return;
+
+    let geoW = 0, asnW = 0, usageW = 0, total = 0;
+    let wpos = sp + 4;
+    let ok = true;
+    for (let i = 0; i < fieldCount; i++) {
+      const fid = d[wpos];
+      const w = d[wpos + 1];
+      if (fid === 0) geoW = w;
+      else if (fid === 1) asnW = w;
+      else if (fid === 2) usageW = w;
+      wpos += 4;
+      total += w;
+      if (w < 1 || w > 4) ok = false;
+    }
+    if (ok && total === this._ipRowSize) {
+      this._rowGeoWidth = geoW;
+      this._rowAsnWidth = asnW;
+      this._rowUsageWidth = usageW;
     }
   }
 
@@ -760,7 +815,8 @@ class QzdbSearcher {
       if (isNative) {
         const t = natTypes && i < natTypes.length ? natTypes[i] : 0;
         if (t === 1) {
-          val = Number(w === 4 ? d.readFloatLE(fo) : d.readDoubleLE(fo)).toFixed(6);
+          const num = w === 4 ? d.readFloatLE(fo) : d.readDoubleLE(fo);
+          val = num === Math.floor(num) ? String(num) : num.toString();
         } else if (w <= 1) {
           val = String(d[fo]);
         } else if (w === 2) {

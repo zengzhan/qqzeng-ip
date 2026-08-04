@@ -21,5 +21,9 @@ name = "main"
 path = "src/main.rs"
 
 [[bin]]
+name = "demo"
+path = "src/bin/demo.rs"
+
+[[bin]]
 name = "test_v20"
 path = "src/bin/test_v20.rs"
