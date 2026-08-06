@@ -364,28 +364,66 @@ class QzdbSearcher:
             raise QzdbError(f'Database file not found: {db_path}', QzdbError.NOT_FOUND)
         except OSError as exc:
             raise QzdbError(f'Failed to read database file: {exc}', QzdbError.CORRUPTED) from exc
+
+        # Build a shadow object so that a partial load never leaves
+        # the live instance in a broken state (half-old-data / half-new-data).
+        shadow = QzdbSearcher.__new__(QzdbSearcher)
+        # Seed shadow with this instance's full runtime state so methods that
+        # touch pools/offsets don't hit AttributeError before _parse_header
+        # repopulates them (shadow is __new__-born and never runs __init__).
+        shadow.__dict__.update(self.__dict__)
+        shadow._data = b''
+        shadow._is_mmap = False
+        shadow._verify_crc = self._verify_crc
+        shadow._group_index = self._group_index
+        # Reset lazy-pool flags so the new file rebuilds its own pools.
+        shadow._pools_loaded = False
+        shadow._group_pools = None
+        shadow._pools_lock = threading.Lock()
         try:
-            self.close()  # release any previous mapping before acquiring new one
-            fsize = os.fstat(f.fileno()).st_size
-            if fsize >= 1024 * 1024:  # 1MB threshold → mmap for lazy loading
-                data = mmap.mmap(f.fileno(), fsize, access=mmap.ACCESS_READ)
-                self._is_mmap = True
-            else:
-                data = f.read()
-                self._is_mmap = False
-            self._data = data
-        except OSError as exc:
-            f.close()
-            raise QzdbError(f'Failed to memory-map database: {exc}', QzdbError.CORRUPTED) from exc
-        finally:
-            f.close()
-        self._parse_header()
-        if self._verify_crc:
-            if not self.verify_crc():
-                raise QzdbError(
-                    'CRC32 checksum mismatch — the .qzdb file is corrupted or truncated',
-                    QzdbError.CORRUPTED,
-                )
+            try:
+                fsize = os.fstat(f.fileno()).st_size
+                if fsize >= 1024 * 1024:  # 1MB threshold → mmap for lazy loading
+                    data = mmap.mmap(f.fileno(), fsize, access=mmap.ACCESS_READ)
+                    shadow._is_mmap = True
+                else:
+                    data = f.read()
+                shadow._data = data
+            except OSError as exc:
+                f.close()
+                raise QzdbError(f'Failed to memory-map database: {exc}', QzdbError.CORRUPTED) from exc
+            finally:
+                f.close()
+            shadow._parse_header()
+            if shadow._verify_crc:
+                if not shadow.verify_crc():
+                    raise QzdbError(
+                        'CRC32 checksum mismatch — the .qzdb file is corrupted or truncated',
+                        QzdbError.CORRUPTED,
+                    )
+        except Exception:
+            # Shadow failed — close its mmap if it opened one, then re-raise.
+            if shadow._is_mmap and hasattr(shadow._data, 'close'):
+                try:
+                    shadow._data.close()
+                except OSError:
+                    pass
+            raise
+
+        # Shadow succeeded. Publish it atomically, then release the old mmap.
+        old_data = self._data
+        # Do NOT alias the dict: sharing shadow.__dict__ lets shadow's
+        # __del__ -> close() wipe self._data to b'', breaking every find() call.
+        self.__dict__.clear()
+        self.__dict__.update(shadow.__dict__)
+        # Disarm shadow so its destructor cannot close the mmap we took over.
+        shadow._is_mmap = False
+        shadow._data = b''
+        if hasattr(old_data, 'close'):
+            try:
+                old_data.close()
+            except OSError:
+                pass
 
     def safe_read_u16(self, off):
         return struct.unpack_from('<H', self._data, off)[0]
@@ -967,11 +1005,12 @@ class QzdbSearcher:
         jump_bits = self._v6_jump_bits
 
         shift = 128 - jump_bits
-        hi = int.from_bytes(ip_bytes[:8], 'big')
         if jump_bits <= 64:
+            hi = (ip_bytes[0] << 56) | (ip_bytes[1] << 48) | (ip_bytes[2] << 40) | (ip_bytes[3] << 32) | (ip_bytes[4] << 24) | (ip_bytes[5] << 16) | (ip_bytes[6] << 8) | ip_bytes[7]
             idx_jump = (hi >> (64 - jump_bits)) & ((1 << jump_bits) - 1)
         else:
-            idx_jump = (int.from_bytes(ip_bytes, 'big') >> shift) & ((1 << jump_bits) - 1)
+            full = int.from_bytes(ip_bytes, 'big')
+            idx_jump = (full >> shift) & ((1 << jump_bits) - 1)
         ptr = struct.unpack_from('<I', d, off_jump + idx_jump * 4)[0]
         if ptr == 0:
             return 0

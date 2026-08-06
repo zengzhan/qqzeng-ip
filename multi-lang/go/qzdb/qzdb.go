@@ -975,9 +975,6 @@ func (s *QzdbSearcher) Find(ipStr string) (*GeoInfo, error) {
 		return nil, ErrInvalidParam
 	}
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	result, ok := fastParseIp(ipStr)
 	if !ok {
 		return nil, ErrInvalidParam
@@ -992,6 +989,8 @@ func (s *QzdbSearcher) FindUint(ipInt uint32) (*GeoInfo, error) {
 	if s == nil {
 		return nil, ErrInvalidParam
 	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if !s.hasV4 {
 		return nil, ErrNotFound
 	}
@@ -1009,6 +1008,8 @@ func (s *QzdbSearcher) FindV6Uint(ip16 [16]byte) (*GeoInfo, error) {
 	if s == nil {
 		return nil, ErrInvalidParam
 	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	if !s.hasV6 {
 		return nil, ErrNotFound
 	}
@@ -1033,7 +1034,8 @@ func (s *QzdbSearcher) LookupRowId(ipStr string) uint32 {
 		return 0
 	}
 	if result.isV4 {
-		return s.LookupRowIdUint(result.v4)
+		rowID, _ := s.trieWalkV4(result.v4)
+		return rowID
 	}
 	if !s.hasV6 {
 		return 0
@@ -1093,7 +1095,25 @@ func (s *QzdbSearcher) FindFields(ipStr string, fieldNames []string) (*GeoInfo, 
 	if len(fieldNames) == 0 {
 		return s.Find(ipStr)
 	}
-	rowID := s.LookupRowId(ipStr)
+
+	result, ok := fastParseIp(ipStr)
+	if !ok {
+		return nil, ErrInvalidParam
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var rowID uint32
+	var err error
+	if result.isV4 {
+		rowID, err = s.trieWalkV4(result.v4)
+	} else if s.hasV6 {
+		rowID, err = s.trieWalkV6(result.v6)
+	}
+	if err != nil {
+		return nil, err
+	}
 	if rowID == 0 {
 		return nil, ErrNotFound
 	}

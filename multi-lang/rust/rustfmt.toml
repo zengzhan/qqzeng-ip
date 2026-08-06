@@ -1,0 +1,5 @@
+edition = "2021"
+line_length = 100
+tab_spaces = 4
+use_small_heuristics = "Default"
+indent_style = "Spaces"

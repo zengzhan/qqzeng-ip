@@ -1,0 +1,12 @@
+[tool.black]
+line-length = 100
+target-version = ['py311']
+include = '\.py$'
+force-exclude = '''
+/(
+  \.git
+  | \.venv
+  | __pycache__
+  | multi-lang/tools/results
+)/
+'''

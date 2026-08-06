@@ -57,6 +57,52 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc clang
 
+      - name: Cache Go modules
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Cache Rust build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            multi-lang/rust/target
+          key: ${{ runner.os }}-rust-${{ hashFiles('multi-lang/rust/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-rust-
+
+      - name: Cache Node.js modules
+        uses: actions/cache@v4
+        with:
+          path: multi-lang/nodejs/node_modules
+          key: ${{ runner.os }}-node-${{ hashFiles('multi-lang/nodejs/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Cache Python pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-python-${{ hashFiles('multi-lang/python/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-python-
+
+      - name: Install formatters
+        run: |
+          npm install -g prettier
+          pip install black ruff
+          go install golang.org/x/tools/cmd/goimports@latest
+          rustup component add rustfmt
+          sudo apt-get install -y clang-format google-java-format php-codesniffer
+
+      - name: Install pre-commit
+        run: pip install pre-commit
+
       - name: Validate data directory
         run: |
           if [ ! -d "multi-lang/data" ]; then
@@ -71,7 +117,12 @@ jobs:
           fi
           echo "Found $DB_COUNT .qzdb file(s) in multi-lang/data/"
 
-      - name: Run unified verification
+      - name: Run format check
+        run: |
+          echo "=== Format Check ==="
+          cd multi-lang && pre-commit run --all-files || true
+
+      - name: Run unified verification (L1-L4)
         working-directory: multi-lang
         run: |
           chmod +x run_all.sh
@@ -85,10 +136,3 @@ jobs:
           path: multi-lang/.test_results/
           retention-days: 30
         continue-on-error: true
-
-      - name: Run smoke tests only (fast feedback)
-        if: github.event_name == 'pull_request'
-        working-directory: multi-lang
-        run: |
-          chmod +x run_all_tests.sh
-          ./run_all_tests.sh

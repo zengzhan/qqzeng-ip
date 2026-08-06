@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Threading;
 
 namespace Qqzeng
 {
@@ -145,7 +146,7 @@ namespace Qqzeng
         private string[][][] _groupPools;
         private volatile bool _poolsLoaded;
 
-        private readonly object _loadLock = new();
+        private readonly ReaderWriterLockSlim _loadLock = new();
         private readonly object _poolsLock = new();
 
         public QzdbSearcher() { }
@@ -159,7 +160,8 @@ namespace Qqzeng
 
         public void Load(string dbPath, int groupIndex = 0)
         {
-            lock (_loadLock)
+            _loadLock.EnterWriteLock();
+            try
             {
                 _groupIndex = groupIndex;
                 byte[] raw;
@@ -175,12 +177,16 @@ namespace Qqzeng
                 {
                     throw new QzdbException(ErrorCode.Corrupted, $"Failed to read database file: {dbPath}", ex);
                 }
-                _data = raw;
                 ParseHeader(raw);
                 if (!VerifyCrc())
                 {
                     throw new QzdbException(ErrorCode.Corrupted, "CRC32 checksum mismatch — the .qzdb file is corrupted or truncated");
                 }
+                _data = raw;
+            }
+            finally
+            {
+                _loadLock.ExitWriteLock();
             }
         }
 
@@ -814,9 +820,24 @@ namespace Qqzeng
         {
             if (fieldNames == null || fieldNames.Length == 0)
                 return Find(ipStr);
-            var rowId = LookupRowId(ipStr);
-            if (rowId == 0) return null;
-            return ResolveGeoFields(rowId, _groupIndex, fieldNames);
+            if (!FastParseIp(ipStr, out var result)) return null;
+            _loadLock.EnterReadLock();
+            try
+            {
+                uint rowId;
+                if (result.IsV4)
+                    rowId = TrieWalkV4(result.V4);
+                else if (_hasV6)
+                    rowId = TrieWalkV6(result.V6High, result.V6Low);
+                else
+                    return null;
+                if (rowId == 0) return null;
+                return ResolveGeoFields(rowId, _groupIndex, fieldNames);
+            }
+            finally
+            {
+                _loadLock.ExitReadLock();
+            }
         }
 
         private GeoInfo ResolveGeoFields(uint rowId, int groupIndex, string[] fieldNames)
@@ -879,24 +900,48 @@ namespace Qqzeng
         {
             if (string.IsNullOrEmpty(ipStr)) return null;
             if (!FastParseIp(ipStr, out var result)) return null;
-            if (result.IsV4) return FindUint(result.V4);
-            return FindV6Uint(result.V6High, result.V6Low);
+            _loadLock.EnterReadLock();
+            try
+            {
+                if (result.IsV4) return FindUint(result.V4);
+                return FindV6Uint(result.V6High, result.V6Low);
+            }
+            finally
+            {
+                _loadLock.ExitReadLock();
+            }
         }
 
         public GeoInfo FindUint(uint ipInt)
         {
             if (!_hasV4) return null;
-            uint rowId = TrieWalkV4(ipInt);
-            if (rowId == 0) return null;
-            return ResolveRowId(rowId, _groupIndex);
+            _loadLock.EnterReadLock();
+            try
+            {
+                uint rowId = TrieWalkV4(ipInt);
+                if (rowId == 0) return null;
+                return ResolveRowId(rowId, _groupIndex);
+            }
+            finally
+            {
+                _loadLock.ExitReadLock();
+            }
         }
 
         public GeoInfo FindV6Uint(ulong ipHigh, ulong ipLow)
         {
             if (!_hasV6) return null;
-            uint rowId = TrieWalkV6(ipHigh, ipLow);
-            if (rowId == 0) return null;
-            return ResolveRowId(rowId, _groupIndex);
+            _loadLock.EnterReadLock();
+            try
+            {
+                uint rowId = TrieWalkV6(ipHigh, ipLow);
+                if (rowId == 0) return null;
+                return ResolveRowId(rowId, _groupIndex);
+            }
+            finally
+            {
+                _loadLock.ExitReadLock();
+            }
         }
 
         /// <summary>Lookup row_id only (trie walk, no data materialization). Returns 0 if not found.</summary>
@@ -904,35 +949,75 @@ namespace Qqzeng
         {
             if (string.IsNullOrEmpty(ipStr)) return 0;
             if (!FastParseIp(ipStr, out var result)) return 0;
-            if (result.IsV4) return LookupRowIdUint(result.V4);
-            return LookupRowIdV6(result.V6High, result.V6Low);
+            _loadLock.EnterReadLock();
+            try
+            {
+                if (result.IsV4) return LookupRowIdUint(result.V4);
+                return LookupRowIdV6(result.V6High, result.V6Low);
+            }
+            finally
+            {
+                _loadLock.ExitReadLock();
+            }
         }
 
         /// <summary>Lookup row_id for a pre-parsed IPv4 integer.</summary>
         public uint LookupRowIdUint(uint ipInt)
         {
             if (!_hasV4) return 0;
-            return TrieWalkV4(ipInt);
+            _loadLock.EnterReadLock();
+            try
+            {
+                return TrieWalkV4(ipInt);
+            }
+            finally
+            {
+                _loadLock.ExitReadLock();
+            }
         }
 
         public uint LookupRowIdV6(ulong ipHigh, ulong ipLow)
         {
             if (!_hasV6) return 0;
-            return TrieWalkV6(ipHigh, ipLow);
+            _loadLock.EnterReadLock();
+            try
+            {
+                return TrieWalkV6(ipHigh, ipLow);
+            }
+            finally
+            {
+                _loadLock.ExitReadLock();
+            }
         }
 
         /// <summary>Lookup raw entry IDs from a row_id. Returns (geoId, asnId, usageId) tuple, or null if invalid.</summary>
         public (uint geoId, uint asnId, uint usageTypeId)? LookupIds(uint rowId)
         {
             if (rowId <= 0 || rowId >= _rowCount) return null;
-            ReadIPRow(rowId, out uint geoId, out uint asnId, out uint usageTypeId);
-            return (geoId, asnId, usageTypeId);
+            _loadLock.EnterReadLock();
+            try
+            {
+                ReadIPRow(rowId, out uint geoId, out uint asnId, out uint usageTypeId);
+                return (geoId, asnId, usageTypeId);
+            }
+            finally
+            {
+                _loadLock.ExitReadLock();
+            }
         }
 
         public string FindStr(string ipStr)
         {
-            var info = Find(ipStr);
-            return info == null || info.IsEmpty ? "" : info.ToPipe();
+            _loadLock.EnterReadLock();
+            try
+            {
+                var info = Find(ipStr);
+                return info == null || info.IsEmpty ? "" : info.ToPipe();
+            }
+            finally
+            {
+                _loadLock.ExitReadLock();
+            }
         }
 
         public string[] FieldNames => (string[])(_fieldNames?.Clone() ?? Array.Empty<string>());

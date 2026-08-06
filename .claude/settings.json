@@ -1,0 +1,52 @@
+{
+  "mcpServers": {
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@context7/mcp-server"],
+      "description": "Live documentation lookup for libraries and frameworks"
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@github/mcp-server"],
+      "description": "GitHub integration for PRs, issues, and workflow runs"
+    }
+  },
+  "enabledPlugins": {
+    "hookify@claude-plugins-official": true,
+    "commit-commands@claude-plugins-official": true,
+    "code-review@claude-plugins-official": true,
+    "skill-creator@claude-plugins-official": true
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "prompt": "Auto-format the edited file if a language-specific formatter is available (gofmt for Go, rustfmt for Rust, black/ruff for Python, prettier for JS/TS/JSON, phpcs for PHP, clang-format for C/C#, google-java-format for Java). Run the appropriate formatter on the changed file. If the formatter is not installed, skip silently."
+      },
+      {
+        "matcher": "Edit|Write",
+        "prompt": "If the edited file is part of the multi-lang SDK (under multi-lang/), run cross-language verification: cd multi-lang && python3 cross_lang_verify.py. If the edited file is a verification script (under tools/ or multi-lang/tools/), run deep accuracy analysis: cd multi-lang && python3 accuracy_analysis.py. If the edited file is FORMAT.md, run the full verification suite: cd multi-lang && ./run_all.sh."
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit",
+        "prompt": "Block edits to .env files, lock files (package-lock.json, Cargo.lock, go.sum), and .qzdb database files. Require explicit user confirmation before proceeding."
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Edit",
+      "Write",
+      "Bash(cd multi-lang && ./run_all.sh)",
+      "Bash(cd multi-lang && python3 cross_lang_verify.py)",
+      "Bash(cd multi-lang && python3 accuracy_analysis.py)",
+      "Bash(cd multi-lang && ./run_all_tests.sh)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(python3:*)",
+      "Bash(npx:*)"
+    ]
+  }
+}

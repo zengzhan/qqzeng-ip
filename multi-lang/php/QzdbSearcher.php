@@ -305,34 +305,43 @@ class QzdbSearcher
 
     private function safeReadU16($off)
     {
-        $b = $this->readBytes($off, 2);
-        return strlen($b) === 2 ? unpack('v', $b)[1] : 0;
+        if ($off < 0 || $off + 2 > strlen($this->data)) {
+            throw new QzdbException('Out of bounds reading U16 at offset ' . $off, self::ERROR_OUT_OF_BOUNDS);
+        }
+        return unpack('v', $this->data, $off)[1];
     }
 
     private function safeReadU32($off)
     {
-        $b = $this->readBytes($off, 4);
-        return strlen($b) === 4 ? unpack('V', $b)[1] : 0;
+        if ($off < 0 || $off + 4 > strlen($this->data)) {
+            throw new QzdbException('Out of bounds reading U32 at offset ' . $off, self::ERROR_OUT_OF_BOUNDS);
+        }
+        return unpack('V', $this->data, $off)[1];
     }
 
     private function safeReadU64($off)
     {
-        $b = $this->readBytes($off, 8);
-        return strlen($b) === 8 ? unpack('P', $b)[1] : 0;
+        if ($off < 0 || $off + 8 > strlen($this->data)) {
+            throw new QzdbException('Out of bounds reading U64 at offset ' . $off, self::ERROR_OUT_OF_BOUNDS);
+        }
+        return unpack('P', $this->data, $off)[1];
     }
 
     private function safeReadU24($off)
     {
-        $b0 = $this->readByte($off);
-        $b1 = $this->readByte($off + 1);
-        $b2 = $this->readByte($off + 2);
-        return $b0 | ($b1 << 8) | ($b2 << 16);
+        if ($off < 0 || $off + 3 > strlen($this->data)) {
+            throw new QzdbException('Out of bounds reading U24 at offset ' . $off, self::ERROR_OUT_OF_BOUNDS);
+        }
+        return ord($this->data[$off]) | (ord($this->data[$off + 1]) << 8) | (ord($this->data[$off + 2]) << 16);
     }
 
     private function safeReadU48($off)
     {
-        $low = $this->safeReadU32($off);
-        $high = $this->safeReadU16($off + 4);
+        if ($off < 0 || $off + 6 > strlen($this->data)) {
+            throw new QzdbException('Out of bounds reading U48 at offset ' . $off, self::ERROR_OUT_OF_BOUNDS);
+        }
+        $low = unpack('V', $this->data, $off)[1];
+        $high = unpack('v', $this->data, $off + 4)[1];
         return $low + ($high * 4294967296);
     }
 
@@ -985,14 +994,20 @@ class QzdbSearcher
 
             if ($isNative) {
                 $t = $natTypes && $i < count($natTypes) ? $natTypes[$i] : 0;
-                if ($t === 1) {
-                    // float
-                    if ($w === 4) {
-                        $valNum = unpack('f', $this->readBytes($fo, 4))[1];
-                    } else {
-                        $valNum = unpack('d', $this->readBytes($fo, 8))[1];
-                    }
-                    $val = GeoInfo::formatFloatValue($valNum);
+                 if ($t === 1) {
+                     // float
+                     if ($w === 4) {
+                         if ($fo < 0 || $fo + 4 > strlen($this->data)) {
+                             throw new QzdbException('Out of bounds reading float32 at offset ' . $fo, self::ERROR_OUT_OF_BOUNDS);
+                         }
+                         $valNum = unpack('f', $this->data, $fo)[1];
+                     } else {
+                         if ($fo < 0 || $fo + 8 > strlen($this->data)) {
+                             throw new QzdbException('Out of bounds reading float64 at offset ' . $fo, self::ERROR_OUT_OF_BOUNDS);
+                         }
+                         $valNum = unpack('d', $this->data, $fo)[1];
+                     }
+                     $val = GeoInfo::formatFloatValue($valNum);
                 } else {
                     // int
                     $valNum = $this->safeReadUintWidth($fo, $w);
@@ -1130,9 +1145,19 @@ class QzdbSearcher
             $isNative = $natives && $i < count($natives) && $natives[$i];
             if ($isNative) {
                 $t = $natTypes && $i < count($natTypes) ? $natTypes[$i] : 0;
-                if ($t === 1) {
-                    $valNum = $w === 4 ? unpack('f', $this->readBytes($fo, 4))[1] : unpack('d', $this->readBytes($fo, 8))[1];
-                    $resolved[$i] = GeoInfo::formatFloatValue($valNum);
+                 if ($t === 1) {
+                     if ($w === 4) {
+                         if ($fo < 0 || $fo + 4 > strlen($this->data)) {
+                             throw new QzdbException('Out of bounds reading float32 at offset ' . $fo, self::ERROR_OUT_OF_BOUNDS);
+                         }
+                         $valNum = unpack('f', $this->data, $fo)[1];
+                     } else {
+                         if ($fo < 0 || $fo + 8 > strlen($this->data)) {
+                             throw new QzdbException('Out of bounds reading float64 at offset ' . $fo, self::ERROR_OUT_OF_BOUNDS);
+                         }
+                         $valNum = unpack('d', $this->data, $fo)[1];
+                     }
+                     $resolved[$i] = GeoInfo::formatFloatValue($valNum);
                 } else {
                     $resolved[$i] = (string)$this->safeReadUintWidth($fo, $w);
                 }
@@ -1261,7 +1286,10 @@ class QzdbSearcher
         if ($this->fileSize < 20) {
             return false;
         }
-        $stored = unpack('V', $this->readBytes(16, 4))[1];
+        if (16 + 4 > strlen($this->data)) {
+            return false;
+        }
+        $stored = unpack('V', $this->data, 16)[1];
         $computed = self::crc32bComputeFile((string)$this->data, $this->stream, $this->fileSize);
         return $stored === $computed;
     }

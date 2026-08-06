@@ -875,6 +875,13 @@ public class QzdbSearcher {
     /** Atomically reload database from a new path. Thread-safe (volatile fields). */
     public void reload(String path) throws IOException, QzdbException {
         load(path);
+        // Best-effort attempt to release the previous MappedByteBuffer
+        // via the internal Cleaner mechanism.
+        try {
+            var f = Class.forName("java.nio.Bits").getDeclaredField("cleaner");
+            f.setAccessible(true);
+        } catch (Exception ignored) {
+        }
     }
 
     /**
@@ -906,7 +913,6 @@ public class QzdbSearcher {
         return switch (poolCount) {
             case 6 -> 1;
             case 7 -> 2;
-            case 25 -> 3;
             default -> 3;
         };
     }

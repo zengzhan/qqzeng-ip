@@ -264,14 +264,19 @@ def _find_java_home():
 
 
 def run_rust(ip_list):
-    rust_bin = os.path.join(SCRIPT_DIR, "rust", "_cross_verify", "target", "release", "cross_verify")
+    rust_bin = os.path.join(SCRIPT_DIR, "tools", "batch_rust")
     if not os.path.exists(rust_bin):
-        print(f"  [SKIP Rust: binary not found]")
+        print(f"  [SKIP Rust: binary not found at {rust_bin}]")
         return None
     try:
-        cmd = [rust_bin, DB_PATH] + ip_list
-        out = subprocess.check_output(cmd, cwd=SCRIPT_DIR, timeout=30).decode()
-        return json.loads(out.strip())
+        cmd = [rust_bin, DB_PATH]
+        out = subprocess.check_output(cmd, input="\n".join(ip_list).encode(), cwd=SCRIPT_DIR, timeout=30).decode()
+        results = {}
+        lines = out.strip().split("\n")
+        for i, line in enumerate(lines):
+            if i < len(ip_list):
+                results[ip_list[i]] = line.strip()
+        return results
     except Exception as e:
         print(f"  [SKIP Rust: {e}]")
         return None
@@ -327,28 +332,65 @@ int main() {{
 
 
 def run_go(ip_list):
-    go_bin = os.path.join(SCRIPT_DIR, "test_runner_bin", "go_cross_verify")
+    go_bin = os.path.join(SCRIPT_DIR, "tools", "batch_go")
     if not os.path.exists(go_bin):
         print(f"  [SKIP Go: binary not found at {go_bin}]")
         return None
     try:
-        cmd = [go_bin, DB_PATH] + ip_list
-        out = subprocess.check_output(cmd, cwd=SCRIPT_DIR, timeout=30).decode()
-        return json.loads(out.strip())
+        # batch_go uses file-based I/O: db_path v4_test v4_out v6_test v6_out
+        v4_test = os.path.join(SCRIPT_DIR, ".cross_v4_tmp")
+        v4_out = os.path.join(SCRIPT_DIR, ".cross_v4_out")
+        v6_test = os.path.join(SCRIPT_DIR, ".cross_v6_tmp")
+        v6_out = os.path.join(SCRIPT_DIR, ".cross_v6_out")
+        with open(v4_test, "w") as f:
+            f.write("\n".join(ip_list) + "\n")
+        with open(v6_test, "w") as f:
+            f.write("\n".join(ip_list) + "\n")
+        cmd = [go_bin, DB_PATH, v4_test, v4_out, v6_test, v6_out]
+        subprocess.check_output(cmd, cwd=SCRIPT_DIR, timeout=30, stderr=subprocess.DEVNULL)
+        results = {}
+        with open(v4_out) as f:
+            for line in f:
+                line = line.strip()
+                if "|" in line:
+                    ip, pipe = line.split("|", 1)
+                    results[ip] = pipe
+        for f in [v4_test, v4_out, v6_test, v6_out]:
+            if os.path.exists(f):
+                os.unlink(f)
+        return results
     except Exception as e:
         print(f"  [SKIP Go: {e}]")
         return None
 
 
 def run_csharp(ip_list):
-    cs_exe = os.path.join(SCRIPT_DIR, "test_runner_bin", "cs_cross_verify", "CrossVerify")
+    cs_exe = os.path.join(SCRIPT_DIR, "tools", "batch_csharp_out", "batch_csharp")
     if not os.path.exists(cs_exe):
         print(f"  [SKIP C#: binary not found at {cs_exe}]")
         return None
     try:
-        cmd = [cs_exe, DB_PATH] + ip_list
-        out = subprocess.check_output(cmd, cwd=SCRIPT_DIR, timeout=30).decode()
-        return json.loads(out.strip())
+        v4_test = os.path.join(SCRIPT_DIR, ".cross_v4_tmp")
+        v4_out = os.path.join(SCRIPT_DIR, ".cross_v4_out")
+        v6_test = os.path.join(SCRIPT_DIR, ".cross_v6_tmp")
+        v6_out = os.path.join(SCRIPT_DIR, ".cross_v6_out")
+        with open(v4_test, "w") as f:
+            f.write("\n".join(ip_list) + "\n")
+        with open(v6_test, "w") as f:
+            f.write("\n".join(ip_list) + "\n")
+        cmd = [cs_exe, DB_PATH, v4_test, v4_out, v6_test, v6_out]
+        subprocess.check_output(cmd, cwd=SCRIPT_DIR, timeout=30, stderr=subprocess.DEVNULL)
+        results = {}
+        with open(v4_out) as f:
+            for line in f:
+                line = line.strip()
+                if "|" in line:
+                    ip, pipe = line.split("|", 1)
+                    results[ip] = pipe
+        for f in [v4_test, v4_out, v6_test, v6_out]:
+            if os.path.exists(f):
+                os.unlink(f)
+        return results
     except Exception as e:
         print(f"  [SKIP C#: {e}]")
         return None

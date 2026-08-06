@@ -1,0 +1,91 @@
+repos:
+  - repo: local
+    hooks:
+      # --- C ---
+      - id: clang-format
+        name: clang-format C files
+        entry: clang-format -i
+        language: system
+        files: 'multi-lang/c/.*\.(c|h)$'
+        pass_filenames: true
+
+      # --- Go ---
+      - id: gofmt
+        name: gofmt Go files
+        entry: gofmt -w
+        language: system
+        files: 'multi-lang/go/.*\.go$'
+        pass_filenames: true
+
+      # --- Rust ---
+      - id: rustfmt
+        name: rustfmt Rust files
+        entry: rustfmt
+        language: system
+        files: 'multi-lang/rust/.*\.rs$'
+        pass_filenames: true
+
+      # --- Python ---
+      - id: black
+        name: black Python files
+        entry: black
+        language: system
+        files: 'multi-lang/python/.*\.py$'
+        pass_filenames: true
+
+      - id: ruff
+        name: ruff Python files
+        entry: ruff check --fix
+        language: system
+        files: 'multi-lang/python/.*\.py$'
+        pass_filenames: true
+
+      # --- JavaScript/Node.js ---
+      - id: prettier
+        name: prettier JS/JSON files
+        entry: npx prettier --write
+        language: system
+        files: 'multi-lang/nodejs/.*\.(js|json)$'
+        pass_filenames: true
+
+      # --- PHP ---
+      - id: phpcs
+        name: phpcs PHP files
+        entry: phpcs --standard=PS-12
+        language: system
+        files: 'multi-lang/php/.*\.php$'
+        pass_filenames: true
+
+      # --- Java ---
+      - id: google-java-format
+        name: google-java-format Java files
+        entry: google-java-format -i
+        language: system
+        files: 'multi-lang/java/.*\.java$'
+        pass_filenames: true
+
+      # --- C# ---
+      - id: dotnet-format
+        name: dotnet-format C# files
+        entry: dotnet format
+        language: system
+        files: 'multi-lang/netcore/.*\.cs$'
+        pass_filenames: true
+
+      # --- Cross-language verification ---
+      - id: cross-lang-verify
+        name: Cross-language verification (L2)
+        entry: bash -c 'cd multi-lang && python3 cross_lang_verify.py'
+        language: system
+        files: 'multi-lang/(c/.*|go/.*|rust/.*|netcore/.*|nodejs/.*|php/.*|python/.*|java/.*)'
+        pass_filenames: false
+        always_run: true
+
+      # --- Accuracy analysis (L4) ---
+      - id: accuracy-analysis
+        name: Accuracy analysis (L4)
+        entry: bash -c 'cd multi-lang && python3 accuracy_analysis.py'
+        language: system
+        files: 'multi-lang/(c/.*|go/.*|rust/.*|netcore/.*|nodejs/.*|php/.*|python/.*|java/.*)'
+        pass_filenames: false
+        always_run: true

@@ -1,0 +1,25 @@
+run:
+  go: "1.21"
+  timeout: 120s
+
+linters:
+  enable:
+    - gofmt
+    - goimports
+    - golint
+    - staticcheck
+    - gosimple
+    - unused
+    - ineffassign
+    - govet
+  disable-all: false
+
+linters-settings:
+  gofmt:
+    simplify: true
+  golint:
+    min-confidence: 0
+
+issues:
+  exclude-useful: false
+  max-issues-per-linter: 50
