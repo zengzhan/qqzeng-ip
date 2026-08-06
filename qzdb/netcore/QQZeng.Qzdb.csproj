@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- 多目标框架：覆盖 net8 LTS 与 net10 现代运行时 -->
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
+    <OutputType>Library</OutputType>
+
+    <!-- 语言/编译选项 -->
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>latest</LangVersion>
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- 包标识：与根命名空间保持一致（公司.产品） -->
+    <PackageId>QQZeng.Qzdb</PackageId>
+    <RootNamespace>QQZeng.Qzdb</RootNamespace>
+    <AssemblyName>QQZeng.Qzdb</AssemblyName>
+    <Version>1.0.0</Version>
+
+    <!-- 作者 / 公司 / 描述 -->
+    <Authors>QQZeng</Authors>
+    <Company>QQZeng</Company>
+    <Product>QZDB .NET SDK</Product>
+    <Description>Official .NET SDK for the QQZeng QZDB IP geolocation database. Offline, dependency-free, high-performance IPv4/IPv6 lookup with a lock-free, hot-reloadable reader/registry API. 纯离线 IP 地理定位数据库官方 .NET SDK，零依赖、支持热更新。</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageTags>ip;geolocation;qqzeng;qzdb;ipv4;ipv6;offline;ipdatabase;network;lookup</PackageTags>
+    <PackageProjectUrl>https://github.com/zengzhan/qqzeng-ip/tree/main/qzdb/netcore</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/zengzhan/qqzeng-ip</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+
+    <!-- 文档 + 符号包 + 确定性构建 -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <Deterministic>true</Deterministic>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>
