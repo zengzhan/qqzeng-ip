@@ -4,7 +4,7 @@
 > **本文件是 QZDB 二进制格式的唯一权威规范，精确对应实际 C# 实现。**
 >
 > **⚠️ 文档健康度（2026-07 复核）**：字段计数段落自相矛盾，以 C# 源码 `QZDBBuilder.VersionFieldNames` 与 [product-specification.md](./reference/product-specification.md) 为准：
-> - **字段计数已统一**：§6.3 与 §10.2 均使用权威值 **std=6 / pro=11 / ult=15 / asn=8 / max=25**（pro 为新增专业版，字段见 product-spec）；以 C# 源码 `QZDBBuilder.VersionFieldNames` 与 [product-specification.md](./reference/product-specification.md) §3 为准。
+> - **字段计数已统一**：§6.3 与 §10.2 均使用权威值 **std=6 / pro=11 / max=15 / asn=8 / ult=25**（pro 为新增专业版，max 为 15 字段旗舰版，ult 为 25 字段至尊版）；以 C# 源码 `QZDBBuilder.VersionFieldNames` 与 [product-specification.md](./reference/product-specification.md) §3 为准。
 > - GeoResolver 相关章节若提及 GeoCorrector / GeoHelperNew / GeoAddressParserBest / StringSimilarityHelper，均已被 `src/QQzeng.MergeEngine/GeoMatching/` 完全取代并已删除源码，详见 geo-resolver-comparison.md 的迁移记录。
 >
 > **引用位置说明**：`product-specification.md`、`geo-resolver-comparison.md` 与 `QZDBBuilder.cs` 位于生成器仓库 `qqzeng-ipdb-workspace`（`docs/reference/`、`docs/`、`src/QQzeng.MergeEngine.Core/`），非本仓库文件。
@@ -363,9 +363,9 @@ GeoEntry_VER[entryId]:
 |------|-----------|------|
 | std | 6 | continent, country_code, country, province, city, isp |
 | pro | 11 | continent, country_code, country, province, city, district, geo_id, longitude, latitude, timezone, isp |
-| ult | 15 | continent, country_code, country, province, city, district, geo_id, longitude, latitude, timezone, isp, asn, as_name, as_domain, usage_type |
+| max | 15 | continent, country_code, country, province, city, district, geo_id, longitude, latitude, timezone, isp, asn, as_name, as_domain, usage_type |
 | asn | 8 | continent, country_code, country, isp, asn, as_name, as_domain, usage_type |
-| max | 25 | continent, continent_en, country_code, country_alpha3, country, country_en, province, province_en, city, city_en, district, district_en, geo_id, longitude, latitude, timezone, isp, languages, currency_code, phone_prefix, emoji_flag, asn, as_name, as_domain, usage_type |
+| ult | 25 | continent, continent_en, country_code, country_alpha3, country, country_en, province, province_en, city, city_en, district, district_en, geo_id, longitude, latitude, timezone, languages, currency_code, phone_prefix, emoji_flag, isp, asn, as_name, as_domain, usage_type |
 
 > 完整字段定义、中文名与逐版本表格以 `reference/product-specification.md` §3 为唯一权威；SDK 按 Metadata 读取维度池，不硬编码 groupIndex→字段顺序映射。
 > Pool 顺序以 C# 源码 `QZDBBuilder.VersionFieldNames` 为唯一真源（`usage_type` 替代旧版 `usage_flags` BIGINT 位标记，迷移 079 已执行）。

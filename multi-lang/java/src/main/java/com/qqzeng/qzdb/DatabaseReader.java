@@ -227,8 +227,8 @@ public class DatabaseReader implements AutoCloseable {
         }
 
         private static String inferEdition(int count, Map<String, Integer> normMap) {
-            if (normMap.containsKey("district")) return "ult";
-            if (normMap.containsKey("currencycode") || count >= 20) return "max";
+            if (normMap.containsKey("currencycode") || count >= 20) return "ult";
+            if (normMap.containsKey("district") || count >= 15) return "max";
             if (normMap.containsKey("asn")) return "asn";
             if (count >= 10) return "pro";
             return "std";
