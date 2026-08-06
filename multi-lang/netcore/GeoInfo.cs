@@ -11,7 +11,7 @@ public sealed class GeoInfo
     private readonly Dictionary<string, int>? _normMap;
     private readonly bool[]? _numericFlags;
 
-    internal GeoInfo(string[] fieldNames, string[] values, Dictionary<string, int>? normMap, bool[]? numericFlags)
+    public GeoInfo(string[] fieldNames, string[] values, Dictionary<string, int>? normMap, bool[]? numericFlags)
     {
         _fieldNames = fieldNames;
         _values = values;
@@ -105,7 +105,8 @@ public sealed class GeoInfo
             if (!first) sb.Append(',');
             first = false;
             sb.Append('"').Append(EscapeJson(_fieldNames[i])).Append("\":");
-            bool numeric = _numericFlags != null && i < _numericFlags.Length && _numericFlags[i];
+            bool numeric = (_numericFlags != null && i < _numericFlags.Length && _numericFlags[i])
+                || (_numericFlags == null && IsNumericFieldName(_fieldNames[i]));
             if (i >= _values.Length || _values[i] == null || _values[i].Length == 0)
                 sb.Append(numeric ? "null" : "\"\"");
             else if (numeric)
