@@ -199,12 +199,18 @@ public class DatabaseReaderTest {
                 assertTrue(!infoOpt.get().toPipeString().isEmpty(), "pipe non-empty");
             });
 
-            // Test 14: CIDR 网段反查 API 测试 (lookupCidr)
+            // Test 14: CIDR 网段反查 API 测试 (lookupCidr IPv4 + IPv6)
             test("14. CIDR 网段反查测试 (lookupCidr)", () -> {
-                String cidr1 = reader.lookupCidr("223.5.5.5");
-                assertNotNull(cidr1, "cidr for 223.5.5.5 non-null");
-                assertTrue(cidr1.contains("/"), "cidr contains slash: " + cidr1);
-                System.out.println("   [CIDR Output]: 223.5.5.5 -> " + cidr1);
+                String cidr4 = reader.lookupCidr("223.5.5.5");
+                assertNotNull(cidr4, "cidr for 223.5.5.5 non-null");
+                assertTrue(cidr4.contains("/"), "cidr4 contains slash: " + cidr4);
+                System.out.println("   [IPv4 CIDR Output]: 223.5.5.5 -> " + cidr4);
+
+                String cidr6 = reader.lookupCidr("2001:218::1");
+                if (cidr6 != null) {
+                    assertTrue(cidr6.contains("/"), "cidr6 contains slash: " + cidr6);
+                    System.out.println("   [IPv6 CIDR Output]: 2001:218::1 -> " + cidr6);
+                }
             });
 
             test("B3. IPv4-Mapped IPv6 自动降级与直查一致", () -> {
