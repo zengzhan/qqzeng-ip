@@ -3,12 +3,12 @@ package com.qqzeng.qzdb;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * IP 地理位置与元数据响应实体 (GeoInfo)
  * <p>
  * 支持动态字段访问 (get) 与全量 Ult 25 字段语义化 Getter。
+ * 归一化字段索引在加载期构建一次（SDK 规范 §6.1 性能强制项），查询期仅 O(1) 哈希查找。
  */
 public final class GeoInfo {
 
@@ -17,9 +17,11 @@ public final class GeoInfo {
 
     // 归一化字段索引映射 (key: lowercase without underscores -> index)
     private final Map<String, Integer> normalizedMap;
+    // toJson 数值类型标记（与 fieldNames 等长；内部快路径传入，公共构造时现算）
+    private final boolean[] numericFlags;
 
     /**
-     * 内部构造函数
+     * 公共构造函数（自行构建归一化索引，用于 ChainedReader 合并结果等低频场景）
      *
      * @param fieldNames 字段名数组
      * @param values     字段值数组
@@ -28,6 +30,30 @@ public final class GeoInfo {
         this.fieldNames = fieldNames != null ? fieldNames : new String[0];
         this.values = values != null ? values : new String[0];
         this.normalizedMap = buildNormalizedMap(this.fieldNames);
+        boolean[] flags = new boolean[this.fieldNames.length];
+        for (int i = 0; i < this.fieldNames.length; i++) {
+            flags[i] = isNumericFieldName(this.fieldNames[i]);
+        }
+        this.numericFlags = flags;
+    }
+
+    /**
+     * 内部热路径构造函数：复用快照级归一化索引与数值标记，避免每次查询重建 HashMap。
+     */
+    GeoInfo(String[] fieldNames, String[] values, Map<String, Integer> sharedNormalizedMap, boolean[] numericFlags) {
+        this.fieldNames = fieldNames != null ? fieldNames : new String[0];
+        this.values = values != null ? values : new String[0];
+        this.normalizedMap = sharedNormalizedMap != null ? sharedNormalizedMap : buildNormalizedMap(this.fieldNames);
+        this.numericFlags = numericFlags != null && numericFlags.length == this.fieldNames.length
+                ? numericFlags : buildNumericFlags(this.fieldNames);
+    }
+
+    private static boolean[] buildNumericFlags(String[] names) {
+        boolean[] flags = new boolean[names.length];
+        for (int i = 0; i < names.length; i++) {
+            flags[i] = isNumericFieldName(names[i]);
+        }
+        return flags;
     }
 
     /**
@@ -48,7 +74,7 @@ public final class GeoInfo {
     }
 
     /**
-     * 归一化算法: 小写化并移除所有 '_'
+     * 归一化算法: 小写化并移除所有 '_'（SDK 规范 §6.1，8 语言逐字节一致）
      */
     public static String normalizeKey(String key) {
         if (key == null) return "";
@@ -60,6 +86,28 @@ public final class GeoInfo {
             }
         }
         return sb.toString();
+    }
+
+    /**
+     * toJson 数值类型字段判定（SDK 规范 §6.2）：longitude/latitude/asn/geo_id 输出 JSON 数字。
+     */
+    public static boolean isNumericFieldName(String name) {
+        if (name == null) return false;
+        // 与 normalizeKey(name) 等价的内联快路径（仅覆盖目标字段的常见形态）
+        switch (name.length()) {
+            case 3:
+                return name.equalsIgnoreCase("asn");
+            case 6:
+                return name.equalsIgnoreCase("geoid") || name.equalsIgnoreCase("geo_id");
+            case 8:
+                return name.equalsIgnoreCase("latitude");
+            case 9:
+                return name.equalsIgnoreCase("longitude");
+            default:
+                String norm = normalizeKey(name);
+                return norm.equals("longitude") || norm.equals("latitude")
+                        || norm.equals("asn") || norm.equals("geoid");
+        }
     }
 
     /**
@@ -121,7 +169,8 @@ public final class GeoInfo {
     /**
      * 序列化为 JSON 字符串
      * <p>
-     * 保持原始 snake_case 键名，并将 longitude, latitude, asn, geo_id 保持为 JSON 数字类型。
+     * 保持原始 snake_case 键名，并将 longitude, latitude, asn, geo_id 保持为 JSON 数字类型
+     * （SDK 规范 §6.2：手写序列化，不经反射式序列化框架）。
      */
     public String toJson() {
         StringBuilder sb = new StringBuilder(256);
@@ -138,18 +187,13 @@ public final class GeoInfo {
             first = false;
 
             sb.append('"').append(escapeJson(name)).append("\":");
+            boolean numeric = i < numericFlags.length && numericFlags[i];
             if (val == null || val.isEmpty()) {
-                if (isNumericField(name)) {
-                    sb.append("null");
-                } else {
-                    sb.append("\"\"");
-                }
-            } else if (isNumericField(name)) {
-                try {
-                    // 校验是否为有效数值
-                    Double.parseDouble(val);
+                sb.append(numeric ? "null" : "\"\"");
+            } else if (numeric) {
+                if (isJsonNumber(val)) {
                     sb.append(val);
-                } catch (NumberFormatException e) {
+                } else {
                     sb.append("null");
                 }
             } else {
@@ -160,10 +204,26 @@ public final class GeoInfo {
         return sb.toString();
     }
 
-    private static boolean isNumericField(String name) {
-        String norm = normalizeKey(name);
-        return norm.equals("longitude") || norm.equals("latitude") ||
-               norm.equals("asn") || norm.equals("geoid");
+    /** 校验字符串是否为合法 JSON 数字（整数或小数，允许负号）。 */
+    private static boolean isJsonNumber(String val) {
+        int i = 0, n = val.length();
+        if (n == 0) return false;
+        if (val.charAt(0) == '-') {
+            if (n == 1) return false;
+            i = 1;
+        }
+        boolean digit = false, dot = false;
+        for (; i < n; i++) {
+            char c = val.charAt(i);
+            if (c >= '0' && c <= '9') {
+                digit = true;
+            } else if (c == '.' && !dot) {
+                dot = true;
+            } else {
+                return false;
+            }
+        }
+        return digit;
     }
 
     private static String escapeJson(String s) {
@@ -192,25 +252,16 @@ public final class GeoInfo {
     }
 
     // =========================================================================
-    // 语义 Getter 全集 (Ult 25 字段)
+    // 语义 Getter 全集 (Ult 25 字段；空值兜底标准见 SDK 规范 §6.3)
     // =========================================================================
 
     public String getCidr() { return get("cidr"); }
     public String getCountry() { return get("country"); }
-    public String getCountryEn() {
-        String val = get("country_en");
-        return !val.isEmpty() ? val : getCountry();
-    }
+    public String getCountryEn() { return get("country_en"); }
     public String getProvince() { return get("province"); }
-    public String getProvinceEn() {
-        String val = get("province_en");
-        return !val.isEmpty() ? val : getProvince();
-    }
+    public String getProvinceEn() { return get("province_en"); }
     public String getCity() { return get("city"); }
-    public String getCityEn() {
-        String val = get("city_en");
-        return !val.isEmpty() ? val : getCity();
-    }
+    public String getCityEn() { return get("city_en"); }
     public String getDistrict() { return get("district"); }
 
     public Long getGeoId() {
@@ -233,10 +284,7 @@ public final class GeoInfo {
 
     public String getTimezone() { return get("timezone"); }
     public String getIsp() { return get("isp"); }
-    public String getIspEn() {
-        String val = get("isp_en");
-        return !val.isEmpty() ? val : getIsp();
-    }
+    public String getIspEn() { return get("isp_en"); }
 
     public Long getAsn() {
         String val = get("asn");

@@ -76,6 +76,9 @@ public class FullAccuracyAndPerfTester {
             }
 
             System.out.println("\n----------------------------------------------------------------------------------");
+            if (mappedSkipped > 0) {
+                System.out.println(" 规范 §9.7 排除项: " + mappedSkipped + " 条 IPv4-mapped IPv6 网段行（经剥离后走 V4 Trie，V6 侧真值行不可达）");
+            }
             if (totalErrors == 0) {
                 System.out.println(" 真实 Ground Truth 比对结果: 100% 精确对齐 (PASSED)");
             } else {
@@ -164,6 +167,13 @@ public class FullAccuracyAndPerfTester {
         String cleanIp = ip != null ? ip.trim() : "";
         // 保留/未分配网段或 0.0.0.0 / 0:0 跳过
         if (cleanIp.isEmpty() || "0.0.0.0".equals(cleanIp) || "0:0".equals(cleanIp) || "0".equals(cleanIp) || "::".equals(cleanIp)) return 0;
+
+        // 规范 §9.7：IPv4-mapped IPv6 (::ffff:0:0/96) 一律剥离映射前缀改走 V4 Trie，
+        // 其 V6 侧真值行在公共 API 下不可达；等价 V4 网段（如 0.0.0.0/8）已按普通 V4 行单独校验。
+        if (isV4MappedLiteral(cleanIp)) {
+            mappedSkipped++;
+            return 0;
+        }
 
         Optional<GeoInfo> infoOpt;
         try {
@@ -312,6 +322,16 @@ public class FullAccuracyAndPerfTester {
             System.err.println("   [ERROR] 压测过程出现异常: " + e.getMessage());
             e.printStackTrace();
         }
+    }
+
+    private static long mappedSkipped = 0;
+
+    /** 判断是否为 IPv4-mapped IPv6 字面量（::ffff:a.b.c.d 或其展开/十六进制形态），大小写不敏感。 */
+    private static boolean isV4MappedLiteral(String ip) {
+        String lower = ip.toLowerCase();
+        if (lower.startsWith("::ffff:")) return true;
+        String expanded = "0:0:0:0:0:ffff:";
+        return lower.startsWith(expanded) || lower.startsWith("0000:0000:0000:0000:0000:ffff:");
     }
 
     private static String[] parseCsvLine(String line) {

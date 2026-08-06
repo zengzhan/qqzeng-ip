@@ -91,10 +91,11 @@ public class ChainedReader {
                             String v = (i < vals.length && vals[i] != null) ? vals[i] : "";
 
                             if (mode == Mode.MERGE) {
-                                // 先注册者优先
-                                mergedMap.putIfAbsent(f, v);
+                                // 先注册者优先：先注册库的非空值不被覆盖；
+                                // 先注册库该字段缺失/为空时，才用后面库的值补上（规范 §9.1）
+                                mergedMap.merge(f, v, (old, cur) -> old.isEmpty() ? cur : old);
                             } else {
-                                // 后注册者覆盖
+                                // 后注册者覆盖：后注册库的非空值覆盖先注册库
                                 if (!v.isEmpty() || !mergedMap.containsKey(f)) {
                                     mergedMap.put(f, v);
                                 }
@@ -175,6 +176,32 @@ public class ChainedReader {
             }
         }
         return results;
+    }
+
+    public List<BatchResult> findBatchFields(List<String> ips, String[] fields) {
+        if (ips == null) return Collections.emptyList();
+        List<BatchResult> results = new ArrayList<>(ips.size());
+        for (String ip : ips) {
+            try {
+                Optional<GeoInfo> info = findFields(ip, fields);
+                results.add(new BatchResult(ip, info, null));
+            } catch (QzdbException e) {
+                results.add(new BatchResult(ip, Optional.empty(), e));
+            }
+        }
+        return results;
+    }
+
+    public java.util.stream.Stream<BatchResult> findStream(java.util.stream.Stream<String> ips) {
+        if (ips == null) return java.util.stream.Stream.empty();
+        return ips.map(ip -> {
+            try {
+                Optional<GeoInfo> info = find(ip);
+                return new BatchResult(ip, info, null);
+            } catch (QzdbException e) {
+                return new BatchResult(ip, Optional.empty(), e);
+            }
+        });
     }
 
     // =========================================================================
