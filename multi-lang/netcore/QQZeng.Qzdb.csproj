@@ -25,7 +25,7 @@
     <Description>Official .NET SDK for the QQZeng QZDB IP geolocation database. Offline, dependency-free, high-performance IPv4/IPv6 lookup with a lock-free, hot-reloadable reader/registry API. 纯离线 IP 地理定位数据库官方 .NET SDK，零依赖、支持热更新。</Description>
     <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageTags>ip;geolocation;qqzeng;qzdb;ipv4;ipv6;offline;ipdatabase;network;lookup</PackageTags>
-    <PackageProjectUrl>https://github.com/zengzhan/qqzeng-ip</PackageProjectUrl>
+    <PackageProjectUrl>https://github.com/zengzhan/qqzeng-ip/tree/main/qzdb/netcore</PackageProjectUrl>
     <RepositoryUrl>https://github.com/zengzhan/qqzeng-ip</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
