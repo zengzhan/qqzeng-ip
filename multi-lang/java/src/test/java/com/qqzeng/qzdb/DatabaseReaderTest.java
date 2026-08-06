@@ -199,6 +199,14 @@ public class DatabaseReaderTest {
                 assertTrue(!infoOpt.get().toPipeString().isEmpty(), "pipe non-empty");
             });
 
+            // Test 14: CIDR 网段反查 API 测试 (lookupCidr)
+            test("14. CIDR 网段反查测试 (lookupCidr)", () -> {
+                String cidr1 = reader.lookupCidr("223.5.5.5");
+                assertNotNull(cidr1, "cidr for 223.5.5.5 non-null");
+                assertTrue(cidr1.contains("/"), "cidr contains slash: " + cidr1);
+                System.out.println("   [CIDR Output]: 223.5.5.5 -> " + cidr1);
+            });
+
             test("B3. IPv4-Mapped IPv6 自动降级与直查一致", () -> {
                 Optional<GeoInfo> direct = reader.find("223.5.5.5");
                 Optional<GeoInfo> mapped = reader.find("::ffff:223.5.5.5");

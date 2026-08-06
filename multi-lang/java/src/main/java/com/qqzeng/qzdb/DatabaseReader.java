@@ -936,6 +936,50 @@ public class DatabaseReader implements AutoCloseable {
     }
 
     // =========================================================================
+    // CIDR 反查 API（由 Trie 匹配深度重建，数据库本身不存储 CIDR）
+    // =========================================================================
+
+    /**
+     * 返回包含该 IP 的最具体网段的标准 CIDR（如 "1.0.1.0/24"、"2001:218::/32"）。
+     * <p>
+     * 原理：QZDB Trie 每个叶子对应构建时的一条 CIDR 记录，叶子深度 = 前缀长度 N；
+     * 将 IP 的高 N 位保留、主机位清零即得网络地址（FORMAT §4.3 单比特步进，无跳层压缩）。
+     * Jump Table 直接命中叶子时前 16/JumpBits 位内的深度信息被压缩，内部自动从根补走重建。
+     * <p>
+     * IPv4-mapped IPv6 按规范 §9.7 剥离后走 V4 Trie，返回 V4 CIDR。未覆盖返回 null。
+     */
+    public String lookupCidr(String ipStr) {
+        if (ipStr == null) return null;
+        String ip = ipStr.trim();
+        if (ip.isEmpty()) return null;
+        Snapshot snap = requireSnapshot();
+        try {
+            if (ip.indexOf(':') >= 0) {
+                byte[] bytes = parseIPv6Bytes(ip);
+                if (isV4MappedBytes(bytes)) {
+                    int v4 = v4FromMappedBytes(bytes);
+                    int n = lookupV4PrefixLen(snap, v4);
+                    return n < 0 ? null : formatV4Cidr(v4, n);
+                }
+                int n = lookupV6PrefixLen(snap, bytes);
+                return n < 0 ? null : formatV6Cidr(bytes, n);
+            }
+            int v4 = parseIPv4Uint(ip);
+            int n = lookupV4PrefixLen(snap, v4);
+            return n < 0 ? null : formatV4Cidr(v4, n);
+        } catch (QzdbException e) {
+            return null;
+        }
+    }
+
+    /** IPv4 数值入口的 CIDR 反查。未覆盖返回 null。 */
+    public String lookupCidrUint(int ipInt) {
+        Snapshot snap = requireSnapshot();
+        int n = lookupV4PrefixLen(snap, ipInt);
+        return n < 0 ? null : formatV4Cidr(ipInt, n);
+    }
+
+    // =========================================================================
     // 热更新 reload API（影子对象 + CRC 强制 + 原子替换，SDK 规范 §4.3）
     // =========================================================================
 
@@ -1252,6 +1296,148 @@ public class DatabaseReader implements AutoCloseable {
             val = (val << 1) | bit;
         }
         return val;
+    }
+
+    // =========================================================================
+    // 前缀长度重建（CIDR 反查核心：叶子深度 = 前缀位数）
+    // =========================================================================
+
+    /**
+     * V4 前缀长度。Jump 命中叶子时深度信息在跳表内被压缩（≤16 的某个值），
+     * 需从根重走得到精确深度；Jump 返回内节点则深度 = 16 + 后续步数。
+     */
+    private static int lookupV4PrefixLen(Snapshot s, int ipInt) {
+        if (!s.hasV4 || s.offV4Jump <= 0) return -1;
+        int ptr = readU32(s.data, (int) (s.offV4Jump + (((ipInt >>> 16) & 0xFFFF) * 4L)));
+        if (ptr == 0) return -1;
+        if ((ptr & SENTINEL) != 0) {
+            return walkV4Depth(s, ipInt, 0, 0, 16);
+        }
+        return walkV4Depth(s, ipInt, ptr, 16, 32);
+    }
+
+    private static int walkV4Depth(Snapshot s, int ipInt, int startIdx, int startDepth, int maxDepth) {
+        if (startDepth >= maxDepth) return -1;
+        int idx = startIdx;
+        final ByteBuffer d = s.data;
+        final long nOff = s.offV4Nodes;
+        final int nodeCount = s.v4NodeCount;
+
+        if (s.v4Node24) {
+            for (int depth = startDepth; depth < maxDepth; depth++) {
+                if (idx >= nodeCount) return -1;
+                int bit = (ipInt >>> (31 - depth)) & 1;
+                int child = readU24(d, (int) (nOff + (long) idx * 6 + (bit == 0 ? 0 : 3)));
+                if ((child & 0x800000) != 0) return depth + 1;
+                if (child == 0) return -1;
+                idx = child;
+            }
+        } else {
+            for (int depth = startDepth; depth < maxDepth; depth++) {
+                if (idx >= nodeCount) return -1;
+                int bit = (ipInt >>> (31 - depth)) & 1;
+                int child = readU32(d, (int) (nOff + (long) idx * 8 + (bit == 0 ? 0 : 4)));
+                if ((child & SENTINEL) != 0) return depth + 1;
+                if (child == 0) return -1;
+                idx = child;
+            }
+        }
+        return -1;
+    }
+
+    /** V6 前缀长度。Jump 命中叶子时从根重走（≤ jumpBits 步）。 */
+    private static int lookupV6PrefixLen(Snapshot s, byte[] ip16) {
+        if (!s.hasV6 || s.offV6Jump <= 0 || ip16.length != 16) return -1;
+        final int jumpBits = s.v6JumpBits;
+        int pref = readPrefixBits(ip16, jumpBits);
+        int ptr = readU32(s.data, (int) (s.offV6Jump + (long) pref * 4));
+        if (ptr == 0) return -1;
+        if ((ptr & SENTINEL) != 0) {
+            return walkV6Depth(s, ip16, 0, 0, jumpBits);
+        }
+        return walkV6Depth(s, ip16, ptr, jumpBits, 128);
+    }
+
+    private static int walkV6Depth(Snapshot s, byte[] ip16, int startIdx, int startDepth, int maxDepth) {
+        if (startDepth >= maxDepth) return -1;
+        int idx = startIdx;
+        final ByteBuffer d = s.data;
+        final long nOff = s.offV6Nodes;
+        final int nodeCount = s.v6NodeCount;
+
+        if (s.v6Node24) {
+            for (int depth = startDepth; depth < maxDepth; depth++) {
+                if (idx >= nodeCount) return -1;
+                int bit = (ip16[depth >> 3] >>> (7 - (depth & 7))) & 1;
+                int child = readU24(d, (int) (nOff + (long) idx * 6 + (bit == 0 ? 0 : 3)));
+                if ((child & 0x800000) != 0) return depth + 1;
+                if (child == 0) return -1;
+                idx = child;
+            }
+        } else {
+            for (int depth = startDepth; depth < maxDepth; depth++) {
+                if (idx >= nodeCount) return -1;
+                int bit = (ip16[depth >> 3] >>> (7 - (depth & 7))) & 1;
+                int child = readU32(d, (int) (nOff + (long) idx * 8 + (bit == 0 ? 0 : 4)));
+                if ((child & SENTINEL) != 0) return depth + 1;
+                if (child == 0) return -1;
+                idx = child;
+            }
+        }
+        return -1;
+    }
+
+    // =========================================================================
+    // CIDR 格式化（网络地址 = IP 高 N 位；V6 按 RFC 5952 压缩）
+    // =========================================================================
+
+    private static String formatV4Cidr(int ipInt, int n) {
+        int net = n == 0 ? 0 : (ipInt & (int) (0xFFFFFFFFL << (32 - n)));
+        return ((net >>> 24) & 0xFF) + "." + ((net >>> 16) & 0xFF) + "."
+                + ((net >>> 8) & 0xFF) + "." + (net & 0xFF) + "/" + n;
+    }
+
+    private static String formatV6Cidr(byte[] ip16, int n) {
+        byte[] net = ip16.clone();
+        for (int bit = n; bit < 128; bit++) {
+            net[bit >> 3] &= (byte) ~(1 << (7 - (bit & 7)));
+        }
+        int[] g = new int[8];
+        for (int i = 0; i < 8; i++) {
+            g[i] = ((net[2 * i] & 0xFF) << 8) | (net[2 * i + 1] & 0xFF);
+        }
+        // RFC 5952：最长全零组段（并列取最左），长度 ≥2 才压缩
+        int bestStart = -1, bestLen = 0, curStart = -1, curLen = 0;
+        for (int i = 0; i < 8; i++) {
+            if (g[i] == 0) {
+                if (curStart < 0) { curStart = i; curLen = 1; } else curLen++;
+            } else {
+                if (curLen > bestLen) { bestStart = curStart; bestLen = curLen; }
+                curStart = -1; curLen = 0;
+            }
+        }
+        if (curLen > bestLen) { bestStart = curStart; bestLen = curLen; }
+
+        StringBuilder sb = new StringBuilder(44);
+        if (bestLen >= 2) {
+            for (int i = 0; i < bestStart; i++) {
+                if (i > 0) sb.append(':');
+                sb.append(Integer.toHexString(g[i]));
+            }
+            sb.append("::");
+            boolean first = true;
+            for (int i = bestStart + bestLen; i < 8; i++) {
+                if (!first) sb.append(':');
+                sb.append(Integer.toHexString(g[i]));
+                first = false;
+            }
+        } else {
+            for (int i = 0; i < 8; i++) {
+                if (i > 0) sb.append(':');
+                sb.append(Integer.toHexString(g[i]));
+            }
+        }
+        return sb.append('/').append(n).toString();
     }
 
     // =========================================================================
