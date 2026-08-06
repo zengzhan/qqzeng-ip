@@ -1,21 +1,17 @@
-/**
- * QzdbSearcher - C# SDK calling example
- *
- * Usage: dotnet run
- * Place qqzeng_ip_std_china.qzdb in the same directory or specify the path.
- */
-
-using System;
-using System.IO;
+using Qzdb;
+using System.Globalization;
+using System.Diagnostics;
 
 class Program
 {
-    static string FindDb()
+    static string? FindDb()
     {
         foreach (var c in new[] {
-            "qqzeng_ip_std_china.qzdb",
+            "test_data_202608/std/china/qqzeng_ip_std_china.qzdb",
+            "../test_data_202608/std/china/qqzeng_ip_std_china.qzdb",
+            "../../test_data_202608/std/china/qqzeng_ip_std_china.qzdb",
+            "multi-lang/test_data_202608/std/china/qqzeng_ip_std_china.qzdb",
             "../data/qqzeng_ip_std_china.qzdb",
-            "data/qqzeng_ip_std_china.qzdb",
         })
         {
             if (File.Exists(c)) return c;
@@ -32,25 +28,33 @@ class Program
             return;
         }
 
-        var searcher = new Qqzeng.QzdbSearcher();
-        searcher.Load(dbPath);
+        using var reader = new DatabaseReader.Builder(dbPath).Build();
 
-        Console.WriteLine($"Version: {searcher.Version}");
-        Console.WriteLine($"Fields ({searcher.FieldNames.Length}): {string.Join(", ", searcher.FieldNames)}\n");
+        Console.WriteLine($"Version: {reader.Version}");
+        Console.WriteLine($"Edition: {reader.Edition}");
+        Console.WriteLine($"DataMonth: {reader.DataMonth}");
+        Console.WriteLine($"Fields: {string.Join(", ", reader.FieldNames)}");
+        Console.WriteLine();
 
         foreach (var ip in new[] { "114.114.114.114", "223.5.5.5", "8.8.8.8" })
         {
-            Console.WriteLine($"find(\"{ip.PadRight(16)}\") => {searcher.FindStr(ip)}");
+            var info = reader.Find(ip);
+            Console.WriteLine($"Find(\"{ip}\") => {(info != null ? info.ToPipe() : "null")}");
         }
-        Console.WriteLine($"find(\"2408:8000:9000::1\") => {searcher.FindStr("2408:8000:9000::1")}");
 
-        Console.WriteLine("\n--- Structured fields for 114.114.114.114 ---");
-        var loc = searcher.Find("114.114.114.114");
-        if (loc != null)
+        Console.WriteLine($"\nFind(\"2408:8000:9000::1\") => {reader.FindStr("2408:8000:9000::1")}");
+        Console.WriteLine($"LookupRowId(\"223.5.5.5\") => {reader.LookupRowId("223.5.5.5")}");
+
+        // Perf benchmark
+        const int iterations = 1_000_000;
+        var sw = Stopwatch.StartNew();
+        for (int i = 0; i < iterations; i++)
         {
-            for (int i = 0; i < searcher.FieldNames.Length; i++)
-                Console.WriteLine($"  {searcher.FieldNames[i]}: {loc.Get(searcher.FieldNames[i])}");
+            reader.Find("223.5.5.5");
         }
-        Console.WriteLine("TEST_PASS");
+        sw.Stop();
+        double qps = iterations / sw.Elapsed.TotalSeconds;
+        Console.WriteLine($"\nPerf: {qps:N0} QPS (single-thread, {sw.Elapsed.TotalSeconds:F2}s for {iterations:N0} ops)");
+        Console.WriteLine($"TEST_PASS");
     }
 }
