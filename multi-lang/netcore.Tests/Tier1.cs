@@ -5,7 +5,6 @@ using System.Globalization;
 class Program
 {
     static string BP = "";
-    static System.Random rng = new System.Random(42);
     static int tier1Pass = 0, tier1Fail = 0;
     static int tier2Nodes = 0, tier2Err = 0, tier2Ipv4 = 0, tier2Ipv6 = 0, tier2Excl = 0;
 
@@ -123,6 +122,52 @@ class Program
         foreach (var f in info4.FieldNames)
             T1(info4.Get(f) == infoMap.Get(f), "Dual: " + f + " matches");
 
+        // ===== 10. v2.4 新 API：FindUint / LookupRowIdUint / LookupRowIdBytes / LookupIds =====
+        uint wantRow = r.LookupRowId("223.5.5.5");
+        T1(wantRow > 0, "NewAPI: LookupRowId known");
+        T1(r.LookupRowIdUint(0xDF050505) == wantRow, "NewAPI: LookupRowIdUint == string path");
+        T1(r.LookupRowIdUint(0x01010101) == 0, "NewAPI: LookupRowIdUint unknown -> 0");
+        T1(r.LookupRowIdBytes(new byte[] { 0xDF, 0x05, 0x05, 0x05 }) == wantRow, "NewAPI: LookupRowIdBytes v4");
+        T1(r.LookupRowIdBytes(new byte[] { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xFF, 0xFF, 0xDF, 0x05, 0x05, 0x05 }) == wantRow,
+            "NewAPI: LookupRowIdBytes mapped v6");
+        T1(r.LookupRowIdBytes(null) == 0 && r.LookupRowIdBytes(new byte[3]) == 0, "NewAPI: LookupRowIdBytes bad input");
+        var fUint = r.FindUint(0xDF050505);
+        T1(fUint != null && fUint.ToPipe() == d, "NewAPI: FindUint == string path");
+        T1(r.FindUint(0) == null, "NewAPI: FindUint 0 null");
+        var ids = r.LookupIds(wantRow);
+        T1(ids.GeoId > 0, "NewAPI: LookupIds geoId");
+
+        // ===== 11. v2.4 新 API：FindFields / FindBatch =====
+        var ff = r.FindFields("223.5.5.5", new[] { "country", "province" });
+        T1(ff != null && ff.FieldNames.Length == 2, "NewAPI: FindFields projects 2 cols");
+        T1(ff.Get("country") == info4.Get("country"), "NewAPI: FindFields country matches");
+        var fb = r.FindBatch(new[] { "223.5.5.5", "8.8.8.8", "bad!!" });
+        T1(fb.Length == 3, "NewAPI: FindBatch count");
+        T1(fb[0].Info != null && fb[0].Info.ToPipe() == d, "NewAPI: FindBatch[0] valid");
+        T1(fb[1].Error == null, "NewAPI: FindBatch miss/no-error");
+        T1(fb[2].Error != null || fb[2].Info == null, "NewAPI: FindBatch bad input error");
+
+        // ===== 12. v2.4 新 API：Reload 生命周期 =====
+        var rl = new DatabaseReader.Builder(BP + "/std/china/qqzeng_ip_std_china.qzdb").Build();
+        T1(rl.Find("223.5.5.5") != null, "Reload: before");
+        rl.Reload(BP + "/std/china/qqzeng_ip_std_china.qzdb");
+        T1(rl.Find("223.5.5.5") != null, "Reload: after path");
+        var raw = System.IO.File.ReadAllBytes(BP + "/std/china/qqzeng_ip_std_china.qzdb");
+        rl.ReloadBuffer(raw);
+        T1(rl.Find("223.5.5.5") != null, "Reload: after buffer");
+        rl.Dispose();
+
+        // ===== 13. ChainedReader 多库联合 =====
+        using (var c1 = new DatabaseReader.Builder(BP + "/std/china/qqzeng_ip_std_china.qzdb").Build())
+        using (var c2 = new DatabaseReader.Builder(BP + "/std/china/qqzeng_ip_std_china.qzdb").Build())
+        {
+            using var chain = ChainedReader.Chain(c1, c2);
+            var ch = chain.Find("223.5.5.5");
+            T1(ch != null && ch.ToPipe() == d, "Chain: fallback find == single");
+            T1(chain.FindBatch(new[] { "223.5.5.5", "8.8.8.8" }).Length == 2, "Chain: batch");
+            T1(chain.FindUint(0xDF050505)?.ToPipe() == d, "Chain: FindUint");
+        }
+
         Console.WriteLine("Tier 1: " + tier1Pass + " pass, " + tier1Fail + " fail");
     }
 
@@ -224,12 +269,10 @@ class Program
             if (double.TryParse(exp, NumberStyles.Float, CultureInfo.InvariantCulture, out var e) &&
                 double.TryParse(act, NumberStyles.Float, CultureInfo.InvariantCulture, out var a))
                 return System.Math.Abs(e - a) < 0.001;
+            return false;
         }
         var normE = exp.ToLowerInvariant().Trim();
         var normA = act.ToLowerInvariant().Trim();
-        if (normE == normA) return true;
-        normE = normE.TrimEnd('0').TrimEnd('.');
-        normA = normA.TrimEnd('0').TrimEnd('.');
         if (normE == normA) return true;
         return normE.Replace("\"", "") == normA.Replace("\"", "");
     }

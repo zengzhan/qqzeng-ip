@@ -34,8 +34,20 @@ public sealed class GeoInfo
     public static string NormalizeKey(string key)
     {
         if (string.IsNullOrEmpty(key)) return "";
-        var sb = new StringBuilder(key.Length);
-        for (int i = 0; i < key.Length; i++)
+        int n = key.Length;
+        if (n <= 64)
+        {
+            Span<char> buf = stackalloc char[n];
+            int k = 0;
+            for (int i = 0; i < n; i++)
+            {
+                char c = key[i];
+                if (c != '_') buf[k++] = char.IsAsciiLetter(c) ? char.ToLowerInvariant(c) : c;
+            }
+            return new string(buf[..k]);
+        }
+        var sb = new StringBuilder(n);
+        for (int i = 0; i < n; i++)
         {
             char c = key[i];
             if (c != '_') sb.Append(char.IsAsciiLetter(c) ? char.ToLowerInvariant(c) : c);

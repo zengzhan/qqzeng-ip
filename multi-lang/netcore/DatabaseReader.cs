@@ -18,27 +18,19 @@ public sealed class DatabaseReader : IDisposable
     private const uint SentinelMask24 = 0x7FFFFF;
     private const uint SentinelMask31 = 0x7FFFFFFF;
     private const int MaxPoolCount = 1 << 24;
-    private const int CrcChunk = 1 << 20;
-    private static readonly byte[] Zero4 = new byte[4];
 
     private Snapshot? _activeSnapshot;
-    private readonly bool _ownsMemory;
 
-    private DatabaseReader(Snapshot snap, bool ownsMemory)
+    private DatabaseReader(Snapshot snap)
     {
         _activeSnapshot = snap;
-        _ownsMemory = ownsMemory;
     }
 
-    internal static Snapshot VolatileReadSnapshot(ref Snapshot? s) => Unsafe.As<Snapshot?, VolatileBox>(ref s)!.Value;
-
-    private sealed class VolatileBox { public Snapshot Value; }
-
-    private Snapshot SnapshotVolatileRead() => VolatileReadSnapshot(ref _activeSnapshot);
-
+    /// <summary>Volatile read of the active snapshot (acquire semantics for lock-free reload/dispose).</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private Snapshot RequireSnapshot()
     {
-        var s = _activeSnapshot;
+        var s = Volatile.Read(ref _activeSnapshot);
         if (s == null) throw new ObjectDisposedException(nameof(DatabaseReader));
         return s;
     }
@@ -62,12 +54,12 @@ public sealed class DatabaseReader : IDisposable
             if (_fileStream != null)
             {
                 var snap = Snapshot.FromStream(_fileStream, _groupIndex, _verifyCrc);
-                return new DatabaseReader(snap, true);
+                return new DatabaseReader(snap);
             }
             if (_buffer != null)
             {
                 var snap = Snapshot.FromBuffer(_buffer, _groupIndex, _verifyCrc);
-                return new DatabaseReader(snap, false);
+                return new DatabaseReader(snap);
             }
             throw new QzdbException(ErrorCode.InvalidParam, "Neither file path nor buffer was provided");
         }
@@ -584,6 +576,113 @@ public sealed class DatabaseReader : IDisposable
         return isV4 ? TrieWalkV4(snap, v4) : TrieWalkV6(snap, v6High, v6Low);
     }
 
+    public GeoInfo? FindUint(uint ipInt)
+    {
+        var snap = RequireSnapshot();
+        if (snap == null) return null;
+        uint rowId = TrieWalkV4(snap, ipInt);
+        return rowId > 0 ? ResolveRowId(snap, rowId) : null;
+    }
+
+    public uint LookupRowIdUint(uint ipInt)
+    {
+        var snap = RequireSnapshot();
+        return snap == null ? 0u : TrieWalkV4(snap, ipInt);
+    }
+
+    public uint LookupRowIdBytes(byte[]? ipBytes)
+    {
+        if (ipBytes == null) return 0;
+        var snap = RequireSnapshot();
+        if (snap == null) return 0;
+
+        if (ipBytes.Length == 16)
+        {
+            if (IsV4Mapped(ipBytes)) return TrieWalkV4(snap, V4FromMapped(ipBytes));
+            var (hi, lo) = V6FromBytes(ipBytes);
+            return TrieWalkV6(snap, hi, lo);
+        }
+        if (ipBytes.Length == 4)
+        {
+            uint v4 = (uint)((ipBytes[0] << 24) | (ipBytes[1] << 16) | (ipBytes[2] << 8) | ipBytes[3]);
+            return TrieWalkV4(snap, v4);
+        }
+        return 0;
+    }
+
+    public RowIds LookupIds(uint rowId)
+    {
+        var snap = RequireSnapshot();
+        if (snap == null || rowId >= (uint)snap._rowCount) return default;
+
+        var span = snap._data.Span;
+        long rOff = snap._offIPRow + (long)rowId * snap._ipRowSize;
+
+        uint geoId = ReadUintWidth(span, (int)rOff, snap._rowGeoWidth);
+        uint asnId = snap._rowAsnWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowGeoWidth), snap._rowAsnWidth) : 0;
+        uint usageId = snap._rowUsageWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowGeoWidth + snap._rowAsnWidth), snap._rowUsageWidth) : 0;
+
+        return new RowIds((int)geoId, (int)asnId, (int)usageId);
+    }
+
+    public GeoInfo? FindFields(string ipStr, string[]? fields)
+    {
+        if (ipStr == null) return null;
+        if (!TryParseIp(ipStr, out var v4, out var v6High, out var v6Low, out var isV4)) return null;
+
+        var snap = RequireSnapshot();
+        if (snap == null) return null;
+
+        uint rowId = isV4 ? TrieWalkV4(snap, v4) : TrieWalkV6(snap, v6High, v6Low);
+        if (rowId == 0) return null;
+
+        if (fields == null || fields.Length == 0) return ResolveRowId(snap, rowId);
+        return ResolveFields(snap, rowId, fields);
+    }
+
+    public BatchResult[] FindBatch(IEnumerable<string> ipStrs)
+    {
+        if (ipStrs == null) return Array.Empty<BatchResult>();
+        var list = ipStrs as string[] ?? ipStrs.ToArray();
+        var results = new BatchResult[list.Length];
+        for (int i = 0; i < list.Length; i++) results[i] = FindResult(list[i]);
+        return results;
+    }
+
+    public BatchResult[] FindBatchFields(IEnumerable<string> ipStrs, IEnumerable<string>? fields)
+    {
+        if (ipStrs == null) return Array.Empty<BatchResult>();
+        var list = ipStrs as string[] ?? ipStrs.ToArray();
+        var flds = fields?.ToArray();
+        var results = new BatchResult[list.Length];
+        for (int i = 0; i < list.Length; i++)
+        {
+            try
+            {
+                var info = FindFields(list[i], flds);
+                results[i] = new BatchResult(info, null);
+            }
+            catch (QzdbException e) { results[i] = new BatchResult(null, e); }
+        }
+        return results;
+    }
+
+    public IEnumerable<BatchResult> FindStream(IEnumerable<string> ipStrs)
+    {
+        if (ipStrs == null) yield break;
+        foreach (var ip in ipStrs) yield return FindResult(ip);
+    }
+
+    private BatchResult FindResult(string ip)
+    {
+        try
+        {
+            var info = Find(ip);
+            return new BatchResult(info, null);
+        }
+        catch (QzdbException e) { return new BatchResult(null, e); }
+    }
+
     #endregion
 
     #region Unsafe Trie Walk (zero allocation, bypass bounds check)
@@ -608,10 +707,11 @@ public sealed class DatabaseReader : IDisposable
 
             if (snap._v4Node24)
             {
+                byte* nodesEnd = nodes + (long)snap._v4NodeCount * 6;
                 for (int step = 0; step < 16; step++)
                 {
-                    if (idx >= (uint)snap._v4NodeCount) return 0;
                     byte* node = nodes + idx * 6;
+                    if (node >= nodesEnd) return 0;
                     int off = ((suffix >> 31) & 1) == 0 ? 0 : 3;
                     uint child = (uint)(node[off] | (node[off + 1] << 8) | (node[off + 2] << 16));
                     if ((child & 0x800000) != 0) return child & SentinelMask24;
@@ -622,10 +722,11 @@ public sealed class DatabaseReader : IDisposable
             }
             else
             {
+                uint* nodesEnd = (uint*)(nodes + (long)snap._v4NodeCount * 8);
                 for (int step = 0; step < 16; step++)
                 {
-                    if (idx >= (uint)snap._v4NodeCount) return 0;
                     uint* node = (uint*)(nodes + idx * 8);
+                    if (node >= nodesEnd) return 0;
                     uint bit = (suffix >> 31) & 1;
                     uint child = node[bit];
                     if ((child & Sentinel) != 0) return child & SentinelMask31;
@@ -658,11 +759,12 @@ public sealed class DatabaseReader : IDisposable
 
             if (snap._v6Node24)
             {
+                byte* nodesEnd = nodes + (long)snap._v6NodeCount * 6;
                 for (int depth = jumpBits; depth < 128; depth++)
                 {
-                     if (idx >= (uint)snap._v6NodeCount) return 0;
-                     uint bit2 = depth <= 63 ? (uint)((ipHigh >> (63 - depth)) & 1) : (uint)((ipLow >> (127 - depth)) & 1);
+                    uint bit2 = depth <= 63 ? (uint)((ipHigh >> (63 - depth)) & 1) : (uint)((ipLow >> (127 - depth)) & 1);
                     byte* node = nodes + idx * 6;
+                    if (node >= nodesEnd) return 0;
                     int off = bit2 == 0 ? 0 : 3;
                     uint child = (uint)(node[off] | (node[off + 1] << 8) | (node[off + 2] << 16));
                     if ((child & 0x800000) != 0) return child & SentinelMask24;
@@ -672,11 +774,12 @@ public sealed class DatabaseReader : IDisposable
             }
             else
             {
+                uint* nodesEnd = (uint*)(nodes + (long)snap._v6NodeCount * 8);
                 for (int depth = jumpBits; depth < 128; depth++)
                 {
-                    if (idx >= (uint)snap._v6NodeCount) return 0;
                     uint bit = depth <= 63 ? (uint)((ipHigh >> (63 - depth)) & 1) : (uint)((ipLow >> (127 - depth)) & 1);
                     uint* node = (uint*)(nodes + idx * 8);
+                    if (node >= nodesEnd) return 0;
                     uint child = node[bit];
                     if ((child & Sentinel) != 0) return child & SentinelMask31;
                     if (child == 0) return 0;
@@ -756,6 +859,69 @@ public sealed class DatabaseReader : IDisposable
         return new GeoInfo(snap._fieldNames, values, snap._normMap, snap._numericFlags);
     }
 
+    private static GeoInfo? ResolveFields(Snapshot snap, uint rowId, string[] fields)
+    {
+        if (rowId >= snap._rowCount) return null;
+
+        var span = snap._data.Span;
+        long rOff = snap._offIPRow + (long)rowId * snap._ipRowSize;
+
+        uint geoId = ReadUintWidth(span, (int)rOff, snap._rowGeoWidth);
+        uint asnId = snap._rowAsnWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowGeoWidth), snap._rowAsnWidth) : 0;
+        uint usageId = snap._rowUsageWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowGeoWidth + snap._rowAsnWidth), snap._rowUsageWidth) : 0;
+
+        int mask = snap._groupDimMasks[snap._groupIndex];
+        uint entryId = (mask & 0x02) != 0 ? asnId : (mask & 0x04) != 0 ? usageId : geoId;
+
+        if (entryId == 0) return null;
+
+        int gi = snap._groupIndex;
+        int fc = snap._groupFieldCounts[gi];
+        long entryOff = snap._groupEntryOffsets[gi] + (long)entryId * snap._groupStrides[gi];
+
+        var widths = snap._groupFieldWidths[gi];
+        var offsets = snap._groupFieldOffsets[gi];
+        var natives = snap._groupFieldNative[gi];
+        var natTypes = snap._groupFieldNativeType[gi];
+        var groupPools = snap._pools[gi];
+        var normMap = snap._normMap;
+
+        var names = new List<string>(fields.Length);
+        var values = new List<string>(fields.Length);
+        foreach (var f in fields)
+        {
+            if (string.IsNullOrEmpty(f) || !normMap.TryGetValue(GeoInfo.NormalizeKey(f), out var fi) || fi >= fc) continue;
+            int w = widths[fi];
+            int fo = (int)(entryOff + offsets[fi]);
+            string val;
+            if (natives[fi])
+            {
+                int nt = natTypes[fi];
+                if (nt == 1)
+                {
+                    ref var r = ref Unsafe.Add(ref MemoryMarshal.GetReference(span), fo);
+                    val = w == 4
+                        ? Unsafe.ReadUnaligned<float>(ref r).ToString("F6", System.Globalization.CultureInfo.InvariantCulture)
+                        : Unsafe.ReadUnaligned<double>(ref r).ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
+                }
+                else
+                {
+                    val = ReadUintWidth(span, fo, w).ToString();
+                }
+            }
+            else
+            {
+                uint idx = ReadUintWidth(span, fo, w);
+                var pool = groupPools[fi];
+                val = idx < (uint)pool.Length ? pool[(int)idx] : "";
+            }
+            names.Add(snap._fieldNames[fi]);
+            values.Add(val);
+        }
+        if (names.Count == 0) return null;
+        return new GeoInfo(names.ToArray(), values.ToArray(), GeoInfo.BuildNormalizedMap(names.ToArray()), null);
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static uint ReadUintWidth(ReadOnlySpan<byte> s, int off, int width) => width switch
     {
@@ -780,14 +946,8 @@ public sealed class DatabaseReader : IDisposable
     private static uint V4FromMapped(byte[] b) =>
         (uint)((b[12] << 24) | (b[13] << 16) | (b[14] << 8) | b[15]);
 
-    private static (ulong hi, ulong lo) V6FromBytes(byte[] b)
-    {
-        ulong hi = 0;
-        for (int i = 0; i < 8; i++) hi = (hi << 8) | b[i];
-        ulong lo = 0;
-        for (int i = 8; i < 16; i++) lo = (lo << 8) | b[i];
-        return (hi, lo);
-    }
+    private static (ulong hi, ulong lo) V6FromBytes(byte[] b) =>
+        (BinaryPrimitives.ReadUInt64BigEndian(b), BinaryPrimitives.ReadUInt64BigEndian(b.AsSpan(8)));
 
     #endregion
 
@@ -798,7 +958,13 @@ public sealed class DatabaseReader : IDisposable
     {
         v4 = 0; v6High = 0; v6Low = 0; isV4 = false;
         if (s.IsEmpty || s.Length > 45) return false;
-        if (s.Contains(':'))
+
+        if (TryParseV4(s, out v4, out bool hasColon))
+        {
+            isV4 = true;
+            return true;
+        }
+        if (hasColon)
         {
             var r = TryParseV6(s);
             if (!r.Valid) return false;
@@ -812,7 +978,7 @@ public sealed class DatabaseReader : IDisposable
             v6Low = r.Low;
             return true;
         }
-        return TryParseV4(s, out v4) && (isV4 = true) == true;
+        return false;
     }
 
     private static readonly byte[] HexLUT = new byte[128];
@@ -830,11 +996,13 @@ public sealed class DatabaseReader : IDisposable
         }
     }
 
-    private static bool TryParseV4(ReadOnlySpan<char> s, out uint v4)
+    private static bool TryParseV4(ReadOnlySpan<char> s, out uint v4, out bool hasColon)
     {
         v4 = 0;
         int n = s.Length;
-        if (n == 0 || n > 15) return false;
+        if (n == 0) { hasColon = false; return false; }
+        if (n > 15) { hasColon = s.Contains(':'); return false; }
+        hasColon = false;
         uint result = 0;
         int val = 0, dots = 0, start = 0;
         for (int i = 0; i <= n; i++)
@@ -856,6 +1024,10 @@ public sealed class DatabaseReader : IDisposable
                 result = (result << 8) | (uint)val;
                 dots++;
                 start = i + 1;
+            }
+            else if (c == ':')
+            {
+                hasColon = true;
             }
         }
         if (dots != 4) return false;
@@ -884,25 +1056,51 @@ public sealed class DatabaseReader : IDisposable
         ReadOnlySpan<char> left = dc >= 0 ? s[..dc] : s;
         ReadOnlySpan<char> right = dc >= 0 ? s[(dc + 2)..] : ReadOnlySpan<char>.Empty;
 
-        string[] leftStrs = left.IsEmpty ? Array.Empty<string>() : left.ToString().Split(':');
-        string[] rightStrs = right.IsEmpty ? Array.Empty<string>() : right.ToString().Split(':');
-
-        List<string> leftGroups = new(8);
-        foreach (var seg in leftStrs) { if (seg.Length > 0) leftGroups.Add(seg); }
-
-        List<string> rightGroups = new(8);
-        foreach (var seg in rightStrs) { if (seg.Length > 0) rightGroups.Add(seg); }
-
+        // Parse colon-separated non-empty segments of both halves into a stack buffer.
+        Span<ushort> groups = stackalloc ushort[8];
+        int leftCount = 0, rightCount = 0;
         bool hasV4 = false;
         uint v4Int = 0;
-        if (rightGroups.Count > 0 && rightGroups[^1].Contains('.'))
+
+        for (int half = 0; half < 2; half++)
         {
-            if (!TryParseV4(rightGroups[^1], out v4Int)) return r;
-            hasV4 = true;
-            rightGroups.RemoveAt(rightGroups.Count - 1);
+            ReadOnlySpan<char> segs = half == 0 ? left : right;
+            int segStart = 0;
+            for (int i = 0; i <= segs.Length; i++)
+            {
+                if (i == segs.Length || segs[i] == ':')
+                {
+                    int len = i - segStart;
+                    if (len > 0)
+                    {
+                        ReadOnlySpan<char> seg = segs.Slice(segStart, len);
+                        bool isLastRight = half == 1 && i == segs.Length;
+                        if (isLastRight && seg.Contains('.'))
+                        {
+                            if (!TryParseV4(seg, out v4Int, out _)) return r;
+                            hasV4 = true;
+                        }
+                        else
+                        {
+                            if (!TryParseHexGroup(seg, out ushort gv)) return r;
+                            if (half == 0)
+                            {
+                                if (leftCount >= 8) return r;
+                                groups[leftCount++] = gv;
+                            }
+                            else
+                            {
+                                if (rightCount >= 8) return r;
+                                groups[leftCount + rightCount++] = gv;
+                            }
+                        }
+                    }
+                    segStart = i + 1;
+                }
+            }
         }
 
-        int totalGroups = leftGroups.Count + rightGroups.Count;
+        int totalGroups = leftCount + rightCount;
         int v4Slots = hasV4 ? 2 : 0;
         int zeros;
         if (dc >= 0)
@@ -916,31 +1114,17 @@ public sealed class DatabaseReader : IDisposable
             zeros = 0;
         }
 
-        foreach (var g in leftGroups)
-        {
-            if (g.Length == 0 || g.Length > 4) return r;
-            foreach (var cc in g) { if (cc >= 128 || (HexLUT[cc] == 0 && cc != '0')) return r; }
-        }
-        foreach (var g in rightGroups)
-        {
-            if (g.Length == 0 || g.Length > 4) return r;
-            foreach (var cc in g) { if (cc >= 128 || (HexLUT[cc] == 0 && cc != '0')) return r; }
-        }
-
-        byte[] buf = new byte[16];
+        // Compose 16 bytes: left groups, zeros, right groups, optional IPv4 tail.
+        Span<byte> buf = stackalloc byte[16];
         int off = 0;
-        foreach (var g in leftGroups)
+        for (int g = 0; g < leftCount; g++, off += 2)
         {
-            int v = 0;
-            foreach (var c in g) v = (v << 4) | HexLUT[c];
-            buf[off++] = (byte)(v >> 8); buf[off++] = (byte)v;
+            buf[off] = (byte)(groups[g] >> 8); buf[off + 1] = (byte)groups[g];
         }
         off += zeros * 2;
-        foreach (var g in rightGroups)
+        for (int g = leftCount; g < leftCount + rightCount; g++, off += 2)
         {
-            int v = 0;
-            foreach (var c in g) v = (v << 4) | HexLUT[c];
-            buf[off++] = (byte)(v >> 8); buf[off++] = (byte)v;
+            buf[off] = (byte)(groups[g] >> 8); buf[off + 1] = (byte)groups[g];
         }
         if (hasV4)
         {
@@ -959,10 +1143,30 @@ public sealed class DatabaseReader : IDisposable
             return r;
         }
 
-        for (int i = 0; i < 8; i++) r.High = (r.High << 8) | buf[i];
-        for (int i = 8; i < 16; i++) r.Low = (r.Low << 8) | buf[i];
+        ulong hi = 0, lo = 0;
+        for (int i = 0; i < 8; i++) hi = (hi << 8) | buf[i];
+        for (int i = 8; i < 16; i++) lo = (lo << 8) | buf[i];
+        r.High = hi;
+        r.Low = lo;
         r.Valid = true;
         return r;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static bool TryParseHexGroup(ReadOnlySpan<char> g, out ushort val)
+    {
+        val = 0;
+        int len = g.Length;
+        if (len == 0 || len > 4) return false;
+        for (int i = 0; i < len; i++)
+        {
+            char c = g[i];
+            if (c >= 128) return false;
+            byte h = HexLUT[c];
+            if (h == 0 && c != '0') return false;
+            val = (ushort)((val << 4) | h);
+        }
+        return true;
     }
 
     #endregion
@@ -1008,6 +1212,24 @@ public sealed class DatabaseReader : IDisposable
     #endregion
 
     #region Lifecycle
+
+    /// <summary>Atomically swap in a freshly loaded snapshot from <paramref name="path"/> (CRC always enforced).</summary>
+    public void Reload(string path)
+    {
+        using var fs = File.OpenRead(path);
+        int groupIndex = RequireSnapshot()._groupIndex;
+        var snap = Snapshot.FromStream(fs, groupIndex, verifyCrc: true);
+        Interlocked.Exchange(ref _activeSnapshot, snap);
+    }
+
+    /// <summary>Atomically swap in a freshly loaded snapshot from <paramref name="buffer"/> (CRC always enforced).</summary>
+    public void ReloadBuffer(byte[] buffer)
+    {
+        ArgumentNullException.ThrowIfNull(buffer);
+        int groupIndex = RequireSnapshot()._groupIndex;
+        var snap = Snapshot.FromBuffer(buffer, groupIndex, verifyCrc: true);
+        Interlocked.Exchange(ref _activeSnapshot, snap);
+    }
 
     public void Dispose()
     {
