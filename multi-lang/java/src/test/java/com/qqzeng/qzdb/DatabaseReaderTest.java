@@ -31,6 +31,7 @@ public class DatabaseReaderTest {
 
     private static int passed = 0;
     private static int failed = 0;
+    private static int assertions = 0;
 
     public static void main(String[] args) {
         System.out.println("==================================================");
@@ -59,6 +60,8 @@ public class DatabaseReaderTest {
         System.out.println("\n--------------------------------------------------");
         System.out.println(" 测试结果: passed=" + passed + " failed=" + failed
                 + (failed == 0 ? " (ALL PASSED)" : " (FAILED)"));
+        System.out.println(" 独立断言总数: " + assertions
+                + (assertions >= 50 ? " (≥50，满足 Tier 1 要求)" : " (<50，不满足 Tier 1 要求)"));
         System.out.println("--------------------------------------------------");
         if (failed > 0) System.exit(1);
     }
@@ -183,6 +186,43 @@ public class DatabaseReaderTest {
             assertEquals("-33.865101", df.format(-33.8651f), "float -33.8651 实际存储为 -33.865101...");
             assertEquals("0.000000", df.format(0.0f), "zero 6dp");
             assertEquals("180.000000", df.format(180.0f), "integer-valued float 6dp");
+        });
+
+        test("P9. 端口/CIDR/掩码/控制字符一律拒绝（§1.1/§1.4）", () -> {
+            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv4Uint("1.1.1.1:80"), "port form");
+            // 带端口（含冒号走 v6 路径会被拒）；此处验证 v4 解析器对非数字直接拒绝
+            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv4Uint("1.1.1.1/24"), "CIDR form");
+            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv4Uint("1.1.1.1 255.255.255.0"), "netmask form");
+            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv4Uint("1.1.1.+1"), "plus sign");
+            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv4Uint("1.1.1.-1"), "minus sign");
+            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv4Uint("1.1.1.1\u0000"), "control char");
+            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv6Bytes("2001:db8::1/64"), "v6 CIDR form");
+            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv6Bytes("[2001:db8::1]:80"), "v6 bracketed port");
+        });
+
+        test("P10. IPv6 压缩/全展开字节级一致（::1 与 2001:218::）（§1.2）", () -> {
+            assertTrue(Arrays.equals(
+                    DatabaseReader.parseIPv6Bytes("::1"),
+                    DatabaseReader.parseIPv6Bytes("0000:0000:0000:0000:0000:0000:0000:0001")), "::1 == expanded");
+            assertTrue(Arrays.equals(
+                    DatabaseReader.parseIPv6Bytes("2001:218::"),
+                    DatabaseReader.parseIPv6Bytes("2001:0218:0000:0000:0000:0000:0000:0000")), "2001:218:: == expanded");
+            // 末尾点分 IPv4 形态
+            assertTrue(Arrays.equals(
+                    DatabaseReader.parseIPv6Bytes("::ffff:1.2.3.4"),
+                    DatabaseReader.parseIPv6Bytes("::ffff:102:304")), "dotted == hex tail");
+        });
+
+        test("P11. GeoInfo 连字符/下划线归一化 + 空值安全（§2）", () -> {
+            GeoInfo g = new GeoInfo(new String[]{"country_code"}, new String[]{"CN"});
+            assertEquals("CN", g.get("country_code"), "underscore");
+            assertEquals("CN", g.get("countryCode"), "camel");
+            assertEquals("CN", g.get("COUNTRY_CODE"), "upper underscore");
+            assertEquals("CN", g.get("country-code"), "hyphen");
+            assertEquals("CN", g.get("Country-Code"), "mixed hyphen");
+            assertEquals("", g.get("no_such_field"), "missing -> empty string, no exception");
+            assertEquals("", g.get(null), "null key -> empty");
+            assertEquals("", g.get(""), "empty key -> empty");
         });
     }
 
@@ -382,6 +422,50 @@ public class DatabaseReaderTest {
                 r3.close();
                 tmp.delete();
             });
+
+            test("B16. 双栈一致性交叉断言：三种输入形式字段级一致（§9）", () -> {
+                Optional<GeoInfo> a = reader.find("223.5.5.5");
+                Optional<GeoInfo> b = reader.find("::ffff:223.5.5.5");
+                Optional<GeoInfo> c = reader.find("::ffff:df05:0505");
+                assertTrue(a.isPresent(), "plain v4 present");
+                assertTrue(b.isPresent(), "mapped dotted present");
+                assertTrue(c.isPresent(), "mapped hex present");
+                String pa = a.get().toPipeString();
+                assertEquals(pa, b.get().toPipeString(), "v4 == mapped dotted");
+                assertEquals(pa, c.get().toPipeString(), "v4 == mapped hex");
+                assertEquals(b.get().toPipeString(), c.get().toPipeString(), "dotted == hex");
+            });
+
+            test("B17. 非法 Mapped 拒绝（::ffff:256.1.1.1）（§1.3）", () -> {
+                assertThrowsInvalidIp(() -> reader.find("::ffff:256.1.1.1"), "mapped with invalid v4 tail");
+                assertThrowsInvalidIp(() -> reader.find("::ffff:1.2.3"), "mapped with short v4 tail");
+            });
+
+            test("B18. lookupCidr 错误语义：非法→INVALID_IP，未命中→null（§7）", () -> {
+                assertThrowsInvalidIp(() -> reader.lookupCidr("not-an-ip"), "invalid -> INVALID_IP");
+                assertThrowsInvalidIp(() -> reader.lookupCidr(""), "empty -> INVALID_IP");
+                assertThrowsInvalidIp(() -> reader.lookupCidr("1.1.1.1/24"), "CIDR form -> INVALID_IP");
+                // 未命中返回 null（用一个几乎必然不在库中的保留段地址）
+                assertNull(reader.lookupCidr("203.0.113.254"), "TEST-NET-3 miss -> null");
+            });
+
+            test("B19. 超长垃圾输入拒绝（≥10000 字符）（§1.4/§4）", () -> {
+                String longJunk = "1." + "1".repeat(10000) + ".1.1";
+                assertThrowsInvalidIp(() -> reader.find(longJunk), "10k-char junk");
+                assertThrowsInvalidIp(() -> reader.find("A".repeat(10000)), "10k-char alpha");
+            });
+
+            test("B20. CRC Fail-Closed：清零 CRC 字段拒绝加载（§5）", () -> {
+                byte[] bytes = Files.readAllBytes(dbFile.toPath());
+                // 清零偏移 16~19 的 CRC 字段（canonical 重算值几乎必然非 0 → 必须拒绝）
+                bytes[16] = 0; bytes[17] = 0; bytes[18] = 0; bytes[19] = 0;
+                try {
+                    new DatabaseReader.Builder(bytes).verifyCrc(true).build();
+                    fail("zeroed CRC field must be rejected (crc==0 must NOT pass)");
+                } catch (QzdbException e) {
+                    assertEquals(ErrorCode.CORRUPTED, e.getErrorCode(), "zeroed CRC -> CORRUPTED");
+                }
+            });
         } catch (Exception e) {
             System.err.println("[FAIL] 二进制测试套件异常: " + e);
             e.printStackTrace();
@@ -529,8 +613,8 @@ public class DatabaseReaderTest {
                 assertEquals(viaStr, r2.lookupCidrBytes(v4), "lookupCidrBytes(4B) == lookupCidr(String)");
                 byte[] mapped = DatabaseReader.parseIPv6Bytes("::ffff:223.5.5.5");
                 assertEquals(viaStr, r2.lookupCidrBytes(mapped), "lookupCidrBytes(16B mapped) == lookupCidr(String)");
-                assertNull(r2.lookupCidrBytes((byte[]) null), "null input -> null");
-                assertNull(r2.lookupCidrBytes(new byte[]{1, 2, 3}), "invalid length -> null");
+                assertThrowsInvalidIp(() -> r2.lookupCidrBytes((byte[]) null), "null -> INVALID_IP");
+                assertThrowsInvalidIp(() -> r2.lookupCidrBytes(new byte[]{1, 2, 3}), "invalid length -> INVALID_IP");
             });
 
             test("C5. getPoolCount / getGroupCount 自省", () -> {
@@ -600,6 +684,67 @@ public class DatabaseReaderTest {
                 assertTrue(ok.get() > 0, "at least some successful lookups: " + ok.get());
             }
         });
+
+        test("T2. 无锁热重载：reload 期间 16 线程并发查询零异常（§6）", () -> {
+            final int READERS = 16;
+            final int OPS = 20_000;
+            final DatabaseReader r = new DatabaseReader.Builder(dbFile).build();
+            try {
+                java.util.concurrent.atomic.AtomicInteger unexpected = new java.util.concurrent.atomic.AtomicInteger(0);
+                java.util.concurrent.atomic.AtomicLong done = new java.util.concurrent.atomic.AtomicLong(0);
+                java.util.concurrent.atomic.AtomicBoolean stop = new java.util.concurrent.atomic.AtomicBoolean(false);
+                java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(READERS);
+
+                for (int t = 0; t < READERS; t++) {
+                    new Thread(() -> {
+                        try {
+                            for (int i = 0; i < OPS && !stop.get(); i++) {
+                                String ip = (i % 255 + 1) + "." + ((i * 17) % 256) + "." + ((i * 131) % 256) + "." + (i % 254 + 1);
+                                try {
+                                    r.find(ip); // present 或 empty 均合法，关键是零 NPE / 零脏读
+                                    done.incrementAndGet();
+                                } catch (QzdbException e) {
+                                    if (e.getErrorCode() != ErrorCode.INVALID_IP) unexpected.incrementAndGet();
+                                } catch (Throwable other) {
+                                    unexpected.incrementAndGet(); // NPE / 脏读等
+                                }
+                            }
+                        } finally {
+                            latch.countDown();
+                        }
+                    }).start();
+                }
+
+                // 写线程：读线程运行期间反复 reload 同一合法文件（影子构建 + 原子切换）
+                int reloads = 0;
+                long deadline = System.nanoTime() + 3_000_000_000L; // 最多 3s
+                while (System.nanoTime() < deadline && latch.getCount() > 0) {
+                    try {
+                        r.reload(dbFile.getAbsolutePath());
+                        reloads++;
+                    } catch (QzdbException e) {
+                        unexpected.incrementAndGet();
+                    }
+                    Thread.sleep(50);
+                }
+                latch.await();
+
+                assertTrue(reloads > 0, "at least one reload happened: " + reloads);
+                assertEquals(0, unexpected.get(), "zero NPE / dirty-read / unexpected error during reload");
+                assertTrue(done.get() > 0, "readers made progress: " + done.get());
+
+                // reload 失败不影响现有快照
+                String before = r.find("223.5.5.5").map(GeoInfo::toPipeString).orElse("<none>");
+                try {
+                    r.reloadBuffer("junk".getBytes());
+                    fail("junk reloadBuffer must throw");
+                } catch (QzdbException expected) { /* old snapshot intact */ }
+                assertEquals(before, r.find("223.5.5.5").map(GeoInfo::toPipeString).orElse("<none>"),
+                        "old snapshot still serving after failed reload");
+            } finally {
+                r.close();
+            }
+        });
     }
 
     // =========================================================================
@@ -623,23 +768,28 @@ public class DatabaseReaderTest {
     }
 
     private static void assertThrowsInvalidIp(Runnable r, String msg) {
+        assertions++;
         try {
             r.run();
             fail("expected INVALID_IP: " + msg);
         } catch (QzdbException e) {
-            assertEquals(ErrorCode.INVALID_IP, e.getErrorCode(), msg);
+            if (e.getErrorCode() != ErrorCode.INVALID_IP) {
+                throw new AssertionError("expected INVALID_IP but got " + e.getErrorCode() + ": " + msg);
+            }
         }
     }
 
     private static void assertThrowsCorrupt(Runnable r) {
+        assertions++;
         try {
             r.run();
             fail("expected corruption exception");
         } catch (QzdbException e) {
-            assertTrue(e.getErrorCode() == ErrorCode.CORRUPTED
-                            || e.getErrorCode() == ErrorCode.BAD_MAGIC
-                            || e.getErrorCode() == ErrorCode.BAD_HEADER,
-                    "corrupt-family code, got " + e.getErrorCode());
+            if (!(e.getErrorCode() == ErrorCode.CORRUPTED
+                    || e.getErrorCode() == ErrorCode.BAD_MAGIC
+                    || e.getErrorCode() == ErrorCode.BAD_HEADER)) {
+                throw new AssertionError("corrupt-family code expected, got " + e.getErrorCode());
+            }
         }
     }
 
@@ -648,22 +798,27 @@ public class DatabaseReaderTest {
     }
 
     private static void assertTrue(boolean condition, String msg) {
+        assertions++;
         if (!condition) throw new AssertionError("AssertTrue failed: " + msg);
     }
 
     private static void assertFalse(boolean condition, String msg) {
+        assertions++;
         if (condition) throw new AssertionError("AssertFalse failed: " + msg);
     }
 
     private static void assertNotNull(Object obj, String msg) {
+        assertions++;
         if (obj == null) throw new AssertionError("AssertNotNull failed: " + msg);
     }
 
     private static void assertNull(Object obj, String msg) {
+        assertions++;
         if (obj != null) throw new AssertionError("AssertNull failed: " + msg);
     }
 
     private static void assertEquals(Object expected, Object actual, String msg) {
+        assertions++;
         if (expected == null && actual == null) return;
         if (expected != null && expected.equals(actual)) return;
         throw new AssertionError("AssertEquals failed [" + msg + "]: expected <" + expected + ">, but got <" + actual + ">");

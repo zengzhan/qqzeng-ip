@@ -76,14 +76,15 @@ public final class GeoInfo {
     }
 
     /**
-     * 归一化算法: 小写化并移除所有 '_'（SDK 规范 §6.1，8 语言逐字节一致）
+     * 归一化算法: 小写化并移除所有 '_' 与 '-'
+     * （QZDB_TEST_SPECIFICATION.md Tier 1 §2：country_code == countryCode == country-code 等价）。
      */
     public static String normalizeKey(String key) {
         if (key == null) return "";
         StringBuilder sb = new StringBuilder(key.length());
         for (int i = 0; i < key.length(); i++) {
             char c = key.charAt(i);
-            if (c != '_') {
+            if (c != '_' && c != '-') {
                 sb.append(Character.toLowerCase(c));
             }
         }
@@ -95,21 +96,24 @@ public final class GeoInfo {
      */
     public static boolean isNumericFieldName(String name) {
         if (name == null) return false;
-        // 与 normalizeKey(name) 等价的内联快路径（仅覆盖目标字段的常见形态）
-        switch (name.length()) {
-            case 3:
-                return name.equalsIgnoreCase("asn");
-            case 6:
-                return name.equalsIgnoreCase("geoid") || name.equalsIgnoreCase("geo_id");
-            case 8:
-                return name.equalsIgnoreCase("latitude");
-            case 9:
-                return name.equalsIgnoreCase("longitude");
-            default:
-                String norm = normalizeKey(name);
-                return norm.equals("longitude") || norm.equals("latitude")
-                        || norm.equals("asn") || norm.equals("geoid");
+        // 与 normalizeKey(name) 等价的内联快路径（仅对不含 '_'/'-' 的形态启用，保证与归一化结果恒一致）
+        if (name.indexOf('_') < 0 && name.indexOf('-') < 0) {
+            switch (name.length()) {
+                case 3:
+                    return name.equalsIgnoreCase("asn");
+                case 5:
+                    return name.equalsIgnoreCase("geoid");
+                case 8:
+                    return name.equalsIgnoreCase("latitude");
+                case 9:
+                    return name.equalsIgnoreCase("longitude");
+                default:
+                    return false;
+            }
         }
+        String norm = normalizeKey(name);
+        return norm.equals("longitude") || norm.equals("latitude")
+                || norm.equals("asn") || norm.equals("geoid");
     }
 
     /**

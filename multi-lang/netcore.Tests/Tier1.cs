@@ -1,4 +1,5 @@
 using Qzdb;
+using System.Diagnostics;
 using System.Globalization;
 
 class Program
@@ -11,7 +12,7 @@ class Program
     static int Main()
     {
         BP = Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, "..", "test_data_202608"));
-        Console.WriteLine("=== QZDB C# SDK Full Test Suite ===");
+        Console.WriteLine("=== QZDB C# SDK Full Test Suite (QZDB_TEST_SPECIFICATION.md) ===");
         RunTier1();
         RunTier2();
         RunTier3();
@@ -23,62 +24,105 @@ class Program
 
     static void RunTier1()
     {
-        Console.WriteLine("\n--- Tier 1: Unit & Boundary ---");
+        Console.WriteLine("\n--- Tier 1: Unit & Boundary (60+ assertions) ---");
         using var r = new DatabaseReader.Builder(BP + "/std/china/qqzeng_ip_std_china.qzdb").Build();
-        T1(r.Find("01.1.1.1") == null, "reject leading zero");
-        T1(r.Find("256.1.1.1") == null, "reject 256");
-        T1(r.Find("1.1.1") == null, "reject missing segment");
-        T1(r.Find("1.1.1.1.1") == null, "reject extra segment");
-        T1(r.Find("") == null, "reject empty");
-        T1(r.Find("   ") == null, "reject whitespace");
-        T1(r.Find("abc") == null, "reject non-numeric");
-        T1(r.Find("1.1.1.1:80") == null, "reject port");
-        T1(r.Find("1.1.1.1/24") == null, "reject CIDR");
-        T1(r.Find("fe80::1%eth0") == null, "reject zone ID");
-        T1(r.Find("1::2::3") == null, "reject double ::");
-        T1(r.Find("gggg::1") == null, "reject invalid hex");
-        T1(r.Find("12345::") == null, "reject group too long");
-        T1(r.Find("1:2:3") == null, "reject too few groups");
+
+        // ===== 1. IPv4 严格性 =====
+        T1(r.Find("0.0.0.0") == null, "IPv4: 0.0.0.0");
+        T1(r.Find("255.255.255.255") == null, "IPv4: 255.255.255.255");
+        T1(r.Find("192.168.0.1") == null, "IPv4: private 192.168.0.1");
+        T1(r.Find("223.5.5.5") != null, "IPv4: 223.5.5.5 valid");
+        T1(r.Find("01.1.1.1") == null, "IPv4: reject leading zero 01");
+        T1(r.Find("1.02.3.4") == null, "IPv4: reject leading zero 02");
+        T1(r.Find("1.1.1.01") == null, "IPv4: reject leading zero 01 end");
+        T1(r.Find("256.1.1.1") == null, "IPv4: reject 256");
+        T1(r.Find("1.1.1.256") == null, "IPv4: reject 256 seg");
+        T1(r.Find("1.300.1.1") == null, "IPv4: reject 300");
+        T1(r.Find("1.1.1") == null, "IPv4: reject 3 parts");
+        T1(r.Find("1.1") == null, "IPv4: reject 2 parts");
+        T1(r.Find("1") == null, "IPv4: reject 1 part");
+        T1(r.Find("1.1.1.1.1") == null, "IPv4: reject 5 parts");
+        T1(r.Find("") == null, "IPv4: reject empty");
+        T1(r.Find("   ") == null, "IPv4: reject whitespace");
+        T1(r.Find("abc.def.ghi.jkl") == null, "IPv4: reject alpha");
+        T1(r.Find("1.1.1.1:80") == null, "IPv4: reject port");
+        T1(r.Find("1.1.1.1/24") == null, "IPv4: reject CIDR");
+
+        // ===== 2. IPv6 规范性 =====
+        T1(r.Find("::ffff:223.5.5.5") != null, "IPv6: mapped resolves");
+        T1(r.Find("::1") == null, "IPv6: ::1 loopback null");
+        T1(r.Find("fe80::1%eth0") == null, "IPv6: reject zone ID");
+        T1(r.Find("fe80::1%1") == null, "IPv6: reject zone ID %1");
+        T1(r.Find("1::2::3") == null, "IPv6: reject double ::");
+        T1(r.Find("gggg::1") == null, "IPv6: reject invalid hex");
+        T1(r.Find("12345::") == null, "IPv6: reject group > 4 hex");
+        T1(r.Find("1:2:3") == null, "IPv6: reject too few groups");
+        T1(r.Find("1:2:3:4:5:6:7:8:9") == null, "IPv6: reject > 8 groups");
+        T1(r.Find("::ffff:256.1.1.1") == null, "IPv6: reject mapped bad v4");
+
+        // ===== 3. IPv4-Mapped 自动降级 =====
         var d = r.FindStr("223.5.5.5");
-        var m1 = r.FindStr("::ffff:223.5.5.5");
-        var m2 = r.FindStr("::ffff:df05:505");
-        T1(d == m1 && d == m2, "Mapped == direct");
-        T1(UsageType.FromString("DNS").IsKnown, "DNS known");
-        T1(UsageType.FromString("Cloud").IsKnown, "Cloud known");
-        T1(UsageType.FromString("FutureUnknown").IsKnown == false, "unknown type");
-        T1(UsageType.FromString("FutureUnknown").RawValue == "FutureUnknown", "unknown preserves raw");
-        T1(UsageType.FromString("").IsKnown, "empty -> Unknown");
-        T1(UsageType.FromString(null).IsKnown, "null -> Unknown");
-        T1(Enum.GetValues<KnownUsageType>().Length == 21, "21 types");
-        try { new DatabaseReader.Builder(new byte[] { (byte)'X', (byte)'Z' }).Build(); T1(false, "should throw"); }
-        catch (QzdbException) { T1(true, "corrupted file rejected"); }
-        var trunc = new byte[] { (byte)'Q', (byte)'Z', (byte)'D', (byte)'B' };
-        try { new DatabaseReader.Builder(trunc).Build(); T1(false, "should throw truncated"); }
-        catch (QzdbException) { T1(true, "truncated file rejected"); }
-        try {
-            var bytes = System.IO.File.ReadAllBytes(BP + "/std/china/qqzeng_ip_std_china.qzdb");
-            bytes[200] ^= 0xFF;
-            new DatabaseReader.Builder(bytes).VerifyCrc(true).Build();
-            T1(false, "should throw CRC");
-        } catch (QzdbException e) { T1(e.ErrorCode == ErrorCode.Corrupted, "CRC mismatch detected"); }
-        T1(r.VerifyCrc(), "CRC valid on healthy file");
+        T1(d == r.FindStr("::ffff:223.5.5.5"), "Mapped: dotted == direct");
+        T1(d == r.FindStr("::ffff:df05:505"), "Mapped: hex == direct");
+        T1(d == r.FindStr("0:0:0:0:0:ffff:df05:505"), "Mapped: full == direct");
+        T1(d == r.FindStr("0000:0000:0000:0000:0000:ffff:df05:505"), "Mapped: 4-digit groups");
+
+        // ===== 4. 字段名归一化 =====
         using (var r2 = new DatabaseReader.Builder(BP + "/max/china/qqzeng_ip_max_china.qzdb").Build())
         {
             var info = r2.Find("114.114.114.114");
-            T1(info.Get("country") == info.Get("COUNTRY"), "case insensitive");
-            T1(info.Get("country") == info.Get("Country"), "mixed case");
-            T1(info.Get("country_code") == info.Get("countrycode"), "underscore insensitive");
-            T1(info.Get("nonexistent") == "", "missing field empty");
-            T1(info.Get("") == "", "empty field empty");
+            T1(info.Get("country") == info.Get("COUNTRY"), "Norm: upper");
+            T1(info.Get("country") == info.Get("Country"), "Norm: mixed");
+            T1(info.Get("country_code") == info.Get("countrycode"), "Norm: underscore");
+            T1(info.Get("country_code") == info.Get("COUNTRY_CODE"), "Norm: all upper");
+            T1(info.Get("nonexistent_field") == "", "Norm: missing empty");
+            T1(info.Get("") == "", "Norm: empty empty");
+            T1(info.Get(null) == "", "Norm: null empty");
         }
+
+        // ===== 5. UsageType 21 场景 =====
+        T1(UsageType.FromString("DNS").IsKnown, "UT: DNS known");
+        T1(UsageType.FromString("Cloud").IsKnown, "UT: Cloud known");
+        T1(UsageType.FromString("AICrawler").IsKnown, "UT: AICrawler known");
+        T1(UsageType.FromString("Broadband").IsKnown, "UT: Broadband known");
+        T1(UsageType.FromString("FutureUnknownType").IsKnown == false, "UT: unknown");
+        T1(UsageType.FromString("FutureUnknownType").RawValue == "FutureUnknownType", "UT: raw preserved");
+        T1(UsageType.FromString("").IsKnown, "UT: empty -> Unknown");
+        T1(UsageType.FromString(null).IsKnown, "UT: null -> Unknown");
+        T1(Enum.GetValues<KnownUsageType>().Length == 21, "UT: 21 types");
+
+        // ===== 6. 恶意输入/损坏文件防御 =====
+        T1(r.Find(new string('X', 10000)) == null, "Malice: 10k garbage");
+        T1(r.Find("\x00\x01\x02") == null, "Malice: control chars");
+        try { new DatabaseReader.Builder(new byte[] { (byte)'X', (byte)'Z' }).Build(); T1(false, "should throw"); }
+        catch (QzdbException) { T1(true, "Corrupt: bad magic"); }
+        try { new DatabaseReader.Builder(new byte[] { (byte)'Q',(byte)'Z',(byte)'D',(byte)'B' }).Build(); T1(false, "should throw"); }
+        catch (QzdbException) { T1(true, "Corrupt: truncated"); }
+        try {
+            var b = System.IO.File.ReadAllBytes(BP + "/std/china/qqzeng_ip_std_china.qzdb");
+            b[200] ^= 0xFF;
+            new DatabaseReader.Builder(b).VerifyCrc(true).Build();
+            T1(false, "should throw CRC");
+        } catch (QzdbException e) { T1(e.ErrorCode == ErrorCode.Corrupted, "CRC: mismatch detected"); }
+        T1(r.VerifyCrc(), "CRC: valid on healthy");
+
+        // ===== 7. 资源释放 =====
         var rd = new DatabaseReader.Builder(BP + "/std/china/qqzeng_ip_std_china.qzdb").Build();
         rd.Dispose();
-        try { rd.Find("1.1.1.1"); T1(false, "should throw disposed"); }
-        catch (ObjectDisposedException) { T1(true, "disposed throws"); }
+        try { rd.Find("1.1.1.1"); T1(false, "should throw"); }
+        catch (ObjectDisposedException) { T1(true, "Dispose: throws OOD"); }
         var rd2 = new DatabaseReader.Builder(BP + "/std/china/qqzeng_ip_std_china.qzdb").Build();
         rd2.Dispose();
         rd2.Dispose();
-        T1(true, "double dispose idempotent");
+        T1(true, "Dispose: idempotent");
+
+
+        // ===== 9. 双栈一致性 =====
+        var info4 = r.Find("223.5.5.5");
+        var infoMap = r.Find("::ffff:223.5.5.5");
+        foreach (var f in info4.FieldNames)
+            T1(info4.Get(f) == infoMap.Get(f), "Dual: " + f + " matches");
+
         Console.WriteLine("Tier 1: " + tier1Pass + " pass, " + tier1Fail + " fail");
     }
 
@@ -100,26 +144,31 @@ class Program
 
     static void RunTier3()
     {
-        Console.WriteLine("\n--- Tier 3: Performance ---");
+        Console.WriteLine("\n--- Tier 3: Performance (Dual-Stack 1:1) ---");
         var ipv4 = GenerateIpv4(500000);
         var ipv6 = GenerateIpv6(500000);
         using var r = new DatabaseReader.Builder(BP + "/max/global/qqzeng_ip_max_global.qzdb").Build();
         for (int i = 0; i < 100000; i++) { r.Find(ipv4[i % ipv4.Length]); r.Find(ipv6[i % ipv6.Length]); }
-        var sw = System.Diagnostics.Stopwatch.StartNew();
+        var sw = Stopwatch.StartNew();
         for (int i = 0; i < 1000000; i++) r.Find(ipv4[i % ipv4.Length]);
         sw.Stop();
-        double qps = 1000000 / sw.Elapsed.TotalSeconds;
-        Console.WriteLine("Single-thread IPv4: " + qps.ToString("N0") + " QPS");
+        double ipv4Qps = 1000000 / sw.Elapsed.TotalSeconds;
+        sw.Restart();
+        for (int i = 0; i < 1000000; i++) r.Find(ipv6[i % ipv6.Length]);
+        sw.Stop();
+        double ipv6Qps = 1000000 / sw.Elapsed.TotalSeconds;
+        Console.WriteLine("Single-thread IPv4: " + ipv4Qps.ToString("N0") + " QPS");
+        Console.WriteLine("Single-thread IPv6: " + ipv6Qps.ToString("N0") + " QPS");
         int safetyErr = 0;
         var lockObj = new object();
-        System.Threading.Tasks.Parallel.For(0, 16, t =>
+        Parallel.For(0, 16, t =>
         {
             try { for (int i = 0; i < 100000; i++) { r.Find(ipv4[i % ipv4.Length]); r.Find(ipv6[i % ipv6.Length]); } }
             catch (Exception ex) { lock (lockObj) { safetyErr++; Console.WriteLine("  Thread err: " + ex.Message); } }
         });
         Console.WriteLine("Concurrent safety errors: " + safetyErr);
         T1(safetyErr == 0, "16-thread concurrent safe");
-        Console.WriteLine("Tier 3: performance + safety verified");
+        Console.WriteLine("Tier 3: dual-stack performance verified");
     }
 
     static void VerifyVersion(string ver, string scope, string dbPath, string csvPath)
@@ -170,35 +219,19 @@ class Program
     {
         if (exp == act) return true;
         if (string.IsNullOrEmpty(exp)) return true;
-
         if (field == "longitude" || field == "latitude")
         {
             if (double.TryParse(exp, NumberStyles.Float, CultureInfo.InvariantCulture, out var e) &&
                 double.TryParse(act, NumberStyles.Float, CultureInfo.InvariantCulture, out var a))
                 return System.Math.Abs(e - a) < 0.001;
         }
-
         var normE = exp.ToLowerInvariant().Trim();
         var normA = act.ToLowerInvariant().Trim();
         if (normE == normA) return true;
-
         normE = normE.TrimEnd('0').TrimEnd('.');
         normA = normA.TrimEnd('0').TrimEnd('.');
         if (normE == normA) return true;
-
-        var cleanE = normE.Replace("\"", "");
-        var cleanA = normA.Replace("\"", "");
-        if (cleanE == cleanA) return true;
-
-        if (field == "as_name" || field == "as_domain" || field == "usage_type")
-        {
-            if (cleanE.Length > 3 && cleanA.Length > 3)
-            {
-                if (cleanA.StartsWith(cleanE) || cleanE.StartsWith(cleanA)) return true;
-            }
-        }
-
-        return false;
+        return normE.Replace("\"", "") == normA.Replace("\"", "");
     }
 
     static string[] ParseCsv(string line)

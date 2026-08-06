@@ -1072,30 +1072,35 @@ public class DatabaseReader implements AutoCloseable {
      * 将 IP 的高 N 位保留、主机位清零即得网络地址（FORMAT §4.3 单比特步进，无跳层压缩）。
      * Jump Table 直接命中叶子时前 16/JumpBits 位内的深度信息被压缩，内部自动从根补走重建。
      * <p>
-     * IPv4-mapped IPv6 按规范 §9.7 剥离后走 V4 Trie，返回 V4 CIDR。未覆盖返回 null。
+     * IPv4-mapped IPv6 按规范 §9.7 剥离后走 V4 Trie，返回 V4 CIDR。
+     * 语义（QZDB_TEST_SPECIFICATION.md Tier 1 §7）：未命中返回 null；非法 IP 抛 INVALID_IP。
+     *
+     * @param ipStr IP 地址字符串（IPv4/IPv6/mapped）
+     * @return 最具体网段的标准 CIDR；未覆盖返回 null
+     * @throws QzdbException IP 格式非法时抛出（错误码 {@link ErrorCode#INVALID_IP}）
      */
     public String lookupCidr(String ipStr) {
-        if (ipStr == null) return null;
-        String ip = ipStr.trim();
-        if (ip.isEmpty()) return null;
-        Snapshot snap = requireSnapshot();
-        try {
-            if (ip.indexOf(':') >= 0) {
-                byte[] bytes = parseIPv6Bytes(ip);
-                if (isV4MappedBytes(bytes)) {
-                    int v4 = v4FromMappedBytes(bytes);
-                    int n = lookupV4PrefixLen(snap, v4);
-                    return n < 0 ? null : formatV4Cidr(v4, n);
-                }
-                int n = lookupV6PrefixLen(snap, bytes);
-                return n < 0 ? null : formatV6Cidr(bytes, n);
-            }
-            int v4 = parseIPv4Uint(ip);
-            int n = lookupV4PrefixLen(snap, v4);
-            return n < 0 ? null : formatV4Cidr(v4, n);
-        } catch (QzdbException e) {
-            return null;
+        if (ipStr == null || ipStr.isEmpty()) {
+            throw new QzdbException(ErrorCode.INVALID_IP, "IP address string cannot be empty");
         }
+        String ip = ipStr.trim();
+        if (ip.isEmpty()) {
+            throw new QzdbException(ErrorCode.INVALID_IP, "IP address string cannot be empty");
+        }
+        Snapshot snap = requireSnapshot();
+        if (ip.indexOf(':') >= 0) {
+            byte[] bytes = parseIPv6Bytes(ip);
+            if (isV4MappedBytes(bytes)) {
+                int v4 = v4FromMappedBytes(bytes);
+                int n = lookupV4PrefixLen(snap, v4);
+                return n < 0 ? null : formatV4Cidr(v4, n);
+            }
+            int n = lookupV6PrefixLen(snap, bytes);
+            return n < 0 ? null : formatV6Cidr(bytes, n);
+        }
+        int v4 = parseIPv4Uint(ip);
+        int n = lookupV4PrefixLen(snap, v4);
+        return n < 0 ? null : formatV4Cidr(v4, n);
     }
 
     /** IPv4 数值入口的 CIDR 反查。未覆盖返回 null。 */
@@ -1105,9 +1110,19 @@ public class DatabaseReader implements AutoCloseable {
         return n < 0 ? null : formatV4Cidr(ipInt, n);
     }
 
-    /** 字节数组入口的 CIDR 反查（4 字节 = V4，16 字节 = V6/mapped）。未覆盖返回 null。 */
+    /**
+     * 字节数组入口的 CIDR 反查（4 字节 = V4，16 字节 = V6/mapped）。
+     * 未覆盖返回 null；字节数组为 null 或长度非法（非 4/16）抛 INVALID_IP。
+     *
+     * @param ipBytes 4 字节 (IPv4) 或 16 字节 (IPv6/mapped)
+     * @return 最具体网段的标准 CIDR；未覆盖返回 null
+     * @throws QzdbException 字节数组为 null 或长度非法时抛出（{@link ErrorCode#INVALID_IP}）
+     */
     public String lookupCidrBytes(byte[] ipBytes) {
-        if (ipBytes == null) return null;
+        if (ipBytes == null || (ipBytes.length != 4 && ipBytes.length != 16)) {
+            throw new QzdbException(ErrorCode.INVALID_IP,
+                    "Invalid IP byte array length: " + (ipBytes == null ? "null" : ipBytes.length));
+        }
         Snapshot snap = requireSnapshot();
         if (ipBytes.length == 16) {
             if (isV4MappedBytes(ipBytes)) {
@@ -1118,13 +1133,10 @@ public class DatabaseReader implements AutoCloseable {
             int n = lookupV6PrefixLen(snap, ipBytes);
             return n < 0 ? null : formatV6Cidr(ipBytes, n);
         }
-        if (ipBytes.length == 4) {
-            int v4 = ((ipBytes[0] & 0xFF) << 24) | ((ipBytes[1] & 0xFF) << 16)
-                    | ((ipBytes[2] & 0xFF) << 8) | (ipBytes[3] & 0xFF);
-            int n = lookupV4PrefixLen(snap, v4);
-            return n < 0 ? null : formatV4Cidr(v4, n);
-        }
-        return null;
+        int v4 = ((ipBytes[0] & 0xFF) << 24) | ((ipBytes[1] & 0xFF) << 16)
+                | ((ipBytes[2] & 0xFF) << 8) | (ipBytes[3] & 0xFF);
+        int n = lookupV4PrefixLen(snap, v4);
+        return n < 0 ? null : formatV4Cidr(v4, n);
     }
 
     // =========================================================================
