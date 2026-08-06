@@ -197,12 +197,13 @@ public class DatabaseReader implements AutoCloseable {
             // 加载字符串池
             this.pools = parsePools();
 
-            // 解析字段名数组
+            // 解析动态 Metadata 字段名或标准降级表
+            String[] metaFields = parseMetadataFieldNames();
             int numFields = groupFieldCounts[groupIndex];
-            this.fieldNames = new String[numFields];
-            for (int i = 0; i < numFields; i++) {
-                int fid = groupFieldIds[groupIndex][i];
-                fieldNames[i] = fid < DEFAULT_FIELD_NAMES.length ? DEFAULT_FIELD_NAMES[fid] : "field_" + fid;
+            if (metaFields != null && metaFields.length == numFields) {
+                this.fieldNames = metaFields;
+            } else {
+                this.fieldNames = fallbackFieldNames(numFields);
             }
             this.normalizedFieldMap = GeoInfo.buildNormalizedMap(this.fieldNames);
 
@@ -238,6 +239,56 @@ public class DatabaseReader implements AutoCloseable {
                 return "global";
             }
             return "cn";
+        }
+
+        private String[] parseMetadataFieldNames() {
+            if (offMeta <= 0 || offMeta >= data.capacity()) {
+                return null;
+            }
+            int cursor = (int) offMeta;
+            int end = data.capacity();
+
+            while (cursor + 4 <= end) {
+                int type = data.get(cursor) & 0xFF;
+                int length = readU16(data, cursor + 2);
+                cursor += 4;
+
+                if (length <= 0 || cursor + length > end) break;
+
+                if (type == 2) { // field_names
+                    byte[] bytes = new byte[length];
+                    int pos = data.position();
+                    data.position(cursor);
+                    data.get(bytes);
+                    data.position(pos);
+                    String str = new String(bytes, StandardCharsets.UTF_8).trim();
+                    if (!str.isEmpty()) {
+                        String delimiter = str.contains("|") ? "\\|" : ",";
+                        String[] parts = str.split(delimiter);
+                        for (int i = 0; i < parts.length; i++) {
+                            parts[i] = parts[i].trim();
+                        }
+                        return parts;
+                    }
+                }
+                cursor += length;
+            }
+            return null;
+        }
+
+        private static String[] fallbackFieldNames(int count) {
+            return switch (count) {
+                case 6 -> new String[]{"continent", "country_code", "country", "province", "city", "isp"};
+                case 8 -> new String[]{"continent", "country_code", "country", "isp", "asn", "as_name", "as_domain", "usage_type"};
+                case 11 -> new String[]{"continent", "country_code", "country", "province", "city", "district", "geo_id", "longitude", "latitude", "timezone", "isp"};
+                case 15 -> new String[]{"continent", "country_code", "country", "province", "city", "district", "geo_id", "longitude", "latitude", "timezone", "isp", "asn", "as_name", "as_domain", "usage_type"};
+                case 25 -> new String[]{"continent", "continent_en", "country_code", "country_alpha3", "country", "country_en", "province", "province_en", "city", "city_en", "district", "district_en", "geo_id", "longitude", "latitude", "timezone", "isp", "languages", "currency_code", "phone_prefix", "emoji_flag", "asn", "as_name", "as_domain", "usage_type"};
+                default -> {
+                    String[] res = new String[count];
+                    for (int i = 0; i < count; i++) res[i] = "field_" + i;
+                    yield res;
+                }
+            };
         }
 
         private void parseRowSchema() {
@@ -335,7 +386,6 @@ public class DatabaseReader implements AutoCloseable {
                     int[] natTypes = new int[fldCount];
                     int[] fids = new int[fldCount];
 
-                    int curOffset = 0;
                     for (int fi = 0; fi < fldCount; fi++) {
                         int fid = readU16(data, sp);
                         sp += 2;
@@ -345,13 +395,12 @@ public class DatabaseReader implements AutoCloseable {
                         int fieldFlags = data.get(sp) & 0xFF;
                         sp += 1;
                         natives[fi] = (fieldFlags & 0x01) != 0;
-                        natTypes[fi] = data.get(sp) & 0xFF;
-                        sp += 1;
-                        sp += 1; // skip reserved byte
+                        natTypes[fi] = (fieldFlags >> 1) & 0x03;
+                        offsets[fi] = readU32(data, sp); // 读取显式偏移量 uint32
+                        sp += 4;
+                        sp += 4; // skip poolSectionId
 
                         widths[fi] = w;
-                        offsets[fi] = curOffset;
-                        curOffset += w;
                     }
 
                     groupFieldWidths[gi] = widths;
@@ -420,57 +469,103 @@ public class DatabaseReader implements AutoCloseable {
             return result;
         }
 
-        GeoInfo extractGeoInfo(int geoId, int asnId, int usageId, String[] fieldFilter) {
-            if (geoId < 0 || geoId >= groupEntryCounts[groupIndex]) {
+        GeoInfo extractGeoInfo(int entryId, String[] fieldFilter) {
+            if (entryId < 0 || entryId >= groupEntryCounts[groupIndex]) {
                 return null;
             }
 
             int fc = groupFieldCounts[groupIndex];
-            String[] targetFields = fieldFilter != null ? fieldFilter : fieldNames;
-            String[] values = new String[targetFields.length];
+            long entryOff = groupEntryOffsets[groupIndex] + (long) entryId * groupStrides[groupIndex];
 
-            long entryOff = groupEntryOffsets[groupIndex] + (long) geoId * groupStrides[groupIndex];
+            if (fieldFilter == null || Arrays.equals(fieldFilter, fieldNames)) {
+                String[] values = new String[fc];
+                int[] widths = groupFieldWidths[groupIndex];
+                int[] offsets = groupFieldOffsets[groupIndex];
+                boolean[] natives = groupFieldNative[groupIndex];
+                int[] natTypes = groupFieldNativeType[groupIndex];
+                String[][] groupPoolList = pools[groupIndex];
 
-            for (int i = 0; i < targetFields.length; i++) {
-                String reqField = targetFields[i];
-                Integer origIdx = normalizedFieldMap.get(GeoInfo.normalizeKey(reqField));
-                if (origIdx == null || origIdx >= fc) {
-                    values[i] = "";
-                    continue;
-                }
+                for (int fi = 0; fi < fc; fi++) {
+                    int w = (widths != null && fi < widths.length) ? widths[fi] : poolIdxSize;
+                    int fo = (offsets != null && fi < offsets.length) ? offsets[fi] : fi * poolIdxSize;
+                    boolean isNative = natives != null && fi < natives.length && natives[fi];
+                    int nt = (natTypes != null && fi < natTypes.length) ? natTypes[fi] : 0;
 
-                int fw = groupFieldWidths[groupIndex][origIdx];
-                int fo = groupFieldOffsets[groupIndex][origIdx];
-                boolean isNative = groupFieldNative[groupIndex][origIdx];
-                int nt = groupFieldNativeType[groupIndex][origIdx];
-
-                if (isNative) {
-                    values[i] = readNativeValue(entryOff + fo, fw, nt);
-                } else {
-                    int valIdx = readUintWidth(data, (int) (entryOff + fo), fw);
-                    String[] pool = pools[groupIndex][origIdx];
-                    if (pool != null && valIdx >= 0 && valIdx < pool.length) {
-                        values[i] = pool[valIdx];
+                    if (isNative) {
+                        values[fi] = readNativeValue(entryOff + fo, w, nt);
                     } else {
-                        values[i] = "";
+                        int valIdx = readUintWidth(data, (int) (entryOff + fo), w);
+                        if (groupPoolList != null && fi < groupPoolList.length) {
+                            String[] pool = groupPoolList[fi];
+                            if (pool != null && valIdx >= 0 && valIdx < pool.length) {
+                                values[fi] = pool[valIdx];
+                            } else {
+                                values[fi] = "";
+                            }
+                        } else {
+                            values[fi] = "";
+                        }
                     }
                 }
+                return new GeoInfo(fieldNames, values);
+            } else {
+                // 筛选字段模式
+                String[] values = new String[fieldFilter.length];
+                for (int i = 0; i < fieldFilter.length; i++) {
+                    String reqField = fieldFilter[i];
+                    Integer origIdx = normalizedFieldMap.get(GeoInfo.normalizeKey(reqField));
+                    if (origIdx == null || origIdx >= fc) {
+                        values[i] = "";
+                        continue;
+                    }
+
+                    int fi = origIdx;
+                    int w = (groupFieldWidths[groupIndex] != null && fi < groupFieldWidths[groupIndex].length) ? groupFieldWidths[groupIndex][fi] : poolIdxSize;
+                    int fo = (groupFieldOffsets[groupIndex] != null && fi < groupFieldOffsets[groupIndex].length) ? groupFieldOffsets[groupIndex][fi] : fi * poolIdxSize;
+                    boolean isNative = groupFieldNative[groupIndex] != null && fi < groupFieldNative[groupIndex].length && groupFieldNative[groupIndex][fi];
+                    int nt = (groupFieldNativeType[groupIndex] != null && fi < groupFieldNativeType[groupIndex].length) ? groupFieldNativeType[groupIndex][fi] : 0;
+
+                    if (isNative) {
+                        values[i] = readNativeValue(entryOff + fo, w, nt);
+                    } else {
+                        int valIdx = readUintWidth(data, (int) (entryOff + fo), w);
+                        String[][] groupPoolList = pools[groupIndex];
+                        if (groupPoolList != null && fi < groupPoolList.length) {
+                            String[] pool = groupPoolList[fi];
+                            if (pool != null && valIdx >= 0 && valIdx < pool.length) {
+                                values[i] = pool[valIdx];
+                            } else {
+                                values[i] = "";
+                            }
+                        } else {
+                            values[i] = "";
+                        }
+                    }
+                }
+                return new GeoInfo(fieldFilter, values);
             }
-            return new GeoInfo(targetFields, values);
         }
 
         private String readNativeValue(long off, int fw, int nt) {
             int iOff = (int) off;
-            if (nt == 1) { // float
-                return String.valueOf(Float.intBitsToFloat(readU32(data, iOff)));
-            } else if (nt == 2) { // double
-                return String.valueOf(Double.longBitsToDouble(readU64(data, iOff)));
-            } else if (nt == 3) { // int32
-                return String.valueOf(readU32(data, iOff));
-            } else if (nt == 4) { // uint32
-                return String.valueOf(readU32(data, iOff) & 0xFFFFFFFFL);
+            if (nt == 1) { // 浮点数类型
+                if (fw == 4) {
+                    float f = Float.intBitsToFloat(readU32(data, iOff));
+                    if (f == Math.floor(f) && !Float.isInfinite(f)) {
+                        return Long.toString((long) f);
+                    }
+                    return String.valueOf(f);
+                } else if (fw == 8) {
+                    double dVal = Double.longBitsToDouble(readU64(data, iOff));
+                    if (dVal == Math.floor(dVal) && !Double.isInfinite(dVal)) {
+                        return Long.toString((long) dVal);
+                    }
+                    return String.valueOf(dVal);
+                }
             }
-            return "";
+            // 整数类型 (nt == 0 或其他整数)
+            long valNum = readUintWidth(data, iOff, fw) & 0xFFFFFFFFL;
+            return String.valueOf(valNum);
         }
     }
 
@@ -573,7 +668,22 @@ public class DatabaseReader implements AutoCloseable {
             return Optional.empty();
         }
 
-        GeoInfo info = snap.extractGeoInfo(ids.geoId(), ids.asnId(), ids.usageId(), null);
+        int dimMask = (snap.groupDimMasks != null && snap.groupIndex < snap.groupDimMasks.length)
+                ? snap.groupDimMasks[snap.groupIndex] : 01;
+        int entryId;
+        if ((dimMask & 0x02) != 0) {
+            entryId = ids.asnId();
+        } else if ((dimMask & 0x04) != 0) {
+            entryId = ids.usageId();
+        } else {
+            entryId = ids.geoId();
+        }
+
+        if (entryId <= 0) {
+            return Optional.empty();
+        }
+
+        GeoInfo info = snap.extractGeoInfo(entryId, null);
         return Optional.ofNullable(info);
     }
 
@@ -592,7 +702,7 @@ public class DatabaseReader implements AutoCloseable {
         RowIds ids = lookupIdsInternal(snap, rowId);
         if (ids == null) return Optional.empty();
 
-        GeoInfo info = snap.extractGeoInfo(ids.geoId(), ids.asnId(), ids.usageId(), null);
+        GeoInfo info = snap.extractGeoInfo(ids.geoId(), null);
         return Optional.ofNullable(info);
     }
 
@@ -638,7 +748,20 @@ public class DatabaseReader implements AutoCloseable {
         RowIds ids = lookupIdsInternal(snap, rowId);
         if (ids == null) return Optional.empty();
 
-        GeoInfo info = snap.extractGeoInfo(ids.geoId(), ids.asnId(), ids.usageId(), fields);
+        int dimMask = (snap.groupDimMasks != null && snap.groupIndex < snap.groupDimMasks.length)
+                ? snap.groupDimMasks[snap.groupIndex] : 1;
+        int entryId;
+        if ((dimMask & 0x02) != 0) {
+            entryId = ids.asnId();
+        } else if ((dimMask & 0x04) != 0) {
+            entryId = ids.usageId();
+        } else {
+            entryId = ids.geoId();
+        }
+
+        if (entryId <= 0) return Optional.empty();
+
+        GeoInfo info = snap.extractGeoInfo(entryId, fields);
         return Optional.ofNullable(info);
     }
 
@@ -813,29 +936,42 @@ public class DatabaseReader implements AutoCloseable {
         if (!s.hasV4 || s.offV4Jump <= 0) return 0;
         int pref = (ipInt >>> 16) & 0xFFFF;
         int jOff = (int) (s.offV4Jump + pref * 4L);
-        int cur = readU32(s.data, jOff);
+        if (jOff + 4 > s.data.capacity()) return 0;
+        int ptr = readU32(s.data, jOff);
 
+        if (ptr == 0) return 0;
+        if ((ptr & SENTINEL) != 0) return ptr & SENTINEL_MASK_31;
+
+        int idx = ptr;
+        int suffix = (ipInt & 0xFFFF) << 16;
         int nodeSize = s.v4Node24 ? 6 : 8;
         long nOff = s.offV4Nodes;
 
         for (int step = 0; step < MAX_TRIE_WALK_STEPS; step++) {
-            if ((cur & SENTINEL) != 0) {
-                return cur & SENTINEL_MASK_31;
-            }
-            if (cur == 0) return 0;
-
-            int bit = (ipInt >>> (31 - step)) & 1;
-            long nodeAddr = nOff + (long) (cur - 1) * nodeSize;
+            if (idx >= s.v4NodeCount) return 0;
+            int bit = (suffix >>> 31) & 1;
 
             if (s.v4Node24) {
-                int left = readU24(s.data, (int) nodeAddr);
-                int right = readU24(s.data, (int) nodeAddr + 3);
-                cur = (bit == 0) ? left : right;
+                long nodeAddr = nOff + (long) idx * 6;
+                if (nodeAddr + 6 > s.data.capacity()) return 0;
+                int off = (bit == 0) ? (int) nodeAddr : (int) nodeAddr + 3;
+                int child = readU24(s.data, off);
+                if ((child & 0x800000) != 0) {
+                    return child & 0x7FFFFF;
+                }
+                if (child == 0) return 0;
+                idx = child;
             } else {
-                int left = readU32(s.data, (int) nodeAddr);
-                int right = readU32(s.data, (int) nodeAddr + 4);
-                cur = (bit == 0) ? left : right;
+                long nodeAddr = nOff + (long) idx * 8 + bit * 4;
+                if (nodeAddr + 4 > s.data.capacity()) return 0;
+                int child = readU32(s.data, (int) nodeAddr);
+                if ((child & SENTINEL) != 0) {
+                    return child & SENTINEL_MASK_31;
+                }
+                if (child == 0) return 0;
+                idx = child;
             }
+            suffix <<= 1;
         }
         return 0;
     }
@@ -845,31 +981,43 @@ public class DatabaseReader implements AutoCloseable {
         int jumpBits = s.v6JumpBits;
         int pref = readPrefixBits(ip16, jumpBits);
         int jOff = (int) (s.offV6Jump + pref * 4L);
-        int cur = readU32(s.data, jOff);
+        if (jOff + 4 > s.data.capacity()) return 0;
+        int ptr = readU32(s.data, jOff);
 
+        if (ptr == 0) return 0;
+        if ((ptr & SENTINEL) != 0) return ptr & SENTINEL_MASK_31;
+
+        int idx = ptr;
         int nodeSize = s.v6Node24 ? 6 : 8;
         long nOff = s.offV6Nodes;
 
         for (int step = jumpBits; step < 128; step++) {
-            if ((cur & SENTINEL) != 0) {
-                return cur & SENTINEL_MASK_31;
-            }
-            if (cur == 0) return 0;
+            if (idx >= s.v6NodeCount) return 0;
 
             int bitIndex = step;
             int byteIdx = bitIndex >> 3;
             int bitIdx = 7 - (bitIndex & 7);
             int bit = (ip16[byteIdx] >>> bitIdx) & 1;
 
-            long nodeAddr = nOff + (long) (cur - 1) * nodeSize;
             if (s.v6Node24) {
-                int left = readU24(s.data, (int) nodeAddr);
-                int right = readU24(s.data, (int) nodeAddr + 3);
-                cur = (bit == 0) ? left : right;
+                long nodeAddr = nOff + (long) idx * 6;
+                if (nodeAddr + 6 > s.data.capacity()) return 0;
+                int off = (bit == 0) ? (int) nodeAddr : (int) nodeAddr + 3;
+                int child = readU24(s.data, off);
+                if ((child & 0x800000) != 0) {
+                    return child & 0x7FFFFF;
+                }
+                if (child == 0) return 0;
+                idx = child;
             } else {
-                int left = readU32(s.data, (int) nodeAddr);
-                int right = readU32(s.data, (int) nodeAddr + 4);
-                cur = (bit == 0) ? left : right;
+                long nodeAddr = nOff + (long) idx * 8 + bit * 4;
+                if (nodeAddr + 4 > s.data.capacity()) return 0;
+                int child = readU32(s.data, (int) nodeAddr);
+                if ((child & SENTINEL) != 0) {
+                    return child & SENTINEL_MASK_31;
+                }
+                if (child == 0) return 0;
+                idx = child;
             }
         }
         return 0;
