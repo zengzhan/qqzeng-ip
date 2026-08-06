@@ -801,28 +801,32 @@ int QZDBBuilder.AppendVersionGroup(
 
 ## 附录 1：产品矩阵与字段定义
 
-### 级别划分
+### 级别划分与维度数（以 `QZDBBuilder.VersionFieldNames` / `VersionExporter` 为唯一真源）
 
-| 中文名 | 英文名 | version(CSV) | 缩写 | 核心字段维度 |
-|--------|--------|-------------|------|-------------|
-| 标准版 | Standard | std | std | 基础地理定位（大洲/国家/省份/城市/运营商） |
-| 旗舰版 | Ultimate | ult | ult | + 区县 + geo_id + 经纬度 + 国家简码 |
-| ASN 路由版 | ASN | asn | asn | 自治域号 + 域名 + 应用场景 + 国家 + 运营商 |
-| 至尊版 | Max | max | max | 全能 26 字段（含 CIDR）/ 25 维度池（地理+ASN+时区+货币+语言+国旗+电话区号等） |
+| 版本级别 | 缩写 | 数据属性维度数 (fieldCount) | 核心特性与数据字段说明 |
+|--------|------|-------------|-------------------|
+| **标准版** | std | **6 维** | 基础地理定位（`continent`, `country_code`, `country`, `province`, `city`, `isp`） |
+| **ASN 路由版** | asn | **8 维** | 自治域与路由（`continent`, `country_code`, `country`, `isp`, `asn`, `as_name`, `as_domain`, `usage_type`） |
+| **旗舰版** | pro | **11 维** | 扩展地理定位（含 `district`, `geo_id`, `longitude`, `latitude`, `timezone`） |
+| **至尊版** | max | **15 维** | 地理 + ASN + 场景综合数据（在 pro 11 维基础上增加 `asn`, `as_name`, `as_domain`, `usage_type`） |
+| **全字段终极版** | ult | **25 维** | 包含中英文、国家三字码、语言、货币、电话区号、国旗 Emoji 及 ASN 全量 25 属性 |
 
-### 每版本字段集（权威定义见 `reference/product-specification.md` §3）
+### 各版本维度字段清单（Pool 顺序 = 维度池顺序）
 
-> ⚠️ 本节历史附录的字段名/成员关系基于旧版源码（含 `country_english` / `timezone_zh` / `currency_name` / `area_code` / `usage_type` / `asn_org` 等已重命名或移除字段）。**当前各版本字段名、字段数与 Pool 顺序以 `reference/product-specification.md` §3 为唯一权威**，构建器与导出端均复用 `QZDBBuilder.VersionFieldNames`。下方仅保留当前 fieldCount 供格式解析参考：
+1. **std (标准版 - 6 维)**：
+   `continent` | `country_code` | `country` | `province` | `city` | `isp`
+2. **asn (ASN路由版 - 8 维)**：
+   `continent` | `country_code` | `country` | `isp` | `asn` | `as_name` | `as_domain` | `usage_type`
+3. **pro (旗舰版 - 11 维)**：
+   `continent` | `country_code` | `country` | `province` | `city` | `district` | `geo_id` | `longitude` | `latitude` | `timezone` | `isp`
+4. **max (至尊版 - 15 维)**：
+   `continent` | `country_code` | `country` | `province` | `city` | `district` | `geo_id` | `longitude` | `latitude` | `timezone` | `isp` | `asn` | `as_name` | `as_domain` | `usage_type`
+5. **ult (全字段终极版 - 25 维)**：
+   `continent` | `continent_en` | `country_code` | `country_alpha3` | `country` | `country_en` | `province` | `province_en` | `city` | `city_en` | `district` | `district_en` | `geo_id` | `longitude` | `latitude` | `timezone` | `languages` | `currency_code` | `phone_prefix` | `emoji_flag` | `isp` | `asn` | `as_name` | `as_domain` | `usage_type`
 
-| 版本 | fieldCount（维度池数，不含 CIDR） |
-|------|-----------|
-| std | 6 |
-| pro | 11 |
-| ult | 15 |
-| asn | 8 |
-| max | 25 |
-
-> CSV 列数 = fieldCount + 1（首列 `cidr`）；Range 版前四列为 `start_ip|end_ip|start_ip_num|end_ip_num`。SDK 按 Metadata 读取，不硬编码字段顺序。
+> **说明**：
+> - **CSV 文件列数**：CIDR 格式 CSV 列数 = `fieldCount + 1`（首列 `cidr`）；IP 范围段 CSV 列数 = `fieldCount + 4`（前四列 `start_ip,end_ip,start_ip_num,end_ip_num`）。
+> - **TXT 文件列数**：使用 `|` 分隔，纯数据列数 = `fieldCount`。
 
 ---
 
