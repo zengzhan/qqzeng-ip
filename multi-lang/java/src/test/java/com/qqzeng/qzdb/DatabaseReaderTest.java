@@ -538,6 +538,17 @@ public class DatabaseReaderTest {
                 assertTrue(r2.getGroupCount() >= 1, "groupCount >= 1");
                 assertTrue(r2.getGroupCount() <= 4, "groupCount <= 4");
             });
+
+            test("C6. lookupRowIdBytes 4/16 字节入口", () -> {
+                int viaStr = r2.lookupRowId("223.5.5.5");
+                assertTrue(viaStr > 0, "rowId positive via string");
+                byte[] v4 = {(byte) 223, 5, 5, 5};
+                assertEquals(viaStr, r2.lookupRowIdBytes(v4), "lookupRowIdBytes(4B) == lookupRowId(String)");
+                byte[] mapped = DatabaseReader.parseIPv6Bytes("::ffff:223.5.5.5");
+                assertEquals(viaStr, r2.lookupRowIdBytes(mapped), "lookupRowIdBytes(16B mapped) == lookupRowId(String)");
+                assertEquals(0, r2.lookupRowIdBytes((byte[]) null), "null -> 0");
+                assertEquals(0, r2.lookupRowIdBytes(new byte[]{1, 2, 3}), "invalid length -> 0");
+            });
         }
     }
 

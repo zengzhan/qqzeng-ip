@@ -58,80 +58,100 @@ public class DatabaseReader implements AutoCloseable {
      * 不可变只读数据快照（构造完成后经 AtomicReference 安全发布，此后只读）。
      */
     private static final class Snapshot {
-        final ByteBuffer data;
-        final int dataLen;
-        final int groupIndex;
+        ByteBuffer data;
+        int dataLen;
+        int groupIndex;
 
         // Header 元数据
-        final int flags;
-        final boolean hasV4;
-        final boolean hasV6;
-        final boolean v4Node24;
-        final boolean v6Node24;
-        final int v6JumpBits;
-        final int poolCount;
-        final int poolIdxSize;
-        final int rowCount;
-        final int v4NodeCount;
-        final int v6NodeCount;
-        final int ipRowSize;
-        final int buildDate;          // yyyyMMdd（Header 偏移 32）
+        int flags;
+        boolean hasV4;
+        boolean hasV6;
+        boolean v4Node24;
+        boolean v6Node24;
+        int v6JumpBits;
+        int poolCount;
+        int poolIdxSize;
+        int rowCount;
+        int v4NodeCount;
+        int v6NodeCount;
+        int ipRowSize;
+        int buildDate;          // yyyyMMdd（Header 偏移 32）
 
         // 偏移量
-        final long offRowSchema;
-        final long offGroupSchema;
-        final long offV4Jump;
-        final long offV4Nodes;
-        final long offV6Jump;
-        final long offV6Nodes;
-        final long offIPRow;
-        final long offGeoEntries;
-        final long offPools;
-        final long offMeta;
+        long offRowSchema;
+        long offGroupSchema;
+        long offV4Jump;
+        long offV4Nodes;
+        long offV6Jump;
+        long offV6Nodes;
+        long offIPRow;
+        long offGeoEntries;
+        long offPools;
+        long offMeta;
 
         // IPRow 动态宽度（ROW_SCHEMA 驱动，默认 3/3/0）
-        final int rowGeoWidth;
-        final int rowAsnWidth;
-        final int rowUsageWidth;
+        int rowGeoWidth;
+        int rowAsnWidth;
+        int rowUsageWidth;
 
         // 版本组布局（GroupMetadataTable + GROUP_SCHEMA + 兜底）
-        final int actualGroups;
-        final int[] groupFieldCounts;
-        final long[] groupEntryCounts;
-        final int[] groupDimMasks;
-        final long[] groupEntryOffsets;
-        final int[] groupStrides;
-        final int[][] groupFieldWidths;
-        final int[][] groupFieldOffsets;
-        final boolean[][] groupFieldNative;
-        final int[][] groupFieldNativeType;
-        final int[][] groupFieldIds;
+        int actualGroups;
+        int[] groupFieldCounts;
+        long[] groupEntryCounts;
+        int[] groupDimMasks;
+        long[] groupEntryOffsets;
+        int[] groupStrides;
+        int[][] groupFieldWidths;
+        int[][] groupFieldOffsets;
+        boolean[][] groupFieldNative;
+        int[][] groupFieldNativeType;
+        int[][] groupFieldIds;
 
-        final String[][][] pools;
+        String[][][] pools;
 
         // 字段名与归一化索引（加载期一次性构建，见 SDK 规范 §6.1 性能强制项）
-        final String[] fieldNames;
-        final Map<String, Integer> normalizedFieldMap;
-        final boolean[] numericFieldFlags;
+        String[] fieldNames;
+        Map<String, Integer> normalizedFieldMap;
+        boolean[] numericFieldFlags;
 
         // 元数据属性
-        final String version;      // Metadata type=1 version_list（无则 ""）
-        final String description;  // Metadata type=3 description（无则 ""）
-        final String dataMonth;    // Header BuildDate -> "yyyy-MM"（无则 ""）
-        final String buildTimeStr; // Header BuildDate -> "yyyy-MM-dd"（无则 ""）
-        final String edition;      // Metadata type=4 primary_version 优先
-        final String scope;        // 当前格式 Header 尚无 scope 字段，按规范 §13.1 返回 ""
+        String version;      // Metadata type=1 version_list（无则 ""）
+        String description;  // Metadata type=3 description（无则 ""）
+        String dataMonth;    // Header BuildDate -> "yyyy-MM"（无则 ""）
+        String buildTimeStr; // Header BuildDate -> "yyyy-MM-dd"（无则 ""）
+        String edition;      // Metadata type=4 primary_version 优先
+        String scope;        // 当前格式 Header 尚无 scope 字段，按规范 §13.1 返回 ""
 
         // CRC32（canonical：CRC 字段填 0 计算）。open 校验时顺带得出，否则首次 getFileHash 惰性计算。
-        final long storedCrc;
+        long storedCrc;
         volatile Long canonicalCrc;
+        private int geoEntryGroupCount;
 
         Snapshot(ByteBuffer buffer, int groupIndex, boolean verifyCrc) throws QzdbException {
             this.data = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN);
             this.dataLen = data.capacity();
             this.groupIndex = groupIndex;
 
-            // ── Header 基础校验 ──────────────────────────────────────────
+            parseHeader();
+            parseSectionBounds();
+            parseRowSchema();
+            parseGroups();
+            parseMetadata();
+
+            if (verifyCrc) {
+                long calc = computeCanonicalCrc(data);
+                this.canonicalCrc = calc;
+                if (calc != storedCrc) {
+                    throw new QzdbException(ErrorCode.CORRUPTED,
+                            String.format("CRC32 checksum mismatch: stored=0x%08x calculated=0x%08x — database corrupted or truncated",
+                                    storedCrc, calc));
+                }
+            }
+
+            this.pools = parsePools();
+        }
+
+        private void parseHeader() throws QzdbException {
             if (dataLen < HEADER_SIZE) {
                 throw new QzdbException(ErrorCode.CORRUPTED, "File too small for QZDB header: " + dataLen + " bytes");
             }
@@ -164,6 +184,7 @@ public class DatabaseReader implements AutoCloseable {
             }
             buildDate = readU32(data, 32);
             rowCount = readU32(data, 20);
+            storedCrc = readU32(data, 16) & 0xFFFFFFFFL;
 
             int hs = readU32(data, 36);
             if (hs != HEADER_SIZE) {
@@ -194,8 +215,10 @@ public class DatabaseReader implements AutoCloseable {
             if (gCount < 1 || gCount > 255) {
                 throw new QzdbException(ErrorCode.INVALID_PARAM, "geoEntryGroupCount out of range [1,255]: " + gCount);
             }
+            geoEntryGroupCount = gCount;
+        }
 
-            // ── 段边界预校验（fail closed，避免查询期越界）────────────────
+        private void parseSectionBounds() throws QzdbException {
             int v4NodeSize = v4Node24 ? 6 : 8;
             int v6NodeSize = v6Node24 ? 6 : 8;
             checkSection("v4_jump", offV4Jump, 65536L * 4);
@@ -212,9 +235,6 @@ public class DatabaseReader implements AutoCloseable {
             if (offMeta > 0 && offMeta > dataLen) {
                 throw new QzdbException(ErrorCode.CORRUPTED, "Section meta out of bounds: " + offMeta);
             }
-            // Flags 与偏移一致性（矛盾 header 视为损坏，fail closed）。
-            // 注意：nodeCount==0 时节点段偏移为 0 是合法退化形态
-            // （所有记录在 Jump Table 层直接内联叶子，无 Trie 节点数组）。
             if (hasV4 && offV4Jump <= 0) {
                 throw new QzdbException(ErrorCode.CORRUPTED, "Flags indicate V4 data but V4 jump offset is zero");
             }
@@ -230,8 +250,9 @@ public class DatabaseReader implements AutoCloseable {
             if (offIPRow <= 0) {
                 throw new QzdbException(ErrorCode.CORRUPTED, "Missing IPRow section (offsetIPRow == 0)");
             }
+        }
 
-            // ── ROW_SCHEMA（IPRow 动态宽度）──────────────────────────────
+        private void parseRowSchema() throws QzdbException {
             int geoW = 3, asnW = 3, usageW = 0;
             if (offRowSchema > 0 && offRowSchema + 4 <= dataLen) {
                 int sp = (int) offRowSchema;
@@ -261,16 +282,17 @@ public class DatabaseReader implements AutoCloseable {
             rowGeoWidth = geoW;
             rowAsnWidth = asnW;
             rowUsageWidth = usageW;
+        }
 
-            // ── GroupMetadataTable（§6.2 固定布局）───────────────────────
-            if (offGeoEntries <= 0) {
-                throw new QzdbException(ErrorCode.CORRUPTED, "Missing GeoEntry section (offsetGeoEntries == 0)");
-            }
+        private void parseGroups() throws QzdbException {
             long[] headerGeoOffsets = new long[4];
             for (int i = 0; i < 4; i++) {
                 headerGeoOffsets[i] = readU48(data, 168 + i * 6);
             }
 
+            if (offGeoEntries <= 0) {
+                throw new QzdbException(ErrorCode.CORRUPTED, "Missing GeoEntry section (offsetGeoEntries == 0)");
+            }
             int gmOff = (int) offGeoEntries;
             if (gmOff + 1 > dataLen) {
                 throw new QzdbException(ErrorCode.CORRUPTED, "GroupMetadataTable out of bounds");
@@ -278,7 +300,7 @@ public class DatabaseReader implements AutoCloseable {
             int tableGroups = data.get(gmOff) & 0xFF;
             gmOff += 1;
 
-            int groups = Math.min(tableGroups, gCount);
+            int groups = Math.min(tableGroups, geoEntryGroupCount);
             if (groups > 4) groups = 4;
             if (groups < 1) {
                 throw new QzdbException(ErrorCode.CORRUPTED, "GroupMetadataTable groupCount is 0");
@@ -293,8 +315,15 @@ public class DatabaseReader implements AutoCloseable {
             this.actualGroups = groups;
             groupFieldCounts = new int[groups];
             groupEntryCounts = new long[groups];
-            groupDimMasks = new int[groups];
             groupEntryOffsets = new long[groups];
+            groupDimMasks = new int[groups];
+            groupStrides = new int[groups];
+            groupFieldWidths = new int[groups][];
+            groupFieldOffsets = new int[groups][];
+            groupFieldNative = new boolean[groups][];
+            groupFieldNativeType = new int[groups][];
+            groupFieldIds = new int[groups][];
+
             for (int gi = 0; gi < groups; gi++) {
                 groupFieldCounts[gi] = data.get(gmOff) & 0xFF;
                 gmOff += 1;
@@ -304,14 +333,6 @@ public class DatabaseReader implements AutoCloseable {
                 gmOff += 2;
                 groupEntryOffsets[gi] = offGeoEntries + headerGeoOffsets[gi];
             }
-
-            // ── GROUP_SCHEMA（字段布局自描述，§6.5）──────────────────────
-            groupStrides = new int[groups];
-            groupFieldWidths = new int[groups][];
-            groupFieldOffsets = new int[groups][];
-            groupFieldNative = new boolean[groups][];
-            groupFieldNativeType = new int[groups][];
-            groupFieldIds = new int[groups][];
 
             if (offGroupSchema > 0 && offGroupSchema + 2 <= dataLen) {
                 int sp = (int) offGroupSchema;
@@ -356,7 +377,7 @@ public class DatabaseReader implements AutoCloseable {
                     groupFieldIds[gi] = fids;
                 }
             }
-            // 无 GROUP_SCHEMA 的兜底（stride = fieldCount × poolIdxSize，§9.4）
+            // 兜底（stride = fieldCount × poolIdxSize，§9.4）
             for (int g = 0; g < groups; g++) {
                 int fc = groupFieldCounts[g];
                 if (groupStrides[g] == 0) groupStrides[g] = fc * poolIdxSize;
@@ -371,8 +392,9 @@ public class DatabaseReader implements AutoCloseable {
                 if (groupFieldNative[g] == null) groupFieldNative[g] = new boolean[fc];
                 if (groupFieldNativeType[g] == null) groupFieldNativeType[g] = new int[fc];
             }
+        }
 
-            // ── Metadata TLV（type 1/2/3/4）──────────────────────────────
+        private void parseMetadata() throws QzdbException {
             String metaVersion = "";
             String metaDesc = "";
             String metaPrimary = "";
@@ -397,7 +419,6 @@ public class DatabaseReader implements AutoCloseable {
             this.version = metaVersion;
             this.description = metaDesc;
 
-            // ── 字段名：Metadata type=2 优先，否则兜底映射表（§10.3）────
             int numFields = groupFieldCounts[groupIndex];
             if (metaFields != null && metaFields.length == numFields) {
                 this.fieldNames = metaFields;
@@ -410,8 +431,7 @@ public class DatabaseReader implements AutoCloseable {
                 numericFieldFlags[i] = GeoInfo.isNumericFieldName(fieldNames[i]);
             }
 
-            // ── dimensionMask 修复（§10.1-7c：禁止硬编码 groupIndex）─────
-            for (int g = 0; g < groups; g++) {
+            for (int g = 0; g < actualGroups; g++) {
                 if (groupDimMasks[g] != 0) continue;
                 boolean hasAsn = false;
                 int[] fids = groupFieldIds[g];
@@ -433,7 +453,6 @@ public class DatabaseReader implements AutoCloseable {
                 groupDimMasks[g] = hasAsn ? 0x02 : 0x01;
             }
 
-            // ── BuildDate（偏移 32，yyyyMMdd）→ dataMonth / buildTime ───
             if (buildDate > 0) {
                 int y = buildDate / 10000;
                 int m = (buildDate / 100) % 100;
@@ -445,27 +464,12 @@ public class DatabaseReader implements AutoCloseable {
                 this.buildTimeStr = "";
             }
 
-            // ── edition：Metadata primary_version 优先，兜底按字段数 ─────
             String ed = !metaPrimary.isEmpty() ? metaPrimary : (!metaVersion.isEmpty() ? metaVersion : "");
             this.edition = ed.isEmpty() ? inferEdition(numFields, normalizedFieldMap) : ed;
-            // scope：当前格式 Header 尚无该字段（规范 §13.1 前置依赖），旧文件一律返回 ""
             this.scope = "";
-
-            // ── CRC32（canonical：偏移 16~19 填 0；流式分块，无整文件堆拷贝）
-            this.storedCrc = readU32(data, 16) & 0xFFFFFFFFL;
-            if (verifyCrc) {
-                long calc = computeCanonicalCrc(data);
-                this.canonicalCrc = calc;
-                if (calc != storedCrc) {
-                    throw new QzdbException(ErrorCode.CORRUPTED,
-                            String.format("CRC32 checksum mismatch: stored=0x%08x calculated=0x%08x — database corrupted or truncated",
-                                    storedCrc, calc));
-                }
-            }
-
-            // ── 字符串池（全量预加载；原生标量字段无池，跳过）────────────
-            this.pools = parsePools();
         }
+
+
 
         private void checkSection(String name, long off, long size) throws QzdbException {
             if (off > 0 && off + size > dataLen) {
@@ -682,35 +686,62 @@ public class DatabaseReader implements AutoCloseable {
     /**
      * DatabaseReader 构建器
      */
+    /**
+     * DatabaseReader 构建器。使用方式：
+     * <pre>{@code
+     *   DatabaseReader reader = new DatabaseReader.Builder(new File("ip.qzdb"))
+     *       .verifyCrc(true)
+     *       .groupIndex(0)
+     *       .build();
+     * }</pre>
+     */
     public static class Builder {
         private File databaseFile;
         private byte[] bufferData;
         private int groupIndex = 0;
         private boolean verifyCrc = true;
 
+        /** @param database 数据库文件路径 */
         public Builder(File database) {
             this.databaseFile = database;
         }
 
+        /**
+         * @param buffer 数据库字节（拷贝语义：内部 clone 传入数组，调用方可自由修改/释放原数组）
+         */
         public Builder(byte[] buffer) {
-            // 拷贝语义（SDK 规范 §4.1）：Reader 不持有调用方原数组
             this.bufferData = buffer != null ? buffer.clone() : new byte[0];
         }
 
+        /** @param stream 数据库输入流（读取全部字节） */
         public Builder(InputStream stream) throws IOException {
             this.bufferData = stream.readAllBytes();
         }
 
+        /**
+         * @param idx 版本组索引（0=主版本组，2=ASN 组等）
+         * @return this（链式调用）
+         */
         public Builder groupIndex(int idx) {
             this.groupIndex = idx;
             return this;
         }
 
+        /**
+         * @param enabled 是否开启 CRC32 校验（默认 true；仅 open 可关，reload 强制开启）
+         * @return this（链式调用）
+         */
         public Builder verifyCrc(boolean enabled) {
             this.verifyCrc = enabled;
             return this;
         }
 
+        /**
+         * 构建 DatabaseReader 实例。
+         *
+         * @return 构建好的 DatabaseReader
+         * @throws QzdbException 文件不存在/CRC 失败/格式错误时抛出
+         */
         public DatabaseReader build() throws QzdbException {
             ByteBuffer buffer;
             File fileRef = databaseFile;
@@ -761,10 +792,24 @@ public class DatabaseReader implements AutoCloseable {
     // 单条查询 API（所有入口共享同一套地址规范化与解析路径，见 SDK 规范 §5.3）
     // =========================================================================
 
+    /**
+     * 查询 IP 地址的地理信息。
+     *
+     * @param ipStr IP 地址字符串（IPv4 或 IPv6，支持 IPv4-mapped IPv6 自动降级）
+     * @return 查询结果；未找到返回 {@link Optional#empty()}
+     * @throws QzdbException IP 格式非法时抛出（错误码 {@link ErrorCode#INVALID_IP}）
+     */
     public Optional<GeoInfo> find(String ipStr) {
         return findInternal(ipStr, null);
     }
 
+    /**
+     * 查询 {@link InetAddress} 的地理信息。
+     *
+     * @param addr InetAddress 实例（不可为 null）
+     * @return 查询结果；未找到返回 {@link Optional#empty()}
+     * @throws QzdbException addr 为 null 或 IP 格式非法时抛出
+     */
     public Optional<GeoInfo> find(InetAddress addr) {
         if (addr == null) {
             throw new QzdbException(ErrorCode.INVALID_IP, "InetAddress cannot be null");
@@ -775,12 +820,25 @@ public class DatabaseReader implements AutoCloseable {
         return resolveRow(snap, rowId, null);
     }
 
+    /**
+     * 查询 IPv4 uint32 的地理信息。
+     *
+     * @param ipInt IPv4 地址的 uint32 值（如 0x01020304 = 1.2.3.4）
+     * @return 查询结果；未找到返回 {@link Optional#empty()}
+     */
     public Optional<GeoInfo> findUint(int ipInt) {
         Snapshot snap = requireSnapshot();
         int rowId = lookupRowIdUintInternal(snap, ipInt);
         return resolveRow(snap, rowId, null);
     }
 
+    /**
+     * 查询 16 字节 IP 地址（IPv6 或 IPv4-mapped IPv6）的地理信息。
+     *
+     * @param ip16 16 字节网络序地址；前 10 字节为 0 且第 10-11 字节为 0xFF 时按 IPv4-mapped 降级
+     * @return 查询结果；未找到返回 {@link Optional#empty()}
+     * @throws QzdbException 数组为 null 或长度非法时抛出
+     */
     public Optional<GeoInfo> findBytes(byte[] ip16) {
         if (ip16 == null) {
             throw new QzdbException(ErrorCode.INVALID_IP, "IP bytes array cannot be null");
@@ -793,6 +851,14 @@ public class DatabaseReader implements AutoCloseable {
         return resolveRow(snap, rowId, null);
     }
 
+    /**
+     * 字段投影查询：只解析指定字段，减少不必要的池读取开销。
+     *
+     * @param ipStr  IP 地址字符串
+     * @param fields 要查询的字段名（归一化匹配，大小写/下划线不敏感）；null 或空数组等价于 {@link #find(String)}
+     * @return 查询结果（GeoInfo 仅包含 fields 指定的字段）；未找到返回 {@link Optional#empty()}
+     * @throws QzdbException IP 格式非法时抛出
+     */
     public Optional<GeoInfo> findFields(String ipStr, String[] fields) {
         if (fields == null || fields.length == 0) {
             return find(ipStr);
@@ -800,6 +866,13 @@ public class DatabaseReader implements AutoCloseable {
         return findInternal(ipStr, fields);
     }
 
+    /**
+     * 查询并返回 pipe 分隔的结果字符串（格式：field1|field2|...|fieldN）。
+     *
+     * @param ipStr IP 地址字符串
+     * @return pipe 分隔结果；未找到返回空字符串 ""
+     * @throws QzdbException IP 格式非法时抛出
+     */
     public String findStr(String ipStr) {
         Optional<GeoInfo> info = find(ipStr);
         return info.map(GeoInfo::toPipeString).orElse("");
@@ -860,6 +933,12 @@ public class DatabaseReader implements AutoCloseable {
     // 批量与流式 API（顺序执行，逐条保留三态语义，SDK 规范 §8）
     // =========================================================================
 
+    /**
+     * 批量顺序查询（SDK 内部不起线程池）。输入输出数组等长一一对应，逐条保留三态语义。
+     *
+     * @param ips IP 地址列表；null 返回空列表
+     * @return 与输入等长的 {@link BatchResult} 列表
+     */
     public List<BatchResult> findBatch(List<String> ips) {
         if (ips == null) return java.util.Collections.emptyList();
         List<BatchResult> results = new ArrayList<>(ips.size());
@@ -874,6 +953,13 @@ public class DatabaseReader implements AutoCloseable {
         return results;
     }
 
+    /**
+     * 批量字段投影查询。
+     *
+     * @param ips    IP 地址列表；null 返回空列表
+     * @param fields 要查询的字段名（归一化匹配）
+     * @return 与输入等长的 {@link BatchResult} 列表
+     */
     public List<BatchResult> findBatchFields(List<String> ips, String[] fields) {
         if (ips == null) return java.util.Collections.emptyList();
         List<BatchResult> results = new ArrayList<>(ips.size());
@@ -888,6 +974,12 @@ public class DatabaseReader implements AutoCloseable {
         return results;
     }
 
+    /**
+     * 流式惰性查询（Stream 惰性求值，不累积结果，内存占用恒定）。
+     *
+     * @param ips IP 地址流；null 返回空流
+     * @return 惰性求值的 {@link BatchResult} 流
+     */
     public Stream<BatchResult> findStream(Stream<String> ips) {
         if (ips == null) return Stream.empty();
         return ips.map(ip -> {
@@ -904,6 +996,12 @@ public class DatabaseReader implements AutoCloseable {
     // 低级行号 API
     // =========================================================================
 
+    /**
+     * 低级查询：只走 Trie 获取 row_id，不解包 GeoEntry。
+     *
+     * @param ipStr IP 地址字符串；null/空/非法格式返回 0
+     * @return row_id（0 表示未找到或输入非法）
+     */
     public int lookupRowId(String ipStr) {
         if (ipStr == null) return 0;
         String ip = ipStr.trim();
@@ -922,10 +1020,35 @@ public class DatabaseReader implements AutoCloseable {
         }
     }
 
+    /**
+     * 低级查询（IPv4 uint32 入口）。
+     *
+     * @param ipInt IPv4 地址的 uint32 值
+     * @return row_id（0 表示未找到）
+     */
     public int lookupRowIdUint(int ipInt) {
         return lookupRowIdUintInternal(requireSnapshot(), ipInt);
     }
 
+    /**
+     * 低级查询（字节数组入口）。
+     *
+     * @param ipBytes 4 字节 (IPv4) 或 16 字节 (IPv6/mapped)；null 返回 0
+     * @return row_id（0 表示未找到或输入非法）
+     */
+    public int lookupRowIdBytes(byte[] ipBytes) {
+        if (ipBytes == null) return 0;
+        Snapshot snap = requireSnapshot();
+        int rowId = lookupRowIdFromBytes(snap, ipBytes);
+        return rowId < 0 ? 0 : rowId;
+    }
+
+    /**
+     * 从 row_id 解包 IPRow 获取各维度 ID。
+     *
+     * @param rowId 行号（> 0 且 < rowCount）
+     * @return RowIds 具名结构体；越界返回 null
+     */
     public RowIds lookupIds(int rowId) {
         Snapshot s = requireSnapshot();
         if (rowId <= 0 || rowId >= s.rowCount) return null;
@@ -1008,6 +1131,14 @@ public class DatabaseReader implements AutoCloseable {
     // 热更新 reload API（影子对象 + CRC 强制 + 原子替换，SDK 规范 §4.3）
     // =========================================================================
 
+    /**
+     * 热替换正在服务的数据文件。构建完整新快照后原子替换引用，旧数据在替换失败时保持不变。
+     * <p>
+     * 强制 CRC 校验（不可关闭），校验失败抛异常且旧数据不动。
+     *
+     * @param path 新数据库文件路径
+     * @throws QzdbException 文件不存在/CRC 失败/格式错误时抛出
+     */
     public void reload(String path) throws QzdbException {
         File file = new File(path);
         if (!file.exists() || !file.canRead()) {
@@ -1027,6 +1158,12 @@ public class DatabaseReader implements AutoCloseable {
         }
     }
 
+    /**
+     * 热替换正在服务的数据字节（拷贝语义：内部 clone 传入的 buffer）。
+     *
+     * @param buffer 新数据库字节；不可为 null 或空
+     * @throws QzdbException buffer 为空/CRC 失败/格式错误时抛出
+     */
     public void reloadBuffer(byte[] buffer) throws QzdbException {
         if (buffer == null || buffer.length == 0) {
             throw new QzdbException(ErrorCode.INVALID_PARAM, "Reload buffer cannot be null or empty");
@@ -1036,9 +1173,11 @@ public class DatabaseReader implements AutoCloseable {
         activeSnapshot.set(newSnap);
     }
 
+    /**
+     * 释放 mmap/文件句柄/内存引用。幂等操作；关闭后任何查询/自省 API 抛 {@link IllegalStateException}。
+     */
     @Override
     public void close() {
-        // 幂等；关闭后任何查询/自省抛 IllegalStateException
         activeSnapshot.set(null);
     }
 
@@ -1046,25 +1185,49 @@ public class DatabaseReader implements AutoCloseable {
     // 元信息自省 API
     // =========================================================================
 
+    /** @return Metadata type=1 版本列表；无 Metadata 返回 "" */
     public String getVersion() { return requireSnapshot().version; }
+
+    /** @return 数据期号 "yyyy-MM"（由 Header BuildDate 推算）；无则 "" */
     public String getDataMonth() { return requireSnapshot().dataMonth; }
+
+    /** @return 版本档次 "std"|"pro"|"asn"|"max"|"ult"（Metadata 优先，兜底按字段数推断） */
     public String getEdition() { return requireSnapshot().edition; }
+
+    /** @return 地域覆盖（当前格式 Header 尚无该字段，始终返回 ""） */
     public String getScope() { return requireSnapshot().scope; }
+
+    /** @return 构建日期 "yyyy-MM-dd"（由 Header BuildDate 推算）；无则 "" */
     public String getBuildTime() { return requireSnapshot().buildTimeStr; }
+
+    /** @return Metadata type=3 描述；无 Metadata 返回 "" */
     public String getDescription() { return requireSnapshot().description; }
+
+    /** @return 文件 CRC32 十六进制字符串（8 位小写） */
     public String getFileHash() { return requireSnapshot().fileHashHex(); }
+
+    /** @return 当前版本组的字段名数组（克隆副本，修改不影响内部状态） */
     public String[] getFieldNames() { return requireSnapshot().fieldNames.clone(); }
 
+    /**
+     * 判断当前版本组是否包含指定字段（归一化匹配，大小写/下划线不敏感）。
+     *
+     * @param name 字段名（如 "country_en"、"countryEn"、"COUNTRY_EN" 等价）
+     * @return 是否包含该字段
+     */
     public boolean hasField(String name) {
         return requireSnapshot().normalizedFieldMap.containsKey(GeoInfo.normalizeKey(name));
     }
 
-    /** 重新计算全文件 CRC32 并与 Header 存储值比对（只读操作，不影响快照）。 */
+    /** @return 重新计算全文件 CRC32 并与 Header 存储值比对（只读操作，不影响快照） */
     public boolean verifyCrc() {
         return requireSnapshot().verifyCrcNow();
     }
 
+    /** @return 文件中包含的版本组数量（1~4） */
     public int getGroupCount() { return requireSnapshot().actualGroups; }
+
+    /** @return 主版本组（group 0）的维度数（=字段数） */
     public int getPoolCount() { return requireSnapshot().poolCount; }
 
     // =========================================================================
@@ -1252,9 +1415,9 @@ public class DatabaseReader implements AutoCloseable {
 
         int idx = ptr;
         int suffix = (ipInt & 0xFFFF) << 16;
-        final ByteBuffer d = s.data;
-        final long nOff = s.offV4Nodes;
-        final int nodeCount = s.v4NodeCount;
+        ByteBuffer d = s.data;
+        long nOff = s.offV4Nodes;
+        int nodeCount = s.v4NodeCount;
 
         if (s.v4Node24) {
             for (int step = 0; step < 16; step++) {
@@ -1282,16 +1445,16 @@ public class DatabaseReader implements AutoCloseable {
 
     private static int lookupV6Bytes(Snapshot s, byte[] ip16) {
         if (!s.hasV6 || s.offV6Jump <= 0 || ip16.length != 16) return 0;
-        final int jumpBits = s.v6JumpBits;
+        int jumpBits = s.v6JumpBits;
         int pref = readPrefixBits(ip16, jumpBits);
         int ptr = readU32(s.data, (int) (s.offV6Jump + (long) pref * 4));
         if (ptr == 0) return 0;
         if ((ptr & SENTINEL) != 0) return ptr & SENTINEL_MASK_31;
 
         int idx = ptr;
-        final ByteBuffer d = s.data;
-        final long nOff = s.offV6Nodes;
-        final int nodeCount = s.v6NodeCount;
+        ByteBuffer d = s.data;
+        long nOff = s.offV6Nodes;
+        int nodeCount = s.v6NodeCount;
 
         if (s.v6Node24) {
             for (int depth = jumpBits; depth < 128; depth++) {
@@ -1347,9 +1510,9 @@ public class DatabaseReader implements AutoCloseable {
     private static int walkV4Depth(Snapshot s, int ipInt, int startIdx, int startDepth, int maxDepth) {
         if (startDepth >= maxDepth) return -1;
         int idx = startIdx;
-        final ByteBuffer d = s.data;
-        final long nOff = s.offV4Nodes;
-        final int nodeCount = s.v4NodeCount;
+        ByteBuffer d = s.data;
+        long nOff = s.offV4Nodes;
+        int nodeCount = s.v4NodeCount;
 
         if (s.v4Node24) {
             for (int depth = startDepth; depth < maxDepth; depth++) {
@@ -1376,7 +1539,7 @@ public class DatabaseReader implements AutoCloseable {
     /** V6 前缀长度。Jump 命中叶子时从根重走（≤ jumpBits 步）。 */
     private static int lookupV6PrefixLen(Snapshot s, byte[] ip16) {
         if (!s.hasV6 || s.offV6Jump <= 0 || ip16.length != 16) return -1;
-        final int jumpBits = s.v6JumpBits;
+        int jumpBits = s.v6JumpBits;
         int pref = readPrefixBits(ip16, jumpBits);
         int ptr = readU32(s.data, (int) (s.offV6Jump + (long) pref * 4));
         if (ptr == 0) return -1;
@@ -1389,9 +1552,9 @@ public class DatabaseReader implements AutoCloseable {
     private static int walkV6Depth(Snapshot s, byte[] ip16, int startIdx, int startDepth, int maxDepth) {
         if (startDepth >= maxDepth) return -1;
         int idx = startIdx;
-        final ByteBuffer d = s.data;
-        final long nOff = s.offV6Nodes;
-        final int nodeCount = s.v6NodeCount;
+        ByteBuffer d = s.data;
+        long nOff = s.offV6Nodes;
+        int nodeCount = s.v6NodeCount;
 
         if (s.v6Node24) {
             for (int depth = startDepth; depth < maxDepth; depth++) {
