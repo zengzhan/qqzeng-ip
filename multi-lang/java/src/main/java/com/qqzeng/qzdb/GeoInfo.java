@@ -12,6 +12,8 @@ import java.util.Map;
  */
 public final class GeoInfo {
 
+    private static final char[] HEX_CHARS = "0123456789abcdef".toCharArray();
+
     private final String[] fieldNames;
     private final String[] values;
 
@@ -241,7 +243,11 @@ public final class GeoInfo {
                 case '\t' -> sb.append("\\t");
                 default -> {
                     if (c < 0x20) {
-                        sb.append(String.format("\\u%04x", (int) c));
+                        sb.append('\\').append('u')
+                                .append(HEX_CHARS[(c >> 12) & 0xF])
+                                .append(HEX_CHARS[(c >> 8) & 0xF])
+                                .append(HEX_CHARS[(c >> 4) & 0xF])
+                                .append(HEX_CHARS[c & 0xF]);
                     } else {
                         sb.append(c);
                     }

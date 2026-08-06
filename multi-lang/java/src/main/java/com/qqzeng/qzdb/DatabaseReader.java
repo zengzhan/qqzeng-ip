@@ -623,17 +623,17 @@ public class DatabaseReader implements AutoCloseable {
                 int nt = fi < natTypes.length ? natTypes[fi] : 0;
                 return readNativeValue(entryOff + fo, w, nt);
             }
-            int valIdx = readUintWidth(data, (int) (entryOff + fo), w);
+            long valIdx = readUintWidthUnsigned(data, (int) (entryOff + fo), w);
             if (fi < groupPoolList.length) {
                 String[] pool = groupPoolList[fi];
-                if (pool != null && valIdx >= 0 && valIdx < pool.length) {
-                    return pool[valIdx];
+                if (pool != null && valIdx < pool.length) {
+                    return pool[(int) valIdx];
                 }
             }
             return "";
         }
 
-        /** 原生标量字段解码（§6.6）：int 原样；float 按最短精度输出（整值去掉小数部分）。 */
+        /** 原生标量字段解码（§6.6 / §10.5）：int 原样；float 按 %.6f 格式化（FORMAT 规范跨语言一致）。 */
         private String readNativeValue(long off, int fw, int nt) {
             int iOff = (int) off;
             if (iOff < 0 || iOff + fw > dataLen) return "";
@@ -642,12 +642,12 @@ public class DatabaseReader implements AutoCloseable {
                     float f = Float.intBitsToFloat(readU32(data, iOff));
                     if (Float.isNaN(f) || Float.isInfinite(f)) return "";
                     if (f == Math.floor(f)) return Long.toString((long) f);
-                    return String.valueOf(f);
+                    return String.format(Locale.US, "%.6f", f);
                 } else if (fw == 8) {
                     double dVal = Double.longBitsToDouble(readU64(data, iOff));
                     if (Double.isNaN(dVal) || Double.isInfinite(dVal)) return "";
                     if (dVal == Math.floor(dVal)) return Long.toString((long) dVal);
-                    return String.valueOf(dVal);
+                    return String.format(Locale.US, "%.6f", dVal);
                 }
             }
             long valNum = readUintWidth(data, iOff, fw) & 0xFFFFFFFFL;
@@ -1475,7 +1475,10 @@ public class DatabaseReader implements AutoCloseable {
 
     private static String readUtf8(ByteBuffer d, int off, int len) {
         byte[] bytes = new byte[len];
-        for (int i = 0; i < len; i++) bytes[i] = d.get(off + i);
+        // duplicate() 保证多线程并发读不竞争 position（ByteBuffer.position 非线程安全）
+        ByteBuffer dup = d.duplicate();
+        dup.position(off);
+        dup.get(bytes, 0, len);
         return new String(bytes, StandardCharsets.UTF_8);
     }
 
@@ -1510,5 +1513,13 @@ public class DatabaseReader implements AutoCloseable {
         if (width == 2) return readU16(d, off);
         if (width == 3) return readU24(d, off);
         return readU32(d, off);
+    }
+
+    /** 无符号宽度读取（用于池索引：width==4 时高位为 1 不返回负数）。 */
+    private static long readUintWidthUnsigned(ByteBuffer d, int off, int width) {
+        if (width <= 1) return d.get(off) & 0xFFL;
+        if (width == 2) return readU16(d, off) & 0xFFFFL;
+        if (width == 3) return readU24(d, off) & 0xFFFFFL;
+        return readU32(d, off) & 0xFFFFFFFFL;
     }
 }
