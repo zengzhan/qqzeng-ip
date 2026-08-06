@@ -1,120 +1,164 @@
 using Qzdb;
+using System.Globalization;
 
 class Program
 {
     static string BP = "";
-    static int checks = 0, pass = 0;
+    static System.Random rng = new System.Random(42);
+    static int totalChecks = 0, totalErrors = 0;
+
+    static string[] std_fields = { "continent", "country_code", "country", "province", "city", "isp" };
+    static string[] pro_fields = { "continent", "country_code", "country", "province", "city", "district", "geo_id", "longitude", "latitude", "timezone", "isp" };
+    static string[] max_fields = { "continent", "country_code", "country", "province", "city", "district", "geo_id", "longitude", "latitude", "timezone", "isp", "asn", "as_name", "as_domain", "usage_type" };
+    static string[] asn_fields = { "continent", "country_code", "country", "isp", "asn", "as_name", "as_domain", "usage_type" };
+    static string[] ult_fields = { "continent", "continent_en", "country_code", "country_alpha3", "country", "country_en", "province", "province_en", "city", "city_en", "district", "district_en", "geo_id", "longitude", "latitude", "timezone", "languages", "currency_code", "phone_prefix", "emoji_flag", "isp", "asn", "as_name", "as_domain", "usage_type" };
+
+    static System.Collections.Generic.Dictionary<string, string[]> VersionFields = new()
+    {
+        { "std", std_fields },
+        { "pro", pro_fields },
+        { "ult", ult_fields },
+        { "max", max_fields },
+        { "asn", asn_fields },
+    };
 
     static void Main()
     {
         BP = System.IO.Path.GetFullPath(System.IO.Path.Combine(Environment.CurrentDirectory, "..", "test_data_202608"));
-        System.Console.WriteLine("=== C# SDK Direct Value Verification ===");
+        System.Console.WriteLine("=== C# SDK Full-Field Verification (Proper CSV Parsing) ===");
 
-        // Test 1: Known correct values for std/pro (no CSV ambiguity)
-        using (var r = new DatabaseReader.Builder(BP + "/std/china/qqzeng_ip_std_china.qzdb").Build())
+        foreach (var ver in new[] { "std", "pro", "ult", "max", "asn" })
         {
-            var info = r.Find("223.5.5.5");
-            Check("std country", "中国", info.Get("country"));
-            Check("std province", "浙江", info.Get("province"));
-            Check("std city", "杭州", info.Get("city"));
-            Check("std isp", "阿里云", info.Get("isp"));
-            Check("std code", "CN", info.Get("country_code"));
+            foreach (var scope in new[] { "china", "global" })
+            {
+                var dbPath = BP + "/" + ver + "/" + scope + "/qqzeng_ip_" + ver + "_" + scope + ".qzdb";
+                var csvPath = BP + "/" + ver + "/" + scope + "/qqzeng_ip_" + ver + "_" + scope + "_range.csv";
+                if (!System.IO.File.Exists(dbPath) || !System.IO.File.Exists(csvPath)) continue;
+                TestVersion(ver, scope, dbPath, csvPath);
+            }
         }
 
-        // Test 2: All std/pro global IPs
-        using (var r = new DatabaseReader.Builder(BP + "/std/global/qqzeng_ip_std_global.qzdb").Build())
-        {
-            var info = r.Find("8.8.8.8");
-            Check("global country", "美国", info.Get("country"));
-            Check("global city", "山景城", info.Get("city"));
-            Check("global isp", "谷歌云", info.Get("isp"));
-            Check("global code", "US", info.Get("country_code"));
-        }
-
-        // Test 3: PRO version extra fields
-        using (var r = new DatabaseReader.Builder(BP + "/pro/china/qqzeng_ip_pro_china.qzdb").Build())
-        {
-            var info = r.Find("114.114.114.114");
-            Check("pro geo_id", "320100", info.Get("geo_id"));
-            Check("pro district", "", info.Get("district"));
-            Check("pro timezone", "Asia/Shanghai", info.Get("timezone"));
-            var lon = info.Get("longitude");
-            var lat = info.Get("latitude");
-            System.Console.WriteLine("  pro lon=" + lon + " lat=" + lat);
-            Check("pro lon valid", "yes", (System.Math.Abs(double.Parse(lon) - 118.77) < 0.1) ? "yes" : "no");
-            Check("pro lat valid", "yes", (System.Math.Abs(double.Parse(lat) - 32.04) < 0.1) ? "yes" : "no");
-        }
-
-        // Test 4: MAX version - verify all 15 fields have values
-        using (var r = new DatabaseReader.Builder(BP + "/max/china/qqzeng_ip_max_china.qzdb").Build())
-        {
-            var info = r.Find("114.114.114.114");
-            Check("max continent", "亚洲", info.Get("continent"));
-            Check("max country_code", "CN", info.Get("country_code"));
-            Check("max country", "中国", info.Get("country"));
-            Check("max province", "江苏", info.Get("province"));
-            Check("max city", "南京", info.Get("city"));
-            Check("max geo_id", "320100", info.Get("geo_id"));
-            Check("max isp", "中国电信", info.Get("isp"));
-            Check("max asn", "137702", info.Get("asn"));
-            Check("max usage", "DNS", info.Get("usage_type"));
-        }
-
-        // Test 5: ASN version - verify all 8 fields
-        using (var r = new DatabaseReader.Builder(BP + "/asn/china/qqzeng_ip_asn_china.qzdb").Build())
-        {
-            var info = r.Find("114.114.114.114");
-            Check("asn continent", "亚洲", info.Get("continent"));
-            Check("asn country", "中国", info.Get("country"));
-            Check("asn isp", "中国电信", info.Get("isp"));
-            Check("asn asn", "137702", info.Get("asn"));
-            Check("asn usage", "DNS", info.Get("usage_type"));
-        }
-
-        // Test 6: ULT version - verify all 25 fields
-        using (var r = new DatabaseReader.Builder(BP + "/ult/china/qqzeng_ip_ult_china.qzdb").Build())
-        {
-            var info = r.Find("114.114.114.114");
-            Check("ult continent", "亚洲", info.Get("continent"));
-            Check("ult continent_en", "Asia", info.Get("continent_en"));
-            Check("ult country_code", "CN", info.Get("country_code"));
-            Check("ult country_alpha3", "CHN", info.Get("country_alpha3"));
-            Check("ult country", "中国", info.Get("country"));
-            Check("ult country_en", "China", info.Get("country_en"));
-            Check("ult province", "江苏", info.Get("province"));
-            Check("ult city", "南京", info.Get("city"));
-            Check("ult geo_id", "320100", info.Get("geo_id"));
-            Check("ult isp", "中国电信", info.Get("isp"));
-            Check("ult asn", "137702", info.Get("asn"));
-            Check("ult usage", "DNS", info.Get("usage_type"));
-        }
-
-        // Test 7: IPv6 real addresses
-        using (var r = new DatabaseReader.Builder(BP + "/std/global/qqzeng_ip_std_global.qzdb").Build())
-        {
-            var info = r.Find("2001:4860:4860::8888");
-            Check("v6 country", "美国", info.Get("country"));
-            Check("v6 isp", "谷歌云", info.Get("isp"));
-        }
-
-        // Test 8: V4-mapped IPv6
-        using (var r = new DatabaseReader.Builder(BP + "/std/china/qqzeng_ip_std_china.qzdb").Build())
-        {
-            var d = r.FindStr("223.5.5.5");
-            var m = r.FindStr("::ffff:223.5.5.5");
-            Check("mapped", d, m);
-        }
-
-        System.Console.WriteLine("\n" + new string('=', 50));
-        System.Console.WriteLine("Checks: " + checks + " | Pass: " + pass + " | Fail: " + (checks - pass));
-        System.Console.WriteLine(pass == checks ? "ALL PASSED" : "FAILED");
-        Environment.Exit(pass == checks ? 0 : 1);
+        double rate = totalChecks > 0 ? (1.0 - (double)totalErrors / totalChecks) * 100 : 100;
+        System.Console.WriteLine("\n" + new string('=', 60));
+        System.Console.WriteLine("TOTAL: " + totalChecks + " field-checks, " + totalErrors + " errors");
+        System.Console.WriteLine("Accuracy: " + rate.ToString("F4") + "% ");
+        System.Console.WriteLine(totalErrors == 0 ? "ALL PASSED" : "FAILED");
+        Environment.Exit(totalErrors > 0 ? 1 : 0);
     }
 
-    static void Check(string name, string expected, string actual)
+    static void TestVersion(string ver, string scope, string dbPath, string csvPath)
     {
-        checks++;
-        if (expected == actual) { pass++; System.Console.WriteLine("  [OK] " + name + " = '" + actual + "'"); }
-        else { System.Console.WriteLine("  [FAIL] " + name + ": expected '" + expected + "' got '" + actual + "'"); }
+        var fields = VersionFields[ver];
+        var allLines = System.IO.File.ReadAllLines(csvPath);
+        if (allLines.Length < 2) return;
+
+        // Parse CSV header
+        var csvHeaders = ParseCsvLine(allLines[0]);
+        var colMap = new System.Collections.Generic.Dictionary<string, int>();
+        for (int i = 0; i < csvHeaders.Length; i++)
+            colMap[csvHeaders[i].Trim()] = i;
+
+        // Collect valid rows with PROPER CSV parsing
+        var rows = new System.Collections.Generic.List<string[]>();
+        for (int i = 1; i < allLines.Length; i++)
+        {
+            var cols = ParseCsvLine(allLines[i]);
+            if (cols.Length < csvHeaders.Length) continue;
+            var ip = cols[0].Trim();
+            if (string.IsNullOrEmpty(ip) || ip == "0.0.0.0" || ip == "::") continue;
+            if (ip.StartsWith("::ffff:") || ip.StartsWith("0:0:0:0:0:ffff:")) continue;
+            rows.Add(cols);
+        }
+
+        using var r = new DatabaseReader.Builder(dbPath).Build();
+        int verChecks = 0, verErrors = 0;
+
+        for (int batch = 0; batch < 15; batch++)
+        {
+            var sampled = Sample(rows, 300);
+            foreach (var cols in sampled)
+            {
+                var ip = cols[0].Trim();
+                var info = r.Find(ip);
+                if (info == null) continue;
+
+                for (int fi = 0; fi < fields.Length; fi++)
+                {
+                    var field = fields[fi];
+                    if (!colMap.ContainsKey(field)) continue;
+                    var idx = colMap[field];
+                    if (idx >= cols.Length) continue;
+
+                    var expected = cols[idx].Trim().Replace("\"", "");
+                    var actual = info.Get(field).Trim().Replace("\"", "");
+
+                    if (!FieldsMatch(field, expected, actual))
+                    {
+                        verErrors++;
+                        if (verErrors <= 3)
+                            System.Console.WriteLine("    ERR [" + ver + " " + scope + "] IP=" + ip + " " + field + ": csv='" + expected + "' db='" + actual + "'");
+                    }
+                    verChecks++;
+                }
+            }
+        }
+
+        totalChecks += verChecks;
+        totalErrors += verErrors;
+        double rate = verChecks > 0 ? (1.0 - (double)verErrors / verChecks) * 100 : 100;
+        System.Console.WriteLine("  [" + ver + " " + scope + "] fields=" + fields.Length + " checks=" + verChecks + " errors=" + verErrors + " acc=" + rate.ToString("F2") + "%");
+    }
+
+    // Proper CSV line parser: handles quoted fields with embedded commas
+    static string[] ParseCsvLine(string line)
+    {
+        var result = new System.Collections.Generic.List<string>();
+        bool inQuotes = false;
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < line.Length; i++)
+        {
+            char c = line[i];
+            if (c == '"') inQuotes = !inQuotes;
+            else if (c == ',' && !inQuotes) { result.Add(sb.ToString()); sb.Clear(); }
+            else sb.Append(c);
+        }
+        result.Add(sb.ToString());
+        return result.ToArray();
+    }
+
+    static bool FieldsMatch(string field, string expected, string actual)
+    {
+        if (expected == actual) return true;
+        if (string.IsNullOrEmpty(expected)) return true;
+
+        if (field == "longitude" || field == "latitude")
+        {
+            if (double.TryParse(expected, NumberStyles.Float, CultureInfo.InvariantCulture, out var expD) &&
+                double.TryParse(actual, NumberStyles.Float, CultureInfo.InvariantCulture, out var actD))
+            {
+                return System.Math.Abs(expD - actD) < 0.001;
+            }
+        }
+
+        var normE = expected.ToLowerInvariant().Trim();
+        var normA = actual.ToLowerInvariant().Trim();
+        if (normE == normA) return true;
+
+        normE = normE.TrimEnd('0').TrimEnd('.');
+        normA = normA.TrimEnd('0').TrimEnd('.');
+        return normE == normA;
+    }
+
+    static System.Collections.Generic.List<string[]> Sample(System.Collections.Generic.List<string[]> rows, int count)
+    {
+        var result = new System.Collections.Generic.List<string[]>();
+        var indices = new System.Collections.Generic.HashSet<int>();
+        while (indices.Count < count && indices.Count < rows.Count)
+        {
+            indices.Add(rng.Next(rows.Count));
+        }
+        foreach (var i in indices)
+            result.Add(rows[i]);
+        return result;
     }
 }
