@@ -119,11 +119,54 @@ public class DatabaseReaderTest {
             });
             passed++;
 
-            // Test 8: ChainedReader 多库联合测试
+            // Test 8: ChainedReader 联合查询测试
             testAssert("8. ChainedReader 联合查询测试", () -> {
                 ChainedReader chain = ChainedReader.chainMerge(reader);
                 Optional<GeoInfo> info = chain.find("223.5.5.5");
                 assertTrue(info.isPresent(), "chained find");
+            });
+            passed++;
+
+            // Test 11: 恶意与非法输入防御测试
+            testAssert("11. 恶意与非法 IP 输入安全防御", () -> {
+                String[] badInputs = {"", "   ", "abc.def.ghi.jkl", "256.1.1.1", "1.1.1", "1.1.1.1.1", "1.1.1.1/24", "A".repeat(10000)};
+                for (String bad : badInputs) {
+                    try {
+                        reader.find(bad);
+                        fail("Should throw QzdbException for bad input: " + bad);
+                    } catch (QzdbException e) {
+                        assertEquals(ErrorCode.INVALID_IP, e.getErrorCode(), "ErrorCode.INVALID_IP for: " + bad);
+                    }
+                }
+            });
+            passed++;
+
+            // Test 12: 损坏与伪造数据库文件防护测试
+            testAssert("12. 损坏/伪造数据库文件强鲁棒性防护", () -> {
+                byte[] badMagic = "INVALID_MAGIC_HEADER_TEST_BYTES_FOR_QZDB_PARSER_SAFETY_123456789".getBytes();
+                try {
+                    new DatabaseReader.Builder(badMagic).build();
+                    fail("Should fail on invalid magic");
+                } catch (QzdbException e) {
+                    assertTrue(e.getErrorCode() == ErrorCode.CORRUPTED || e.getErrorCode() == ErrorCode.BAD_MAGIC, "CORRUPTED or BAD_MAGIC error code");
+                }
+
+                byte[] truncated = "QZDB".getBytes();
+                try {
+                    new DatabaseReader.Builder(truncated).build();
+                    fail("Should fail on truncated header");
+                } catch (QzdbException e) {
+                    assertTrue(e.getErrorCode() == ErrorCode.BAD_HEADER || e.getErrorCode() == ErrorCode.BAD_MAGIC || e.getErrorCode() == ErrorCode.CORRUPTED, "truncated header error code");
+                }
+            });
+            passed++;
+
+            // Test 13: IPv6 全展开与双冒号压缩格式测试
+            testAssert("13. IPv6 极限展开/双冒号压缩规范解析", () -> {
+                Optional<GeoInfo> g1 = reader.find("2001:db8::1");
+                Optional<GeoInfo> g2 = reader.find("2001:0db8:0000:0000:0000:0000:0000:0001");
+                Optional<GeoInfo> g3 = reader.find("::ffff:223.5.5.5");
+                assertTrue(g3.isPresent(), "mapped v6 find");
             });
             passed++;
 
@@ -183,25 +226,29 @@ public class DatabaseReaderTest {
         void run() throws Throwable;
     }
 
-    private static void assertEquals(Object expected, Object actual, String msg) {
-        if (expected == null && actual == null) return;
-        if (expected != null && expected.equals(actual)) return;
-        throw new AssertionError(msg + " — expected: <" + expected + ">, but got: <" + actual + ">");
+    private static void fail(String msg) {
+        throw new AssertionError(msg);
     }
 
     private static void assertTrue(boolean condition, String msg) {
-        if (!condition) throw new AssertionError(msg + " — expected true, but got false");
+        if (!condition) throw new AssertionError("AssertTrue failed: " + msg);
     }
 
     private static void assertFalse(boolean condition, String msg) {
-        if (condition) throw new AssertionError(msg + " — expected false, but got true");
+        if (condition) throw new AssertionError("AssertFalse failed: " + msg);
     }
 
     private static void assertNotNull(Object obj, String msg) {
-        if (obj == null) throw new AssertionError(msg + " — expected non-null");
+        if (obj == null) throw new AssertionError("AssertNotNull failed: " + msg);
     }
 
     private static void assertNull(Object obj, String msg) {
-        if (obj != null) throw new AssertionError(msg + " — expected null, but got " + obj);
+        if (obj != null) throw new AssertionError("AssertNull failed: " + msg);
+    }
+
+    private static void assertEquals(Object expected, Object actual, String msg) {
+        if (expected == null && actual == null) return;
+        if (expected != null && expected.equals(actual)) return;
+        throw new AssertionError("AssertEquals failed [" + msg + "]: expected <" + expected + ">, but got <" + actual + ">");
     }
 }
