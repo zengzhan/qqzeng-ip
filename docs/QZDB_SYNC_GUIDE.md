@@ -20,7 +20,7 @@
 
 | 开发目录 | GitHub 目录 | 说明 |
 |---|---|---|
-| `multi-lang/netcore/` | `qzdb/csharp/` | ⚠️ 目录名不同！dev 叫 netcore GitHub 叫 csharp |
+| `multi-lang/netcore/` | `qzdb/netcore/` | — |
 | `multi-lang/c/` | `qzdb/c/` | — |
 | `multi-lang/go/` | `qzdb/go/` | — |
 | `multi-lang/java/` | `qzdb/java/` | — |
@@ -127,9 +127,9 @@ cp "$DEV/java/src/main/java/qzdb/ErrorCode.java" "$GITHUB/java/src/main/java/qzd
 cp "$DEV/java/src/main/java/qzdb/QzdbException.java" "$GITHUB/java/src/main/java/qzdb/" 2>/dev/null || true
 cp "$DEV/java/src/main/java/qzdb/IpLocation.java" "$GITHUB/java/src/main/java/qzdb/" 2>/dev/null || true
 
-# C#（注意目录名：dev=netcore, GitHub=csharp）
-cp "$DEV/netcore/QzdbReader.cs" "$GITHUB/csharp/"
-cp "$DEV/netcore/qzdb-searcher.csproj" "$GITHUB/csharp/" 2>/dev/null || true
+# .NET / C#
+cp "$DEV/netcore/QzdbReader.cs" "$GITHUB/netcore/"
+cp "$DEV/netcore/QQZeng.Qzdb.csproj" "$GITHUB/netcore/" 2>/dev/null || true
 
 # Node.js
 cp "$DEV/nodejs/qzdb.js" "$GITHUB/nodejs/"
@@ -161,7 +161,7 @@ ls qzdb/tools/ 2>/dev/null && echo "ERROR: tools/ 不应存在" || echo "  tools
 
 # 检查必不可少的 README.md 是否完好
 echo "=== 检查子目录 README ==="
-for d in csharp go java nodejs php python rust; do
+for d in netcore go java nodejs php python rust; do
   ls qzdb/$d/README.md 2>/dev/null && echo "  $d/README.md: 存在" || echo "  $d/README.md: ❌ 缺失！"
 done
 
@@ -184,7 +184,7 @@ ls qzdb/rust/target/ 2>/dev/null && echo "ERROR: rust/target/ 不应存在" || e
 cd "/Users/zengxiangzhan/ZengData/网站/GitHub/qqzeng-ip/qqzeng-ip"
 
 # 编译产物
-rm -rf qzdb/csharp/bin qzdb/csharp/obj
+rm -rf qzdb/netcore/bin qzdb/netcore/obj
 rm -f qzdb/c/qzdb_reader.o qzdb/c/bench_qps qzdb/c/bench_qps.c
 rm -f qzdb/go/main
 rm -rf qzdb/rust/target/
@@ -226,17 +226,17 @@ cd "/Users/zengxiangzhan/ZengData/网站/GitHub/qqzeng-ip/qqzeng-ip"
 # 以下按需执行。如果目录描述已经是正确的，只需要改一下注释版本号触发提交即可。
 
 # 如果只需要更新单个目录（如 csharp）：
-sed -i '' 's/<!-- commit: csharp:.*/<!-- commit: csharp: C# .NET 极速解析引擎 (堆分配, 8500 万+ QPS) -->/' qzdb/csharp/README.md
-git add qzdb/csharp/README.md
-git commit -m "csharp: C# .NET 极速解析引擎 (堆分配, 8500 万+ QPS)"
+sed -i '' 's/<!-- commit: netcore:.*/<!-- commit: netcore: .NET 极速解析引擎 (堆分配, 8500 万+ QPS) -->/' qzdb/netcore/README.md
+git add qzdb/netcore/README.md
+git commit -m "netcore: .NET 极速解析引擎 (堆分配, 8500 万+ QPS)"
 
 # 全部目录一次恢复（用脚本）：
-for dir in c csharp go java nodejs php python rust; do
+for dir in c netcore go java nodejs php python rust; do
   # 确保 README.md 末尾有正确的隐藏注释
   desc=""
   case "$dir" in
-    c)      desc="c: C 语言极速解析引擎 (mmap 零拷贝, 2 亿+ QPS)" ;;
-    csharp) desc="csharp: C# .NET 极速解析引擎 (堆分配, 8500 万+ QPS)" ;;
+    c)       desc="c: C 语言极速解析引擎 (mmap 零拷贝, 2 亿+ QPS)" ;;
+    netcore) desc="netcore: .NET 极速解析引擎 (堆分配, 8500 万+ QPS)" ;;
     go)     desc="go: Go 语言极速解析引擎 (mmap, 9500 万+ QPS)" ;;
     java)   desc="java: Java 极速解析引擎 (堆分配, 9600 万+ QPS)" ;;
     nodejs) desc="nodejs: Node.js 极速解析引擎 (V8 BigInt, 4700 万+ QPS)" ;;
