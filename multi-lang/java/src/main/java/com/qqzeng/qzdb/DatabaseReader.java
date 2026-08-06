@@ -41,6 +41,9 @@ public class DatabaseReader implements AutoCloseable {
     private static final int CRC_CHUNK = 1 << 20;
     private static final byte[] ZERO4 = new byte[4];
     private static final int[] HEX_DIGITS = new int[128];
+    private static final ThreadLocal<java.text.DecimalFormat> FLOAT6 =
+            ThreadLocal.withInitial(() -> new java.text.DecimalFormat("0.000000",
+                    java.text.DecimalFormatSymbols.getInstance(Locale.US)));
 
     static {
         java.util.Arrays.fill(HEX_DIGITS, -1);
@@ -633,7 +636,7 @@ public class DatabaseReader implements AutoCloseable {
             return "";
         }
 
-        /** 原生标量字段解码（§6.6 / §10.5）：int 原样；float 按 %.6f 格式化（FORMAT 规范跨语言一致）。 */
+        /** 原生标量字段解码（§6.6 / §10.5）：int 原样；float 按 6 位小数格式化（FORMAT 规范跨语言一致）。 */
         private String readNativeValue(long off, int fw, int nt) {
             int iOff = (int) off;
             if (iOff < 0 || iOff + fw > dataLen) return "";
@@ -642,12 +645,12 @@ public class DatabaseReader implements AutoCloseable {
                     float f = Float.intBitsToFloat(readU32(data, iOff));
                     if (Float.isNaN(f) || Float.isInfinite(f)) return "";
                     if (f == Math.floor(f)) return Long.toString((long) f);
-                    return String.format(Locale.US, "%.6f", f);
+                    return FLOAT6.get().format(f);
                 } else if (fw == 8) {
                     double dVal = Double.longBitsToDouble(readU64(data, iOff));
                     if (Double.isNaN(dVal) || Double.isInfinite(dVal)) return "";
                     if (dVal == Math.floor(dVal)) return Long.toString((long) dVal);
-                    return String.format(Locale.US, "%.6f", dVal);
+                    return FLOAT6.get().format(dVal);
                 }
             }
             long valNum = readUintWidth(data, iOff, fw) & 0xFFFFFFFFL;
@@ -979,6 +982,28 @@ public class DatabaseReader implements AutoCloseable {
         return n < 0 ? null : formatV4Cidr(ipInt, n);
     }
 
+    /** 字节数组入口的 CIDR 反查（4 字节 = V4，16 字节 = V6/mapped）。未覆盖返回 null。 */
+    public String lookupCidrBytes(byte[] ipBytes) {
+        if (ipBytes == null) return null;
+        Snapshot snap = requireSnapshot();
+        if (ipBytes.length == 16) {
+            if (isV4MappedBytes(ipBytes)) {
+                int v4 = v4FromMappedBytes(ipBytes);
+                int n = lookupV4PrefixLen(snap, v4);
+                return n < 0 ? null : formatV4Cidr(v4, n);
+            }
+            int n = lookupV6PrefixLen(snap, ipBytes);
+            return n < 0 ? null : formatV6Cidr(ipBytes, n);
+        }
+        if (ipBytes.length == 4) {
+            int v4 = ((ipBytes[0] & 0xFF) << 24) | ((ipBytes[1] & 0xFF) << 16)
+                    | ((ipBytes[2] & 0xFF) << 8) | (ipBytes[3] & 0xFF);
+            int n = lookupV4PrefixLen(snap, v4);
+            return n < 0 ? null : formatV4Cidr(v4, n);
+        }
+        return null;
+    }
+
     // =========================================================================
     // 热更新 reload API（影子对象 + CRC 强制 + 原子替换，SDK 规范 §4.3）
     // =========================================================================
@@ -1038,6 +1063,9 @@ public class DatabaseReader implements AutoCloseable {
     public boolean verifyCrc() {
         return requireSnapshot().verifyCrcNow();
     }
+
+    public int getGroupCount() { return requireSnapshot().actualGroups; }
+    public int getPoolCount() { return requireSnapshot().poolCount; }
 
     // =========================================================================
     // IP 解析（严格、无 DNS、零外部依赖；所有入口共享，SDK 规范 §5.3）
@@ -1475,27 +1503,24 @@ public class DatabaseReader implements AutoCloseable {
 
     private static String readUtf8(ByteBuffer d, int off, int len) {
         byte[] bytes = new byte[len];
-        // duplicate() 保证多线程并发读不竞争 position（ByteBuffer.position 非线程安全）
-        ByteBuffer dup = d.duplicate();
-        dup.position(off);
-        dup.get(bytes, 0, len);
+        d.get(off, bytes, 0, len);
         return new String(bytes, StandardCharsets.UTF_8);
     }
 
     private static int readU16(ByteBuffer d, int off) {
-        return (d.get(off) & 0xFF) | ((d.get(off + 1) & 0xFF) << 8);
+        return d.getShort(off) & 0xFFFF;
     }
 
     private static int readU32(ByteBuffer d, int off) {
-        return (d.get(off) & 0xFF) | ((d.get(off + 1) & 0xFF) << 8) |
-               ((d.get(off + 2) & 0xFF) << 16) | ((d.get(off + 3) & 0xFF) << 24);
+        return d.getInt(off);
     }
 
     private static long readU64(ByteBuffer d, int off) {
-        return (readU32(d, off) & 0xFFFFFFFFL) | ((long) readU32(d, off + 4) << 32);
+        return d.getLong(off);
     }
 
     private static long readU48(ByteBuffer d, int off) {
+        // 逐字节读取（header 内偏移 186+6=192 恰为边界，getLong 会越界）
         return (d.get(off) & 0xFFL)
                 | ((d.get(off + 1) & 0xFFL) << 8)
                 | ((d.get(off + 2) & 0xFFL) << 16)
@@ -1505,7 +1530,7 @@ public class DatabaseReader implements AutoCloseable {
     }
 
     private static int readU24(ByteBuffer d, int off) {
-        return (d.get(off) & 0xFF) | ((d.get(off + 1) & 0xFF) << 8) | ((d.get(off + 2) & 0xFF) << 16);
+        return (d.get(off) & 0xFF) | ((d.getShort(off + 1) & 0xFFFF) << 8);
     }
 
     private static int readUintWidth(ByteBuffer d, int off, int width) {
@@ -1515,11 +1540,10 @@ public class DatabaseReader implements AutoCloseable {
         return readU32(d, off);
     }
 
-    /** 无符号宽度读取（用于池索引：width==4 时高位为 1 不返回负数）。 */
     private static long readUintWidthUnsigned(ByteBuffer d, int off, int width) {
         if (width <= 1) return d.get(off) & 0xFFL;
-        if (width == 2) return readU16(d, off) & 0xFFFFL;
-        if (width == 3) return readU24(d, off) & 0xFFFFFL;
-        return readU32(d, off) & 0xFFFFFFFFL;
+        if (width == 2) return d.getShort(off) & 0xFFFFL;
+        if (width == 3) return (d.get(off) & 0xFFL) | ((d.getShort(off + 1) & 0xFFFFL) << 8);
+        return d.getInt(off) & 0xFFFFFFFFL;
     }
 }
