@@ -181,10 +181,8 @@ QZDB 引擎核心采用专门定制的 **双阶段 Patricia Trie 树型检索算
 
 ---
 
-## 📁 内部文档
+## 📁 核心设计文档
 
-本文档仅供内部开发参考，不上传 GitHub：
-
-- **[docs/FORMAT.md](./docs/FORMAT.md)** - 二进制格式规范
-- **[docs/SDK同步流程.md](./docs/SDK同步流程.md)** - SDK 同步操作流程
-- **[docs/QZDB_SYNC_GUIDE.md](./docs/QZDB_SYNC_GUIDE.md)** - 同步指南
+- **[二进制格式规范](../docs/QZDB_FORMAT.md)** - QZDB 底层存储二进制格式规范
+- **[SDK API 设计规范](../docs/QZDB_SDK_API.md)** - QZDB 8 种语言 SDK API v2.4 规范
+- **[SDK 同步指南](../docs/QZDB_SYNC_GUIDE.md)** - 多语言 SDK 同步与测试指南

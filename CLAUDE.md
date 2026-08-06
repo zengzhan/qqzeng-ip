@@ -8,7 +8,9 @@ Cross-platform IP geolocation SDK supporting 8 languages: C, C#, Go, Java, Node.
 
 | File | Purpose |
 |------|---------|
-| `FORMAT.md` | Binary format specification (single source of truth) |
+| `docs/QZDB_FORMAT.md` | Binary format specification (single source of truth for format) |
+| `docs/QZDB_SDK_API.md` | SDK API v2.4 specification (single source of truth for SDK design) |
+| `docs/QZDB_SYNC_GUIDE.md` | Multi-language SDK synchronization guide |
 | `multi-lang/` | SDK implementations for all 8 languages |
 | `multi-lang/run_all.sh` | Unified verification orchestrator (L1-L4) |
 | `multi-lang/cross_lang_verify.py` | L2: cross-language consistency check |
@@ -36,7 +38,7 @@ Cross-platform IP geolocation SDK supporting 8 languages: C, C#, Go, Java, Node.
 
 ## Workflow Rules
 
-- **Format changes**: Always update `FORMAT.md` first, then update all 8 language ports, then run `cd multi-lang && ./run_all.sh`
+- **Format changes**: Always update `docs/QZDB_FORMAT.md` first, then update all 8 language ports, then run `cd multi-lang && ./run_all.sh`
 - **Bug fixes**: Must include a regression test in the appropriate test file
 - **New fields**: Use the `create-migration` skill (`.claude/skills/create-migration/SKILL.md`)
 - **New tests**: Use the `gen-test` skill (`.claude/skills/gen-test/SKILL.md`)
