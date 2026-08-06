@@ -115,27 +115,27 @@ DEV="/Users/zengxiangzhan/ZengData/IP数据库/qzdb/multi-lang"
 GITHUB="/Users/zengxiangzhan/ZengData/网站/GitHub/qqzeng-ip/qqzeng-ip/qzdb"
 
 # C（核心 SDK，不含 main.c）
-cp "$DEV/c/qzdb_searcher.c" "$GITHUB/c/"
-cp "$DEV/c/qzdb_searcher.h" "$GITHUB/c/"
+cp "$DEV/c/qzdb_reader.c" "$GITHUB/c/"
+cp "$DEV/c/qzdb_reader.h" "$GITHUB/c/"
 
 # Go（只更新 qzdb 包，不覆盖 main.go 和 go.mod）
 cp "$DEV/go/qzdb/qzdb.go" "$GITHUB/go/qzdb/"
 
 # Java
-cp "$DEV/java/src/main/java/qzdb/QzdbSearcher.java" "$GITHUB/java/src/main/java/qzdb/"
+cp "$DEV/java/src/main/java/qzdb/QzdbReader.java" "$GITHUB/java/src/main/java/qzdb/"
 cp "$DEV/java/src/main/java/qzdb/ErrorCode.java" "$GITHUB/java/src/main/java/qzdb/" 2>/dev/null || true
 cp "$DEV/java/src/main/java/qzdb/QzdbException.java" "$GITHUB/java/src/main/java/qzdb/" 2>/dev/null || true
 cp "$DEV/java/src/main/java/qzdb/IpLocation.java" "$GITHUB/java/src/main/java/qzdb/" 2>/dev/null || true
 
 # C#（注意目录名：dev=netcore, GitHub=csharp）
-cp "$DEV/netcore/QzdbSearcher.cs" "$GITHUB/csharp/"
+cp "$DEV/netcore/QzdbReader.cs" "$GITHUB/csharp/"
 cp "$DEV/netcore/qzdb-searcher.csproj" "$GITHUB/csharp/" 2>/dev/null || true
 
 # Node.js
 cp "$DEV/nodejs/qzdb.js" "$GITHUB/nodejs/"
 
 # PHP
-cp "$DEV/php/QzdbSearcher.php" "$GITHUB/php/"
+cp "$DEV/php/QzdbReader.php" "$GITHUB/php/"
 
 # Python（只更新核心 SDK，不含验证脚本）
 cp "$DEV/python/qzdb.py" "$GITHUB/python/"
@@ -185,7 +185,7 @@ cd "/Users/zengxiangzhan/ZengData/网站/GitHub/qqzeng-ip/qqzeng-ip"
 
 # 编译产物
 rm -rf qzdb/csharp/bin qzdb/csharp/obj
-rm -f qzdb/c/qzdb_searcher.o qzdb/c/bench_qps qzdb/c/bench_qps.c
+rm -f qzdb/c/qzdb_reader.o qzdb/c/bench_qps qzdb/c/bench_qps.c
 rm -f qzdb/go/main
 rm -rf qzdb/rust/target/
 

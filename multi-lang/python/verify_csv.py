@@ -1,7 +1,7 @@
 import csv, random, ipaddress, os, sys
 
 sys.path.insert(0, os.path.dirname(__file__))
-from qzdb import QzdbSearcher
+from qzdb import QzdbReader
 
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 BASE_DIR = os.path.join(os.path.dirname(__file__), '..', '..')
@@ -17,7 +17,7 @@ def test_database(db_name, csv_rel_path, sample_n):
         print(f'  [{db_name}] SKIP: qzdb not found at {qzdb_path}')
         return True
 
-    s = QzdbSearcher()
+    s = QzdbReader()
     s.load(qzdb_path)
     rng = random.Random(42)
     total = 0

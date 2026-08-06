@@ -5,7 +5,7 @@ import (
 	"math/rand"
 	"time"
 
-	"qzdb_searcher/qzdb"
+	"qzdb_reader/qzdb"
 )
 
 // highLowTo16 converts two uint64 halves (big-endian) to a [16]byte for FindV6Uint.

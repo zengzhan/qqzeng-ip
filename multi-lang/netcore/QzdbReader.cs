@@ -1,4 +1,4 @@
-namespace Qzdb;
+namespace QQZeng.Qzdb;
 
 using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
@@ -6,12 +6,13 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 
 /// <summary>
 /// QZDB high-performance IP geolocation reader (.NET 10).
 /// Lock-free snapshot architecture: queries never block each other; reload is atomic via Interlocked.Exchange.
 /// </summary>
-public sealed class DatabaseReader : IDisposable
+public sealed class QzdbReader : IDisposable
 {
     private const int HeaderSize = 192;
     private const uint Sentinel = 0x80000000;
@@ -19,9 +20,13 @@ public sealed class DatabaseReader : IDisposable
     private const uint SentinelMask31 = 0x7FFFFFFF;
     private const int MaxPoolCount = 1 << 24;
 
+    // Bounded, lock-free per-snapshot cache of resolved GeoInfo keyed by entryId.
+    // Power of two; collisions cause a recompute, never a wrong value (see ResolveGeo).
+    private const int GeoCacheSize = 1 << 14; // 16384 slots ≈ 196 KB per snapshot
+
     private Snapshot? _activeSnapshot;
 
-    private DatabaseReader(Snapshot snap)
+    private QzdbReader(Snapshot snap)
     {
         _activeSnapshot = snap;
     }
@@ -31,7 +36,7 @@ public sealed class DatabaseReader : IDisposable
     private Snapshot RequireSnapshot()
     {
         var s = Volatile.Read(ref _activeSnapshot);
-        if (s == null) throw new ObjectDisposedException(nameof(DatabaseReader));
+        if (s == null) throw new ObjectDisposedException(nameof(QzdbReader));
         return s;
     }
 
@@ -49,17 +54,17 @@ public sealed class DatabaseReader : IDisposable
         public Builder GroupIndex(int idx) { _groupIndex = idx; return this; }
         public Builder VerifyCrc(bool enabled) { _verifyCrc = enabled; return this; }
 
-        public DatabaseReader Build()
+        public QzdbReader Build()
         {
             if (_fileStream != null)
             {
                 var snap = Snapshot.FromStream(_fileStream, _groupIndex, _verifyCrc);
-                return new DatabaseReader(snap);
+                return new QzdbReader(snap);
             }
             if (_buffer != null)
             {
                 var snap = Snapshot.FromBuffer(_buffer, _groupIndex, _verifyCrc);
-                return new DatabaseReader(snap);
+                return new QzdbReader(snap);
             }
             throw new QzdbException(ErrorCode.InvalidParam, "Neither file path nor buffer was provided");
         }
@@ -102,6 +107,9 @@ public sealed class DatabaseReader : IDisposable
         internal Dictionary<string, int> _normMap;
         internal bool[] _numericFlags;
 
+        internal uint[]? _cacheKeys;
+        internal GeoInfo?[]? _cacheVals;
+
         internal string _version, _description, _dataMonth, _buildTimeStr, _edition, _scope;
         internal long _storedCrc;
         internal long? _canonicalCrc;
@@ -134,6 +142,9 @@ public sealed class DatabaseReader : IDisposable
             ParseGroups();
             ParseMetadata();
             ParsePools();
+
+            _cacheKeys = new uint[GeoCacheSize];
+            _cacheVals = new GeoInfo?[GeoCacheSize];
 
             if (verifyCrc)
             {
@@ -812,10 +823,35 @@ public sealed class DatabaseReader : IDisposable
         return ResolveGeo(snap, entryId);
     }
 
-    private static GeoInfo ResolveGeo(Snapshot snap, uint entryId)
+    // Bounded, lock-free per-snapshot cache of resolved GeoInfo keyed by entryId.
+    // The snapshot is immutable, so a given entryId always resolves to the same GeoInfo.
+    // Cache is bounded (GeoCacheSize slots) to avoid unbounded memory growth on large DBs;
+    // collisions simply cause a recompute and never a wrong value (see read order below).
+    private static GeoInfo? ResolveGeo(Snapshot snap, uint entryId)
     {
+        if (entryId == 0) return null;
         if (entryId >= snap._groupEntryCounts[snap._groupIndex]) return null;
 
+        var keys = snap._cacheKeys!;
+        var vals = snap._cacheVals!;
+        int h = (int)(entryId & (uint)(GeoCacheSize - 1));
+
+        // Read value BEFORE key, and only return when key matches: this guarantees we never
+        // return a GeoInfo belonging to a different entryId, even under concurrent races
+        // where another writer overwrites the same slot with a different entry.
+        var cached = Volatile.Read(ref vals[h]);
+        if (cached != null && Volatile.Read(ref keys[h]) == entryId)
+            return cached;
+
+        var geo = BuildGeo(snap, entryId);
+
+        Volatile.Write(ref vals[h], geo);
+        Volatile.Write(ref keys[h], entryId);
+        return geo;
+    }
+
+    private static GeoInfo BuildGeo(Snapshot snap, uint entryId)
+    {
         int gi = snap._groupIndex;
         int fc = snap._groupFieldCounts[gi];
         long entryOff = snap._groupEntryOffsets[gi] + (long)entryId * snap._groupStrides[gi];
@@ -983,7 +1019,7 @@ public sealed class DatabaseReader : IDisposable
 
     private static readonly byte[] HexLUT = new byte[128];
     private static readonly uint[] CrcTable = new uint[256];
-    static DatabaseReader()
+    static QzdbReader()
     {
         for (int i = 0; i < 10; i++) HexLUT[48 + i] = (byte)i;
         for (int i = 0; i < 6; i++) { HexLUT[97 + i] = (byte)(10 + i); HexLUT[65 + i] = (byte)(10 + i); }

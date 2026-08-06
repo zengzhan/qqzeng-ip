@@ -15,7 +15,7 @@ import json, os, random, sys
 
 SRC_DIR = os.path.join(os.path.dirname(__file__), '..')
 sys.path.insert(0, os.path.join(SRC_DIR, 'python'))
-from qzdb import QzdbSearcher
+from qzdb import QzdbReader
 
 DATA_DIR = os.path.join(SRC_DIR, 'data')
 OUT_FILE = os.path.join(os.path.dirname(__file__), 'golden_vectors.json')
@@ -105,7 +105,7 @@ def generate_for_db(db_name, db_path):
         print(f"  SKIP {db_name}: {db_path} not found")
         return None
 
-    searcher = QzdbSearcher(db_path)
+    searcher = QzdbReader(db_path)
     rng_v4 = random.Random(SEED)
     rng_v6 = random.Random(SEED + 1)
 

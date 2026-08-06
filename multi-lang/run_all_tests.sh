@@ -85,7 +85,7 @@ fi
 if command -v gcc &> /dev/null || command -v clang &> /dev/null; then
     CC="gcc"
     command -v clang &> /dev/null && CC="clang"
-    if ! (cd c && $CC -O3 -o qzdb_test qzdb_searcher.c main.c -lm); then
+    if ! (cd c && $CC -O3 -o qzdb_test qzdb_reader.c main.c -lm); then
         echo "✗ C (compile failed)" > "$RESULTS_DIR/C.result.status"
         TEST_NAMES+=("C")
         TEST_PIDS+=(0)
@@ -94,7 +94,7 @@ if command -v gcc &> /dev/null || command -v clang &> /dev/null; then
     fi
 fi
 
-# Java
+# Java (v2.4 API: com.qqzeng.qzdb.DatabaseReader + DatabaseReaderTest)
 find_java_home() {
     local homes=(
         /opt/homebrew/Cellar/openjdk@21/*/libexec/openjdk.jdk/Contents/Home
@@ -116,17 +116,17 @@ JAVA_HOME=$(find_java_home)
 if [ -n "$JAVA_HOME" ]; then
     export JAVA_HOME
     mkdir -p java/build
-    if ! $JAVA_HOME/bin/javac -d java/build \
-        java/src/main/java/qzdb/QzdbSearcher.java \
-        java/src/main/java/qzdb/IpLocation.java \
-        java/src/main/java/qzdb/ErrorCode.java \
-        java/src/main/java/qzdb/QzdbException.java \
-        java/src/main/java/Main.java; then
+    # 编译整个源码树（main + test），v2.4 包名为 com.qqzeng.qzdb
+    if ! $JAVA_HOME/bin/javac -encoding UTF-8 -d java/build $(find java/src -name '*.java'); then
         echo "✗ Java (compile failed)" > "$RESULTS_DIR/Java.result.status"
         TEST_NAMES+=("Java")
         TEST_PIDS+=(0)
     else
-        run_test "Java" "$JAVA_HOME/bin/java -cp java/build Main" ""
+        # DatabaseReaderTest 覆盖 Tier 1 全场景，成功时打印 TEST_PASS；
+        # 以 multi-lang/ 为 CWD 运行时按相对路径候选自动定位 test_data_202608 数据。
+        run_test "Java" "$JAVA_HOME/bin/java -cp java/build com.qqzeng.qzdb.DatabaseReaderTest" ""
+        run_test "Java-Tier2" "$JAVA_HOME/bin/java -cp java/build com.qqzeng.qzdb.FullAccuracyAndPerfTester" ""
+        run_test "Java-Tier3" "$JAVA_HOME/bin/java -Xmx4g -cp java/build com.qqzeng.qzdb.DualStackBenchmark" ""
     fi
 else
     echo "[SKIP] Java (JDK not found)"

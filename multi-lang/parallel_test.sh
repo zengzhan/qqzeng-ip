@@ -70,10 +70,10 @@ run_l1_test "python" "python3 qzdb.py --test"
 run_l1_test "nodejs" "node qzdb.js --test"
 
 # PHP smoke test
-run_l1_test "php" "php -r 'require_once \"QzdbSearcher.php\"; echo \"OK\";'"
+run_l1_test "php" "php -r 'require_once \"QzdbReader.php\"; echo \"OK\";'"
 
 # Java smoke test
-run_l1_test "java" "javac -d build src/*.java && java -cp build com.qqzeng.ip.QzdbSearcher"
+run_l1_test "java" "javac -d build src/*.java && java -cp build com.qqzeng.ip.QzdbReader"
 
 # C# smoke test
 run_l1_test "csharp" "dotnet run --project netcore/"

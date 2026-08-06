@@ -5,6 +5,6 @@
     <RootNamespace>batch_csharp</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../../netcore/QzdbSearcher.cs" />
+    <Compile Include="../../netcore/QzdbReader.cs" />
   </ItemGroup>
 </Project>

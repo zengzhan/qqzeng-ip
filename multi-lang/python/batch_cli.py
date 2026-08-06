@@ -6,7 +6,7 @@ import qzdb
 if len(sys.argv) < 2:
     sys.exit(1)
 
-searcher = qzdb.QzdbSearcher(sys.argv[1])
+searcher = qzdb.QzdbReader(sys.argv[1])
 for line in sys.stdin:
     ip = line.strip()
     if not ip:

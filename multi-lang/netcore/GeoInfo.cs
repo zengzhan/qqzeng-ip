@@ -1,4 +1,4 @@
-namespace Qzdb;
+namespace QQZeng.Qzdb;
 
 using System.Globalization;
 using System.Runtime.CompilerServices;
@@ -10,6 +10,7 @@ public sealed class GeoInfo
     private readonly string[] _values;
     private readonly Dictionary<string, int>? _normMap;
     private readonly bool[]? _numericFlags;
+    private string? _pipe; // lazily memoized ToPipe() result (immutable per instance)
 
     public GeoInfo(string[] fieldNames, string[] values, Dictionary<string, int>? normMap, bool[]? numericFlags)
     {
@@ -86,13 +87,16 @@ public sealed class GeoInfo
     public string ToPipe()
     {
         if (_values.Length == 0) return "";
+        var cached = _pipe;
+        if (cached != null) return cached;
         var sb = new StringBuilder();
         for (int i = 0; i < _fieldNames.Length; i++)
         {
             if (i > 0) sb.Append('|');
             if (i < _values.Length && _values[i] != null) sb.Append(_values[i]);
         }
-        return sb.ToString();
+        _pipe = sb.ToString();
+        return _pipe;
     }
 
     public Dictionary<string, string> ToMap()

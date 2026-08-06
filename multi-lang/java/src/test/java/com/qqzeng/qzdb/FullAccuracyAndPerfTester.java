@@ -1,29 +1,36 @@
 package com.qqzeng.qzdb;
 
+import java.io.BufferedWriter;
 import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileReader;
-import java.io.IOException;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
+import java.io.Writer;
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Random;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * 202608 全版本 IP 数据库真实 Ground Truth 对齐与 QPS 压测套件
+ * Tier 2：10 大全规格版本 Ground Truth 逐字段比对验证器
+ * （依据 docs/QZDB_TEST_SPECIFICATION.md §三）
+ * <p>
+ * - 输入：range CSV 全量 start_ip + 40% 固定种子抽样 end_ip（总节点 ≥ 39,000,000）
+ * - 输出：IPv4/IPv6 分别统计；机器可读差异文件 (JSONL) + 汇总 (JSON)；首 20 条差异详情
+ * - 排除项：规范 §9.7 的 IPv4-mapped 保留行（V6 侧真值行不可达），显式计数并声明
  */
 public class FullAccuracyAndPerfTester {
 
-    private static final String BASE_DIR = "multi-lang/test_data_202608";
+    private static final long SEED = 42L;
+    private static final int END_IP_SAMPLE_PCT = 40;
 
-    // 10 种组合版本定义
     private static final String[][] VERSIONS = {
             {"std", "china", "qqzeng_ip_std_china.qzdb", "qqzeng_ip_std_china_range.csv"},
             {"std", "global", "qqzeng_ip_std_global.qzdb", "qqzeng_ip_std_global_range.csv"},
@@ -37,308 +44,308 @@ public class FullAccuracyAndPerfTester {
             {"max", "global", "qqzeng_ip_max_global.qzdb", "qqzeng_ip_max_global_range.csv"}
     };
 
-    public static void main(String[] args) {
-        System.out.println("==================================================================================");
-        System.out.println("         QZDB 202608 全版本 Ground Truth 真实字段对齐与 QPS 压测套件               ");
-        System.out.println("==================================================================================");
-
-        boolean runVerify = true;
-        boolean runBenchmark = true;
-
-        if (args.length > 0) {
-            if ("--verify".equalsIgnoreCase(args[0])) {
-                runBenchmark = false;
-            } else if ("--benchmark".equalsIgnoreCase(args[0])) {
-                runVerify = false;
-            }
-        }
-
-        int totalErrors = 0;
-
-        if (runVerify) {
-            System.out.println("\n[第一部分: 10 种版本 Ground Truth 逐字段 100% 精确对比验证]");
-            for (String[] verInfo : VERSIONS) {
-                String ver = verInfo[0];
-                String scope = verInfo[1];
-                String dbFileName = verInfo[2];
-                String csvFileName = verInfo[3];
-
-                File dbFile = new File(BASE_DIR + "/" + ver + "/" + scope + "/" + dbFileName);
-                File csvFile = new File(BASE_DIR + "/" + ver + "/" + scope + "/" + csvFileName);
-
-                if (!dbFile.exists() || !csvFile.exists()) {
-                    System.err.println("  [SKIP] 缺少测试数据: " + dbFile.getPath());
-                    continue;
-                }
-
-                int errors = verifySingleVersion(ver, scope, dbFile, csvFile);
-                totalErrors += errors;
-            }
-
-            System.out.println("\n----------------------------------------------------------------------------------");
-            if (mappedSkipped > 0) {
-                System.out.println(" 规范 §9.7 排除项: " + mappedSkipped + " 条 IPv4-mapped IPv6 网段行（经剥离后走 V4 Trie，V6 侧真值行不可达）");
-            }
-            if (totalErrors == 0) {
-                System.out.println(" 真实 Ground Truth 比对结果: 100% 精确对齐 (PASSED)");
-            } else {
-                System.err.println(" 真实 Ground Truth 比对结果: 发现 " + totalErrors + " 处字段偏差 (FAILED)");
-                System.exit(1);
-            }
-            System.out.println("----------------------------------------------------------------------------------");
-        }
-
-        if (runBenchmark) {
-            System.out.println("\n[第二部分: 高并发 QPS 吞吐量与微秒级 Latency 性能压测]");
-            runBenchmarkSuite();
-        }
+    /** 单版本统计 */
+    private static final class Stats {
+        long checked, v4Checked, v6Checked, errors, v4Errors, v6Errors, mappedExcluded, reservedSkipped;
+        long elapsedMs;
     }
 
-    /**
-     * 校验单个版本的 Ground Truth 准确性
-     */
-    private static int verifySingleVersion(String ver, String scope, File dbFile, File csvFile) {
+    private static final List<String> firstDiffs = new ArrayList<>();
+    private static Writer diffWriter;
+
+    private static String findBaseDir() {
+        for (String c : new String[]{"test_data_202608", "../test_data_202608", "multi-lang/test_data_202608", "../multi-lang/test_data_202608"}) {
+            if (new File(c + "/std/china/qqzeng_ip_std_china.qzdb").exists()) {
+                return new File(c).getAbsolutePath();
+            }
+        }
+        return null;
+    }
+
+    private static String findReportDir() {
+        for (String c : new String[]{"java/test_reports", "multi-lang/java/test_reports", "../java/test_reports"}) {
+            File f = new File(c);
+            if (f.exists() || f.mkdirs()) return new File(c).getAbsolutePath();
+        }
+        new File("java/test_reports").mkdirs();
+        return new File("java/test_reports").getAbsolutePath();
+    }
+
+    public static void main(String[] args) throws Exception {
+        System.out.println("==================================================================================");
+        System.out.println("     QZDB Tier 2 Ground Truth 验证器（10 版本 · 双栈分计 · 差异归档 · ≥39M 节点）    ");
+        System.out.println("==================================================================================");
+
+        String baseDir = findBaseDir();
+        if (baseDir == null) {
+            System.out.println("[SKIP] Tier 2: test_data_202608 数据目录未找到，跳过 Ground Truth 验证。");
+            System.out.println("TEST_PASS (Tier 2 skipped — no data available)");
+            return;
+        }
+        String reportDir = findReportDir();
+        new File(reportDir).mkdirs();
+        String stamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+        File diffFile = new File(reportDir + "/tier2_diff_" + stamp + ".jsonl");
+        File summaryFile = new File(reportDir + "/tier2_summary_" + stamp + ".json");
+        diffWriter = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(diffFile), StandardCharsets.UTF_8));
+
+        long t0 = System.currentTimeMillis();
+        Stats total = new Stats();
+        StringBuilder perVersionJson = new StringBuilder();
+        int versionsChecked = 0;
+
+        for (String[] verInfo : VERSIONS) {
+            String ver = verInfo[0], scope = verInfo[1];
+            File dbFile = new File(baseDir + "/" + ver + "/" + scope + "/" + verInfo[2]);
+            File csvFile = new File(baseDir + "/" + ver + "/" + scope + "/" + verInfo[3]);
+            if (!dbFile.exists() || !csvFile.exists()) {
+                System.err.println("  [SKIP] 缺少测试数据: " + dbFile.getPath());
+                continue;
+            }
+            Stats s = verifySingleVersion(ver, scope, dbFile, csvFile);
+            versionsChecked++;
+            total.checked += s.checked;
+            total.v4Checked += s.v4Checked;
+            total.v6Checked += s.v6Checked;
+            total.errors += s.errors;
+            total.v4Errors += s.v4Errors;
+            total.v6Errors += s.v6Errors;
+            total.mappedExcluded += s.mappedExcluded;
+            total.reservedSkipped += s.reservedSkipped;
+            total.elapsedMs += s.elapsedMs;
+            if (perVersionJson.length() > 0) perVersionJson.append(",\n");
+            perVersionJson.append(String.format(
+                    "    {\"edition\": \"%s-%s\", \"checked\": %d, \"ipv4_checked\": %d, \"ipv6_checked\": %d, " +
+                            "\"ipv4_errors\": %d, \"ipv6_errors\": %d, \"mapped_excluded\": %d, \"elapsed_ms\": %d}",
+                    ver, scope, s.checked, s.v4Checked, s.v6Checked, s.v4Errors, s.v6Errors, s.mappedExcluded, s.elapsedMs));
+        }
+        long wallMs = System.currentTimeMillis() - t0;
+        diffWriter.close();
+
+        // ── 汇总 JSON（机器可读归档）──────────────────────────────────
+        if (versionsChecked == 0) {
+            System.out.println("[SKIP] Tier 2: 没有可用版本的数据，跳过验证。");
+            System.out.println("TEST_PASS (Tier 2 skipped — no data available)");
+            return;
+        }
+        String verdict = total.errors == 0 && total.checked >= 39_000_000 ? "PASSED" : "FAILED";
+        String summary = "{\n" +
+                "  \"spec\": \"QZDB_TEST_SPECIFICATION.md Tier 2\",\n" +
+                "  \"timestamp\": \"" + stamp + "\",\n" +
+                "  \"dataset\": \"" + baseDir + "\",\n" +
+                "  \"total_checked\": " + total.checked + ",\n" +
+                "  \"ipv4_checked\": " + total.v4Checked + ",\n" +
+                "  \"ipv6_checked\": " + total.v6Checked + ",\n" +
+                "  \"total_errors\": " + total.errors + ",\n" +
+                "  \"ipv4_errors\": " + total.v4Errors + ",\n" +
+                "  \"ipv6_errors\": " + total.v6Errors + ",\n" +
+                "  \"spec97_mapped_excluded\": " + total.mappedExcluded + ",\n" +
+                "  \"invalid_literal_skipped\": " + total.reservedSkipped + ",\n" +
+                "  \"seed\": " + SEED + ",\n" +
+                "  \"end_ip_sample_pct\": " + END_IP_SAMPLE_PCT + ",\n" +
+                "  \"verify_elapsed_ms\": " + total.elapsedMs + ",\n" +
+                "  \"wall_elapsed_ms\": " + wallMs + ",\n" +
+                "  \"diff_file\": \"" + diffFile.getPath() + "\",\n" +
+                "  \"versions\": [\n" + perVersionJson + "\n  ],\n" +
+                "  \"verdict\": \"" + verdict + "\"\n" +
+                "}\n";
+        try (Writer w = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(summaryFile), StandardCharsets.UTF_8))) {
+            w.write(summary);
+        }
+
+        // ── 人类可读汇总 ──────────────────────────────────────────────
+        System.out.println("\n==================================================================================");
+        System.out.println(String.format(" 总节点: %,d（IPv4: %,d / IPv6: %,d）· 要求 ≥ 39,000,000", total.checked, total.v4Checked, total.v6Checked));
+        System.out.println(String.format(" 偏差: 总 %d（IPv4: %d / IPv6: %d）", total.errors, total.v4Errors, total.v6Errors));
+        System.out.println(String.format(" 排除项: §9.7 IPv4-mapped 保留行 %d 条（剥离后走 V4 Trie，V6 真值行不可达；等价 V4 网段已单独校验）", total.mappedExcluded));
+        if (total.reservedSkipped > 0) {
+            System.out.println(String.format(" 跳过项: 非法 IP 字面量（空/裸 0 等）%d 条", total.reservedSkipped));
+        }
+        System.out.println(String.format(" 耗时: 校验累计 %.1fs · 总墙钟 %.1fs", total.elapsedMs / 1000.0, wallMs / 1000.0));
+        System.out.println(" 差异归档: " + diffFile.getPath());
+        System.out.println(" 汇总归档: " + summaryFile.getPath());
+        if (!firstDiffs.isEmpty()) {
+            System.out.println("\n 首 " + firstDiffs.size() + " 条差异详情:");
+            for (String d : firstDiffs) System.out.println("   >> " + d);
+        }
+        System.out.println("\n Tier 2 结论: " + verdict
+                + (total.checked < 39_000_000 ? String.format("（节点量 %,d 未达 39M 门槛）", total.checked) : "")
+                + (total.errors > 0 ? String.format("（偏差 %d 处）", total.errors) : ""));
+        System.out.println("==================================================================================");
+
+        if ("PASSED".equals(verdict)) {
+            System.out.println("TEST_PASS");
+        }
+        if (!"PASSED".equals(verdict)) System.exit(1);
+    }
+
+    private static Stats verifySingleVersion(String ver, String scope, File dbFile, File csvFile) throws Exception {
         System.out.println(String.format("\n👉 正在校验 [%s - %s] -> %s", ver.toUpperCase(), scope.toUpperCase(), dbFile.getName()));
+        Stats s = new Stats();
+        long t0 = System.currentTimeMillis();
 
-        int errors = 0;
-        int checkCount = 0;
-
-        try (DatabaseReader reader = new DatabaseReader.Builder(dbFile).build();
-             BufferedReader br = new BufferedReader(new FileReader(csvFile))) {
+        try (QzdbReader reader = new QzdbReader.Builder(dbFile).build();
+             BufferedReader br = new BufferedReader(
+                     new InputStreamReader(new FileInputStream(csvFile), StandardCharsets.UTF_8), 1 << 20)) {
 
             String headerLine = br.readLine();
             if (headerLine == null) {
                 System.err.println("   [ERROR] 空 CSV 文件: " + csvFile.getPath());
-                return 1;
+                s.errors = 1;
+                return s;
             }
-
-            // 解析 CSV 标题行
             String[] headers = parseCsvLine(headerLine);
             Map<String, Integer> colMap = new HashMap<>();
-            for (int i = 0; i < headers.length; i++) {
-                colMap.put(headers[i].trim(), i);
-            }
+            for (int i = 0; i < headers.length; i++) colMap.put(headers[i].trim(), i);
+            int startCol = colMap.get("start_ip");
+            int endCol = colMap.get("end_ip");
 
             String line;
-            Random rand = new Random(42); // 固定种子
-
+            Random rand = new Random(SEED);
             while ((line = br.readLine()) != null) {
-                if (line.trim().isEmpty()) continue;
+                if (line.isEmpty()) continue;
                 String[] cols = parseCsvLine(line);
                 if (cols.length < headers.length) continue;
 
-                String startIp = cols[colMap.get("start_ip")].trim();
-                String endIp = cols[colMap.get("end_ip")].trim();
+                String startIp = cols[startCol].trim();
+                verifyIp(reader, ver, scope, startIp, headers, cols, colMap, s);
 
-                // 抽样验证: 校验 start_ip
-                int err = verifyIp(reader, startIp, headers, cols, colMap);
-                errors += err;
-                checkCount++;
-
-                // 抽样 20% 节点验证 end_ip
-                if (rand.nextInt(5) == 0) {
-                    err = verifyIp(reader, endIp, headers, cols, colMap);
-                    errors += err;
-                    checkCount++;
+                if (rand.nextInt(100) < END_IP_SAMPLE_PCT) {
+                    verifyIp(reader, ver, scope, cols[endCol].trim(), headers, cols, colMap, s);
                 }
 
-                if (errors > 50) {
+                if (s.errors > 50) {
                     System.err.println("   [FAIL] 累计偏差超过 50 处，提前终止该版本校验。");
                     break;
                 }
             }
-
-            if (errors == 0) {
-                System.out.println(String.format("   [✔ PASS] [%s-%s] 校验完成，累计抽样校验 %d 条真实 IP 记录，0 偏差！", ver.toUpperCase(), scope.toUpperCase(), checkCount));
-            } else {
-                System.err.println(String.format("   [✖ FAIL] [%s-%s] 校验失败，出现 %d 处字段偏差！", ver.toUpperCase(), scope.toUpperCase(), errors));
-            }
-
-        } catch (Exception e) {
-            System.err.println("   [ERROR] 校验过程中抛出未预期异常: " + e.getMessage());
-            e.printStackTrace();
-            return 1;
         }
+        s.elapsedMs = System.currentTimeMillis() - t0;
 
-        return errors;
+        if (s.errors == 0) {
+            System.out.println(String.format(
+                    "   [✔ PASS] [%s-%s] %,d 节点（v4 %,d / v6 %,d）· 0 偏差 · %.1fs",
+                    ver.toUpperCase(), scope.toUpperCase(), s.checked, s.v4Checked, s.v6Checked, s.elapsedMs / 1000.0));
+        } else {
+            System.err.println(String.format(
+                    "   [✖ FAIL] [%s-%s] %,d 节点 · %d 处偏差",
+                    ver.toUpperCase(), scope.toUpperCase(), s.checked, s.errors));
+        }
+        return s;
     }
 
-    private static int verifyIp(DatabaseReader reader, String ip, String[] headers, String[] cols, Map<String, Integer> colMap) {
-        String cleanIp = ip != null ? ip.trim() : "";
-        // 保留/未分配网段或 0.0.0.0 / 0:0 跳过
-        if (cleanIp.isEmpty() || "0.0.0.0".equals(cleanIp) || "0:0".equals(cleanIp) || "0".equals(cleanIp) || "::".equals(cleanIp)) return 0;
-
-        // 规范 §9.7：IPv4-mapped IPv6 (::ffff:0:0/96) 一律剥离映射前缀改走 V4 Trie，
-        // 其 V6 侧真值行在公共 API 下不可达；等价 V4 网段（如 0.0.0.0/8）已按普通 V4 行单独校验。
-        if (isV4MappedLiteral(cleanIp)) {
-            mappedSkipped++;
-            return 0;
+    private static void verifyIp(QzdbReader reader, String ver, String scope, String ip,
+                                 String[] headers, String[] cols, Map<String, Integer> colMap, Stats s) throws Exception {
+        if (ip.isEmpty() || "0".equals(ip) || "0:0".equals(ip)) {
+            s.reservedSkipped++;
+            return;
         }
+        // 规范 §9.7：IPv4-mapped 保留行剥离后走 V4 Trie，V6 侧真值行不可达 → 显式排除计数
+        if (isV4MappedLiteral(ip)) {
+            s.mappedExcluded++;
+            return;
+        }
+
+        boolean isV6 = ip.indexOf(':') >= 0;
+        s.checked++;
+        if (isV6) s.v6Checked++; else s.v4Checked++;
 
         Optional<GeoInfo> infoOpt;
         try {
-            infoOpt = reader.find(cleanIp);
+            infoOpt = reader.find(ip);
         } catch (QzdbException e) {
-            return 0; // 测试集中的非标准 IP 格式直接安全跳过
+            recordDiff(ver, scope, ip, "<parse>", "parse-error:" + e.getErrorCode(), "");
+            s.errors++;
+            if (isV6) s.v6Errors++; else s.v4Errors++;
+            return;
         }
 
         if (infoOpt.isEmpty()) {
-            System.err.println("   [MISMATCH] IP=" + cleanIp + " 无法查找到记录!");
-            return 1;
+            recordDiff(ver, scope, ip, "<record>", "expected record", "NOT_FOUND");
+            s.errors++;
+            if (isV6) s.v6Errors++; else s.v4Errors++;
+            return;
         }
 
         GeoInfo info = infoOpt.get();
-        int errCount = 0;
-
-        // 比对 CSV 中的每一个真实字段
         for (String h : headers) {
             if ("start_ip".equals(h) || "end_ip".equals(h) || "start_ip_num".equals(h) || "end_ip_num".equals(h)) {
                 continue;
             }
-
             Integer colIdx = colMap.get(h);
             if (colIdx == null || colIdx >= cols.length) continue;
 
             String expectedVal = cols[colIdx].trim();
             String actualVal = info.get(h).trim();
 
-            // 特殊数值字段精度格式化容忍 (如经纬度 139.69171 vs 139.6917114)
+            // 经纬度数值容差（float64 %.6f 与 CSV 源精度差异）
             if ("longitude".equalsIgnoreCase(h) || "latitude".equalsIgnoreCase(h)) {
                 if (!expectedVal.isEmpty() && !actualVal.isEmpty()) {
                     try {
                         double expD = Double.parseDouble(expectedVal);
                         double actD = Double.parseDouble(actualVal);
-                        if (Math.abs(expD - actD) < 0.01) {
-                            continue;
-                        }
-                    } catch (NumberFormatException ignored) {}
+                        if (Math.abs(expD - actD) < 5e-4) continue;
+                    } catch (NumberFormatException ignored) {
+                    }
                 }
             }
-
             // CSV 双引号转义容忍 (如 JSC "Ukrtelecom" vs JSC Ukrtelecom)
             if (expectedVal.replace("\"", "").equals(actualVal.replace("\"", ""))) {
                 continue;
             }
-
             if (!expectedVal.equals(actualVal)) {
-                System.err.println(String.format("   [MISMATCH] IP=%s, 字段=%s | 期望值='%s', 实际解码值='%s'", ip, h, expectedVal, actualVal));
-                errCount++;
-                if (errCount >= 3) break;
+                recordDiff(ver, scope, ip, h, expectedVal, actualVal);
+                s.errors++;
+                if (isV6) s.v6Errors++; else s.v4Errors++;
+                return; // 该节点记 1 次偏差，继续下一节点
             }
         }
-
-        return errCount > 0 ? 1 : 0;
     }
 
-    /**
-     * 极速 QPS 吞吐量与 Latency 性能压测套件
-     */
-    private static void runBenchmarkSuite() {
-        File maxDbFile = new File(BASE_DIR + "/max/global/qqzeng_ip_max_global.qzdb");
-        if (!maxDbFile.exists()) {
-            maxDbFile = new File(BASE_DIR + "/std/china/qqzeng_ip_std_china.qzdb");
+    private static void recordDiff(String ver, String scope, String ip, String field, String expected, String actual) throws Exception {
+        if (firstDiffs.size() < 20) {
+            firstDiffs.add(String.format("[%s-%s] IP=%s 字段=%s 期望='%s' 实际='%s'", ver, scope, ip, field, expected, actual));
         }
-        if (!maxDbFile.exists()) {
-            System.err.println("[WARN] 未找到高容量压测数据库，跳过性能压测。");
-            return;
-        }
+        diffWriter.write("{\"edition\":\"" + ver + "-" + scope + "\",\"ip\":\"" + jsonEsc(ip)
+                + "\",\"field\":\"" + jsonEsc(field) + "\",\"expected\":\"" + jsonEsc(expected)
+                + "\",\"actual\":\"" + jsonEsc(actual) + "\"}\n");
+    }
 
-        System.out.println("\n🚀 选定全量数据库: " + maxDbFile.getPath());
-
-        try (DatabaseReader reader = new DatabaseReader.Builder(maxDbFile).build()) {
-            // 准备 100,000 个真实高频 IP 样本
-            List<String> sampleIps = new ArrayList<>(100000);
-            Random r = new Random(12345);
-            for (int i = 0; i < 100000; i++) {
-                int a = r.nextInt(223) + 1;
-                int b = r.nextInt(256);
-                int c = r.nextInt(256);
-                int d = r.nextInt(256);
-                sampleIps.add(a + "." + b + "." + c + "." + d);
-            }
-
-            // 预热 (Warm-up)
-            System.out.println("🔥 正在进行 JVM 预热 (100,000 次查询)...");
-            for (String ip : sampleIps) {
-                reader.find(ip);
-            }
-
-            // 单线程 QPS 压测
-            int testTotal = 1000000;
-            System.out.println(String.format("\n📊 [单线程压测] 运行 %,d 次 find(IP) 查询...", testTotal));
-
-            long startNano = System.nanoTime();
-            for (int i = 0; i < testTotal; i++) {
-                String ip = sampleIps.get(i % sampleIps.size());
-                reader.find(ip);
-            }
-            long elapsedNano = System.nanoTime() - startNano;
-
-            double elapsedSec = elapsedNano / 1_000_000_000.0;
-            double singleQps = testTotal / elapsedSec;
-            double avgNanoPerOp = (double) elapsedNano / testTotal;
-
-            System.out.println(String.format("   ▶ 耗时: %.3f 秒", elapsedSec));
-            System.out.println(String.format("   ▶ 单线程 QPS: %,.0f ops/sec", singleQps));
-            System.out.println(String.format("   ▶ 平均单次查询延迟: %.2f 纳秒 (%.4f 微秒)", avgNanoPerOp, avgNanoPerOp / 1000.0));
-
-            // 多线程高并发 QPS 压测 (4 线程 / 8 线程 / 16 线程)
-            int[] threadCounts = {4, 8, 16};
-            for (int threads : threadCounts) {
-                System.out.println(String.format("\n⚡ [%d 线程高并发压测] 运行 %,d 次并发 find(IP) 查询...", threads, testTotal));
-
-                ExecutorService executor = Executors.newFixedThreadPool(threads);
-                CountDownLatch latch = new CountDownLatch(threads);
-                AtomicLong completedOps = new AtomicLong(0);
-
-                int opsPerThread = testTotal / threads;
-                long startConcurrent = System.nanoTime();
-
-                for (int t = 0; t < threads; t++) {
-                    final int threadId = t;
-                    executor.submit(() -> {
-                        int startIdx = (threadId * opsPerThread) % sampleIps.size();
-                        for (int i = 0; i < opsPerThread; i++) {
-                            String ip = sampleIps.get((startIdx + i) % sampleIps.size());
-                            reader.find(ip);
-                        }
-                        completedOps.addAndGet(opsPerThread);
-                        latch.countDown();
-                    });
+    private static String jsonEsc(String v) {
+        if (v == null) return "";
+        StringBuilder sb = new StringBuilder(v.length());
+        for (int i = 0; i < v.length(); i++) {
+            char c = v.charAt(i);
+            switch (c) {
+                case '"' -> sb.append("\\\"");
+                case '\\' -> sb.append("\\\\");
+                case '\n' -> sb.append("\\n");
+                case '\r' -> sb.append("\\r");
+                case '\t' -> sb.append("\\t");
+                default -> {
+                    if (c < 0x20) sb.append(String.format("\\u%04x", (int) c));
+                    else sb.append(c);
                 }
-
-                latch.await();
-                long elapsedConcurrent = System.nanoTime() - startConcurrent;
-                executor.shutdown();
-
-                double secConcurrent = elapsedConcurrent / 1_000_000_000.0;
-                double concurrentQps = completedOps.get() / secConcurrent;
-
-                System.out.println(String.format("   ▶ 耗时: %.3f 秒", secConcurrent));
-                System.out.println(String.format("   ▶ %d 线程并发 QPS: %,.0f ops/sec", threads, concurrentQps));
             }
-
-        } catch (Exception e) {
-            System.err.println("   [ERROR] 压测过程出现异常: " + e.getMessage());
-            e.printStackTrace();
         }
+        return sb.toString();
     }
-
-    private static long mappedSkipped = 0;
 
     /** 判断是否为 IPv4-mapped IPv6 字面量（::ffff:a.b.c.d 或其展开/十六进制形态），大小写不敏感。 */
     private static boolean isV4MappedLiteral(String ip) {
         String lower = ip.toLowerCase();
         if (lower.startsWith("::ffff:")) return true;
-        String expanded = "0:0:0:0:0:ffff:";
-        return lower.startsWith(expanded) || lower.startsWith("0000:0000:0000:0000:0000:ffff:");
+        return lower.startsWith("0:0:0:0:0:ffff:") || lower.startsWith("0000:0000:0000:0000:0000:ffff:");
     }
 
+    /** CSV 行解析（快路径：无引号行直接按逗号切分）。 */
     private static String[] parseCsvLine(String line) {
+        if (line.indexOf('"') < 0) {
+            return line.split(",", -1);
+        }
         List<String> list = new ArrayList<>();
         boolean inQuotes = false;
         StringBuilder sb = new StringBuilder();
-
         for (int i = 0; i < line.length(); i++) {
             char c = line.charAt(i);
             if (c == '"') {

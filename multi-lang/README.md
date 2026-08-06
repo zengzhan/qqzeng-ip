@@ -30,10 +30,10 @@ QZDB 支持 magic 头部为 `QZDB` 的标准版、旗舰版、至尊版、ASN �
 
 ### 🐍 Python
 ```python
-from qzdb import QzdbSearcher
+from qzdb import QzdbReader
 
 # 加载并查询 (推荐单例)
-searcher = QzdbSearcher.get_instance("qqzeng_ip_max_china.qzdb")
+searcher = QzdbReader.get_instance("qqzeng_ip_max_china.qzdb")
 
 # 查询返回 Pipe 字符串
 print(searcher.find_str("114.114.114.114"))
@@ -47,7 +47,7 @@ if loc:
 
 ### 🐹 Go
 ```go
-import "qzdb_searcher/qzdb"
+import "qzdb_reader/qzdb"
 
 // 初始化单例
 searcher, err := qzdb.Instance("qqzeng_ip_max_china.qzdb")
@@ -64,11 +64,11 @@ if info != nil {
 
 ### ☕ Java
 ```java
-import qzdb.QzdbSearcher;
+import qzdb.QzdbReader;
 import qzdb.IpLocation;
 
 // 初始化单例
-QzdbSearcher searcher = QzdbSearcher.getInstance();
+QzdbReader searcher = QzdbReader.getInstance();
 searcher.load("qqzeng_ip_max_china.qzdb");
 
 // 查询
@@ -81,7 +81,7 @@ if (loc != null) {
 
 ### 🦀 Rust
 ```rust
-use qzdb_searcher::{from_file, QzdbSearcher};
+use qzdb_reader::{from_file, QzdbReader};
 
 let searcher = from_file("qqzeng_ip_max_china.qzdb");
 if let Some(loc) = searcher.find("114.114.114.114") {
@@ -100,7 +100,7 @@ if let Some(loc) = searcher.find("114.114.114.114") {
 ```csharp
 using Qqzeng;
 
-var searcher = QzdbSearcher.GetInstance("qqzeng_ip_max_china.qzdb");
+var searcher = QzdbReader.GetInstance("qqzeng_ip_max_china.qzdb");
 var loc = searcher.Find("114.114.114.114");
 if (loc != null) {
     Console.WriteLine($"Province: {loc.Get("province")}");
@@ -109,9 +109,9 @@ if (loc != null) {
 
 ### 🔌 C / C++
 ```c
-#include "qzdb_searcher.h"
+#include "qzdb_reader.h"
 
-qzdb_searcher_t* searcher = qzdb_instance("qqzeng_ip_max_china.qzdb");
+qzdb_reader_t* searcher = qzdb_instance("qqzeng_ip_max_china.qzdb");
 char buf[256];
 qzdb_find_str(searcher, "114.114.114.114", buf, sizeof(buf));
 printf("Result: %s\n", buf);
@@ -119,18 +119,18 @@ printf("Result: %s\n", buf);
 
 ### 🟢 Node.js
 ```javascript
-const { QzdbSearcher } = require('./qzdb');
+const { QzdbReader } = require('./qzdb');
 
-const searcher = QzdbSearcher.getInstance("qqzeng_ip_max_china.qzdb");
+const searcher = QzdbReader.getInstance("qqzeng_ip_max_china.qzdb");
 const loc = searcher.find("114.114.114.114");
 console.log(loc.country, loc.city);
 ```
 
 ### 🐘 PHP
 ```php
-use Qqzeng\Ip\QzdbSearcher;
+use Qqzeng\Ip\QzdbReader;
 
-$searcher = QzdbSearcher::getInstance("qqzeng_ip_max_china.qzdb");
+$searcher = QzdbReader::getInstance("qqzeng_ip_max_china.qzdb");
 $loc = $searcher->find("114.114.114.114");
 echo $loc['country'] . ' ' . $loc['city'];
 ```
@@ -161,7 +161,7 @@ QZDB 引擎核心采用专门定制的 **双阶段 Patricia Trie 树型检索算
 
 | 格式分类 | 检索时间复杂度 | 数据结构体积 | 核心检索树与数据机制 | QZDB 的技术优化点 |
 | :--- | :--- | :--- | :--- | :--- |
-| **通用嵌套结构树格式 (`.mmdb`)** | $\mathcal{O}(W)$ <br> (需加上反序列化开销) | 较大 <br> (含元数据 Key-Value 冗余) | 经典二进制 Trie；叶子指向嵌套 Map/List 数据区 | **QZDB 首阶段快速跳级 + 零分配**。IPv4 预读 16-bit 跳过前 16 层；叶子基于 Schema 物理偏移，堆内存零分配。 |
+| **通用嵌套结构树格式（经典二进制 Trie 方案）** | $\mathcal{O}(W)$ <br> (需加上反序列化开销) | 较大 <br> (含元数据 Key-Value 冗余) | 经典二进制 Trie；叶子指向嵌套 Map/List 数据区 | **QZDB 首阶段快速跳级 + 零分配**。IPv4 预读 16-bit 跳过前 16 层；叶子基于 Schema 物理偏移，堆内存零分配。 |
 | **扁平区间二分格式 (`.bin`)** | $\mathcal{O}(\log N)$ <br> (基于多轮二分匹配) | 中等 <br> (需存储完整起止 IP 范围) | 已排序起止范围二分检索；辅以前缀索引缓存 | **QZDB 的 Trie 压缩与短路径检索**。Trie 树结构天生善于压缩重叠段，平均检索路径大幅缩短。 |
 | **分区向量索引格式 (`.xdb`)** | $\mathcal{O}(\log N)$ <br> (局部向量二分) | 极小 <br> (一般只索引部分核心地理字段) | 向量索引表 + 局部 B-Tree 区间检索 | **QZDB 对全球超大数据集扩展更佳**。采用全局 RowSchema 与双阶段树设计，能自适应承载从小体积到数行大规模全球网段数据的动态扩展。 |
 | **专有前缀树格式 (`.ipdb`)** | $\mathcal{O}(W)$ <br> (多次树节点跳转) | 较小 <br> (索引节点与偏移量较为紧凑) | 前缀节点位移 Trie 检索；索引与数据区分离 | **QZDB 的多语种只读字符串池与完全免锁设计**。多维字段在初始化后即建立只读内存视图，多线程并发检索无锁竞争。 |

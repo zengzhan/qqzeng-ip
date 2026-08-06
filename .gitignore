@@ -90,3 +90,9 @@ multi-lang/go/main
 # Temp
 tmp/
 *.tmp
+
+# NuGet pack/publish artifacts (fully rebuildable from csproj)
+multi-lang/netcore/nupkgs/
+
+# Test run reports (regenerated each run, timestamped filenames)
+multi-lang/java/test_reports/

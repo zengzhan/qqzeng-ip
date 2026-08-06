@@ -57,7 +57,7 @@ from typing import Dict, List, Optional, Tuple
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(BASE_DIR, 'python'))
-from qzdb import QzdbSearcher
+from qzdb import QzdbReader
 
 TEMP_WORK = '/Users/zengxiangzhan/ZengData/qqzeng-data/temp_work'
 
@@ -311,7 +311,7 @@ def verify_one(name, version, region, args, rng):
         return s, {}
 
     try:
-        searcher = QzdbSearcher(qzdb_path)
+        searcher = QzdbReader(qzdb_path)
     except Exception as e:
         p(f'  {col("ERROR", RED)}: Failed to load: {e}')
         s.skipped_db = True
@@ -970,7 +970,7 @@ def main():
                 print(f'  SKIP {name}: not found')
                 continue
             try:
-                searcher = QzdbSearcher(qzdb_path)
+                searcher = QzdbReader(qzdb_path)
                 print(f'\n  {col(name, CYAN)}:')
                 bres, bugs = run_boundary_test(name, searcher)
                 boundary_results_all.append((name, bres, bugs))

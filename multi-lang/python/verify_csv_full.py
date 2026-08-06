@@ -18,7 +18,7 @@ import sys
 import argparse
 
 sys.path.insert(0, os.path.dirname(__file__))
-from qzdb import QzdbSearcher, GeoInfo
+from qzdb import QzdbReader, GeoInfo
 
 BASE_DIR = os.path.join(os.path.dirname(__file__), '..', '..')
 
@@ -62,7 +62,7 @@ def run(name, csv_rel, sample=1):
         return
 
     print(f'  [{name}] Loading...')
-    s = QzdbSearcher()
+    s = QzdbReader()
     s.load(qzdb_path)
 
     rng = __import__('random').Random(42)

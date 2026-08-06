@@ -82,8 +82,8 @@ if not os.path.exists(DB_PATH):
 
 def run_python(ip_list):
     sys.path.insert(0, os.path.join(SCRIPT_DIR, "python"))
-    from qzdb import QzdbSearcher
-    searcher = QzdbSearcher.get_instance(DB_PATH)
+    from qzdb import QzdbReader
+    searcher = QzdbReader.get_instance(DB_PATH)
     results = {}
     for ip in ip_list:
         r = searcher.find(ip)
@@ -94,9 +94,9 @@ def run_python(ip_list):
 def run_nodejs(ip_list):
     ips_json = json.dumps(ip_list)
     js_code = f"""
-const QzdbSearcher = require('./qzdb');
+const QzdbReader = require('./qzdb');
 const ips = {ips_json};
-const s = new QzdbSearcher('{DB_PATH}');
+const s = new QzdbReader('{DB_PATH}');
 const results = {{}};
 for (const ip of ips) {{
     const r = s.find(ip);
@@ -117,10 +117,10 @@ console.log(JSON.stringify(results));
 def run_php(ip_list):
     php_ips = "array(" + ", ".join(f'"{ip}"' for ip in ip_list) + ")"
     php_code = f"""<?php
-require_once '{os.path.join(SCRIPT_DIR, "php", "QzdbSearcher.php")}';
-use Qqzeng\\Ip\\QzdbSearcher;
+require_once '{os.path.join(SCRIPT_DIR, "php", "QzdbReader.php")}';
+use Qqzeng\\Ip\\QzdbReader;
 $ips = {php_ips};
-$s = QzdbSearcher::getInstance('{DB_PATH}');
+$s = QzdbReader::getInstance('{DB_PATH}');
 $results = array();
 foreach ($ips as $ip) {{
     $r = $s->find($ip);
@@ -156,7 +156,7 @@ import (
 
 func main() {{
     ips := []string{{{", ".join(f'"{ip}"' for ip in ip_list)}}}
-    s, err := qzdb.NewQzdbSearcher("{DB_PATH}")
+    s, err := qzdb.NewQzdbReader("{DB_PATH}")
     if err != nil {{
         fmt.Fprintln(os.Stderr, err)
         os.Exit(1)
@@ -192,19 +192,21 @@ func main() {{
 
 def run_java(ip_list):
     java_ips = "{" + ", ".join(f'"{ip}"' for ip in ip_list) + "}"
-    java_code = f"""import qzdb.QzdbSearcher;
-import qzdb.IpLocation;
+    # v2.4 API: com.qqzeng.qzdb.QzdbReader (Builder 模式) -> find() 返回 Optional<GeoInfo> -> toPipeString()
+    java_code = f"""import com.qqzeng.qzdb.QzdbReader;
+import com.qqzeng.qzdb.GeoInfo;
+import java.io.File;
 import java.util.LinkedHashMap;
+import java.util.Optional;
 
 public class CrossVerify {{
     public static void main(String[] args) throws Exception {{
         String[] ips = {java_ips};
-        QzdbSearcher s = QzdbSearcher.getInstance();
-        s.load("{DB_PATH}");
+        QzdbReader reader = new QzdbReader.Builder(new File("{DB_PATH}")).verifyCrc(true).build();
         LinkedHashMap<String, String> results = new LinkedHashMap<>();
         for (String ip : ips) {{
-            IpLocation r = s.find(ip);
-            results.put(ip, r != null ? r.toPipeString() : "");
+            Optional<GeoInfo> r = reader.find(ip);
+            results.put(ip, r.isPresent() ? r.get().toPipeString() : "");
         }}
         StringBuilder sb = new StringBuilder();
         sb.append("{{");
@@ -216,6 +218,7 @@ public class CrossVerify {{
         }}
         sb.append("}}");
         System.out.println(sb.toString());
+        reader.close();
     }}
 }}
 """
@@ -228,7 +231,7 @@ public class CrossVerify {{
         java_home = _find_java_home()
         if not java_home:
             return None
-        javac_cmd = [f"{java_home}/bin/javac", "-d", build_dir]
+        javac_cmd = [f"{java_home}/bin/javac", "-encoding", "UTF-8", "-d", build_dir]
         srcs = [tmp]
         for root, dirs, files in os.walk(os.path.join(SCRIPT_DIR, "java", "src")):
             for fn in files:
@@ -287,13 +290,13 @@ def run_c(ip_list):
     c_code = f"""#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "qzdb_searcher.h"
+#include "qzdb_reader.h"
 
 int main() {{
     const char* ips[] = {{{", ".join(f'"{ip}"' for ip in ip_list)}}};
     int n = {len(ip_list)};
 
-    qzdb_searcher_t ctx;
+    qzdb_reader_t ctx;
     if (qzdb_init(&ctx, "{DB_PATH}") != 0) {{
         fprintf(stderr, "load failed\\n");
         return 1;
@@ -317,7 +320,7 @@ int main() {{
     try:
         exe = os.path.join(SCRIPT_DIR, "c", "_cross_verify")
         subprocess.check_output(
-            ["clang", "-O2", "-o", exe, tmp_c, "qzdb_searcher.c", "-lm"],
+            ["clang", "-O2", "-o", exe, tmp_c, "qzdb_reader.c", "-lm"],
             cwd=os.path.join(SCRIPT_DIR, "c"), timeout=30, stderr=subprocess.STDOUT
         )
         out = subprocess.check_output([exe], timeout=30).decode()

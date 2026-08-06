@@ -100,7 +100,7 @@ class GeoInfo implements \ArrayAccess
     }
 }
 
-class QzdbSearcher
+class QzdbReader
 {
     private static $instance = null;
     private $data;            // in-memory buffer (null when streaming)

@@ -267,7 +267,7 @@ class GeoInfo:
         return '|'.join(parts)
 
 
-class QzdbSearcher:
+class QzdbReader:
     _instance = None
     _lock = threading.Lock()
 
@@ -367,7 +367,7 @@ class QzdbSearcher:
 
         # Build a shadow object so that a partial load never leaves
         # the live instance in a broken state (half-old-data / half-new-data).
-        shadow = QzdbSearcher.__new__(QzdbSearcher)
+        shadow = QzdbReader.__new__(QzdbReader)
         # Seed shadow with this instance's full runtime state so methods that
         # touch pools/offsets don't hit AttributeError before _parse_header
         # repopulates them (shadow is __new__-born and never runs __init__).

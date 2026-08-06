@@ -1,5 +1,5 @@
 /**
- * QzdbSearcher - Node.js SDK calling example
+ * QzdbReader - Node.js SDK calling example
  *
  * Usage: node test.js
  * Place qqzeng_ip_std_china.qzdb in the same directory or specify the path.
@@ -7,7 +7,7 @@
 
 const path = require('path');
 const fs = require('fs');
-const QzdbSearcher = require('./qzdb');
+const QzdbReader = require('./qzdb');
 
 function findDb() {
     for (const c of [
@@ -27,7 +27,7 @@ function main() {
         return;
     }
 
-    const searcher = QzdbSearcher.getInstance(dbPath);
+    const searcher = QzdbReader.getInstance(dbPath);
 
     console.log(`Fields (${searcher._fieldNames.length}): ${searcher._fieldNames.join(', ')}\n`);
 

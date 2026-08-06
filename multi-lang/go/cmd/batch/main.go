@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"qzdb_searcher/qzdb"
+	"qzdb_reader/qzdb"
 )
 
 func main() {

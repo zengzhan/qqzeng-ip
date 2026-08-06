@@ -1,12 +1,12 @@
 /**
- * QzdbSearcher - C SDK calling example
+ * QzdbReader - C SDK calling example
  *
- * Usage: gcc main.c qzdb_searcher.c -o demo && ./demo
+ * Usage: gcc main.c qzdb_reader.c -o demo && ./demo
  * Place qqzeng_ip_std_china.qzdb in the same directory or specify the path.
  */
 
 #include <stdio.h>
-#include "qzdb_searcher.h"
+#include "qzdb_reader.h"
 
 int main() {
     /* --- Try to locate database file --- */
@@ -26,7 +26,7 @@ int main() {
     }
 
     /* --- Load database via singleton --- */
-    qzdb_searcher_t *searcher = qzdb_instance(db_path);
+    qzdb_reader_t *searcher = qzdb_instance(db_path);
     if (!searcher) {
         fprintf(stderr, "Failed to load database\n");
         return 1;

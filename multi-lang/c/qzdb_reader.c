@@ -1,5 +1,5 @@
 #define _DARWIN_C_SOURCE
-#include "qzdb_searcher.h"
+#include "qzdb_reader.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,7 +34,7 @@ const char* qzdb_strerror(int error_code) {
 static uint32_t crc32_table[256];
 static int crc32_ready = 0;
 static pthread_mutex_t g_instance_mutex = PTHREAD_MUTEX_INITIALIZER;
-static void ensure_pools_loaded(qzdb_searcher_t* ctx);
+static void ensure_pools_loaded(qzdb_reader_t* ctx);
 
 static void crc32_init(void) {
     for (uint32_t i = 0; i < 256; i++) {
@@ -119,13 +119,13 @@ static int safe_read_uint_width(const uint8_t* data, size_t data_size, uint64_t 
     return QZDB_OK;
 }
 
-int qzdb_init(qzdb_searcher_t* ctx, const char* db_path) {
+int qzdb_init(qzdb_reader_t* ctx, const char* db_path) {
     // §10.6: CRC32 verification is ON by default at open time. Pass verify_crc=0
     // (via qzdb_init_ex) only for diagnostics/benchmarks on trusted data.
     return qzdb_init_ex(ctx, db_path, 1);
 }
 
-int qzdb_init_ex(qzdb_searcher_t* ctx, const char* db_path, int verify_crc) {
+int qzdb_init_ex(qzdb_reader_t* ctx, const char* db_path, int verify_crc) {
     if (!ctx || !db_path) return QZDB_ERR_INVALID_PARAM;
     memset(ctx, 0, sizeof(*ctx));
     setlocale(LC_NUMERIC, "C");
@@ -514,7 +514,7 @@ int qzdb_init_ex(qzdb_searcher_t* ctx, const char* db_path, int verify_crc) {
     return QZDB_OK;
 }
 
-static void ensure_pools_loaded(qzdb_searcher_t* ctx) {
+static void ensure_pools_loaded(qzdb_reader_t* ctx) {
     if (ctx->pools_loaded) return;
     ctx->pools_loaded = 1;
 
@@ -646,7 +646,7 @@ static void ensure_pools_loaded(qzdb_searcher_t* ctx) {
     free(scans);
 }
 
-static uint32_t get_v4_child(const qzdb_searcher_t* ctx, uint32_t node_idx, uint32_t bit) {
+static uint32_t get_v4_child(const qzdb_reader_t* ctx, uint32_t node_idx, uint32_t bit) {
     if (node_idx >= ctx->v4_node_count) return 0;
     if (ctx->v4_node_24) {
         uint64_t node_offset = ctx->off_v4_nodes + (uint64_t)node_idx * 6;
@@ -665,7 +665,7 @@ static uint32_t get_v4_child(const qzdb_searcher_t* ctx, uint32_t node_idx, uint
     }
 }
 
-static uint32_t get_v6_child(const qzdb_searcher_t* ctx, uint32_t node_idx, uint32_t bit) {
+static uint32_t get_v6_child(const qzdb_reader_t* ctx, uint32_t node_idx, uint32_t bit) {
     if (node_idx >= ctx->v6_node_count) return 0;
     if (ctx->v6_node_24) {
         uint64_t node_offset = ctx->off_v6_nodes + (uint64_t)node_idx * 6;
@@ -684,7 +684,7 @@ static uint32_t get_v6_child(const qzdb_searcher_t* ctx, uint32_t node_idx, uint
     }
 }
 
-static uint32_t trie_walk_v4(const qzdb_searcher_t* ctx, uint32_t ip_int) {
+static uint32_t trie_walk_v4(const qzdb_reader_t* ctx, uint32_t ip_int) {
     uint32_t hi16 = (ip_int >> 16) & 0xFFFF;
     uint32_t ptr;
     if (safe_read_u32(ctx->data, ctx->data_size, ctx->off_v4_jump + hi16 * 4, &ptr) != QZDB_OK) return 0;
@@ -709,7 +709,7 @@ static uint32_t trie_walk_v4(const qzdb_searcher_t* ctx, uint32_t ip_int) {
     }
 }
 
-static uint32_t trie_walk_v6(const qzdb_searcher_t* ctx, const uint8_t* ip_bin) {
+static uint32_t trie_walk_v6(const qzdb_reader_t* ctx, const uint8_t* ip_bin) {
     int v6_jump_bits = ctx->v6_jump_bits;
     uint32_t idx_jump = 0;
     int bits_collected = 0;
@@ -795,7 +795,7 @@ static void format_float32_value(float fv, char* buf, size_t buf_size) {
     snprintf(buf, buf_size, "%.9g", dv);
 }
 
-static int get_geo_info(qzdb_searcher_t* ctx, uint32_t entry_id, int group_index, qzdb_geo_info_t* result) {
+static int get_geo_info(qzdb_reader_t* ctx, uint32_t entry_id, int group_index, qzdb_geo_info_t* result) {
     if (!ctx || !result) return QZDB_ERR_INVALID_PARAM;
     if (group_index < 0 || group_index >= ctx->actual_groups) return QZDB_ERR_INVALID_PARAM;
     if (entry_id >= ctx->group_entry_counts[group_index]) return QZDB_ERR_INVALID_PARAM;
@@ -865,7 +865,7 @@ static void free_geo_info(qzdb_geo_info_t* info) {
     }
 }
 
-static int get_geo_info_buf(qzdb_searcher_t* ctx, uint32_t entry_id, int group_index,
+static int get_geo_info_buf(qzdb_reader_t* ctx, uint32_t entry_id, int group_index,
                               char** values, char (*bufs)[64], int buf_size, int* out_count) {
     if (!ctx || !values || !bufs || !out_count) return QZDB_ERR_INVALID_PARAM;
     if (group_index < 0 || group_index >= ctx->actual_groups) return QZDB_ERR_INVALID_PARAM;
@@ -924,7 +924,7 @@ static int get_geo_info_buf(qzdb_searcher_t* ctx, uint32_t entry_id, int group_i
     return QZDB_OK;
 }
 
-static int read_ip_row(qzdb_searcher_t* ctx, uint32_t row_id, uint32_t* geo_id, uint32_t* asn_id, uint32_t* usage_id) {
+static int read_ip_row(qzdb_reader_t* ctx, uint32_t row_id, uint32_t* geo_id, uint32_t* asn_id, uint32_t* usage_id) {
     if (!ctx || row_id == 0 || row_id >= (uint32_t)ctx->row_count) return QZDB_ERR_INVALID_PARAM;
     uint64_t off = ctx->off_ip_row + (uint64_t)row_id * ctx->ip_row_size;
     *geo_id = 0; *asn_id = 0; *usage_id = 0;
@@ -949,7 +949,7 @@ static int read_ip_row(qzdb_searcher_t* ctx, uint32_t row_id, uint32_t* geo_id, 
     return QZDB_OK;
 }
 
-static int resolve_row_id_buf(qzdb_searcher_t* ctx, uint32_t row_id, int group_index,
+static int resolve_row_id_buf(qzdb_reader_t* ctx, uint32_t row_id, int group_index,
                                 char** values, char (*bufs)[64], int buf_size, int* out_count) {
     if (!ctx || !values || !bufs || !out_count) return QZDB_ERR_INVALID_PARAM;
     uint32_t geo_id, asn_id, usage_id;
@@ -968,7 +968,7 @@ static int resolve_row_id_buf(qzdb_searcher_t* ctx, uint32_t row_id, int group_i
     return get_geo_info_buf(ctx, entry_id, group_index, values, bufs, buf_size, out_count);
 }
 
-static int resolve_row_id(qzdb_searcher_t* ctx, uint32_t row_id, int group_index, qzdb_geo_info_t* result) {
+static int resolve_row_id(qzdb_reader_t* ctx, uint32_t row_id, int group_index, qzdb_geo_info_t* result) {
     if (!ctx || !result) return QZDB_ERR_INVALID_PARAM;
     uint32_t geo_id, asn_id, usage_id;
     int err = read_ip_row(ctx, row_id, &geo_id, &asn_id, &usage_id);
@@ -986,7 +986,7 @@ static int resolve_row_id(qzdb_searcher_t* ctx, uint32_t row_id, int group_index
     return get_geo_info(ctx, entry_id, group_index, result);
 }
 
-int qzdb_find_uint(qzdb_searcher_t* ctx, uint32_t ip_int, qzdb_geo_info_t* result) {
+int qzdb_find_uint(qzdb_reader_t* ctx, uint32_t ip_int, qzdb_geo_info_t* result) {
     if (!ctx || !result) return QZDB_ERR_INVALID_PARAM;
     if (!ctx->has_v4) return QZDB_ERR_NOT_FOUND;
     uint32_t row_id = trie_walk_v4(ctx, ip_int);
@@ -994,7 +994,7 @@ int qzdb_find_uint(qzdb_searcher_t* ctx, uint32_t ip_int, qzdb_geo_info_t* resul
     return resolve_row_id(ctx, row_id, ctx->group_index, result);
 }
 
-int qzdb_find_v6(qzdb_searcher_t* ctx, const uint8_t* ip_bin, qzdb_geo_info_t* result) {
+int qzdb_find_v6(qzdb_reader_t* ctx, const uint8_t* ip_bin, qzdb_geo_info_t* result) {
     if (!ctx || !result) return QZDB_ERR_INVALID_PARAM;
     if (!ctx->has_v6) return QZDB_ERR_NOT_FOUND;
     uint32_t row_id = trie_walk_v6(ctx, ip_bin);
@@ -1002,7 +1002,7 @@ int qzdb_find_v6(qzdb_searcher_t* ctx, const uint8_t* ip_bin, qzdb_geo_info_t* r
     return resolve_row_id(ctx, row_id, ctx->group_index, result);
 }
 
-int qzdb_find_uint_buf(qzdb_searcher_t* ctx, uint32_t ip_int,
+int qzdb_find_uint_buf(qzdb_reader_t* ctx, uint32_t ip_int,
                         char** values, char (*bufs)[64], int buf_size) {
     if (!ctx || !values || !bufs) return QZDB_ERR_INVALID_PARAM;
     if (!ctx->has_v4) return QZDB_ERR_NOT_FOUND;
@@ -1013,7 +1013,7 @@ int qzdb_find_uint_buf(qzdb_searcher_t* ctx, uint32_t ip_int,
     return rc == 0 ? count : QZDB_ERR_CORRUPTED;
 }
 
-int qzdb_find_v6_buf(qzdb_searcher_t* ctx, const uint8_t* ip_bin,
+int qzdb_find_v6_buf(qzdb_reader_t* ctx, const uint8_t* ip_bin,
                       char** values, char (*bufs)[64], int buf_size) {
     if (!ctx || !values || !bufs) return QZDB_ERR_INVALID_PARAM;
     if (!ctx->has_v6) return QZDB_ERR_NOT_FOUND;
@@ -1027,7 +1027,7 @@ int qzdb_find_v6_buf(qzdb_searcher_t* ctx, const uint8_t* ip_bin,
 typedef struct { uint8_t v6[16]; uint32_t v4; int is_v4; } parse_result_t;
 static int fast_parse_ip(const char* s, parse_result_t* res);
 
-uint32_t qzdb_lookup_row_id(qzdb_searcher_t* ctx, const char* ip_str) {
+uint32_t qzdb_lookup_row_id(qzdb_reader_t* ctx, const char* ip_str) {
     if (!ip_str || !ctx) return 0;
     parse_result_t res;
     if (!fast_parse_ip(ip_str, &res)) return 0;
@@ -1035,17 +1035,17 @@ uint32_t qzdb_lookup_row_id(qzdb_searcher_t* ctx, const char* ip_str) {
     return ctx->has_v6 ? trie_walk_v6(ctx, res.v6) : 0;
 }
 
-uint32_t qzdb_lookup_row_id_uint(qzdb_searcher_t* ctx, uint32_t ip_int) {
+uint32_t qzdb_lookup_row_id_uint(qzdb_reader_t* ctx, uint32_t ip_int) {
     if (!ctx->has_v4) return 0;
     return trie_walk_v4(ctx, ip_int);
 }
 
-uint32_t qzdb_lookup_row_id_v6(qzdb_searcher_t* ctx, const uint8_t* ip_bin) {
+uint32_t qzdb_lookup_row_id_v6(qzdb_reader_t* ctx, const uint8_t* ip_bin) {
     if (!ctx->has_v6) return 0;
     return trie_walk_v6(ctx, ip_bin);
 }
 
-int qzdb_lookup_ids(qzdb_searcher_t* ctx, uint32_t row_id, qzdb_ids_t* out) {
+int qzdb_lookup_ids(qzdb_reader_t* ctx, uint32_t row_id, qzdb_ids_t* out) {
     if (!ctx || !out) return QZDB_ERR_INVALID_PARAM;
     memset(out, 0, sizeof(*out));
     if (row_id == 0 || row_id >= (uint32_t)ctx->row_count) return QZDB_ERR_INVALID_PARAM;
@@ -1220,7 +1220,7 @@ static int fast_parse_ip(const char* s, parse_result_t* res) {
     return 1;
 }
 
-int qzdb_find(qzdb_searcher_t* ctx, const char* ip_str, qzdb_geo_info_t* result) {
+int qzdb_find(qzdb_reader_t* ctx, const char* ip_str, qzdb_geo_info_t* result) {
     if (!ctx || !ip_str || !result) return QZDB_ERR_INVALID_PARAM;
     parse_result_t res;
     if (!fast_parse_ip(ip_str, &res)) return QZDB_ERR_INVALID_PARAM;
@@ -1228,7 +1228,7 @@ int qzdb_find(qzdb_searcher_t* ctx, const char* ip_str, qzdb_geo_info_t* result)
     return qzdb_find_v6(ctx, res.v6, result);
 }
 
-int qzdb_find_str(qzdb_searcher_t* ctx, const char* ip_str, char* out, size_t out_size) {
+int qzdb_find_str(qzdb_reader_t* ctx, const char* ip_str, char* out, size_t out_size) {
     if (!ctx || !ip_str || !out || out_size == 0) return QZDB_ERR_INVALID_PARAM;
     qzdb_geo_info_t info;
     int result = qzdb_find(ctx, ip_str, &info);
@@ -1271,10 +1271,10 @@ int qzdb_find_str(qzdb_searcher_t* ctx, const char* ip_str, char* out, size_t ou
     return QZDB_OK;
 }
 
-static qzdb_searcher_t g_instance;
+static qzdb_reader_t g_instance;
 static int g_instance_inited = 0;
 
-qzdb_searcher_t* qzdb_instance(const char* db_path) {
+qzdb_reader_t* qzdb_instance(const char* db_path) {
     if (!db_path) return NULL;
     pthread_mutex_lock(&g_instance_mutex);
     if (!g_instance_inited) {
@@ -1292,7 +1292,7 @@ qzdb_searcher_t* qzdb_instance(const char* db_path) {
 int qzdb_instance_load(const char* db_path) {
     if (!db_path) return QZDB_ERR_INVALID_PARAM;
     /* Build complete new context first so a failed load leaves the old instance intact. */
-    qzdb_searcher_t tmp;
+    qzdb_reader_t tmp;
     memset(&tmp, 0, sizeof(tmp));
     int result = qzdb_init(&tmp, db_path);
     if (result != QZDB_OK) return result;
@@ -1309,7 +1309,7 @@ int qzdb_instance_load(const char* db_path) {
     return QZDB_OK;
 }
 
-void qzdb_free(qzdb_searcher_t* ctx) {
+void qzdb_free(qzdb_reader_t* ctx) {
     if (!ctx->data) return;
     /* Pool C-strings live in a single arena — free pointer tables, then the arena. */
     free(ctx->pool_arena);
@@ -1362,7 +1362,7 @@ void qzdb_free(qzdb_searcher_t* ctx) {
     memset(ctx, 0, sizeof(*ctx));
 }
 
-int qzdb_verify_crc(qzdb_searcher_t* ctx) {
+int qzdb_verify_crc(qzdb_reader_t* ctx) {
     if (!ctx) return QZDB_ERR_INVALID_PARAM;
     if (!ctx->data || ctx->data_size < 20) return QZDB_ERR_CORRUPTED;
     uint32_t stored = READ_LE32(ctx->data + 16);
@@ -1370,7 +1370,7 @@ int qzdb_verify_crc(qzdb_searcher_t* ctx) {
     return stored == computed ? QZDB_OK : QZDB_ERR_CORRUPTED;
 }
 
-static int resolve_row_id_fields(qzdb_searcher_t* ctx, uint32_t row_id, int group_index,
+static int resolve_row_id_fields(qzdb_reader_t* ctx, uint32_t row_id, int group_index,
                                    const char** field_names, int field_count,
                                    char** values, char (*bufs)[64], int buf_size) {
     if (!ctx || !field_names || !values || !bufs) return QZDB_ERR_INVALID_PARAM;
@@ -1458,7 +1458,7 @@ static int resolve_row_id_fields(qzdb_searcher_t* ctx, uint32_t row_id, int grou
     return total_field_count;
 }
 
-int qzdb_find_fields_uint_buf(qzdb_searcher_t* ctx, uint32_t ip_int,
+int qzdb_find_fields_uint_buf(qzdb_reader_t* ctx, uint32_t ip_int,
                                 const char** field_names,
                                 char** values, char (*bufs)[64], int buf_size) {
     if (!ctx || !values || !bufs) return QZDB_ERR_INVALID_PARAM;
@@ -1472,7 +1472,7 @@ int qzdb_find_fields_uint_buf(qzdb_searcher_t* ctx, uint32_t ip_int,
                                   QZDB_MAX_FIELDS, values, bufs, buf_size);
 }
 
-int qzdb_find_fields_buf(qzdb_searcher_t* ctx, const char* ip_str,
+int qzdb_find_fields_buf(qzdb_reader_t* ctx, const char* ip_str,
                          const char** field_names,
                          char** values, char (*bufs)[64], int buf_size) {
     if (!ctx || !ip_str || !values || !bufs) return QZDB_ERR_INVALID_PARAM;
@@ -1492,9 +1492,9 @@ int qzdb_find_fields_buf(qzdb_searcher_t* ctx, const char* ip_str,
                                   QZDB_MAX_FIELDS, values, bufs, buf_size);
 }
 
-int qzdb_reload(qzdb_searcher_t* ctx, const char* db_path) {
+int qzdb_reload(qzdb_reader_t* ctx, const char* db_path) {
     if (!ctx || !db_path) return QZDB_ERR_INVALID_PARAM;
-    qzdb_searcher_t new_ctx;
+    qzdb_reader_t new_ctx;
     memset(&new_ctx, 0, sizeof(new_ctx));
     int result = qzdb_init(&new_ctx, db_path);
     if (result != QZDB_OK) {

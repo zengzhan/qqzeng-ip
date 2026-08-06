@@ -15,7 +15,7 @@ DATA_DIR = os.path.join(SCRIPT_DIR, "data")
 
 # 加载 Python SDK
 sys.path.insert(0, os.path.join(SCRIPT_DIR, "python"))
-from qzdb import QzdbSearcher
+from qzdb import QzdbReader
 
 class QzdbAnalyzer:
     """底层二进制解析器，直接读取 Header/Trie/IPRow/Pools 用于交叉验证"""
@@ -350,7 +350,7 @@ def run_comprehensive_test(db_path):
     print(f"  文件大小: {os.path.getsize(db_path) / 1024 / 1024:.1f} MB")
     print(f"{'='*80}")
 
-    sdk = QzdbSearcher.get_instance(db_path)
+    sdk = QzdbReader.get_instance(db_path)
     analyzer = QzdbAnalyzer(db_path)
 
     is_china = 'china' in os.path.basename(db_path).lower()

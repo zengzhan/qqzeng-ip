@@ -1,11 +1,11 @@
 <?php
-require_once __DIR__ . '/QzdbSearcher.php';
-use Qqzeng\Ip\QzdbSearcher;
+require_once __DIR__ . '/QzdbReader.php';
+use Qqzeng\Ip\QzdbReader;
 
 function bench($name, $dbPath, $count, $v6count, $first) {
     if (!file_exists($dbPath)) { echo "  $name: not found\n"; return; }
-    if ($first) $s = QzdbSearcher::getInstance($dbPath);
-    else { $s = QzdbSearcher::getInstance(); $s->load($dbPath); }
+    if ($first) $s = QzdbReader::getInstance($dbPath);
+    else { $s = QzdbReader::getInstance(); $s->load($dbPath); }
 
     srand(123);
     $start = microtime(true);

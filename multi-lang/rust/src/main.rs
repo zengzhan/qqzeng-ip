@@ -13,7 +13,7 @@ fn test(path: &str, ip: &str) {
         println!("  ⚠ {} not found", path);
         return;
     }
-    let searcher = match qzdb_searcher::from_file(path) {
+    let searcher = match qzdb_reader::from_file(path) {
         Ok(s) => s,
         Err(e) => {
             println!("  ⚠ {} load error: {:?}", path, e);

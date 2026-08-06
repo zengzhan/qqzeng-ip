@@ -4,7 +4,7 @@ import time
 import random
 
 sys.path.insert(0, os.path.dirname(__file__))
-from qzdb import QzdbSearcher
+from qzdb import QzdbReader
 
 DATADIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 
@@ -14,7 +14,7 @@ def bench(name, db_file, v4_count=3_000_000, v6_count=1_000_000):
         print(f"  {name}: DB not found, skip")
         return
 
-    s = QzdbSearcher(db_path)
+    s = QzdbReader(db_path)
 
     # V4 benchmark
     rng = random.Random(123)

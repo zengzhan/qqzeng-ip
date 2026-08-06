@@ -11,7 +11,7 @@ import java.util.Optional;
 /**
  * 复合联合查询类 (ChainedReader)
  * <p>
- * 支持将多个 DatabaseReader 组合（例如“国内精华版 + 全球旗舰版”），提供 Fallback 备性退避与 Merge 字段自动拼接。
+ * 支持将多个 QzdbReader 组合（例如“国内精华版 + 全球旗舰版”），提供 Fallback 备性退避与 Merge 字段自动拼接。
  */
 public class ChainedReader {
 
@@ -32,26 +32,26 @@ public class ChainedReader {
         MERGE_OVERRIDE
     }
 
-    private final List<DatabaseReader> readers;
+    private final List<QzdbReader> readers;
     private final Mode mode;
 
-    private ChainedReader(List<DatabaseReader> readers, Mode mode) {
+    private ChainedReader(List<QzdbReader> readers, Mode mode) {
         if (readers == null || readers.isEmpty()) {
-            throw new QzdbException(ErrorCode.INVALID_PARAM, "ChainedReader requires at least one DatabaseReader");
+            throw new QzdbException(ErrorCode.INVALID_PARAM, "ChainedReader requires at least one QzdbReader");
         }
         this.readers = Collections.unmodifiableList(new ArrayList<>(readers));
         this.mode = mode;
     }
 
-    public static ChainedReader chain(DatabaseReader... readers) {
+    public static ChainedReader chain(QzdbReader... readers) {
         return new ChainedReader(Arrays.asList(readers), Mode.FALLBACK);
     }
 
-    public static ChainedReader chainMerge(DatabaseReader... readers) {
+    public static ChainedReader chainMerge(QzdbReader... readers) {
         return new ChainedReader(Arrays.asList(readers), Mode.MERGE);
     }
 
-    public static ChainedReader chainMergeOverride(DatabaseReader... readers) {
+    public static ChainedReader chainMergeOverride(QzdbReader... readers) {
         return new ChainedReader(Arrays.asList(readers), Mode.MERGE_OVERRIDE);
     }
 
@@ -61,7 +61,7 @@ public class ChainedReader {
 
     public Optional<GeoInfo> find(String ipStr) {
         if (mode == Mode.FALLBACK) {
-            for (DatabaseReader reader : readers) {
+            for (QzdbReader reader : readers) {
                 try {
                     Optional<GeoInfo> res = reader.find(ipStr);
                     if (res.isPresent()) {
@@ -78,7 +78,7 @@ public class ChainedReader {
             // MERGE / MERGE_OVERRIDE 模式
             Map<String, String> mergedMap = new LinkedHashMap<>();
 
-            for (DatabaseReader reader : readers) {
+            for (QzdbReader reader : readers) {
                 try {
                     Optional<GeoInfo> res = reader.find(ipStr);
                     if (res.isPresent()) {
@@ -121,7 +121,7 @@ public class ChainedReader {
 
     public Optional<GeoInfo> findUint(int ipInt) {
         if (mode == Mode.FALLBACK) {
-            for (DatabaseReader reader : readers) {
+            for (QzdbReader reader : readers) {
                 Optional<GeoInfo> res = reader.findUint(ipInt);
                 if (res.isPresent()) return res;
             }
@@ -135,7 +135,7 @@ public class ChainedReader {
 
     public Optional<GeoInfo> findBytes(byte[] ip16) {
         if (mode == Mode.FALLBACK) {
-            for (DatabaseReader reader : readers) {
+            for (QzdbReader reader : readers) {
                 Optional<GeoInfo> res = reader.findBytes(ip16);
                 if (res.isPresent()) return res;
             }
@@ -209,18 +209,18 @@ public class ChainedReader {
     // =========================================================================
 
     public String[] editions() {
-        return readers.stream().map(DatabaseReader::getEdition).toArray(String[]::new);
+        return readers.stream().map(QzdbReader::getEdition).toArray(String[]::new);
     }
 
     public String[] scopes() {
-        return readers.stream().map(DatabaseReader::getScope).toArray(String[]::new);
+        return readers.stream().map(QzdbReader::getScope).toArray(String[]::new);
     }
 
     public String[] dataMonths() {
-        return readers.stream().map(DatabaseReader::getDataMonth).toArray(String[]::new);
+        return readers.stream().map(QzdbReader::getDataMonth).toArray(String[]::new);
     }
 
-    public List<DatabaseReader> readers() {
+    public List<QzdbReader> readers() {
         return readers;
     }
 }

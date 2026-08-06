@@ -5,7 +5,7 @@ use std::env;
 use std::fs;
 use std::process;
 
-fn geo_to_pipe(searcher: &qzdb_searcher::QzdbSearcher, info: &qzdb_searcher::GeoInfo) -> String {
+fn geo_to_pipe(searcher: &qzdb_reader::QzdbReader, info: &qzdb_reader::GeoInfo) -> String {
     let len = searcher.field_names.len().min(info.values.len());
     let mut parts = Vec::with_capacity(len);
     for i in 0..len {
@@ -36,7 +36,7 @@ fn main() {
     let v6_test = &args[4];
     let v6_out = &args[5];
 
-    let searcher = qzdb_searcher::instance(db_path);
+    let searcher = qzdb_reader::instance(db_path);
 
     // V4
     let v4_data = fs::read_to_string(v4_test).unwrap_or_default();

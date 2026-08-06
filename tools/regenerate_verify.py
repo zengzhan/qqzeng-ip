@@ -7,7 +7,7 @@ import os
 import random
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'multi-lang', 'python'))
-from qzdb import QzdbSearcher, GeoInfo
+from qzdb import QzdbReader, GeoInfo
 
 
 def pooled_samples(searcher, n=10000):
@@ -68,8 +68,8 @@ def main():
     data_dir = os.path.join(os.path.dirname(__file__), '..', 'multi-lang', 'data')
     
     # Clear singleton
-    QzdbSearcher._instance = None
-    QzdbSearcher._init_done = False
+    QzdbReader._instance = None
+    QzdbReader._init_done = False
     
     for fname in sorted(os.listdir(data_dir)):
         if not fname.endswith('.qzdb'):
@@ -78,7 +78,7 @@ def main():
         version = 'std' if 'std' in fname else 'max' if 'max' in fname else 'unknown'
         region = 'global' if 'global' in fname else 'china'
         
-        s = QzdbSearcher(path, version=version)
+        s = QzdbReader(path, version=version)
         samples = pooled_samples(s, 200)
         codes = set(x['code'] for x in samples if x['code'])
         print(f'{fname}: unique pool[6] (code) values: {sorted(codes)[:20]}')
@@ -102,8 +102,8 @@ def main():
         print(f'  wrote {out_v4}: {len(lines)} entries')
         
         # Clear singleton for next file
-        QzdbSearcher._instance = None
-        QzdbSearcher._init_done = False
+        QzdbReader._instance = None
+        QzdbReader._init_done = False
 
 
 if __name__ == '__main__':

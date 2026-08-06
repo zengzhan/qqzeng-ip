@@ -5,7 +5,7 @@ import sys
 import os
 
 sys.path.insert(0, os.path.dirname(__file__))
-from qzdb import QzdbSearcher
+from qzdb import QzdbReader
 
 
 def generate(data_dir, qzdb_name, version):
@@ -14,10 +14,10 @@ def generate(data_dir, qzdb_name, version):
         print(f'  {qzdb_name}: 文件不存在，跳过')
         return
 
-    from qzdb import QzdbSearcher
-    QzdbSearcher._instance = None
-    QzdbSearcher._init_done = False
-    s = QzdbSearcher(path, version=version)
+    from qzdb import QzdbReader
+    QzdbReader._instance = None
+    QzdbReader._init_done = False
+    s = QzdbReader(path, version=version)
 
     rng = random.Random(42)
     region = 'global' if 'global' in qzdb_name else 'china'

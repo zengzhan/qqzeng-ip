@@ -2,7 +2,7 @@
 
 > **状态**: 正式规范（真·全量无损合并版：v2.1 全部细节表格 + v2.3 商业版矩阵扩展，逐条修正 v2.3 审计发现的缺口）
 > **范围**: Go / Rust / Java / C# / Python / Node.js / PHP / C 八种语言 SDK
-> **对标**: MaxMind GeoIP2 全家桶命名与使用习惯
+> **对标**: 业界主流 IP 地理库 SDK 的 reader/registry 命名与使用习惯
 > **原则**: 全新设计，不兼容旧 API，不保留任何 deprecated 过渡
 > **适用前提**: 本 SDK 适配 qzdb 商业数据库矩阵（标准版/专业版/ASN版/旗舰版/至尊版 × 国内版/全球版），无外部历史包袱，允许一次性 breaking change
 > **v2.4 修订说明**：v2.3 自称"全量无损合并版"但实际静默删除了 v2.1/R2 中已敲定的批量语义表、并发时序图、跨语言能力矩阵、文件变更矩阵；本版本原样恢复上述内容，同时保留 v2.3 新增的 `ChainedReader`/`openBuffer`/版本自省等能力，并修正其中未收口的设计缺口（详见附录 C 审计记录）。
@@ -13,7 +13,7 @@
 
 - [一、背景与现有 SDK 缺陷审计](#一背景与现有-sdk-缺陷审计)
 - [二、使用场景与设计目标](#二使用场景与设计目标)
-- [三、架构分层：Reader + Registry + ChainedReader](#三架构分层reader--registry--chainedreader)
+- [三、架构分层：QzdbReader + Registry + ChainedReader](#三架构分层reader--registry--chainedreader)
 - [四、生命周期 API：open / openBuffer / reload / close](#四生命周期-apiopen--openbuffer--reload--close)
 - [五、查询方法矩阵与 IP 解析标准](#五查询方法矩阵与-ip-解析标准)
 - [六、返回实体 GeoInfo 统一规范与容错匹配](#六返回实体-geoinfo-统一规范与容错匹配)
@@ -40,18 +40,18 @@
 
 之前 Go 版本的 `Reload` 曾用 `sync.RWMutex` 保护查询路径：若某个封装函数在同一次调用里递归调用了另一个也持锁的私有方法，恰逢此时有写锁在排队，会直接死锁。**决策**：查询路径必须完全无锁，用原子指针替换（`atomic.Pointer[Snapshot]`）实现，全语言比照此思路（见十一）。
 
-### 1.3 与行业标杆 MaxMind GeoIP2 的能力对比
+### 1.3 与业界主流 IP 地理库 SDK 的能力对比
 
-| 维度 | MaxMind GeoIP2 | 旧版 QZDB SDK | v2.4 规范 QZDB SDK |
+| 维度 | 业界主流 IP 库 SDK | 旧版 QZDB SDK | v2.4 规范 QZDB SDK |
 |---|---|---|---|
-| 核心类命名 | `Reader` / `DatabaseReader` | `QzdbSearcher`（包名类名重复） | **`Reader`** / **`DatabaseReader`** |
+| 核心类命名 | `Reader`（核心读取类通用命名） | `QzdbSearcher`（包名类名重复） | **`QzdbReader`**（全语言统一；C 语言用 `qzdb_reader_t`） |
 | 单例模式 | 无单例，支持 DI 注入 | 强制 `getInstance()` 静态单例 | **彻底去单例 + Registry 便利层** |
 | 复合查询 | 官方 SDK 不内置（需用户自行处理多库） | 不支持 | **`ChainedReader`（Fallback/Merge），方法与单库对等** |
 | 批量查询 | 需用户自行循环 | 裸数组/部分支持 | **`findBatch` + 流式 `findStream`/`findIter`** |
 | 错误表达 | 区分未找到与格式异常 | 部分语言吞异常 | **`BatchResult` 保留三态精度** |
 | 热更新 | 需重新创建 `Reader` | 手写 `load()` 易引发 Race | **原子发布无锁 `reload()`/`reloadBuffer()`** |
 
-> 注：MaxMind 一栏为公开文档层面的一般性观察，非逐 SDK 逐版本核实，如用于对外宣传材料请自行复核。
+> 注：业界主流方案一栏为公开文档层面的一般性观察，非逐 SDK 逐版本核实，如用于对外宣传材料请自行复核。
 
 ---
 
@@ -73,7 +73,7 @@
 |---|---|
 | **跨语言一致性** | 8 种语言的 API 语义、方法名、返回类型概念上等价 |
 | **语言地道性** | 命名、错误处理、资源管理遵循各语言社区惯例 |
-| **MaxMind 生态对齐** | 类名/方法名/用法对齐 GeoIP2 SDK |
+| **业界通行设计** | 类名/方法名/用法遵循业界主流 reader/registry 模式 |
 | **零分配查询路径** | 高频查询不触发 GC 压力 |
 | **故障安全（Fail-Safe）** | `reload()` 失败不影响旧数据；绝不出现"半新半旧"状态 |
 | **无历史包袱** | 全新 API，不保留 deprecated 别名 |
@@ -85,7 +85,7 @@
 
 ---
 
-## 三、架构分层：Reader + Registry + ChainedReader
+## 三、架构分层：QzdbReader + Registry + ChainedReader
 
 ### 3.1 三层架构
 
@@ -93,16 +93,16 @@
 +--------------------------------------------------+
 |  Layer 3: ChainedReader（复合联合层）                |
 |  | Chain(cnReader, globalReader).find(ip)         |
-|  | 方法矩阵与 Reader 对等：find/findUint/findBytes/  |
+|  | 方法矩阵与 QzdbReader 对等：find/findUint/findBytes/  |
 |  | findFields/findBatch/findStream 全部支持         |
 |  | Fallback（依次查找）与 Merge（字段拼接，见 9.1）    |
 +--------------------------------------------------+
 |  Layer 2: Registry（便利层，可实例化）                |
 |  | register("default", "/data/ip.qzdb")           |
 |  | get("default").find("1.1.1.1")                 |
-|  | 可注册 Reader，也可注册 ChainedReader             |
+|  | 可注册 QzdbReader，也可注册 ChainedReader             |
 +--------------------------------------------------+
-|  Layer 1: Reader（核心底层类）                       |
+|  Layer 1: QzdbReader（核心底层类）                       |
 |  | 可实例化，支持本地文件路径与内存 Buffer            |
 |  | 内部自保证线程安全，无锁只读                       |
 |  | 可被 DI 容器接管                                  |
@@ -111,9 +111,9 @@
 
 ### 3.2 Registry 使用范围警告
 
-> ⚠️ **Registry 本质是一个 `Map<name, Reader|ChainedReader>`，与旧单例的区别在于它可以被独立实例化。**
+> ⚠️ **Registry 本质是一个 `Map<name, QzdbReader|ChainedReader>`，与旧单例的区别在于它可以被独立实例化。**
 > - ✅ 适用于：CLI 脚本、Lambda 函数、简单 Web 服务——用**进程级默认 Registry**
-> - ❌ 不适用于：单元测试、库代码、需要 DI 的框架项目——直接用 `Reader`/`ChainedReader` 实例，或 `new` 一个**独立的 Registry 实例**
+> - ❌ 不适用于：单元测试、库代码、需要 DI 的框架项目——直接用 `QzdbReader`/`ChainedReader` 实例，或 `new` 一个**独立的 Registry 实例**
 
 ### 3.3 Registry 两种用法
 
@@ -146,8 +146,8 @@ reg.get("test-db").find(ip);
 | **`close()`** | 释放 mmap/文件句柄/内存引用 | 进程退出/实例销毁 | 幂等 |
 
 > ⚠️ **`openBuffer`/`reloadBuffer` 的缓冲区所有权规则（必须写进各语言实现文档，附录 A 逐语言签名旁需注明）：**
-> - **默认语义：Reader 在 `open`/`reload` 调用期间会把传入的 buffer 完整拷贝进内部私有内存**，调用方在方法返回后可以自由修改/释放/复用原 buffer，不影响 Reader。
-> - 大文件场景下"整份拷贝"会有一次性内存翻倍开销；如果调用方能保证 buffer 在 Reader 生命周期内只读且不被回收（比如 Go 的 `[]byte` 来自 `embed.FS`，本身就是常驻只读数据），可提供一个显式的**零拷贝变体**（如 `OpenBufferNoCopy`/`open_buffer_borrowed`），文档必须明确标注"调用方负责保证该 buffer 在 Reader 关闭前不被修改或释放，否则行为未定义"。零拷贝变体是可选优化项，默认拷贝语义是安全基线，必须先实现。
+> - **默认语义：QzdbReader 在 `open`/`reload` 调用期间会把传入的 buffer 完整拷贝进内部私有内存**，调用方在方法返回后可以自由修改/释放/复用原 buffer，不影响 QzdbReader。
+> - 大文件场景下"整份拷贝"会有一次性内存翻倍开销；如果调用方能保证 buffer 在 QzdbReader 生命周期内只读且不被回收（比如 Go 的 `[]byte` 来自 `embed.FS`，本身就是常驻只读数据），可提供一个显式的**零拷贝变体**（如 `OpenBufferNoCopy`/`open_buffer_borrowed`），文档必须明确标注"调用方负责保证该 buffer 在 QzdbReader 关闭前不被修改或释放，否则行为未定义"。零拷贝变体是可选优化项，默认拷贝语义是安全基线，必须先实现。
 > - C 语言尤其要在头文件注释里显式写清楚 `qzdb_open_buffer` 是否拷贝，避免调用方传入栈上局部数组导致悬垂指针。
 
 ### 4.2 CRC 校验开关规则
@@ -157,12 +157,12 @@ reg.get("test-db").find(ip);
 | 语言 | 关闭 CRC 的写法（仅 `open` 可关） |
 |---|---|
 | **Go** | `qzdb.Open(path, qzdb.WithCRCVerification(false))` |
-| **Rust** | `Reader::open_with(path, ReaderOptions { verify_crc: false, ..Default::default() })` |
-| **Java** | `new DatabaseReader.Builder(file).verifyCrc(false).build()` |
+| **Rust** | `QzdbReader::open_with(path, ReaderOptions { verify_crc: false, ..Default::default() })` |
+| **Java** | `new QzdbReader.Builder(file).verifyCrc(false).build()` |
 | **C#** | `QzdbReader.Open(path, new ReaderOptions { VerifyCrc = false })` |
-| **Python** | `qzdb.Reader(path, verify_crc=False)` |
+| **Python** | `qzdb.QzdbReader(path, verify_crc=False)` |
 | **Node.js** | `qzdb.open(path, { verifyCrc: false })` |
-| **PHP** | `new Reader($path, ['verify_crc' => false])` |
+| **PHP** | `new QzdbReader($path, ['verify_crc' => false])` |
 | **C** | `qzdb_open_ex(path, /*verify_crc=*/0, /*group=*/0, &ctx)` |
 
 ### 4.3 reload 实现要求与原子发布
@@ -186,7 +186,7 @@ reg.get("test-db").find(ip);
 | **Python** | `self.__dict__` 引用整体替换 | GIL 下天然原子 |
 | **Node.js** | 不可变 `state` 对象整体替换 | 新对象先构建完整再赋值 |
 | **PHP** | Swoole/RoadRunner 场景同 Node 处理 | 传统 per-request 天然隔离 |
-| **C** | `_Atomic(qzdb_ctx_t*)` + 引用计数 | RCU 风格 |
+| **C** | `_Atomic(qzdb_reader_t*)` + 引用计数 | RCU 风格 |
 
 ### 4.5 元信息与版本自省 API
 
@@ -264,7 +264,7 @@ reader.verifyCRC()       // 完整性校验
 >
 > **适用范围**：`get(name)`、`hasField(name)`、`findFields(ip, fields[])` 的字段名参数**全部**适用同一条归一化规则，三者行为必须一致——不允许 `get()` 模糊匹配而 `findFields()` 精确匹配这种不对称。
 >
-> **实现要求（避免重演历史上的热路径开销问题）**：归一化查找**必须在 Reader/GeoInfo 构建时（加载 header 阶段）预先构建一次"归一化字段名 → 下标"的哈希表**，`get()`/`hasField()`/`findFields()` 调用时只做一次 O(1) 哈希查找，**不允许每次查询现场对字段名做归一化+线性扫描**。这一条是性能强制项，不是建议项。
+> **实现要求（避免重演历史上的热路径开销问题）**：归一化查找**必须在 QzdbReader/GeoInfo 构建时（加载 header 阶段）预先构建一次"归一化字段名 → 下标"的哈希表**，`get()`/`hasField()`/`findFields()` 调用时只做一次 O(1) 哈希查找，**不允许每次查询现场对字段名做归一化+线性扫描**。这一条是性能强制项，不是建议项。
 
 ### 6.2 toJson() 序列化键名与数字类型规则
 
@@ -433,9 +433,9 @@ findBatchFields(ips[], fields) -> BatchResult[]
 - 如果业务需要相反的"后注册者覆盖"语义，提供一个显式的次要 API `chainMergeOverride(...)`，不作为默认行为。
 - 合并后的 `GeoInfo.fieldNames()` 是所有参与库字段名的**去重并集**，顺序为：先注册库的字段在前，后注册库独有的新字段依次追加在后，保证 `toJson()`/`toMap()` 输出顺序在同一组 Chain 配置下是确定性的。
 
-### 9.2 方法矩阵与 Reader 对等（v2.4 修正：不再只有 find）
+### 9.2 方法矩阵与 QzdbReader 对等（v2.4 修正：不再只有 find）
 
-`ChainedReader` 必须实现与单库 `Reader` 对等的查询方法矩阵：`find`/`findUint`/`findBytes`/`findFields`/`findBatch`/`findBatchFields`/`findStream`（`lookupRowId`/`lookupIds` 因为直接绑定单个物理库的内部行号体系，在联合场景语义不清晰，**不要求** `ChainedReader` 实现，调用方如需底层行号级别的操作应直接对某个具体 `Reader` 调用）。
+`ChainedReader` 必须实现与单库 `QzdbReader` 对等的查询方法矩阵：`find`/`findUint`/`findBytes`/`findFields`/`findBatch`/`findBatchFields`/`findStream`（`lookupRowId`/`lookupIds` 因为直接绑定单个物理库的内部行号体系，在联合场景语义不清晰，**不要求** `ChainedReader` 实现，调用方如需底层行号级别的操作应直接对某个具体 `QzdbReader` 调用）。
 
 ### 9.3 ChainedReader 元信息聚合标准（v2.4 新增，此前目录承诺但正文缺失）
 
@@ -444,19 +444,19 @@ findBatchFields(ips[], fields) -> BatchResult[]
 chainedReader.editions()    // -> 数组，每个成员库各自的 edition，按注册顺序
 chainedReader.scopes()      // -> 数组，每个成员库各自的 scope
 chainedReader.dataMonths()  // -> 数组，每个成员库各自的 dataMonth
-chainedReader.readers()     // -> 返回内部持有的各个 Reader 实例（只读访问，供需要精细控制的调用方绕过 ChainedReader 直接操作某个具体库）
+chainedReader.readers()     // -> 返回内部持有的各个 QzdbReader 实例（只读访问，供需要精细控制的调用方绕过 ChainedReader 直接操作某个具体库）
 ```
 不提供单一的 `version()`/`edition()`（返回哪个库的值语义不清晰，容易被误用）。
 
 ### 9.4 生命周期（v2.4 新增，此前完全缺失）
 
-`ChainedReader` 自身**不拥有**传入的 `Reader` 实例的生命周期——`ChainedReader.close()`（如果提供）只释放 `ChainedReader` 自身持有的少量聚合状态，**不会**关闭内部持有的各个 `Reader`。各个 `Reader` 的 `open`/`reload`/`close` 由调用方独立管理；`Reader` 发生 `reload()` 后，因为 `ChainedReader` 内部只是持有 `Reader` 的引用而非拷贝快照，之后经过 `ChainedReader` 的查询会自动读到该 `Reader` 重载后的最新数据，无需对 `ChainedReader` 做任何额外操作。这一条必须在文档里明确写出来，避免调用方误以为需要重建 `ChainedReader` 才能感知到成员库的热更新。
+`ChainedReader` 自身**不拥有**传入的 `QzdbReader` 实例的生命周期——`ChainedReader.close()`（如果提供）只释放 `ChainedReader` 自身持有的少量聚合状态，**不会**关闭内部持有的各个 `QzdbReader`。各个 `QzdbReader` 的 `open`/`reload`/`close` 由调用方独立管理；`QzdbReader` 发生 `reload()` 后，因为 `ChainedReader` 内部只是持有 `QzdbReader` 的引用而非拷贝快照，之后经过 `ChainedReader` 的查询会自动读到该 `QzdbReader` 重载后的最新数据，无需对 `ChainedReader` 做任何额外操作。这一条必须在文档里明确写出来，避免调用方误以为需要重建 `ChainedReader` 才能感知到成员库的热更新。
 
 ### 9.5 典型用法
 
 ```java
-DatabaseReader cnReader = new DatabaseReader.Builder(new File("ip_cn_pro.qzdb")).build();
-DatabaseReader globalReader = new DatabaseReader.Builder(new File("ip_global_asn.qzdb")).build();
+QzdbReader cnReader = new QzdbReader.Builder(new File("ip_cn_pro.qzdb")).build();
+QzdbReader globalReader = new QzdbReader.Builder(new File("ip_global_asn.qzdb")).build();
 ChainedReader compositeReader = ChainedReader.chainMerge(cnReader, globalReader);
 Optional<GeoInfo> info = compositeReader.find("1.12.0.0");
 ```
@@ -467,18 +467,18 @@ Optional<GeoInfo> info = compositeReader.find("1.12.0.0");
 
 ### 10.1 核心类命名
 
-> 所有语言核心类统一叫 `Reader`（Java 用 `DatabaseReader`，C 用 `qzdb_ctx_t`）；`QzdbSearcher` 直接删除。
+> 所有语言核心类统一叫 `QzdbReader`（仅 C 语言因无 class，用等价的 `qzdb_reader_t` 结构体）；旧版 `QzdbSearcher` 直接删除。
 
 | 语言 | 包/命名空间 | 核心类名 | 打开 | 查询 | 关闭 |
 |---|---|---|---|---|---|
-| **Go** | `qzdb` | `Reader` | `qzdb.Open(path)` | `.Find(ip)` | `.Close()` |
-| **Rust** | `qzdb` crate | `Reader` | `Reader::open(path)` | `.find(ip)` | `Drop` 自动 |
-| **Java** | `com.qqzeng.qzdb` | `DatabaseReader` | `new DatabaseReader.Builder(file).build()` | `.find(ip)` -> `Optional<GeoInfo>` | `AutoCloseable` |
+| **Go** | `qzdb` | `QzdbReader` | `qzdb.Open(path)` | `.Find(ip)` | `.Close()` |
+| **Rust** | `qzdb` crate | `QzdbReader` | `QzdbReader::open(path)` | `.find(ip)` | `Drop` 自动 |
+| **Java** | `com.qqzeng.qzdb` | `QzdbReader` | `new QzdbReader.Builder(file).build()` | `.find(ip)` -> `Optional<GeoInfo>` | `AutoCloseable` |
 | **C#** | `Qzdb` | `QzdbReader` | `QzdbReader.Open(path)` | `.Find(ip)` / `.TryFind(ip, out)` | `IDisposable` |
-| **Python** | `qzdb` | `Reader` | `qzdb.Reader(path)`，支持 `with` | `.find(ip)` | `__exit__` + `.close()` |
-| **Node.js** | `qzdb` | `Reader` | `qzdb.open(path)` | `.find(ip)` | `.close()` |
-| **PHP** | `Qzdb` | `Reader` | `new Reader($path)` | `->find($ip)` | `->close()` |
-| **C** | — | `qzdb_ctx_t` | `qzdb_open(path, &ctx)` | `qzdb_find(ctx, ip, &out)` | `qzdb_close(ctx)` |
+| **Python** | `qzdb` | `QzdbReader` | `qzdb.QzdbReader(path)`，支持 `with` | `.find(ip)` | `__exit__` + `.close()` |
+| **Node.js** | `qzdb` | `QzdbReader` | `qzdb.open(path)` | `.find(ip)` | `.close()` |
+| **PHP** | `Qzdb` | `QzdbReader` | `new QzdbReader($path)` | `->find($ip)` | `->close()` |
+| **C** | — | `qzdb_reader_t` | `qzdb_open(path, &ctx)` | `qzdb_find(ctx, ip, &out)` | `qzdb_close(ctx)` |
 
 ### 10.2 方法命名对照表
 
@@ -598,7 +598,7 @@ sequenceDiagram
 
 | 新增内容 | 涉及语言 |
 |---|---|
-| `Reader`（含 `openBuffer`/`reloadBuffer`，明确缓冲区拷贝语义） | 全语言 |
+| `QzdbReader`（含 `openBuffer`/`reloadBuffer`，明确缓冲区拷贝语义） | 全语言 |
 | `Registry`（可实例化+进程级默认） | 全语言 |
 | `GeoInfo`（归一化 `get`/`hasField`，Ult 25 字段 getter，`UsageType` 类型化） | 全语言 |
 | `BatchResult` 逐条结果结构 | 全语言 |
@@ -613,14 +613,14 @@ sequenceDiagram
 
 | 语言 | 删除 | 新增 | 重命名/重构 |
 |---|---|---|---|
-| **Go** | — | `registry.go`, `batch.go`, `chain.go` | `qzdb.go`（`Reader`+`GeoInfo`补方法） |
-| **Rust** | — | `registry.rs`, `batch.rs`, `chain.rs` | `lib.rs`（`Reader`+`GeoInfo`补方法） |
-| **Java** | `IpLocation.java`, `QzdbSearcher.java` | `GeoInfo.java`, `DatabaseReader.java`, `QzdbRegistry.java`, `BatchResult.java`, `RowIds.java`, `UsageType.java`, `KnownUsageType.java`, `UnknownUsageType.java`, `ChainedReader.java` | — |
-| **C#** | `QzdbSearcher.cs` | `QzdbReader.cs`, `QzdbRegistry.cs`, `BatchResult.cs`, `ReaderOptions.cs`, `RowIds.cs`, `UsageType.cs`, `ChainedReader.cs` | — |
-| **Python** | — | `usage_type.py`, `chained_reader.py` | `qzdb.py`（`Reader`+`Registry`+`BatchResult`+流式） |
-| **Node.js** | — | `usage-type.js`, `chained-reader.js` | `qzdb.js`（`Reader`+`Registry`+`BatchResult`+Generator） |
-| **PHP** | `QzdbSearcher.php` | `Reader.php`, `Registry.php`, `BatchResult.php`, `RowIds.php`, `UsageType.php`, `ChainedReader.php` | — |
-| **C** | `qzdb_searcher.c/h` | `qzdb.c/h`, `qzdb_registry.c/h`, `qzdb_chain.c/h` | — |
+| **Go** | — | `registry.go`, `batch.go`, `chain.go` | `qzdb.go`（`QzdbReader`+`GeoInfo`补方法） |
+| **Rust** | — | `registry.rs`, `batch.rs`, `chain.rs` | `lib.rs`（`QzdbReader`+`GeoInfo`补方法） |
+| **Java** | `IpLocation.java`, `DatabaseReader.java` | `GeoInfo.java`, `QzdbReader.java`, `QzdbRegistry.java`, `BatchResult.java`, `RowIds.java`, `UsageType.java`, `KnownUsageType.java`, `UnknownUsageType.java`, `ChainedReader.java` | — |
+| **C#** | `DatabaseReader.cs` | `QzdbReader.cs`, `QzdbRegistry.cs`, `BatchResult.cs`, `ReaderOptions.cs`, `RowIds.cs`, `UsageType.cs`, `ChainedReader.cs` | — |
+| **Python** | — | `usage_type.py`, `chained_reader.py` | `qzdb.py`（`QzdbReader`+`Registry`+`BatchResult`+流式） |
+| **Node.js** | — | `usage-type.js`, `chained-reader.js` | `qzdb.js`（`QzdbReader`+`Registry`+`BatchResult`+Generator） |
+| **PHP** | `QzdbSearcher.php` | `QzdbReader.php`, `Registry.php`, `BatchResult.php`, `RowIds.php`, `UsageType.php`, `ChainedReader.php` | — |
+| **C** | `qzdb_searcher.c/h` | `qzdb_reader.c/h`, `qzdb_registry.c/h`, `qzdb_chain.c/h` | — |
 
 ### 13.5 排期建议（信息性提示，非规范正文）
 
@@ -635,55 +635,55 @@ sequenceDiagram
 ```go
 package qzdb
 
-type Reader struct { /* ... */ }
+type QzdbReader struct { /* ... */ }
 
 // 加载 API（openBuffer 默认拷贝传入的 data，不持有调用方原切片；见 4.1 缓冲区所有权说明）
-func Open(path string, opts ...Option) (*Reader, error)
-func OpenBuffer(data []byte, opts ...Option) (*Reader, error)
-func OpenBufferNoCopy(data []byte, opts ...Option) (*Reader, error) // 零拷贝变体，调用方须保证 data 生命周期内只读不释放
+func Open(path string, opts ...Option) (*QzdbReader, error)
+func OpenBuffer(data []byte, opts ...Option) (*QzdbReader, error)
+func OpenBufferNoCopy(data []byte, opts ...Option) (*QzdbReader, error) // 零拷贝变体，调用方须保证 data 生命周期内只读不释放
 
 type Option func(*readerConfig)
 func WithGroupIndex(idx int) Option
 func WithCRCVerification(enabled bool) Option // 默认 true
 
 // 单条查询
-func (r *Reader) Find(ipStr string) (*GeoInfo, error)
-func (r *Reader) FindAddr(addr netip.Addr) (*GeoInfo, error)
-func (r *Reader) FindUint(ipInt uint32) (*GeoInfo, error)
-func (r *Reader) FindBytes(ip16 [16]byte) (*GeoInfo, error)
-func (r *Reader) FindFields(ipStr string, fields []string) (*GeoInfo, error)
-func (r *Reader) FindStr(ipStr string) (string, error)
+func (r *QzdbReader) Find(ipStr string) (*GeoInfo, error)
+func (r *QzdbReader) FindAddr(addr netip.Addr) (*GeoInfo, error)
+func (r *QzdbReader) FindUint(ipInt uint32) (*GeoInfo, error)
+func (r *QzdbReader) FindBytes(ip16 [16]byte) (*GeoInfo, error)
+func (r *QzdbReader) FindFields(ipStr string, fields []string) (*GeoInfo, error)
+func (r *QzdbReader) FindStr(ipStr string) (string, error)
 
 // 批量与流式
 type BatchResult struct {
     Info *GeoInfo
     Err  error
 }
-func (r *Reader) FindBatch(ips []string) []BatchResult
-func (r *Reader) FindBatchFields(ips []string, fields []string) []BatchResult
-func (r *Reader) FindEach(ips []string, fn func(index int, result BatchResult))
+func (r *QzdbReader) FindBatch(ips []string) []BatchResult
+func (r *QzdbReader) FindBatchFields(ips []string, fields []string) []BatchResult
+func (r *QzdbReader) FindEach(ips []string, fn func(index int, result BatchResult))
 
 // 低级查询
-func (r *Reader) LookupRowId(ipStr string) uint32
-func (r *Reader) LookupRowIdUint(ipInt uint32) uint32
-func (r *Reader) LookupRowIdBytes(ip16 [16]byte) uint32
-func (r *Reader) LookupIds(rowId uint32) (geo, asn, usage uint32, ok bool)
+func (r *QzdbReader) LookupRowId(ipStr string) uint32
+func (r *QzdbReader) LookupRowIdUint(ipInt uint32) uint32
+func (r *QzdbReader) LookupRowIdBytes(ip16 [16]byte) uint32
+func (r *QzdbReader) LookupIds(rowId uint32) (geo, asn, usage uint32, ok bool)
 
 // 生命周期
-func (r *Reader) Reload(path string) error
-func (r *Reader) ReloadBuffer(data []byte) error
-func (r *Reader) Close() error
+func (r *QzdbReader) Reload(path string) error
+func (r *QzdbReader) ReloadBuffer(data []byte) error
+func (r *QzdbReader) Close() error
 
 // 元信息与自省
-func (r *Reader) Version() string
-func (r *Reader) DataMonth() string
-func (r *Reader) Edition() string
-func (r *Reader) Scope() string
-func (r *Reader) BuildTime() string
-func (r *Reader) FileHash() string
-func (r *Reader) FieldNames() []string
-func (r *Reader) HasField(name string) bool // 归一化匹配，见 6.1
-func (r *Reader) VerifyCRC() bool
+func (r *QzdbReader) Version() string
+func (r *QzdbReader) DataMonth() string
+func (r *QzdbReader) Edition() string
+func (r *QzdbReader) Scope() string
+func (r *QzdbReader) BuildTime() string
+func (r *QzdbReader) FileHash() string
+func (r *QzdbReader) FieldNames() []string
+func (r *QzdbReader) HasField(name string) bool // 归一化匹配，见 6.1
+func (r *QzdbReader) VerifyCRC() bool
 
 // UsageType：字符串别名 + 预定义常量，未知值就是原始字符串本身
 type UsageType string
@@ -734,11 +734,11 @@ func (g *GeoInfo) PhonePrefix() string
 func (g *GeoInfo) EmojiFlag() string
 func (g *GeoInfo) Languages() string
 
-// ChainedReader（方法矩阵与 Reader 对等，见 9.2）
+// ChainedReader（方法矩阵与 QzdbReader 对等，见 9.2）
 type ChainedReader struct { /* ... */ }
-func Chain(readers ...*Reader) *ChainedReader
-func ChainMerge(readers ...*Reader) *ChainedReader
-func ChainMergeOverride(readers ...*Reader) *ChainedReader // 后注册者覆盖语义，见 9.1
+func Chain(readers ...*QzdbReader) *ChainedReader
+func ChainMerge(readers ...*QzdbReader) *ChainedReader
+func ChainMergeOverride(readers ...*QzdbReader) *ChainedReader // 后注册者覆盖语义，见 9.1
 func (c *ChainedReader) Find(ipStr string) (*GeoInfo, error)
 func (c *ChainedReader) FindUint(ipInt uint32) (*GeoInfo, error)
 func (c *ChainedReader) FindBytes(ip16 [16]byte) (*GeoInfo, error)
@@ -748,25 +748,25 @@ func (c *ChainedReader) FindEach(ips []string, fn func(index int, result BatchRe
 func (c *ChainedReader) Editions() []string
 func (c *ChainedReader) Scopes() []string
 func (c *ChainedReader) DataMonths() []string
-func (c *ChainedReader) Readers() []*Reader
+func (c *ChainedReader) Readers() []*QzdbReader
 
 // Registry
 type Registry struct { /* ... */ }
 func NewRegistry() *Registry
 func (reg *Registry) Register(name, path string, opts ...Option) error
 func (reg *Registry) RegisterBuffer(name string, data []byte, opts ...Option) error
-func (reg *Registry) Get(name string) *Reader
+func (reg *Registry) Get(name string) *QzdbReader
 func (reg *Registry) Unregister(name string)
 
 func RegisterGlobal(name, path string, opts ...Option) error
-func GetGlobal(name string) *Reader
+func GetGlobal(name string) *QzdbReader
 func UnregisterGlobal(name string)
 ```
 
 ### A.2 Rust
 
 ```rust
-pub struct Reader { /* ... */ }
+pub struct QzdbReader { /* ... */ }
 
 pub struct ReaderOptions {
     pub verify_crc: bool,
@@ -786,7 +786,7 @@ pub enum UsageType {
     Unknown(String), // 携带原始字符串
 }
 
-impl Reader {
+impl QzdbReader {
     pub fn open(path: &str) -> Result<Self, QzdbError>;
     pub fn open_buffer(data: Vec<u8>) -> Result<Self, QzdbError>; // 拷贝语义
     pub fn open_with(path: &str, opts: ReaderOptions) -> Result<Self, QzdbError>;
@@ -857,14 +857,14 @@ impl GeoInfo {
 
 pub struct ChainedReader { /* ... */ }
 impl ChainedReader {
-    pub fn chain(readers: Vec<Arc<Reader>>) -> Self;
-    pub fn chain_merge(readers: Vec<Arc<Reader>>) -> Self;
-    pub fn chain_merge_override(readers: Vec<Arc<Reader>>) -> Self;
+    pub fn chain(readers: Vec<Arc<QzdbReader>>) -> Self;
+    pub fn chain_merge(readers: Vec<Arc<QzdbReader>>) -> Self;
+    pub fn chain_merge_override(readers: Vec<Arc<QzdbReader>>) -> Self;
     pub fn find(&self, ip: &str) -> Result<Option<GeoInfo>, QzdbError>;
     pub fn find_batch(&self, ips: &[&str]) -> Vec<Result<Option<GeoInfo>, QzdbError>>;
     pub fn editions(&self) -> Vec<&str>;
     pub fn scopes(&self) -> Vec<&str>;
-    pub fn readers(&self) -> &[Arc<Reader>];
+    pub fn readers(&self) -> &[Arc<QzdbReader>];
 }
 
 pub struct Registry { /* ... */ }
@@ -872,7 +872,7 @@ impl Registry {
     pub fn new() -> Self;
     pub fn register(&self, name: &str, path: &str, opts: ReaderOptions) -> Result<(), QzdbError>;
     pub fn register_buffer(&self, name: &str, data: Vec<u8>, opts: ReaderOptions) -> Result<(), QzdbError>;
-    pub fn get(&self, name: &str) -> Option<Arc<Reader>>;
+    pub fn get(&self, name: &str) -> Option<Arc<QzdbReader>>;
     pub fn unregister(&self, name: &str);
 }
 pub fn global_registry() -> &'static Registry;
@@ -894,14 +894,14 @@ public enum KnownUsageType implements UsageType {
 }
 public record UnknownUsageType(String rawValue) implements UsageType {}
 
-public class DatabaseReader implements AutoCloseable {
+public class QzdbReader implements AutoCloseable {
     public static class Builder {
         public Builder(File database);
         public Builder(byte[] buffer);       // 拷贝语义，见 4.1
         public Builder(InputStream stream) throws IOException;
         public Builder groupIndex(int idx);
         public Builder verifyCrc(boolean enabled);
-        public DatabaseReader build() throws QzdbException;
+        public QzdbReader build() throws QzdbException;
     }
 
     public Optional<GeoInfo> find(String ipStr);
@@ -970,9 +970,9 @@ public class GeoInfo {
 }
 
 public class ChainedReader {
-    public static ChainedReader chain(DatabaseReader... readers);
-    public static ChainedReader chainMerge(DatabaseReader... readers);
-    public static ChainedReader chainMergeOverride(DatabaseReader... readers);
+    public static ChainedReader chain(QzdbReader... readers);
+    public static ChainedReader chainMerge(QzdbReader... readers);
+    public static ChainedReader chainMergeOverride(QzdbReader... readers);
     public Optional<GeoInfo> find(String ipStr);
     public Optional<GeoInfo> findUint(int ipInt);
     public Optional<GeoInfo> findBytes(byte[] ip16);
@@ -980,18 +980,18 @@ public class ChainedReader {
     public List<BatchResult> findBatch(List<String> ips);
     public String[] editions();
     public String[] scopes();
-    public List<DatabaseReader> readers();
+    public List<QzdbReader> readers();
 }
 
 public class QzdbRegistry {
     public QzdbRegistry();
     public void register(String name, String path) throws QzdbException;
     public void registerBuffer(String name, byte[] buffer) throws QzdbException;
-    public DatabaseReader get(String name);
+    public QzdbReader get(String name);
     public void unregister(String name);
 
     public static void registerGlobal(String name, String path) throws QzdbException;
-    public static DatabaseReader getGlobal(String name);
+    public static QzdbReader getGlobal(String name);
     public static void unregisterGlobal(String name);
 }
 ```
@@ -1152,10 +1152,10 @@ class BatchResult:
     info: "GeoInfo | None"
     error: "QzdbError | None"
 
-class Reader:
+class QzdbReader:
     def __init__(self, path, group_index=0, verify_crc=True): ...
     @staticmethod
-    def open_buffer(buffer: bytes, group_index=0, verify_crc=True) -> "Reader": ... # 拷贝语义
+    def open_buffer(buffer: bytes, group_index=0, verify_crc=True) -> "QzdbReader": ... # 拷贝语义
 
     def __enter__(self): ...
     def __exit__(self, *args): ...
@@ -1252,11 +1252,11 @@ class GeoInfo:
 
 class ChainedReader:
     @staticmethod
-    def chain(*readers: Reader) -> "ChainedReader": ...
+    def chain(*readers: QzdbReader) -> "ChainedReader": ...
     @staticmethod
-    def chain_merge(*readers: Reader) -> "ChainedReader": ...
+    def chain_merge(*readers: QzdbReader) -> "ChainedReader": ...
     @staticmethod
-    def chain_merge_override(*readers: Reader) -> "ChainedReader": ...
+    def chain_merge_override(*readers: QzdbReader) -> "ChainedReader": ...
     def find(self, ip) -> "GeoInfo | None": ...
     def find_batch(self, ips) -> list[BatchResult]: ...
     @property
@@ -1264,13 +1264,13 @@ class ChainedReader:
     @property
     def scopes(self) -> list[str]: ...
     @property
-    def readers(self) -> list[Reader]: ...
+    def readers(self) -> list[QzdbReader]: ...
 
 class Registry:
     def __init__(self): ...
     def register(self, name, path, **kwargs): ...
     def register_buffer(self, name, buffer, **kwargs): ...
-    def get(self, name) -> Reader: ...
+    def get(self, name) -> QzdbReader: ...
     def unregister(self, name): ...
 
 registry = Registry()
@@ -1288,7 +1288,7 @@ const UsageType = Object.freeze({
     // ...
 });
 
-class Reader {
+class QzdbReader {
     static open(path, options = {}) {}
     static openBuffer(buffer, options = {}) {} // 拷贝语义
 
@@ -1418,7 +1418,7 @@ class BatchResult {
     public ?\QzdbException $error;
 }
 
-class Reader {
+class QzdbReader {
     public function __construct(string $path, array $options = []);
     public static function openBuffer(string $buffer, array $options = []): self; // 拷贝语义
 
@@ -1484,9 +1484,9 @@ class GeoInfo implements \ArrayAccess, \JsonSerializable {
 }
 
 class ChainedReader {
-    public static function chain(Reader ...$readers): self;
-    public static function chainMerge(Reader ...$readers): self;
-    public static function chainMergeOverride(Reader ...$readers): self;
+    public static function chain(QzdbReader ...$readers): self;
+    public static function chainMerge(QzdbReader ...$readers): self;
+    public static function chainMergeOverride(QzdbReader ...$readers): self;
     public function find(string $ip): ?GeoInfo;
     public function findBatch(array $ips): array;
     public function getEditions(): array;
@@ -1498,7 +1498,7 @@ class Registry {
     public function __construct();
     public function register(string $name, string $path, array $options = []): void;
     public function registerBuffer(string $name, string $buffer, array $options = []): void;
-    public function get(string $name): Reader;
+    public function get(string $name): QzdbReader;
     public function unregister(string $name): void;
 
     public static function getDefault(): self;
@@ -1509,44 +1509,44 @@ class Registry {
 
 ```c
 // Lifecycle（openBuffer 默认拷贝，见 4.1；如需零拷贝用 _borrowed 变体并自行保证生命周期）
-int      qzdb_open(const char* path, qzdb_ctx_t** ctx);
-int      qzdb_open_buffer(const uint8_t* buffer, size_t size, qzdb_ctx_t** ctx);
-int      qzdb_open_buffer_borrowed(const uint8_t* buffer, size_t size, qzdb_ctx_t** ctx); // 零拷贝，调用方负责生命周期
-int      qzdb_open_ex(const char* path, int verify_crc, int group_index, qzdb_ctx_t** ctx);
-int      qzdb_reload(qzdb_ctx_t* ctx, const char* path);
-int      qzdb_reload_buffer(qzdb_ctx_t* ctx, const uint8_t* buffer, size_t size);
-void     qzdb_close(qzdb_ctx_t* ctx);
+int      qzdb_open(const char* path, qzdb_reader_t** ctx);
+int      qzdb_open_buffer(const uint8_t* buffer, size_t size, qzdb_reader_t** ctx);
+int      qzdb_open_buffer_borrowed(const uint8_t* buffer, size_t size, qzdb_reader_t** ctx); // 零拷贝，调用方负责生命周期
+int      qzdb_open_ex(const char* path, int verify_crc, int group_index, qzdb_reader_t** ctx);
+int      qzdb_reload(qzdb_reader_t* ctx, const char* path);
+int      qzdb_reload_buffer(qzdb_reader_t* ctx, const uint8_t* buffer, size_t size);
+void     qzdb_close(qzdb_reader_t* ctx);
 
 // 查询
-int      qzdb_find(qzdb_ctx_t* ctx, const char* ip, qzdb_geo_info_t* out);
-int      qzdb_find_uint(qzdb_ctx_t* ctx, uint32_t ip, qzdb_geo_info_t* out);
-int      qzdb_find_v6(qzdb_ctx_t* ctx, const uint8_t* ip16, qzdb_geo_info_t* out);
-int      qzdb_find_str(qzdb_ctx_t* ctx, const char* ip, char* buf, size_t size);
-int      qzdb_find_fields(qzdb_ctx_t* ctx, const char* ip, const char** fields,
+int      qzdb_find(qzdb_reader_t* ctx, const char* ip, qzdb_geo_info_t* out);
+int      qzdb_find_uint(qzdb_reader_t* ctx, uint32_t ip, qzdb_geo_info_t* out);
+int      qzdb_find_v6(qzdb_reader_t* ctx, const uint8_t* ip16, qzdb_geo_info_t* out);
+int      qzdb_find_str(qzdb_reader_t* ctx, const char* ip, char* buf, size_t size);
+int      qzdb_find_fields(qzdb_reader_t* ctx, const char* ip, const char** fields,
                           char** values, char (*bufs)[64], int buf_size);
 
 // 批量
 typedef struct { qzdb_geo_info_t info; int error_code; } qzdb_batch_result_t;
-int      qzdb_find_batch(qzdb_ctx_t* ctx, const char** ips, int count, qzdb_batch_result_t* results);
+int      qzdb_find_batch(qzdb_reader_t* ctx, const char** ips, int count, qzdb_batch_result_t* results);
 typedef void (*qzdb_find_callback)(int index, const qzdb_batch_result_t* result, void* user_data);
-int      qzdb_find_each(qzdb_ctx_t* ctx, const char** ips, int count, qzdb_find_callback cb, void* user_data);
+int      qzdb_find_each(qzdb_reader_t* ctx, const char** ips, int count, qzdb_find_callback cb, void* user_data);
 
 // 低级
-uint32_t qzdb_lookup_row_id(qzdb_ctx_t* ctx, const char* ip);
-uint32_t qzdb_lookup_row_id_uint(qzdb_ctx_t* ctx, uint32_t ip);
-uint32_t qzdb_lookup_row_id_v6(qzdb_ctx_t* ctx, const uint8_t* ip16);
-int      qzdb_lookup_ids(qzdb_ctx_t* ctx, uint32_t row_id, qzdb_ids_t* out);
+uint32_t qzdb_lookup_row_id(qzdb_reader_t* ctx, const char* ip);
+uint32_t qzdb_lookup_row_id_uint(qzdb_reader_t* ctx, uint32_t ip);
+uint32_t qzdb_lookup_row_id_v6(qzdb_reader_t* ctx, const uint8_t* ip16);
+int      qzdb_lookup_ids(qzdb_reader_t* ctx, uint32_t row_id, qzdb_ids_t* out);
 
 // 元信息与自省
-const char*  qzdb_version(qzdb_ctx_t* ctx);
-const char*  qzdb_data_month(qzdb_ctx_t* ctx);
-const char*  qzdb_edition(qzdb_ctx_t* ctx);
-const char*  qzdb_scope(qzdb_ctx_t* ctx);
-const char*  qzdb_build_time(qzdb_ctx_t* ctx);
-const char*  qzdb_file_hash(qzdb_ctx_t* ctx);
-const char** qzdb_field_names(qzdb_ctx_t* ctx, int* count);
-int          qzdb_has_field(qzdb_ctx_t* ctx, const char* name); // 归一化匹配
-int          qzdb_verify_crc(qzdb_ctx_t* ctx);
+const char*  qzdb_version(qzdb_reader_t* ctx);
+const char*  qzdb_data_month(qzdb_reader_t* ctx);
+const char*  qzdb_edition(qzdb_reader_t* ctx);
+const char*  qzdb_scope(qzdb_reader_t* ctx);
+const char*  qzdb_build_time(qzdb_reader_t* ctx);
+const char*  qzdb_file_hash(qzdb_reader_t* ctx);
+const char** qzdb_field_names(qzdb_reader_t* ctx, int* count);
+int          qzdb_has_field(qzdb_reader_t* ctx, const char* name); // 归一化匹配
+int          qzdb_verify_crc(qzdb_reader_t* ctx);
 
 // UsageType：无枚举携带字符串的语言能力，直接返回原始字符串 + 已知值判断辅助函数
 const char* qzdb_geo_usage_type(const qzdb_geo_info_t* info);
@@ -1554,7 +1554,7 @@ int         qzdb_usage_type_is_known(const char* raw);
 
 // ChainedReader 联合（mode: 0=Fallback, 1=Merge, 2=MergeOverride）
 typedef struct qzdb_chain qzdb_chain_t;
-qzdb_chain_t* qzdb_chain_new(qzdb_ctx_t** ctxs, int count, int mode);
+qzdb_chain_t* qzdb_chain_new(qzdb_reader_t** ctxs, int count, int mode);
 int           qzdb_chain_find(qzdb_chain_t* chain, const char* ip, qzdb_geo_info_t* out);
 int           qzdb_chain_find_batch(qzdb_chain_t* chain, const char** ips, int count, qzdb_batch_result_t* results);
 void          qzdb_chain_free(qzdb_chain_t* chain);
@@ -1565,12 +1565,12 @@ qzdb_registry_t* qzdb_registry_new(void);
 void             qzdb_registry_free(qzdb_registry_t* reg);
 int              qzdb_registry_register(qzdb_registry_t* reg, const char* name, const char* path);
 int              qzdb_registry_register_buffer(qzdb_registry_t* reg, const char* name, const uint8_t* buffer, size_t size);
-qzdb_ctx_t*      qzdb_registry_get(qzdb_registry_t* reg, const char* name);
+qzdb_reader_t*      qzdb_registry_get(qzdb_registry_t* reg, const char* name);
 void             qzdb_registry_unregister(qzdb_registry_t* reg, const char* name);
 
 int         qzdb_default_register(const char* name, const char* path);
 int         qzdb_default_register_buffer(const char* name, const uint8_t* buffer, size_t size);
-qzdb_ctx_t* qzdb_default_get(const char* name);
+qzdb_reader_t* qzdb_default_get(const char* name);
 void        qzdb_default_unregister(const char* name);
 ```
 
@@ -1580,7 +1580,7 @@ void        qzdb_default_unregister(const char* name);
 
 | 版本 | 变更内容 |
 |---|---|
-| v2.0 | 初版：场景分析、Registry 分层、open/reload 分离、GeoInfo 动态字段、命名对齐 MaxMind |
+| v2.0 | 初版：场景分析、Registry 分层、open/reload 分离、GeoInfo 动态字段、命名参照业界主流 reader/registry 模式 |
 | R2 | 批量 API 逐条结果结构、语义化 getter 缺失行为、Registry 静态方法隔离、CRC 默认开关、toMap/toJson 类型分离、大规模流式 API |
 | v2.1 | 规则收敛：`Global`/`Default` 区分实例与静态 Registry，并发禁忌说明，元信息完整签名 |
 | v2.2 | 商业版矩阵适配：`ChainedReader` 雏形、`edition()`/`scope()`/`dataMonth()`/`hasField()`、Ult 25 字段 Getter、`UsageType` 向前兼容枚举（首次提出但未定义具体实现） |
@@ -1599,7 +1599,7 @@ void        qzdb_default_unregister(const char* name);
 | 2 | `ChainedReader` 方法矩阵不完整 | 仅 `find(ip)` 一个方法 | 9.2 明确要求对等 `findUint`/`findBytes`/`findFields`/`findBatch` 等 |
 | 3 | Merge 模式字段冲突无规则 | 未定义 | 9.1 明确"先注册者优先"默认规则 + `chainMergeOverride` 备选 |
 | 4 | 9.3 元信息聚合小节缺失 | 目录有、正文无 | 9.3 补齐 |
-| 5 | `ChainedReader` 生命周期未定义 | 未提及 close/reload 感知 | 9.4 补齐：不拥有成员 Reader 生命周期，reload 后自动生效 |
+| 5 | `ChainedReader` 生命周期未定义 | 未提及 close/reload 感知 | 9.4 补齐：不拥有成员 QzdbReader 生命周期，reload 后自动生效 |
 | 6 | 表 6.3 与附录 A 类型签名矛盾 | `geo_id`/`asn` 写"0 / null" | 6.3 统一为 null/Option，删除"0"选项 |
 | 7 | `UsageType` 全文引用无定义 | 8 种语言签名都出现该类型，无定义 | 6.4 新增完整定义，逐语言给出可落地方案 |
 | 8 | Python/PHP `usage_type` 签名与 6.3 矛盾 | 附录 A 写成裸 `string` | 附录 A.5/A.7 修正为 `UsageType`/类型化返回 |

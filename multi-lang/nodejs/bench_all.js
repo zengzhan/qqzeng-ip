@@ -1,11 +1,11 @@
 const fs = require('fs');
-const QzdbSearcher = require('./qzdb');
+const QzdbReader = require('./qzdb');
 
 function bench(name, dbPath, count, v6count, first) {
   if (!fs.existsSync(dbPath)) { console.log(`  ${name}: not found`); return; }
   let s;
-  if (first) s = QzdbSearcher.getInstance(dbPath);
-  else { s = QzdbSearcher.getInstance(); s.load(dbPath); }
+  if (first) s = QzdbReader.getInstance(dbPath);
+  else { s = QzdbReader.getInstance(); s.load(dbPath); }
 
   const ips = new Uint32Array(count);
   let seed = 123;

@@ -8,7 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"qzdb_searcher/qzdb"
+	"qzdb_reader/qzdb"
 )
 
 // geoToPipe uses GeoInfo.ToPipe() so output byte-matches Python to_pipe()
@@ -19,7 +19,7 @@ func geoToPipe(info *qzdb.GeoInfo) string {
 	return info.ToPipe()
 }
 
-func processFile(searcher *qzdb.QzdbSearcher, testPath, outPath string, isV6 bool) int {
+func processFile(searcher *qzdb.QzdbReader, testPath, outPath string, isV6 bool) int {
 	data, err := os.ReadFile(testPath)
 	if err != nil {
 		return 0

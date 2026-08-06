@@ -3,7 +3,7 @@
 #include <stdint.h>
 #include <time.h>
 #include <math.h>
-#include "qzdb_searcher.h"
+#include "qzdb_reader.h"
 
 static uint32_t rand_u32(uint32_t *seed) {
     *seed = *seed * 1664525u + 1013904223u;
@@ -27,7 +27,7 @@ void run_bench(const char* name, const char* db_rel) {
     // Try data/ (multi-lang/) first, then ../data/ (multi-lang/c/)
     if (!try_path(db_path, sizeof(db_path), "data/", db_rel))
         snprintf(db_path, sizeof(db_path), "../data/%s", db_rel);
-    qzdb_searcher_t ctx;
+    qzdb_reader_t ctx;
 
     clock_t load_start = clock();
     if (qzdb_init(&ctx, db_path) != 0) {

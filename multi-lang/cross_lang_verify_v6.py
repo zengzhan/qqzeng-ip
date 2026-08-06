@@ -23,8 +23,8 @@ DB_PATH = os.path.join(SCRIPT_DIR, "data", "qqzeng_ip_std_china.qzdb")
 
 def run_python_v6(ip_list):
     sys.path.insert(0, os.path.join(SCRIPT_DIR, "python"))
-    from qzdb import QzdbSearcher
-    searcher = QzdbSearcher.get_instance(DB_PATH)
+    from qzdb import QzdbReader
+    searcher = QzdbReader.get_instance(DB_PATH)
     results = {}
     for ip in ip_list:
         r = searcher.find(ip)
@@ -33,8 +33,8 @@ def run_python_v6(ip_list):
 
 def run_nodejs_v6(ip_list):
     js_code = f"""
-const QzdbSearcher = require('./qzdb');
-const s = new QzdbSearcher('{DB_PATH}');
+const QzdbReader = require('./qzdb');
+const s = new QzdbReader('{DB_PATH}');
 const results = {{}};
 for (const ip of {json.dumps(ip_list)}) {{
     const r = s.find(ip);
@@ -57,9 +57,9 @@ console.log(JSON.stringify(results));
 
 def run_php_v6(ip_list):
     php_code = f"""<?php
-require_once 'QzdbSearcher.php';
-use Qqzeng\Ip\QzdbSearcher;
-$s = QzdbSearcher::getInstance('{DB_PATH}');
+require_once 'QzdbReader.php';
+use Qqzeng\Ip\QzdbReader;
+$s = QzdbReader::getInstance('{DB_PATH}');
 $results = array();
 $ips = {json.dumps(ip_list)};
 foreach ($ips as $ip) {{
@@ -85,12 +85,12 @@ def run_c_v6(ip_list):
     c_code = f"""#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "qzdb_searcher.h"
+#include "qzdb_reader.h"
 
 int main() {{
     const char* ips[] = {{{", ".join(f'"{ip}"' for ip in ip_list)}}};
     int n = {len(ip_list)};
-    qzdb_searcher_t ctx;
+    qzdb_reader_t ctx;
     if (qzdb_init(&ctx, "{DB_PATH}") != 0) {{
         fprintf(stderr, "load failed\\n");
         return 1;
@@ -113,7 +113,7 @@ int main() {{
     try:
         exe = os.path.join(SCRIPT_DIR, "c", "_cross_v6_tmp")
         subprocess.check_output(
-            ["clang", "-O2", "-o", exe, tmp_c, "qzdb_searcher.c", "-lm"],
+            ["clang", "-O2", "-o", exe, tmp_c, "qzdb_reader.c", "-lm"],
             cwd=os.path.join(SCRIPT_DIR, "c"), timeout=30, stderr=subprocess.DEVNULL
         )
         out = subprocess.check_output([exe], timeout=30).decode()
@@ -127,11 +127,11 @@ int main() {{
                 os.unlink(f)
 
 def run_java_v6(ip_list):
-    java_code = f"""import qzdb.QzdbSearcher;
+    java_code = f"""import qzdb.QzdbReader;
 import qzdb.IpLocation;
 public class CrossVerifyV6 {{
     public static void main(String[] args) {{
-        QzdbSearcher searcher = QzdbSearcher.getInstance();
+        QzdbReader searcher = QzdbReader.getInstance();
         searcher.load("{DB_PATH}");
         String[] ips = {json.dumps(ip_list)};
         java.util.Map<String, String> results = new java.util.HashMap<>();

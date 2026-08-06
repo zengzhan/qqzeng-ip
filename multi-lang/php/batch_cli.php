@@ -1,10 +1,10 @@
 <?php
-require_once __DIR__ . '/QzdbSearcher.php';
+require_once __DIR__ . '/QzdbReader.php';
 
 if ($argc < 2) exit(1);
 $dbPath = $argv[1];
 
-$searcher = new \Qqzeng\Ip\QzdbSearcher();
+$searcher = new \Qqzeng\Ip\QzdbReader();
 $searcher->load($dbPath);
 
 $handle = fopen("php://stdin", "r");

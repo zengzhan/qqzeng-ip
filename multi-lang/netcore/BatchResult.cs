@@ -1,4 +1,4 @@
-namespace Qzdb;
+namespace QQZeng.Qzdb;
 
 /// <summary>Per-row result carrying the three-state lookup semantics of find().</summary>
 public readonly record struct BatchResult(GeoInfo? Info, QzdbException? Error)

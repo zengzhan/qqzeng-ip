@@ -1,18 +1,18 @@
 /**
  * Batch IP query runner for C
- * Compile: clang -O3 -o batch_c batch_query.c ../c/qzdb_searcher.c -lm
+ * Compile: clang -O3 -o batch_c batch_query.c ../c/qzdb_reader.c -lm
  * Usage: ./batch_c <database_path> <v4_test> <v4_output> <v6_test> <v6_output>
  *
  * Reads test IPs from files, queries the QZDB database, writes results.
  */
-#include "../c/qzdb_searcher.h"
+#include "../c/qzdb_reader.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 
 /* Helper: format geo info to pipe string */
-static void geo_to_pipe(const qzdb_searcher_t* ctx, const qzdb_geo_info_t* r, char* buf, size_t size) {
+static void geo_to_pipe(const qzdb_reader_t* ctx, const qzdb_geo_info_t* r, char* buf, size_t size) {
     if (!r) { if (size > 0) buf[0] = '\0'; return; }
     buf[0] = '\0';
     size_t pos = 0;
@@ -34,7 +34,7 @@ static void geo_to_pipe(const qzdb_searcher_t* ctx, const qzdb_geo_info_t* r, ch
     buf[pos] = '\0';
 }
 
-static int process_v4(const qzdb_searcher_t* ctx, const char* test_path, const char* out_path) {
+static int process_v4(const qzdb_reader_t* ctx, const char* test_path, const char* out_path) {
     FILE* f = fopen(test_path, "r");
     if (!f) { fprintf(stderr, "  C: Cannot open %s\n", test_path); return 0; }
     
@@ -66,7 +66,7 @@ static int process_v4(const qzdb_searcher_t* ctx, const char* test_path, const c
     return count;
 }
 
-static int process_v6(const qzdb_searcher_t* ctx, const char* test_path, const char* out_path) {
+static int process_v6(const qzdb_reader_t* ctx, const char* test_path, const char* out_path) {
     FILE* f = fopen(test_path, "r");
     if (!f) return 0;
     
@@ -113,7 +113,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
     
-    qzdb_searcher_t ctx;
+    qzdb_reader_t ctx;
     if (qzdb_init(&ctx, argv[1]) != 0) {
         fprintf(stderr, "  C: Failed to load database: %s\n", argv[1]);
         return 1;

@@ -1,4 +1,4 @@
-using Qzdb;
+using QQZeng.Qzdb;
 using System.Globalization;
 using System.Diagnostics;
 
@@ -28,7 +28,7 @@ class Program
             return;
         }
 
-        using var reader = new DatabaseReader.Builder(dbPath).Build();
+        using var reader = new QzdbReader.Builder(dbPath).Build();
 
         Console.WriteLine($"Version: {reader.Version}");
         Console.WriteLine($"Edition: {reader.Edition}");

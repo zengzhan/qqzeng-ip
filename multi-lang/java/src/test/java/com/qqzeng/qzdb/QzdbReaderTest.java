@@ -1,6 +1,8 @@
 package com.qqzeng.qzdb;
 
 import java.io.File;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.List;
@@ -19,7 +21,7 @@ import java.util.Optional;
  * R7 ChainedReader MERGE 空值补齐语义
  * R8 严格 IP 解析（拒绝前导 0 / zone id / 双 ::）
  */
-public class DatabaseReaderTest {
+public class QzdbReaderTest {
 
     private static final String[] SAMPLE_DB_PATHS = {
             "multi-lang/test_data_202608/std/china/qqzeng_ip_std_china.qzdb",
@@ -63,6 +65,10 @@ public class DatabaseReaderTest {
         System.out.println(" 独立断言总数: " + assertions
                 + (assertions >= 50 ? " (≥50，满足 Tier 1 要求)" : " (<50，不满足 Tier 1 要求)"));
         System.out.println("--------------------------------------------------");
+        // 与 run_all_tests.sh 的 grep "TEST_PASS" 判定约定对齐（其他语言测试入口同样以 TEST_PASS 收尾）
+        if (failed == 0) {
+            System.out.println("TEST_PASS");
+        }
         if (failed > 0) System.exit(1);
     }
 
@@ -80,47 +86,47 @@ public class DatabaseReaderTest {
 
     private static void runPureLogicTests() {
         test("P1. IPv4 严格解析（拒绝前导 0 / 越界 / 缺段）", () -> {
-            assertEquals(0x01020304, DatabaseReader.parseIPv4Uint("1.2.3.4"), "basic");
-            assertEquals(0, DatabaseReader.parseIPv4Uint("0.0.0.0"), "all zero");
-            assertEquals(-1, DatabaseReader.parseIPv4Uint("255.255.255.255"), "max");
-            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv4Uint("01.2.3.4"), "leading zero");
-            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv4Uint("256.1.1.1"), "octet > 255");
-            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv4Uint("1.2.3"), "3 parts");
-            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv4Uint("1.2.3.4.5"), "5 parts");
-            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv4Uint("1.2.3.a"), "non digit");
-            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv4Uint("1.2.3.+4"), "plus sign");
+            assertEquals(0x01020304, QzdbReader.parseIPv4Uint("1.2.3.4"), "basic");
+            assertEquals(0, QzdbReader.parseIPv4Uint("0.0.0.0"), "all zero");
+            assertEquals(-1, QzdbReader.parseIPv4Uint("255.255.255.255"), "max");
+            assertThrowsInvalidIp(() -> QzdbReader.parseIPv4Uint("01.2.3.4"), "leading zero");
+            assertThrowsInvalidIp(() -> QzdbReader.parseIPv4Uint("256.1.1.1"), "octet > 255");
+            assertThrowsInvalidIp(() -> QzdbReader.parseIPv4Uint("1.2.3"), "3 parts");
+            assertThrowsInvalidIp(() -> QzdbReader.parseIPv4Uint("1.2.3.4.5"), "5 parts");
+            assertThrowsInvalidIp(() -> QzdbReader.parseIPv4Uint("1.2.3.a"), "non digit");
+            assertThrowsInvalidIp(() -> QzdbReader.parseIPv4Uint("1.2.3.+4"), "plus sign");
         });
 
         test("P2. IPv6 严格解析（压缩/展开等价、双冒号唯一、拒绝 zone）", () -> {
-            byte[] a = DatabaseReader.parseIPv6Bytes("2001:db8::1");
-            byte[] b = DatabaseReader.parseIPv6Bytes("2001:0db8:0000:0000:0000:0000:0000:0001");
+            byte[] a = QzdbReader.parseIPv6Bytes("2001:db8::1");
+            byte[] b = QzdbReader.parseIPv6Bytes("2001:0db8:0000:0000:0000:0000:0000:0001");
             assertTrue(Arrays.equals(a, b), "compressed == expanded");
             assertEquals(16, a.length, "16 bytes");
             assertEquals(0x20, a[0] & 0xFF, "first byte");
             assertEquals(0x01, a[15] & 0xFF, "last byte");
 
-            byte[] full = DatabaseReader.parseIPv6Bytes("::");
+            byte[] full = QzdbReader.parseIPv6Bytes("::");
             boolean allZero = true;
             for (byte x : full) allZero &= (x == 0);
             assertTrue(allZero, ":: is all zeros");
 
-            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv6Bytes("1::2::3"), "double ::");
-            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv6Bytes("fe80::1%en0"), "zone id");
-            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv6Bytes("1:2:3"), "too few groups");
-            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv6Bytes("12345::"), "group too long");
-            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv6Bytes("g::1"), "non-hex");
+            assertThrowsInvalidIp(() -> QzdbReader.parseIPv6Bytes("1::2::3"), "double ::");
+            assertThrowsInvalidIp(() -> QzdbReader.parseIPv6Bytes("fe80::1%en0"), "zone id");
+            assertThrowsInvalidIp(() -> QzdbReader.parseIPv6Bytes("1:2:3"), "too few groups");
+            assertThrowsInvalidIp(() -> QzdbReader.parseIPv6Bytes("12345::"), "group too long");
+            assertThrowsInvalidIp(() -> QzdbReader.parseIPv6Bytes("g::1"), "non-hex");
         });
 
         test("P3. IPv4-mapped IPv6 数值判定（覆盖点分与十六进制形态）", () -> {
-            byte[] dotted = DatabaseReader.parseIPv6Bytes("::ffff:1.12.0.0");
-            byte[] hexed = DatabaseReader.parseIPv6Bytes("0:0:0:0:0:ffff:10c:0");
-            assertTrue(DatabaseReader.isV4MappedBytes(dotted), "dotted mapped");
-            assertTrue(DatabaseReader.isV4MappedBytes(hexed), "hex mapped");
-            assertEquals(DatabaseReader.v4FromMappedBytes(dotted),
-                    DatabaseReader.v4FromMappedBytes(hexed), "same v4");
-            assertEquals((1 << 24) | (12 << 16), DatabaseReader.v4FromMappedBytes(dotted), "1.12.0.0");
-            byte[] nat = DatabaseReader.parseIPv6Bytes("2001:db8::ffff:1.2.3.4");
-            assertFalse(DatabaseReader.isV4MappedBytes(nat), "native v6 with ffff not mapped");
+            byte[] dotted = QzdbReader.parseIPv6Bytes("::ffff:1.12.0.0");
+            byte[] hexed = QzdbReader.parseIPv6Bytes("0:0:0:0:0:ffff:10c:0");
+            assertTrue(QzdbReader.isV4MappedBytes(dotted), "dotted mapped");
+            assertTrue(QzdbReader.isV4MappedBytes(hexed), "hex mapped");
+            assertEquals(QzdbReader.v4FromMappedBytes(dotted),
+                    QzdbReader.v4FromMappedBytes(hexed), "same v4");
+            assertEquals((1 << 24) | (12 << 16), QzdbReader.v4FromMappedBytes(dotted), "1.12.0.0");
+            byte[] nat = QzdbReader.parseIPv6Bytes("2001:db8::ffff:1.2.3.4");
+            assertFalse(QzdbReader.isV4MappedBytes(nat), "native v6 with ffff not mapped");
         });
 
         test("P4. GeoInfo 归一化 get（大小写/下划线不敏感）", () -> {
@@ -189,28 +195,28 @@ public class DatabaseReaderTest {
         });
 
         test("P9. 端口/CIDR/掩码/控制字符一律拒绝（§1.1/§1.4）", () -> {
-            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv4Uint("1.1.1.1:80"), "port form");
+            assertThrowsInvalidIp(() -> QzdbReader.parseIPv4Uint("1.1.1.1:80"), "port form");
             // 带端口（含冒号走 v6 路径会被拒）；此处验证 v4 解析器对非数字直接拒绝
-            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv4Uint("1.1.1.1/24"), "CIDR form");
-            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv4Uint("1.1.1.1 255.255.255.0"), "netmask form");
-            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv4Uint("1.1.1.+1"), "plus sign");
-            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv4Uint("1.1.1.-1"), "minus sign");
-            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv4Uint("1.1.1.1\u0000"), "control char");
-            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv6Bytes("2001:db8::1/64"), "v6 CIDR form");
-            assertThrowsInvalidIp(() -> DatabaseReader.parseIPv6Bytes("[2001:db8::1]:80"), "v6 bracketed port");
+            assertThrowsInvalidIp(() -> QzdbReader.parseIPv4Uint("1.1.1.1/24"), "CIDR form");
+            assertThrowsInvalidIp(() -> QzdbReader.parseIPv4Uint("1.1.1.1 255.255.255.0"), "netmask form");
+            assertThrowsInvalidIp(() -> QzdbReader.parseIPv4Uint("1.1.1.+1"), "plus sign");
+            assertThrowsInvalidIp(() -> QzdbReader.parseIPv4Uint("1.1.1.-1"), "minus sign");
+            assertThrowsInvalidIp(() -> QzdbReader.parseIPv4Uint("1.1.1.1\u0000"), "control char");
+            assertThrowsInvalidIp(() -> QzdbReader.parseIPv6Bytes("2001:db8::1/64"), "v6 CIDR form");
+            assertThrowsInvalidIp(() -> QzdbReader.parseIPv6Bytes("[2001:db8::1]:80"), "v6 bracketed port");
         });
 
         test("P10. IPv6 压缩/全展开字节级一致（::1 与 2001:218::）（§1.2）", () -> {
             assertTrue(Arrays.equals(
-                    DatabaseReader.parseIPv6Bytes("::1"),
-                    DatabaseReader.parseIPv6Bytes("0000:0000:0000:0000:0000:0000:0000:0001")), "::1 == expanded");
+                    QzdbReader.parseIPv6Bytes("::1"),
+                    QzdbReader.parseIPv6Bytes("0000:0000:0000:0000:0000:0000:0000:0001")), "::1 == expanded");
             assertTrue(Arrays.equals(
-                    DatabaseReader.parseIPv6Bytes("2001:218::"),
-                    DatabaseReader.parseIPv6Bytes("2001:0218:0000:0000:0000:0000:0000:0000")), "2001:218:: == expanded");
+                    QzdbReader.parseIPv6Bytes("2001:218::"),
+                    QzdbReader.parseIPv6Bytes("2001:0218:0000:0000:0000:0000:0000:0000")), "2001:218:: == expanded");
             // 末尾点分 IPv4 形态
             assertTrue(Arrays.equals(
-                    DatabaseReader.parseIPv6Bytes("::ffff:1.2.3.4"),
-                    DatabaseReader.parseIPv6Bytes("::ffff:102:304")), "dotted == hex tail");
+                    QzdbReader.parseIPv6Bytes("::ffff:1.2.3.4"),
+                    QzdbReader.parseIPv6Bytes("::ffff:102:304")), "dotted == hex tail");
         });
 
         test("P11. GeoInfo 连字符/下划线归一化 + 空值安全（§2）", () -> {
@@ -231,7 +237,7 @@ public class DatabaseReaderTest {
     // =========================================================================
 
     private static void runBinaryTests(File dbFile, File asnDb, File maxGlobalDb) {
-        try (DatabaseReader reader = new DatabaseReader.Builder(dbFile).build()) {
+        try (QzdbReader reader = new QzdbReader.Builder(dbFile).build()) {
 
             test("B1. 元信息自省（非空 + 字段名）", () -> {
                 assertNotNull(reader.getVersion(), "version");
@@ -292,7 +298,7 @@ public class DatabaseReaderTest {
             });
 
             test("B5. findBytes(16B) IPv6 与字符串路径一致", () -> {
-                byte[] mapped = DatabaseReader.parseIPv6Bytes("::ffff:223.5.5.5");
+                byte[] mapped = QzdbReader.parseIPv6Bytes("::ffff:223.5.5.5");
                 assertEquals(reader.find("223.5.5.5").map(GeoInfo::toPipeString).orElse(""),
                         reader.findBytes(mapped).map(GeoInfo::toPipeString).orElse(""), "16B mapped");
             });
@@ -304,7 +310,7 @@ public class DatabaseReaderTest {
 
             test("B7. openBuffer 内存加载（拷贝语义）", () -> {
                 byte[] bytes = Files.readAllBytes(dbFile.toPath());
-                DatabaseReader bufReader = new DatabaseReader.Builder(bytes).build();
+                QzdbReader bufReader = new QzdbReader.Builder(bytes).build();
                 Optional<GeoInfo> info = bufReader.find("223.5.5.5");
                 assertTrue(info.isPresent(), "openBuffer find");
                 bufReader.close();
@@ -364,28 +370,28 @@ public class DatabaseReaderTest {
 
             test("B13. 损坏/伪造文件 fail-closed", () -> {
                 byte[] badMagic = "INVALID_MAGIC_HEADER_TEST_BYTES_FOR_QZDB_PARSER_SAFETY_123456789".getBytes();
-                assertThrowsCorrupt(() -> new DatabaseReader.Builder(badMagic).build());
+                assertThrowsCorrupt(() -> new QzdbReader.Builder(badMagic).build());
 
                 byte[] truncated = "QZDB".getBytes();
-                assertThrowsCorrupt(() -> new DatabaseReader.Builder(truncated).build());
+                assertThrowsCorrupt(() -> new QzdbReader.Builder(truncated).build());
 
                 // 篡改尾部字节 → CRC 失败
                 byte[] tampered = Files.readAllBytes(dbFile.toPath());
                 tampered[tampered.length - 10] ^= (byte) 0xFF;
                 try {
-                    new DatabaseReader.Builder(tampered).verifyCrc(true).build();
+                    new QzdbReader.Builder(tampered).verifyCrc(true).build();
                     fail("tampered file must fail CRC");
                 } catch (QzdbException e) {
                     assertEquals(ErrorCode.CORRUPTED, e.getErrorCode(), "CRC mismatch code");
                 }
                 // verifyCrc(false) 可打开但 verifyCrc() 必须报 false
-                DatabaseReader sick = new DatabaseReader.Builder(tampered).verifyCrc(false).build();
+                QzdbReader sick = new QzdbReader.Builder(tampered).verifyCrc(false).build();
                 assertFalse(sick.verifyCrc(), "verifyCrc() false on tampered");
                 sick.close();
             });
 
             test("B14. close() 后调用抛 IllegalStateException（非 NPE）", () -> {
-                DatabaseReader r2 = new DatabaseReader.Builder(dbFile).build();
+                QzdbReader r2 = new QzdbReader.Builder(dbFile).build();
                 r2.close();
                 r2.close(); // 幂等
                 try {
@@ -403,7 +409,7 @@ public class DatabaseReaderTest {
             });
 
             test("B15. reload 原子性：失败不影响旧数据", () -> {
-                DatabaseReader r3 = new DatabaseReader.Builder(dbFile).build();
+                QzdbReader r3 = new QzdbReader.Builder(dbFile).build();
                 String before = r3.find("223.5.5.5").map(GeoInfo::toPipeString).orElse("");
                 byte[] junk = "garbage-not-a-qzdb-file".getBytes();
                 File tmp = File.createTempFile("qzdb_bad_reload", ".bin");
@@ -460,13 +466,43 @@ public class DatabaseReaderTest {
                 // 清零偏移 16~19 的 CRC 字段（canonical 重算值几乎必然非 0 → 必须拒绝）
                 bytes[16] = 0; bytes[17] = 0; bytes[18] = 0; bytes[19] = 0;
                 try {
-                    new DatabaseReader.Builder(bytes).verifyCrc(true).build();
+                    new QzdbReader.Builder(bytes).verifyCrc(true).build();
                     fail("zeroed CRC field must be rejected (crc==0 must NOT pass)");
                 } catch (QzdbException e) {
                     assertEquals(ErrorCode.CORRUPTED, e.getErrorCode(), "zeroed CRC -> CORRUPTED");
                 }
             });
-        } catch (Exception e) {
+
+            test("B21. §8 大端/小端平台兼容性（固定 LE 字节序 + 结果确定性）", () -> {
+                byte[] raw = Files.readAllBytes(dbFile.toPath());
+                ByteBuffer le = ByteBuffer.wrap(raw).order(ByteOrder.LITTLE_ENDIAN);
+
+                byte[] magic = new byte[4];
+                le.position(0);
+                le.get(magic);
+                assertEquals("QZDB", new String(magic, java.nio.charset.StandardCharsets.US_ASCII), "magic");
+
+                int vmLe = le.getShort(6) & 0xFFFF;
+                assertTrue(vmLe > 0, "versionMask LE > 0: " + vmLe);
+
+                int rowCount = le.getInt(20);
+                assertTrue(rowCount > 0, "rowCount LE > 0: " + rowCount);
+
+                Optional<GeoInfo> r1 = reader.find("223.5.5.5");
+                Optional<GeoInfo> r2 = reader.find("223.5.5.5");
+                assertTrue(r1.isPresent() && r2.isPresent(), "both present");
+                assertEquals(r1.get().toPipeString(), r2.get().toPipeString(), "deterministic result");
+            });
+
+            test("B22. §5 CRC32 校验 — 破坏任意中间字节后 verifyCrc() 必须返回 false", () -> {
+                byte[] raw = Files.readAllBytes(dbFile.toPath());
+                int tamperPos = Math.min(raw.length / 2, raw.length - 1);
+                raw[tamperPos] ^= (byte) 0xFF;
+                QzdbReader sick = new QzdbReader.Builder(raw).verifyCrc(false).build();
+                assertFalse(sick.verifyCrc(), "verifyCrc must be false on tampered file");
+                sick.close();
+            });
+         } catch (Exception e) {
             System.err.println("[FAIL] 二进制测试套件异常: " + e);
             e.printStackTrace();
             failed++;
@@ -476,14 +512,14 @@ public class DatabaseReaderTest {
 
         if (dbFile.getPath().contains("202608")) {
             test("R1. BuildDate→dataMonth/buildTime（修复偏移 144 误读）", () -> {
-                try (DatabaseReader r = new DatabaseReader.Builder(dbFile).build()) {
+                try (QzdbReader r = new QzdbReader.Builder(dbFile).build()) {
                     assertEquals("2026-08", r.getDataMonth(), "dataMonth");
                     assertTrue(r.getBuildTime().startsWith("2026-08"), "buildTime date");
                     assertFalse(r.getDataMonth().startsWith("197"), "no epoch-era date");
                 }
             });
             test("R4. edition/version 由 Metadata 驱动（std）", () -> {
-                try (DatabaseReader r = new DatabaseReader.Builder(dbFile).build()) {
+                try (QzdbReader r = new QzdbReader.Builder(dbFile).build()) {
                     assertEquals("std", r.getEdition(), "edition from metadata");
                     assertEquals("std", r.getVersion(), "version from metadata type=1");
                 }
@@ -492,7 +528,7 @@ public class DatabaseReaderTest {
 
         if (asnDb != null) {
             test("R2. ASN 库 findUint 与 find 一致（dimensionMask=0x02 回归）", () -> {
-                try (DatabaseReader r = new DatabaseReader.Builder(asnDb).build()) {
+                try (QzdbReader r = new QzdbReader.Builder(asnDb).build()) {
                     assertEquals("asn", r.getEdition(), "asn edition");
                     // 候选 IP（114.114.0.0/18 在 asn china 库中必有记录）
                     String[] candidates = {"114.114.114.114", "1.0.1.0", "223.5.5.5"};
@@ -500,7 +536,7 @@ public class DatabaseReaderTest {
                     boolean anyAsnPopulated = false;
                     for (String ip : candidates) {
                         Optional<GeoInfo> viaStr = r.find(ip);
-                        int ipInt = DatabaseReader.parseIPv4Uint(ip);
+                        int ipInt = QzdbReader.parseIPv4Uint(ip);
                         Optional<GeoInfo> viaUint = r.findUint(ipInt);
                         assertEquals(viaStr.map(GeoInfo::toPipeString).orElse("<none>"),
                                 viaUint.map(GeoInfo::toPipeString).orElse("<none>"),
@@ -519,7 +555,7 @@ public class DatabaseReaderTest {
 
         if (maxGlobalDb != null) {
             test("R3. ::ffff:0:0 数值化剥离（修复十六进制 mapped 抛异常）", () -> {
-                try (DatabaseReader r = new DatabaseReader.Builder(maxGlobalDb).verifyCrc(false).build()) {
+                try (QzdbReader r = new QzdbReader.Builder(maxGlobalDb).verifyCrc(false).build()) {
                     // 全球库 V4 trie 含 0.0.0.0/8 保留段 → 映射查询应命中保留地址
                     Optional<GeoInfo> mappedZero = r.find("::ffff:0:0");
                     assertTrue(mappedZero.isPresent(), "::ffff:0:0 resolves via V4 trie");
@@ -536,8 +572,8 @@ public class DatabaseReaderTest {
         File chainDbA = dbFile;
         File chainDbB = asnDb != null ? asnDb : dbFile;
         test("C1. ChainedReader Fallback 与 Merge 基础", () -> {
-            try (DatabaseReader a = new DatabaseReader.Builder(chainDbA).build();
-                 DatabaseReader b = new DatabaseReader.Builder(chainDbB).build()) {
+            try (QzdbReader a = new QzdbReader.Builder(chainDbA).build();
+                 QzdbReader b = new QzdbReader.Builder(chainDbB).build()) {
                 ChainedReader fb = ChainedReader.chain(a, b);
                 Optional<GeoInfo> f1 = fb.find("223.5.5.5");
                 assertTrue(f1.isPresent(), "fallback find");
@@ -552,8 +588,8 @@ public class DatabaseReaderTest {
         });
 
         test("R7. Merge 先注册者优先 + 空值补齐（修复 putIfAbsent 空值阻塞）", () -> {
-            try (DatabaseReader a = new DatabaseReader.Builder(chainDbA).build();
-                 DatabaseReader b = new DatabaseReader.Builder(chainDbB).build()) {
+            try (QzdbReader a = new QzdbReader.Builder(chainDbA).build();
+                 QzdbReader b = new QzdbReader.Builder(chainDbB).build()) {
                 ChainedReader mg = ChainedReader.chainMerge(a, b);
                 String ip = "1.0.1.0";
                 Optional<GeoInfo> ra = a.find(ip);
@@ -582,7 +618,7 @@ public class DatabaseReaderTest {
         });
 
         test("C2. ChainedReader 方法矩阵（findBatchFields/findStream）", () -> {
-            try (DatabaseReader a = new DatabaseReader.Builder(chainDbA).build()) {
+            try (QzdbReader a = new QzdbReader.Builder(chainDbA).build()) {
                 ChainedReader mg = ChainedReader.chainMerge(a);
                 List<BatchResult> rs = mg.findBatchFields(
                         Arrays.asList("223.5.5.5", "bad-one"), new String[]{"country"});
@@ -595,7 +631,7 @@ public class DatabaseReaderTest {
         });
 
         test("C3. Fallback 输入格式错误立即终止", () -> {
-            try (DatabaseReader a = new DatabaseReader.Builder(chainDbA).build()) {
+            try (QzdbReader a = new QzdbReader.Builder(chainDbA).build()) {
                 ChainedReader fb = ChainedReader.chain(a, a);
                 try {
                     fb.find("totally-invalid");
@@ -606,12 +642,12 @@ public class DatabaseReaderTest {
             }
         });
 
-        try (DatabaseReader r2 = new DatabaseReader.Builder(dbFile).build()) {
+        try (QzdbReader r2 = new QzdbReader.Builder(dbFile).build()) {
             test("C4. lookupCidrBytes 4/16 字节入口", () -> {
                 String viaStr = r2.lookupCidr("223.5.5.5");
                 byte[] v4 = {(byte) 223, 5, 5, 5};
                 assertEquals(viaStr, r2.lookupCidrBytes(v4), "lookupCidrBytes(4B) == lookupCidr(String)");
-                byte[] mapped = DatabaseReader.parseIPv6Bytes("::ffff:223.5.5.5");
+                byte[] mapped = QzdbReader.parseIPv6Bytes("::ffff:223.5.5.5");
                 assertEquals(viaStr, r2.lookupCidrBytes(mapped), "lookupCidrBytes(16B mapped) == lookupCidr(String)");
                 assertThrowsInvalidIp(() -> r2.lookupCidrBytes((byte[]) null), "null -> INVALID_IP");
                 assertThrowsInvalidIp(() -> r2.lookupCidrBytes(new byte[]{1, 2, 3}), "invalid length -> INVALID_IP");
@@ -628,7 +664,7 @@ public class DatabaseReaderTest {
                 assertTrue(viaStr > 0, "rowId positive via string");
                 byte[] v4 = {(byte) 223, 5, 5, 5};
                 assertEquals(viaStr, r2.lookupRowIdBytes(v4), "lookupRowIdBytes(4B) == lookupRowId(String)");
-                byte[] mapped = DatabaseReader.parseIPv6Bytes("::ffff:223.5.5.5");
+                byte[] mapped = QzdbReader.parseIPv6Bytes("::ffff:223.5.5.5");
                 assertEquals(viaStr, r2.lookupRowIdBytes(mapped), "lookupRowIdBytes(16B mapped) == lookupRowId(String)");
                 assertEquals(0, r2.lookupRowIdBytes((byte[]) null), "null -> 0");
                 assertEquals(0, r2.lookupRowIdBytes(new byte[]{1, 2, 3}), "invalid length -> 0");
@@ -642,7 +678,7 @@ public class DatabaseReaderTest {
         test("T1. 16 线程 × 100k 并发查询无异常 / 结果一致", () -> {
             final int THREADS = 16;
             final int OPS = 100_000;
-            try (DatabaseReader r = new DatabaseReader.Builder(dbFile).build()) {
+            try (QzdbReader r = new QzdbReader.Builder(dbFile).build()) {
                 // 先获取期望结果
                 java.util.concurrent.atomic.AtomicReference<String> expected =
                         new java.util.concurrent.atomic.AtomicReference<>();
@@ -688,7 +724,7 @@ public class DatabaseReaderTest {
         test("T2. 无锁热重载：reload 期间 16 线程并发查询零异常（§6）", () -> {
             final int READERS = 16;
             final int OPS = 20_000;
-            final DatabaseReader r = new DatabaseReader.Builder(dbFile).build();
+            final QzdbReader r = new QzdbReader.Builder(dbFile).build();
             try {
                 java.util.concurrent.atomic.AtomicInteger unexpected = new java.util.concurrent.atomic.AtomicInteger(0);
                 java.util.concurrent.atomic.AtomicLong done = new java.util.concurrent.atomic.AtomicLong(0);

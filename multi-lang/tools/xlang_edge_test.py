@@ -7,7 +7,7 @@ import json, os, subprocess, sys, tempfile
 DATA_DIR = os.path.join(os.path.dirname(__file__), '..', 'data')
 SRC_DIR = os.path.join(os.path.dirname(__file__), '..')
 sys.path.insert(0, os.path.join(SRC_DIR, 'python'))
-from qzdb import QzdbSearcher
+from qzdb import QzdbReader
 
 # Edge-case IPs: (label, ip, is_valid, db_key)
 # db_key: 'std_china' or 'max_global'
@@ -73,7 +73,7 @@ TEST_CASES = [
 
 def run_python(db_path):
     """Run all tests via Python and return results."""
-    s = QzdbSearcher(db_path)
+    s = QzdbReader(db_path)
     results = {}
     for label, ip, is_valid in TEST_CASES:
         r = s.find(ip)
@@ -88,7 +88,7 @@ def run_go(db_path, label_filter=None):
 import (
     "fmt"
     "os"
-    "qzdb_searcher/qzdb"
+    "qzdb_reader/qzdb"
 )
 
 func main() {
@@ -134,11 +134,11 @@ def run_c(db_path, label_filter=None):
     """Compile and run C test binary."""
     # Build C test source. Use {dbpath} and {calls} as placeholders to avoid printf %s conflict.
     c_src = '''
-#include "qzdb_searcher.h"
+#include "qzdb_reader.h"
 #include <stdio.h>
 #include <string.h>
 
-static void test(qzdb_searcher_t* ctx, const char* label, const char* ip) {
+static void test(qzdb_reader_t* ctx, const char* label, const char* ip) {
     qzdb_geo_info_t info;
     char buf[1024];
     if (qzdb_find(ctx, ip, &info) != 0) {
@@ -162,7 +162,7 @@ static void test(qzdb_searcher_t* ctx, const char* label, const char* ip) {
 }
 
 int main() {
-    qzdb_searcher_t ctx;
+    qzdb_reader_t ctx;
     if (qzdb_init(&ctx, "{dbpath}") != 0) return 1;
 {calls}
     qzdb_free(&ctx);
@@ -181,7 +181,7 @@ int main() {
     c_dir = os.path.join(SRC_DIR, 'c')
     try:
         subprocess.run(['cc', '-O2', '-Wall', '-I', c_dir, '-o', binfile, cfile,
-                       os.path.join(c_dir, 'qzdb_searcher.c')],
+                       os.path.join(c_dir, 'qzdb_reader.c')],
                       capture_output=True, text=True, timeout=30)
         r = subprocess.run([binfile], capture_output=True, text=True, timeout=30)
         results = {}
@@ -205,7 +205,7 @@ def run_rust(db_path):
     # Build Rust source with template substitution to avoid format-string conflicts
     rs_src = '''
 fn main() {{
-    let searcher = qzdb_searcher::from_file("{dbpath}");
+    let searcher = qzdb_reader::from_file("{dbpath}");
     let cases: [(&str, &str); {n}] = [
 {cases}
     ];
@@ -230,7 +230,7 @@ fn main() {{
     os.makedirs(os.path.join(cargo_dir, 'src'))
     with open(os.path.join(cargo_dir, 'Cargo.toml'), 'w') as f:
         f.write('[package]\nname = "test_edge"\nversion = "0.1.0"\nedition = "2021"\n')
-        f.write(f'[dependencies]\nqqzdb_searcher = {{ path = "{os.path.join(SRC_DIR, "rust")}" }}\n')
+        f.write(f'[dependencies]\nqzdb_reader = {{ path = "{os.path.join(SRC_DIR, "rust")}" }}\n')
     with open(os.path.join(cargo_dir, 'src', 'main.rs'), 'w') as f:
         f.write(code)
     

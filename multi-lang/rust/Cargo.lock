@@ -36,7 +36,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "qzdb_searcher"
+name = "qzdb_reader"
 version = "0.1.0"
 dependencies = [
  "memmap2",

@@ -16,7 +16,7 @@ import ipaddress
 import argparse
 
 sys.path.insert(0, os.path.dirname(__file__))
-from qzdb import QzdbSearcher
+from qzdb import QzdbReader
 
 
 def verify(csv_rel, qzdb_rel, sample=1, max_fails=50):
@@ -34,7 +34,7 @@ def verify(csv_rel, qzdb_rel, sample=1, max_fails=50):
     print(f'CSV:  {csv_rel}  ({os.path.getsize(csv_path)/1024/1024:.0f} MB)')
     print(f'QZDB: {qzdb_rel}  ({os.path.getsize(qzdb_path)/1024/1024:.0f} MB)')
 
-    s = QzdbSearcher()
+    s = QzdbReader()
     s.load(qzdb_path)
 
     # 读取 CSV header

@@ -1,4 +1,4 @@
-namespace Qzdb;
+namespace QQZeng.Qzdb;
 
 using System.Collections.Generic;
 
@@ -6,18 +6,18 @@ public sealed class ChainedReader : IDisposable
 {
     public enum Mode { Fallback, Merge, MergeOverride }
 
-    private readonly DatabaseReader[] _readers;
+    private readonly QzdbReader[] _readers;
     private readonly Mode _mode;
 
-    private ChainedReader(DatabaseReader[] readers, Mode mode)
+    private ChainedReader(QzdbReader[] readers, Mode mode)
     {
         _readers = readers;
         _mode = mode;
     }
 
-    public static ChainedReader Chain(params DatabaseReader[] readers) => new(readers, Mode.Fallback);
-    public static ChainedReader ChainMerge(params DatabaseReader[] readers) => new(readers, Mode.Merge);
-    public static ChainedReader ChainMergeOverride(params DatabaseReader[] readers) => new(readers, Mode.MergeOverride);
+    public static ChainedReader Chain(params QzdbReader[] readers) => new(readers, Mode.Fallback);
+    public static ChainedReader ChainMerge(params QzdbReader[] readers) => new(readers, Mode.Merge);
+    public static ChainedReader ChainMergeOverride(params QzdbReader[] readers) => new(readers, Mode.MergeOverride);
 
     public GeoInfo? Find(string ipStr) => ChainQuery(r => r.Find(ipStr));
 
@@ -58,7 +58,7 @@ public sealed class ChainedReader : IDisposable
         catch (QzdbException e) { return new BatchResult(null, e); }
     }
 
-    private GeoInfo? ChainQuery(Func<DatabaseReader, GeoInfo?> query)
+    private GeoInfo? ChainQuery(Func<QzdbReader, GeoInfo?> query)
     {
         if (_mode == Mode.Fallback)
         {
@@ -109,7 +109,7 @@ public sealed class ChainedReader : IDisposable
     public string[] Editions() => _readers.Select(r => r.Edition).ToArray();
     public string[] Scopes() => _readers.Select(r => r.Scope).ToArray();
     public string[] DataMonths() => _readers.Select(r => r.DataMonth).ToArray();
-    public IReadOnlyList<DatabaseReader> Readers => _readers;
+    public IReadOnlyList<QzdbReader> Readers => _readers;
 
     /// <summary>Releases only the aggregation state; does NOT close the underlying readers (per API spec §9.4).</summary>
     public void Dispose()

@@ -7,13 +7,13 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * 便利管理层 (QzdbRegistry)
  * <p>
- * 按"名字"管理多个具名 DatabaseReader 实例。可独立实例化（推荐用于 DI/单测），亦提供显式的 Global 静态方法（用于简单 CLI）。
+ * 按"名字"管理多个具名 QzdbReader 实例。可独立实例化（推荐用于 DI/单测），亦提供显式的 Global 静态方法（用于简单 CLI）。
  */
 public class QzdbRegistry {
 
     private static final QzdbRegistry GLOBAL_INSTANCE = new QzdbRegistry();
 
-    private final Map<String, DatabaseReader> registryMap = new ConcurrentHashMap<>();
+    private final Map<String, QzdbReader> registryMap = new ConcurrentHashMap<>();
 
     public QzdbRegistry() {
     }
@@ -25,8 +25,8 @@ public class QzdbRegistry {
         if (name == null || name.isEmpty() || path == null || path.isEmpty()) {
             throw new QzdbException(ErrorCode.INVALID_PARAM, "Name and path must not be empty");
         }
-        DatabaseReader reader = new DatabaseReader.Builder(new File(path)).build();
-        DatabaseReader old = registryMap.put(name, reader);
+        QzdbReader reader = new QzdbReader.Builder(new File(path)).build();
+        QzdbReader old = registryMap.put(name, reader);
         if (old != null) {
             old.close();
         }
@@ -39,8 +39,8 @@ public class QzdbRegistry {
         if (name == null || name.isEmpty() || buffer == null) {
             throw new QzdbException(ErrorCode.INVALID_PARAM, "Name and buffer must not be empty");
         }
-        DatabaseReader reader = new DatabaseReader.Builder(buffer).build();
-        DatabaseReader old = registryMap.put(name, reader);
+        QzdbReader reader = new QzdbReader.Builder(buffer).build();
+        QzdbReader old = registryMap.put(name, reader);
         if (old != null) {
             old.close();
         }
@@ -49,7 +49,7 @@ public class QzdbRegistry {
     /**
      * 根据注册名称获取 Reader 实例
      */
-    public DatabaseReader get(String name) {
+    public QzdbReader get(String name) {
         if (name == null) return null;
         return registryMap.get(name);
     }
@@ -59,7 +59,7 @@ public class QzdbRegistry {
      */
     public void unregister(String name) {
         if (name == null) return;
-        DatabaseReader removed = registryMap.remove(name);
+        QzdbReader removed = registryMap.remove(name);
         if (removed != null) {
             removed.close();
         }
@@ -69,7 +69,7 @@ public class QzdbRegistry {
      * 清空所有注册的 Reader 实例
      */
     public void clear() {
-        for (DatabaseReader reader : registryMap.values()) {
+        for (QzdbReader reader : registryMap.values()) {
             try {
                 reader.close();
             } catch (Exception ignored) {
@@ -90,7 +90,7 @@ public class QzdbRegistry {
         GLOBAL_INSTANCE.registerBuffer(name, buffer);
     }
 
-    public static DatabaseReader getGlobal(String name) {
+    public static QzdbReader getGlobal(String name) {
         return GLOBAL_INSTANCE.get(name);
     }
 

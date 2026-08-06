@@ -17,7 +17,7 @@ public class Main {
         String ip = args[1];
 
         try {
-            DatabaseReader reader = new DatabaseReader.Builder(new File(dbPath)).build();
+            QzdbReader reader = new QzdbReader.Builder(new File(dbPath)).build();
 
             // 如果传了第 3 个参数，只输出特定格式
             if (args.length >= 3 && "pipe".equalsIgnoreCase(args[2])) {

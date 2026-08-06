@@ -2,10 +2,10 @@
 import random, sys, os, subprocess
 
 sys.path.insert(0, os.path.dirname(__file__))
-from qzdb import QzdbSearcher
+from qzdb import QzdbReader
 
 DB = os.path.join(os.path.dirname(__file__), '..', 'data', 'qqzeng_ip_max_china.qzdb')
-s = QzdbSearcher(DB)
+s = QzdbReader(DB)
 
 def test_language(lang, ip_str):
     runners = {
@@ -15,8 +15,8 @@ def test_language(lang, ip_str):
             console.log(s.findStr("{ip_str}"));
         '''],
         'php': ['php', '-r', f'''
-            require "{os.path.dirname(__file__)}/../php/QzdbSearcher.php";
-            $s = new Qqzeng\\Ip\\QzdbSearcher("{DB}");
+            require "{os.path.dirname(__file__)}/../php/QzdbReader.php";
+            $s = new Qqzeng\\Ip\\QzdbReader("{DB}");
             echo $s->findStr("{ip_str}");
         '''],
     }

@@ -1,11 +1,11 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
-#include "qzdb_searcher.h"
+#include "qzdb_reader.h"
 
 int main(int argc, char** argv) {
     if (argc < 2) return 1;
-    qzdb_searcher_t ctx;
+    qzdb_reader_t ctx;
     if (qzdb_init(&ctx, argv[1]) != QZDB_OK) return 1;
 
     char line[256];

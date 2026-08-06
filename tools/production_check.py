@@ -60,7 +60,7 @@ def main():
     check("No hardcoded secrets in source", secrets_found == 0,
           "Found " + str(secrets_found) + " potential secret references")
 
-    ok, out, _ = run_cmd("grep -c 'mmap\\|region.*size\\|bounds.*check' multi-lang/c/qzdb_searcher.c")
+    ok, out, _ = run_cmd("grep -c 'mmap\\|region.*size\\|bounds.*check' multi-lang/c/qzdb_reader.c")
     check("C SDK has mmap/size validation", int(out.strip()) > 0,
           "No mmap size validation found in C SDK")
 
@@ -71,7 +71,7 @@ def main():
 
     ok, out, _ = run_cmd(
         "grep -c 'fail.*close\\|return.*error\\|Error\\|Err(' "
-        "multi-lang/c/qzdb_searcher.c multi-lang/python/qzdb.py "
+        "multi-lang/c/qzdb_reader.c multi-lang/python/qzdb.py "
         "multi-lang/nodejs/qzdb.js 2>/dev/null"
     )
     total_errors = sum(int(x.split(':')[1]) for x in out.strip().split('\n') if ':' in x and x.split(':')[1].strip().isdigit())
@@ -129,8 +129,8 @@ def main():
     print("--- Code Quality Checks ---")
 
     ok, out, _ = run_cmd(
-        "grep -cP ' +$' " + BASE_DIR + "/multi-lang/c/qzdb_searcher.c "
-        + BASE_DIR + "/multi-lang/c/qzdb_searcher.h 2>/dev/null || echo 0"
+        "grep -cP ' +$' " + BASE_DIR + "/multi-lang/c/qzdb_reader.c "
+        + BASE_DIR + "/multi-lang/c/qzdb_reader.h 2>/dev/null || echo 0"
     )
     trailing_ws = int(out.strip())
     check("No trailing whitespace in C SDK", trailing_ws == 0,
@@ -142,12 +142,12 @@ def main():
           "FORMAT.md missing or empty")
 
     sdk_files = {
-        "C": "multi-lang/c/qzdb_searcher.c",
-        "C#": "multi-lang/netcore/QzdbSearcher.cs",
+        "C": "multi-lang/c/qzdb_reader.c",
+        "C#": "multi-lang/netcore/QzdbReader.cs",
         "Go": "multi-lang/go/qzdb/qzdb.go",
-        "Java": "multi-lang/java/src/main/java/qzdb/QzdbSearcher.java",
+        "Java": "multi-lang/java/src/main/java/qzdb/QzdbReader.java",
         "Node.js": "multi-lang/nodejs/qzdb.js",
-        "PHP": "multi-lang/php/QzdbSearcher.php",
+        "PHP": "multi-lang/php/QzdbReader.php",
         "Python": "multi-lang/python/qzdb.py",
         "Rust": "multi-lang/rust/src/lib.rs",
     }

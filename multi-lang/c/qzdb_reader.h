@@ -74,7 +74,7 @@ typedef struct {
     int field_count;
     char* version_name;
     int version_code;
-} qzdb_searcher_t;
+} qzdb_reader_t;
 
 typedef struct {
     char* values[QZDB_MAX_FIELDS];
@@ -102,27 +102,27 @@ typedef enum {
 
 const char* qzdb_strerror(int error_code);
 
-int qzdb_init(qzdb_searcher_t* ctx, const char* db_path);
+int qzdb_init(qzdb_reader_t* ctx, const char* db_path);
 /* Like qzdb_init, but verify_crc=0 skips the default §10.6 CRC32 check. */
-int qzdb_init_ex(qzdb_searcher_t* ctx, const char* db_path, int verify_crc);
-void qzdb_free(qzdb_searcher_t* ctx);
-qzdb_searcher_t* qzdb_instance(const char* db_path);
+int qzdb_init_ex(qzdb_reader_t* ctx, const char* db_path, int verify_crc);
+void qzdb_free(qzdb_reader_t* ctx);
+qzdb_reader_t* qzdb_instance(const char* db_path);
 int qzdb_instance_load(const char* db_path);
-int qzdb_find(qzdb_searcher_t* ctx, const char* ip_str, qzdb_geo_info_t* result);
-int qzdb_find_uint(qzdb_searcher_t* ctx, uint32_t ip_int, qzdb_geo_info_t* result);
-int qzdb_find_v6(qzdb_searcher_t* ctx, const uint8_t* ip_bin, qzdb_geo_info_t* result);
-int qzdb_find_str(qzdb_searcher_t* ctx, const char* ip_str, char* out, size_t out_size);
-int qzdb_verify_crc(qzdb_searcher_t* ctx);
+int qzdb_find(qzdb_reader_t* ctx, const char* ip_str, qzdb_geo_info_t* result);
+int qzdb_find_uint(qzdb_reader_t* ctx, uint32_t ip_int, qzdb_geo_info_t* result);
+int qzdb_find_v6(qzdb_reader_t* ctx, const uint8_t* ip_bin, qzdb_geo_info_t* result);
+int qzdb_find_str(qzdb_reader_t* ctx, const char* ip_str, char* out, size_t out_size);
+int qzdb_verify_crc(qzdb_reader_t* ctx);
 
 /* Buffer-based APIs */
-int qzdb_find_uint_buf(qzdb_searcher_t* ctx, uint32_t ip_int,
+int qzdb_find_uint_buf(qzdb_reader_t* ctx, uint32_t ip_int,
                        char** values, char (*bufs)[64], int buf_size);
-int qzdb_find_v6_buf(qzdb_searcher_t* ctx, const uint8_t* ip_bin,
+int qzdb_find_v6_buf(qzdb_reader_t* ctx, const uint8_t* ip_bin,
                      char** values, char (*bufs)[64], int buf_size);
-int qzdb_find_fields_buf(qzdb_searcher_t* ctx, const char* ip_str,
+int qzdb_find_fields_buf(qzdb_reader_t* ctx, const char* ip_str,
                          const char** field_names,
                          char** values, char (*bufs)[64], int buf_size);
-int qzdb_find_fields_uint_buf(qzdb_searcher_t* ctx, uint32_t ip_int,
+int qzdb_find_fields_uint_buf(qzdb_reader_t* ctx, uint32_t ip_int,
                                const char** field_names,
                                char** values, char (*bufs)[64], int buf_size);
 
@@ -130,15 +130,15 @@ int qzdb_find_fields_uint_buf(qzdb_searcher_t* ctx, uint32_t ip_int,
  * Layer 1: Lookup row_id only (trie walk, no data access).
  * Returns row_id (1-based), or 0 if not found.
  */
-uint32_t qzdb_lookup_row_id(qzdb_searcher_t* ctx, const char* ip_str);
-uint32_t qzdb_lookup_row_id_uint(qzdb_searcher_t* ctx, uint32_t ip_int);
-uint32_t qzdb_lookup_row_id_v6(qzdb_searcher_t* ctx, const uint8_t* ip_bin);
+uint32_t qzdb_lookup_row_id(qzdb_reader_t* ctx, const char* ip_str);
+uint32_t qzdb_lookup_row_id_uint(qzdb_reader_t* ctx, uint32_t ip_int);
+uint32_t qzdb_lookup_row_id_v6(qzdb_reader_t* ctx, const uint8_t* ip_bin);
 
 /*
  * Layer 2: Lookup raw entry IDs from a row_id.
  * Fills geo_id, asn_id, usage_id. Returns 0 on success, -1 on error.
  */
-int qzdb_lookup_ids(qzdb_searcher_t* ctx, uint32_t row_id, qzdb_ids_t* out);
+int qzdb_lookup_ids(qzdb_reader_t* ctx, uint32_t row_id, qzdb_ids_t* out);
 
 /*
  * Field projection API.
@@ -147,10 +147,10 @@ int qzdb_lookup_ids(qzdb_searcher_t* ctx, uint32_t row_id, qzdb_ids_t* out);
  * Same caller-buffer semantics as qzdb_find_uint_buf.
  * Returns field_count on success, 0 if not found, -1 on error.
  */
-int qzdb_find_fields_buf(qzdb_searcher_t* ctx, const char* ip_str,
+int qzdb_find_fields_buf(qzdb_reader_t* ctx, const char* ip_str,
                           const char** field_names,
                           char** values, char (*bufs)[64], int buf_size);
-int qzdb_find_fields_uint_buf(qzdb_searcher_t* ctx, uint32_t ip_int,
+int qzdb_find_fields_uint_buf(qzdb_reader_t* ctx, uint32_t ip_int,
                                const char** field_names,
                                char** values, char (*bufs)[64], int buf_size);
 
@@ -159,6 +159,6 @@ int qzdb_find_fields_uint_buf(qzdb_searcher_t* ctx, uint32_t ip_int,
  * Thread-safe: the new data is loaded completely before swapping pointers.
  * Returns 0 on success, -1 on error (old context unchanged on failure).
  */
-int qzdb_reload(qzdb_searcher_t* ctx, const char* db_path);
+int qzdb_reload(qzdb_reader_t* ctx, const char* db_path);
 
 #endif

@@ -52,7 +52,7 @@ const SENTINEL: u32 = 0x80000000;
 const SENTINEL_MASK_24: u32 = 0x7FFFFF;
 const SENTINEL_MASK_31: u32 = 0x7FFFFFFF;
 
-static INSTANCE: OnceLock<QzdbSearcher> = OnceLock::new();
+static INSTANCE: OnceLock<QzdbReader> = OnceLock::new();
 
 static CRC32_TABLE: OnceLock<[u32; 256]> = OnceLock::new();
 
@@ -140,7 +140,7 @@ impl Serialize for GeoInfo {
     }
 }
 
-pub struct QzdbSearcher {
+pub struct QzdbReader {
     data: Mmap,
     group_index: usize,
     field_names: Arc<Vec<String>>,
@@ -277,19 +277,19 @@ unsafe fn read_u48_le_unchecked(data: &[u8], off: usize) -> u64 {
         | (data[off + 5] as u64) << 40
 }
 
-pub fn instance(db_path: &str) -> Result<&'static QzdbSearcher, QzdbError> {
+pub fn instance(db_path: &str) -> Result<&'static QzdbReader, QzdbError> {
     Ok(INSTANCE.get_or_init(|| {
         from_file(db_path).expect("Failed to initialize database instance")
     }))
 }
 
-pub fn from_file(db_path: &str) -> Result<QzdbSearcher, QzdbError> {
+pub fn from_file(db_path: &str) -> Result<QzdbReader, QzdbError> {
     let file = fs::File::open(db_path).map_err(|_| QzdbError::BadMagic)?;
     let mmap = unsafe { Mmap::map(&file).map_err(|_| QzdbError::Corrupted)? };
-    QzdbSearcher::new(mmap, 0)
+    QzdbReader::new(mmap, 0)
 }
 
-impl QzdbSearcher {
+impl QzdbReader {
     pub fn new(data: Mmap, group_index: usize) -> Result<Self, QzdbError> {
         let data_len = data.len() as u64;
         
@@ -548,7 +548,7 @@ impl QzdbSearcher {
             }
         }
 
-        let mut s = QzdbSearcher {
+        let mut s = QzdbReader {
             data,
             group_index,
             field_names: Arc::new(Vec::new()),

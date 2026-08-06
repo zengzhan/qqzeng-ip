@@ -1,13 +1,13 @@
 <?php
 /**
- * QzdbSearcher - PHP SDK calling example
+ * QzdbReader - PHP SDK calling example
  *
  * Usage: php test.php
  * Place qqzeng_ip_std_china.qzdb in the same directory or specify the path.
  */
 
-require_once __DIR__ . '/QzdbSearcher.php';
-use Qqzeng\Ip\QzdbSearcher;
+require_once __DIR__ . '/QzdbReader.php';
+use Qqzeng\Ip\QzdbReader;
 
 function findDb() {
     $candidates = [
@@ -28,7 +28,7 @@ if (!$dbPath) {
     exit(1);
 }
 
-$searcher = QzdbSearcher::getInstance($dbPath);
+$searcher = QzdbReader::getInstance($dbPath);
 $fields = $searcher->getFieldNames();
 echo "Fields (" . count($fields) . "): " . implode(', ', $fields) . "\n\n";
 

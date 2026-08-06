@@ -15,7 +15,7 @@ if command -v clang &> /dev/null || command -v gcc &> /dev/null; then
     CC=$(command -v clang || command -v gcc)
     # Copy the C batch runner source to the c/ directory for correct relative includes
     cp "$SCRIPT_DIR/batch_query.c" "$BASE_DIR/c/batch_query.c"
-    $CC -O3 -o "$SCRIPT_DIR/batch_c" "$BASE_DIR/c/batch_query.c" "$BASE_DIR/c/qzdb_searcher.c" -lm
+    $CC -O3 -o "$SCRIPT_DIR/batch_c" "$BASE_DIR/c/batch_query.c" "$BASE_DIR/c/qzdb_reader.c" -lm
     echo "  -> tools/batch_c"
 else
     echo "  SKIP (no C compiler)"
@@ -75,7 +75,7 @@ if [ -n "$JAVA_HOME" ]; then
     mkdir -p "$BUILD_DIR"
     SDK_DIR="$BASE_DIR/java/src/main/java"
     "$JAVA_HOME/bin/javac" -d "$BUILD_DIR" \
-        "$SDK_DIR/qzdb/QzdbSearcher.java" \
+        "$SDK_DIR/qzdb/QzdbReader.java" \
         "$SDK_DIR/qzdb/IpLocation.java" \
         "$SCRIPT_DIR/BatchQuery.java"
     # Create wrapper script

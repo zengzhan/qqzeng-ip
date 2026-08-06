@@ -81,7 +81,7 @@ func (g *GeoInfo) ToMap() map[string]string {
 	return m
 }
 
-type QzdbSearcher struct {
+type QzdbReader struct {
 	mu                  sync.RWMutex
 	data                []byte
 	groupIndex          int
@@ -144,7 +144,7 @@ type QzdbSearcher struct {
 
 var (
 	instMu      sync.RWMutex
-	instance    *QzdbSearcher
+	instance    *QzdbReader
 	instanceErr error
 )
 
@@ -152,7 +152,7 @@ var (
 // A failed load is NOT cached: the next call retries from scratch.
 // Passing a dbPath re-loads that path (Python/Node/C# singleton semantics);
 // omitting it returns the current state.
-func Instance(dbPath ...string) (*QzdbSearcher, error) {
+func Instance(dbPath ...string) (*QzdbReader, error) {
 	instMu.RLock()
 	inst := instance
 	err := instanceErr
@@ -193,7 +193,7 @@ func Instance(dbPath ...string) (*QzdbSearcher, error) {
 	return s, nil
 }
 
-func NewSearcher(dbPath string, groupIndex int, verifyCrc bool) (*QzdbSearcher, error) {
+func NewSearcher(dbPath string, groupIndex int, verifyCrc bool) (*QzdbReader, error) {
 	f, err := os.Open(dbPath)
 	if err != nil {
 		return nil, err
@@ -210,7 +210,7 @@ func NewSearcher(dbPath string, groupIndex int, verifyCrc bool) (*QzdbSearcher, 
 	if err != nil {
 		return nil, err
 	}
-	s := &QzdbSearcher{data: data, groupIndex: groupIndex}
+	s := &QzdbReader{data: data, groupIndex: groupIndex}
 	if err := s.parseHeader(); err != nil {
 		syscall.Munmap(data)
 		return nil, err
@@ -223,7 +223,7 @@ func NewSearcher(dbPath string, groupIndex int, verifyCrc bool) (*QzdbSearcher, 
 	return s, nil
 }
 
-func (s *QzdbSearcher) Close() {
+func (s *QzdbReader) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.data != nil {
@@ -244,18 +244,18 @@ func safeReadU64(b []byte, off uint64) uint64 {
 	return binary.LittleEndian.Uint64(b[off:])
 }
 
-func (s *QzdbSearcher) safeReadU24(off uint64) uint32 {
+func (s *QzdbReader) safeReadU24(off uint64) uint32 {
 	d := s.data
 	return uint32(d[off]) | uint32(d[off+1])<<8 | uint32(d[off+2])<<16
 }
 
-func (s *QzdbSearcher) safeReadU48(off uint64) uint64 {
+func (s *QzdbReader) safeReadU48(off uint64) uint64 {
 	d := s.data
 	return uint64(d[off]) | uint64(d[off+1])<<8 | uint64(d[off+2])<<16 |
 		uint64(d[off+3])<<24 | uint64(d[off+4])<<32 | uint64(d[off+5])<<40
 }
 
-func (s *QzdbSearcher) safeReadUintWidth(off uint64, width int) uint32 {
+func (s *QzdbReader) safeReadUintWidth(off uint64, width int) uint32 {
 	if width <= 1 {
 		return uint32(s.data[off])
 	} else if width == 2 {
@@ -267,7 +267,7 @@ func (s *QzdbSearcher) safeReadUintWidth(off uint64, width int) uint32 {
 	}
 }
 
-func (s *QzdbSearcher) parseHeader() error {
+func (s *QzdbReader) parseHeader() error {
 	d := s.data
 	if len(d) < 192 {
 		return fmt.Errorf("file too small for QZDB header")
@@ -502,7 +502,7 @@ func (s *QzdbSearcher) parseHeader() error {
 	return nil
 }
 
-func (s *QzdbSearcher) resolveFieldNames() {
+func (s *QzdbReader) resolveFieldNames() {
 	d := s.data
 	offMeta := s.offMeta
 	if s.flags&4 != 0 && offMeta > 0 && offMeta+4 <= uint64(len(d)) {
@@ -554,7 +554,7 @@ func (s *QzdbSearcher) resolveFieldNames() {
 // stored as 0 (should not happen in valid files). Bit0(0x01)=geo,
 // Bit1(0x02)=asn. A group is treated as ASN-addressed when its group schema or
 // field names expose an "asn" field (fieldId 1); otherwise geo-addressed.
-func (s *QzdbSearcher) repairDimMasks() {
+func (s *QzdbReader) repairDimMasks() {
 	for g := 0; g < len(s.groupDimMasks); g++ {
 		if s.groupDimMasks[g] != 0 {
 			continue
@@ -584,7 +584,7 @@ func (s *QzdbSearcher) repairDimMasks() {
 	}
 }
 
-func (s *QzdbSearcher) ensurePoolsLoaded() {
+func (s *QzdbReader) ensurePoolsLoaded() {
 	if s.poolsLoaded {
 		return
 	}
@@ -660,7 +660,7 @@ func (s *QzdbSearcher) ensurePoolsLoaded() {
 	}
 }
 
-func (s *QzdbSearcher) getV4Child(nodeIdx uint32, bit uint32) uint32 {
+func (s *QzdbReader) getV4Child(nodeIdx uint32, bit uint32) uint32 {
 	if nodeIdx >= s.v4NodeCount {
 		return 0
 	}
@@ -688,7 +688,7 @@ func (s *QzdbSearcher) getV4Child(nodeIdx uint32, bit uint32) uint32 {
 	}
 }
 
-func (s *QzdbSearcher) getV6Child(nodeIdx uint32, bit uint32) uint32 {
+func (s *QzdbReader) getV6Child(nodeIdx uint32, bit uint32) uint32 {
 	if nodeIdx >= s.v6NodeCount {
 		return 0
 	}
@@ -716,7 +716,7 @@ func (s *QzdbSearcher) getV6Child(nodeIdx uint32, bit uint32) uint32 {
 	}
 }
 
-func (s *QzdbSearcher) trieWalkV4(ipInt uint32) (uint32, error) {
+func (s *QzdbReader) trieWalkV4(ipInt uint32) (uint32, error) {
 	hi16 := (ipInt >> 16) & 0xFFFF
 	ptr := safeReadU32(s.data, s.offV4Jump+uint64(hi16)*4)
 
@@ -751,7 +751,7 @@ func (s *QzdbSearcher) trieWalkV4(ipInt uint32) (uint32, error) {
 	}
 }
 
-func (s *QzdbSearcher) trieWalkV6(ip16 [16]byte) (uint32, error) {
+func (s *QzdbReader) trieWalkV6(ip16 [16]byte) (uint32, error) {
 	hi := binary.BigEndian.Uint64(ip16[:8])
 	lo := binary.BigEndian.Uint64(ip16[8:16])
 
@@ -797,7 +797,7 @@ func (s *QzdbSearcher) trieWalkV6(ip16 [16]byte) (uint32, error) {
 	return 0, nil
 }
 
-func (s *QzdbSearcher) parseRowSchema() {
+func (s *QzdbReader) parseRowSchema() {
 	s.rowGeoWidth = 3
 	s.rowAsnWidth = 3
 	s.rowUsageWidth = 0
@@ -849,7 +849,7 @@ func (s *QzdbSearcher) parseRowSchema() {
 	}
 }
 
-func (s *QzdbSearcher) readIPRow(rowID uint32) (uint32, uint32, uint32) {
+func (s *QzdbReader) readIPRow(rowID uint32) (uint32, uint32, uint32) {
 	if rowID <= 0 || rowID >= uint32(s.rowCount) {
 		return 0, 0, 0
 	}
@@ -878,7 +878,7 @@ func (s *QzdbSearcher) readIPRow(rowID uint32) (uint32, uint32, uint32) {
 	return geoID, asnID, usageTypeID
 }
 
-func (s *QzdbSearcher) resolveRowID(rowID uint32, groupIndex int) (*GeoInfo, error) {
+func (s *QzdbReader) resolveRowID(rowID uint32, groupIndex int) (*GeoInfo, error) {
 	if s == nil {
 		return nil, ErrInvalidParam
 	}
@@ -903,7 +903,7 @@ func (s *QzdbSearcher) resolveRowID(rowID uint32, groupIndex int) (*GeoInfo, err
 	return s.resolveGeo(entryID, groupIndex)
 }
 
-func (s *QzdbSearcher) resolveGeo(entryID uint32, groupIndex int) (*GeoInfo, error) {
+func (s *QzdbReader) resolveGeo(entryID uint32, groupIndex int) (*GeoInfo, error) {
 	if s == nil {
 		return nil, ErrInvalidParam
 	}
@@ -967,7 +967,7 @@ func (s *QzdbSearcher) resolveGeo(entryID uint32, groupIndex int) (*GeoInfo, err
 	return &GeoInfo{FieldNames: s.fieldNames, floatIndices: s.floatFieldIndices, Values: values}, nil
 }
 
-func (s *QzdbSearcher) Find(ipStr string) (*GeoInfo, error) {
+func (s *QzdbReader) Find(ipStr string) (*GeoInfo, error) {
 	if s == nil {
 		return nil, ErrInvalidParam
 	}
@@ -985,7 +985,7 @@ func (s *QzdbSearcher) Find(ipStr string) (*GeoInfo, error) {
 	return s.FindV6Uint(result.v6)
 }
 
-func (s *QzdbSearcher) FindUint(ipInt uint32) (*GeoInfo, error) {
+func (s *QzdbReader) FindUint(ipInt uint32) (*GeoInfo, error) {
 	if s == nil {
 		return nil, ErrInvalidParam
 	}
@@ -1004,7 +1004,7 @@ func (s *QzdbSearcher) FindUint(ipInt uint32) (*GeoInfo, error) {
 	return s.resolveRowID(rowID, s.groupIndex)
 }
 
-func (s *QzdbSearcher) FindV6Uint(ip16 [16]byte) (*GeoInfo, error) {
+func (s *QzdbReader) FindV6Uint(ip16 [16]byte) (*GeoInfo, error) {
 	if s == nil {
 		return nil, ErrInvalidParam
 	}
@@ -1025,7 +1025,7 @@ func (s *QzdbSearcher) FindV6Uint(ip16 [16]byte) (*GeoInfo, error) {
 
 // LookupRowId returns the raw row_id for an IP string (trie walk only, no data materialization).
 // Returns 0 if not found.
-func (s *QzdbSearcher) LookupRowId(ipStr string) uint32 {
+func (s *QzdbReader) LookupRowId(ipStr string) uint32 {
 	if ipStr == "" {
 		return 0
 	}
@@ -1045,7 +1045,7 @@ func (s *QzdbSearcher) LookupRowId(ipStr string) uint32 {
 }
 
 // LookupRowIdUint returns the raw row_id for a pre-parsed IPv4 integer.
-func (s *QzdbSearcher) LookupRowIdUint(ipInt uint32) uint32 {
+func (s *QzdbReader) LookupRowIdUint(ipInt uint32) uint32 {
 	if !s.hasV4 {
 		return 0
 	}
@@ -1054,7 +1054,7 @@ func (s *QzdbSearcher) LookupRowIdUint(ipInt uint32) uint32 {
 }
 
 // LookupRowIdV6 returns the raw row_id for a 128-bit IPv6 integer.
-func (s *QzdbSearcher) LookupRowIdV6(ip16 [16]byte) uint32 {
+func (s *QzdbReader) LookupRowIdV6(ip16 [16]byte) uint32 {
 	if !s.hasV6 {
 		return 0
 	}
@@ -1064,7 +1064,7 @@ func (s *QzdbSearcher) LookupRowIdV6(ip16 [16]byte) uint32 {
 
 // LookupIds returns the raw entry IDs (geoId, asnId, usageId) for a row_id.
 // Returns false if row_id is invalid.
-func (s *QzdbSearcher) LookupIds(rowId uint32) (geoId, asnId, usageId uint32, ok bool) {
+func (s *QzdbReader) LookupIds(rowId uint32) (geoId, asnId, usageId uint32, ok bool) {
 	if rowId == 0 || rowId >= uint32(s.rowCount) {
 		return 0, 0, 0, false
 	}
@@ -1072,7 +1072,7 @@ func (s *QzdbSearcher) LookupIds(rowId uint32) (geoId, asnId, usageId uint32, ok
 	return geoId, asnId, usageId, true
 }
 
-func (s *QzdbSearcher) FindStr(ipStr string) (string, error) {
+func (s *QzdbReader) FindStr(ipStr string) (string, error) {
 	if s == nil {
 		return "", ErrInvalidParam
 	}
@@ -1088,7 +1088,7 @@ func (s *QzdbSearcher) FindStr(ipStr string) (string, error) {
 
 // FindFields resolves only the specified fields for an IP.
 // fieldNames=nil or empty returns full GeoInfo (backward compatible).
-func (s *QzdbSearcher) FindFields(ipStr string, fieldNames []string) (*GeoInfo, error) {
+func (s *QzdbReader) FindFields(ipStr string, fieldNames []string) (*GeoInfo, error) {
 	if s == nil {
 		return nil, ErrInvalidParam
 	}
@@ -1120,7 +1120,7 @@ func (s *QzdbSearcher) FindFields(ipStr string, fieldNames []string) (*GeoInfo, 
 	return s.resolveGeoFields(rowID, s.groupIndex, fieldNames)
 }
 
-func (s *QzdbSearcher) resolveGeoFields(rowID uint32, groupIndex int, fieldNames []string) (*GeoInfo, error) {
+func (s *QzdbReader) resolveGeoFields(rowID uint32, groupIndex int, fieldNames []string) (*GeoInfo, error) {
 	if s == nil {
 		return nil, ErrInvalidParam
 	}
@@ -1204,7 +1204,7 @@ func (s *QzdbSearcher) resolveGeoFields(rowID uint32, groupIndex int, fieldNames
 }
 
 // Reload atomically replaces the database state with a fresh load from path.
-func (s *QzdbSearcher) Reload(path string) error {
+func (s *QzdbReader) Reload(path string) error {
 	ns, err := NewSearcher(path, s.groupIndex, true)
 	if err != nil {
 		return err
@@ -1259,19 +1259,19 @@ func (s *QzdbSearcher) Reload(path string) error {
 	return nil
 }
 
-func (s *QzdbSearcher) FieldNames() []string {
+func (s *QzdbReader) FieldNames() []string {
 	return s.fieldNames
 }
 
-func (s *QzdbSearcher) Version() string {
+func (s *QzdbReader) Version() string {
 	return s.versionName
 }
 
-func (s *QzdbSearcher) PoolCount() int {
+func (s *QzdbReader) PoolCount() int {
 	return s.poolCount
 }
 
-func (s *QzdbSearcher) VerifyCRC() bool {
+func (s *QzdbReader) VerifyCRC() bool {
 	if len(s.data) < 20 {
 		return false
 	}

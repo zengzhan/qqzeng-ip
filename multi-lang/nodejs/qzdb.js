@@ -102,7 +102,7 @@ class GeoInfo {
   }
 }
 
-class QzdbSearcher {
+class QzdbReader {
   constructor(dbPath = null, groupIndex = 0, verifyCrc = true) {
     this._data = Buffer.alloc(0);
     this._groupIndex = groupIndex;
@@ -166,9 +166,9 @@ class QzdbSearcher {
   }
 
   static getInstance(dbPath = null, groupIndex = 0) {
-    if (!QzdbSearcher._instance) {
+    if (!QzdbReader._instance) {
       try {
-        QzdbSearcher._instance = new QzdbSearcher(dbPath, groupIndex);
+        QzdbReader._instance = new QzdbReader(dbPath, groupIndex);
       } catch (error) {
         if (error instanceof QzdbError) {
           throw error;
@@ -177,8 +177,8 @@ class QzdbSearcher {
       }
     } else if (dbPath !== null) {
       try {
-        QzdbSearcher._instance.load(dbPath);
-        QzdbSearcher._instance._groupIndex = groupIndex;
+        QzdbReader._instance.load(dbPath);
+        QzdbReader._instance._groupIndex = groupIndex;
       } catch (error) {
         if (error instanceof QzdbError) {
           throw error;
@@ -186,7 +186,7 @@ class QzdbSearcher {
         throw new QzdbError(error.message, QzdbError.CORRUPTED);
       }
     }
-    return QzdbSearcher._instance;
+    return QzdbReader._instance;
   }
 
   load(dbPath, verifyCrc = null) {
@@ -1173,4 +1173,4 @@ function fastParseIp(ip) {
   return { v4: null, v6: buf };
 }
 
-module.exports = QzdbSearcher;
+module.exports = QzdbReader;

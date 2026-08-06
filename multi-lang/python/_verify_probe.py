@@ -5,7 +5,7 @@ import qzdb
 DB = "/Users/zengxiangzhan/ZengData/qqzeng-data/temp_work/qqzeng_ip_asn/qqzeng_ip_asn_china.qzdb"
 TEMP = "/Users/zengxiangzhan/ZengData/qqzeng-data/temp_work/qqzeng_ip_asn/temp_china_v4.txt"
 
-db = qzdb.QzdbSearcher(db_path=DB)
+db = qzdb.QzdbReader(db_path=DB)
 
 # 1) Schema state after fix
 print("== schema state ==")

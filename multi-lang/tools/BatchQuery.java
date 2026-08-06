@@ -1,6 +1,6 @@
 package qzdb;
 
-import qzdb.QzdbSearcher;
+import qzdb.QzdbReader;
 import qzdb.IpLocation;
 
 import java.io.*;
@@ -24,7 +24,7 @@ public class BatchQuery {
         String v6Test = args[3];
         String v6Out = args[4];
 
-        QzdbSearcher searcher = QzdbSearcher.getInstance();
+        QzdbReader searcher = QzdbReader.getInstance();
         searcher.load(dbPath);
 
         // V4

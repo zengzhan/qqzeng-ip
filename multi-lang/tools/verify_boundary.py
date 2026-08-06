@@ -10,7 +10,7 @@ import json, os, sys
 
 SRC_DIR = os.path.join(os.path.dirname(__file__), '..')
 sys.path.insert(0, os.path.join(SRC_DIR, 'python'))
-from qzdb import QzdbSearcher
+from qzdb import QzdbReader
 
 DATA_DIR = os.path.join(SRC_DIR, 'data')
 BOUNDARY_FILE = os.path.join(os.path.dirname(__file__), 'golden_boundary.json')
@@ -57,7 +57,7 @@ def verify_db(db_name, boundary_data, verbose=False):
     if not os.path.exists(db_path):
         return 0, 0, 0, [f"SKIP: {db_path} not found"]
 
-    searcher = QzdbSearcher(db_path)
+    searcher = QzdbReader(db_path)
     passed = 0
     failed = 0
     warnings = 0

@@ -20,8 +20,8 @@ function main() {
 
     // Load SDK resolved relative to this script (tools/), NOT cwd, so it works
     // regardless of where cross_verify.py is invoked from.
-    const QzdbSearcher = require(path.join(__dirname, '..', 'nodejs', 'qzdb'));
-    const searcher = QzdbSearcher.getInstance(dbPath);
+    const QzdbReader = require(path.join(__dirname, '..', 'nodejs', 'qzdb'));
+    const searcher = QzdbReader.getInstance(dbPath);
 
     // Helper: format geo info to pipe string matching Python reference to_pipe()
     function geoToPipe(r) {

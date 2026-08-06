@@ -8,7 +8,7 @@ import sys
 # Add Python SDK to path
 SRC_DIR = os.path.join(os.path.dirname(__file__), '..')
 sys.path.insert(0, os.path.join(SRC_DIR, 'python'))
-from qzdb import QzdbSearcher
+from qzdb import QzdbReader
 
 DATA_DIR = os.path.join(SRC_DIR, 'data')
 
@@ -19,7 +19,7 @@ def test_bug1_php_v6_binary_search():
         print(f"  SKIP: {db_path} not found")
         return True
 
-    searcher = QzdbSearcher(db_path)
+    searcher = QzdbReader(db_path)
 
     test_ips = [
         "2408:8000:9000::1",
@@ -46,7 +46,7 @@ def test_bug2_python_float_formatting():
         print(f"  SKIP: {db_path} not found")
         return True
 
-    searcher = QzdbSearcher(db_path)
+    searcher = QzdbReader(db_path)
 
     result = searcher.find("114.114.114.114")
     if result is None:
@@ -73,7 +73,7 @@ def test_bug3_nodejs_nan_output():
         print(f"SKIP: {db_path} not found")
         return True
     
-    searcher = QzdbSearcher(db_path)
+    searcher = QzdbReader(db_path)
     result = searcher.find("114.114.114.114")
     
     if result is None:
@@ -95,7 +95,7 @@ def test_bug4_c_ip_zero():
         print(f"  SKIP: {db_path} not found")
         return True
 
-    searcher = QzdbSearcher(db_path)
+    searcher = QzdbReader(db_path)
 
     result = searcher.find("0.0.0.0")
     result_uint = searcher.find_uint(0)
@@ -116,7 +116,7 @@ def test_bug5_trailing_dot():
         print(f"  SKIP: {db_path} not found")
         return True
 
-    searcher = QzdbSearcher(db_path)
+    searcher = QzdbReader(db_path)
 
     invalid_ips = [
         "1.2.3.4.",
@@ -140,7 +140,7 @@ def test_bug6_corrupted_data():
     import tempfile
 
     try:
-        searcher = QzdbSearcher("nonexistent.qzdb")
+        searcher = QzdbReader("nonexistent.qzdb")
         print("  FAIL: Should have raised exception for non-existent file")
         return False
     except Exception:
@@ -151,7 +151,7 @@ def test_bug6_corrupted_data():
         tmp_path = f.name
 
     try:
-        searcher = QzdbSearcher(tmp_path)
+        searcher = QzdbReader(tmp_path)
         result = searcher.find("114.114.114.114")
         if result is not None:
             pipe = result.to_pipe()

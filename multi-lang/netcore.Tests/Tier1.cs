@@ -1,4 +1,4 @@
-using Qzdb;
+using QQZeng.Qzdb;
 using System.Diagnostics;
 using System.Globalization;
 
@@ -24,7 +24,7 @@ class Program
     static void RunTier1()
     {
         Console.WriteLine("\n--- Tier 1: Unit & Boundary (60+ assertions) ---");
-        using var r = new DatabaseReader.Builder(BP + "/std/china/qqzeng_ip_std_china.qzdb").Build();
+        using var r = new QzdbReader.Builder(BP + "/std/china/qqzeng_ip_std_china.qzdb").Build();
 
         // ===== 1. IPv4 严格性 =====
         T1(r.Find("0.0.0.0") == null, "IPv4: 0.0.0.0");
@@ -67,7 +67,7 @@ class Program
         T1(d == r.FindStr("0000:0000:0000:0000:0000:ffff:df05:505"), "Mapped: 4-digit groups");
 
         // ===== 4. 字段名归一化 =====
-        using (var r2 = new DatabaseReader.Builder(BP + "/max/china/qqzeng_ip_max_china.qzdb").Build())
+        using (var r2 = new QzdbReader.Builder(BP + "/max/china/qqzeng_ip_max_china.qzdb").Build())
         {
             var info = r2.Find("114.114.114.114");
             T1(info.Get("country") == info.Get("COUNTRY"), "Norm: upper");
@@ -93,24 +93,24 @@ class Program
         // ===== 6. 恶意输入/损坏文件防御 =====
         T1(r.Find(new string('X', 10000)) == null, "Malice: 10k garbage");
         T1(r.Find("\x00\x01\x02") == null, "Malice: control chars");
-        try { new DatabaseReader.Builder(new byte[] { (byte)'X', (byte)'Z' }).Build(); T1(false, "should throw"); }
+        try { new QzdbReader.Builder(new byte[] { (byte)'X', (byte)'Z' }).Build(); T1(false, "should throw"); }
         catch (QzdbException) { T1(true, "Corrupt: bad magic"); }
-        try { new DatabaseReader.Builder(new byte[] { (byte)'Q',(byte)'Z',(byte)'D',(byte)'B' }).Build(); T1(false, "should throw"); }
+        try { new QzdbReader.Builder(new byte[] { (byte)'Q',(byte)'Z',(byte)'D',(byte)'B' }).Build(); T1(false, "should throw"); }
         catch (QzdbException) { T1(true, "Corrupt: truncated"); }
         try {
             var b = System.IO.File.ReadAllBytes(BP + "/std/china/qqzeng_ip_std_china.qzdb");
             b[200] ^= 0xFF;
-            new DatabaseReader.Builder(b).VerifyCrc(true).Build();
+            new QzdbReader.Builder(b).VerifyCrc(true).Build();
             T1(false, "should throw CRC");
         } catch (QzdbException e) { T1(e.ErrorCode == ErrorCode.Corrupted, "CRC: mismatch detected"); }
         T1(r.VerifyCrc(), "CRC: valid on healthy");
 
         // ===== 7. 资源释放 =====
-        var rd = new DatabaseReader.Builder(BP + "/std/china/qqzeng_ip_std_china.qzdb").Build();
+        var rd = new QzdbReader.Builder(BP + "/std/china/qqzeng_ip_std_china.qzdb").Build();
         rd.Dispose();
         try { rd.Find("1.1.1.1"); T1(false, "should throw"); }
         catch (ObjectDisposedException) { T1(true, "Dispose: throws OOD"); }
-        var rd2 = new DatabaseReader.Builder(BP + "/std/china/qqzeng_ip_std_china.qzdb").Build();
+        var rd2 = new QzdbReader.Builder(BP + "/std/china/qqzeng_ip_std_china.qzdb").Build();
         rd2.Dispose();
         rd2.Dispose();
         T1(true, "Dispose: idempotent");
@@ -148,7 +148,7 @@ class Program
         T1(fb[2].Error != null || fb[2].Info == null, "NewAPI: FindBatch bad input error");
 
         // ===== 12. v2.4 新 API：Reload 生命周期 =====
-        var rl = new DatabaseReader.Builder(BP + "/std/china/qqzeng_ip_std_china.qzdb").Build();
+        var rl = new QzdbReader.Builder(BP + "/std/china/qqzeng_ip_std_china.qzdb").Build();
         T1(rl.Find("223.5.5.5") != null, "Reload: before");
         rl.Reload(BP + "/std/china/qqzeng_ip_std_china.qzdb");
         T1(rl.Find("223.5.5.5") != null, "Reload: after path");
@@ -158,8 +158,8 @@ class Program
         rl.Dispose();
 
         // ===== 13. ChainedReader 多库联合 =====
-        using (var c1 = new DatabaseReader.Builder(BP + "/std/china/qqzeng_ip_std_china.qzdb").Build())
-        using (var c2 = new DatabaseReader.Builder(BP + "/std/china/qqzeng_ip_std_china.qzdb").Build())
+        using (var c1 = new QzdbReader.Builder(BP + "/std/china/qqzeng_ip_std_china.qzdb").Build())
+        using (var c2 = new QzdbReader.Builder(BP + "/std/china/qqzeng_ip_std_china.qzdb").Build())
         {
             using var chain = ChainedReader.Chain(c1, c2);
             var ch = chain.Find("223.5.5.5");
@@ -192,7 +192,7 @@ class Program
         Console.WriteLine("\n--- Tier 3: Performance (Dual-Stack 1:1) ---");
         var ipv4 = GenerateIpv4(500000);
         var ipv6 = GenerateIpv6(500000);
-        using var r = new DatabaseReader.Builder(BP + "/max/global/qqzeng_ip_max_global.qzdb").Build();
+        using var r = new QzdbReader.Builder(BP + "/max/global/qqzeng_ip_max_global.qzdb").Build();
         for (int i = 0; i < 100000; i++) { r.Find(ipv4[i % ipv4.Length]); r.Find(ipv6[i % ipv6.Length]); }
         var sw = Stopwatch.StartNew();
         for (int i = 0; i < 1000000; i++) r.Find(ipv4[i % ipv4.Length]);
@@ -223,7 +223,7 @@ class Program
         var csvHeaders = ParseCsv(csvLines[0]);
         var colMap = new System.Collections.Generic.Dictionary<string, int>();
         for (int i = 0; i < csvHeaders.Length; i++) colMap[csvHeaders[i].Trim()] = i;
-        using var r = new DatabaseReader.Builder(dbPath).Build();
+        using var r = new QzdbReader.Builder(dbPath).Build();
         var sample = r.Find(ParseCsv(csvLines[1])[0].Trim());
         if (sample == null) return;
         var dbFields = new System.Collections.Generic.HashSet<string>(sample.FieldNames);

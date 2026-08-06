@@ -5,7 +5,7 @@ fn bench(db_name: &str, db_path: &str) {
        println!("  {db_name}: not found");
        return;
    }
-    let searcher = match qzdb_searcher::from_file(db_path) {
+    let searcher = match qzdb_reader::from_file(db_path) {
         Ok(s) => s,
         Err(_) => { println!("  {db_name}: load failed"); return; }
     };
@@ -39,7 +39,7 @@ fn bench(db_name: &str, db_path: &str) {
 
 fn main() {
     println!("Rust QPS Benchmarks (M4 Pro)");
-    bench("std_china", "../data/qqzeng_ip_std_china.qzdb");
-    bench("max_china", "../data/qqzeng_ip_max_china.qzdb");
-    bench("max_global", "../data/qqzeng_ip_max_global.qzdb");
+    bench("std_china", "../test_data_202608/std/china/qqzeng_ip_std_china.qzdb");
+    bench("max_china", "../test_data_202608/max/china/qqzeng_ip_max_china.qzdb");
+    bench("max_global", "../test_data_202608/max/global/qqzeng_ip_max_global.qzdb");
 }

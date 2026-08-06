@@ -8,6 +8,6 @@
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="../netcore/qzdb-searcher.csproj" />
+    <ProjectReference Include="../netcore/QQZeng.Qzdb.csproj" />
   </ItemGroup>
 </Project>

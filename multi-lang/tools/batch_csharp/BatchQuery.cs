@@ -13,7 +13,7 @@ class BatchQueryCsharp
         return info.ToPipe();
     }
 
-    static int ProcessFile(QzdbSearcher searcher, string testPath, string outPath, bool isV6)
+    static int ProcessFile(QzdbReader searcher, string testPath, string outPath, bool isV6)
     {
         if (!File.Exists(testPath)) return 0;
 
@@ -78,7 +78,7 @@ class BatchQueryCsharp
             Environment.Exit(1);
         }
 
-        var searcher = QzdbSearcher.Instance;
+        var searcher = QzdbReader.Instance;
         searcher.Load(dbPath);
 
         var n4 = ProcessFile(searcher, v4Test, v4Out, false);

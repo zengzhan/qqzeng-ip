@@ -20,12 +20,12 @@ Cross-platform IP geolocation SDK supporting 8 languages: C, C#, Go, Java, Node.
 
 ## Language SDK Locations
 
-- C: `multi-lang/c/qzdb_searcher.c` + `qzdb_searcher.h`
-- C#: `multi-lang/netcore/QzdbSearcher.cs`
+- C: `multi-lang/c/qzdb_reader.c` + `qzdb_reader.h`
+- C#: `multi-lang/netcore/QzdbReader.cs`
 - Go: `multi-lang/go/qzdb/`
 - Java: `multi-lang/java/src/`
 - Node.js: `multi-lang/nodejs/qzdb.js`
-- PHP: `multi-lang/php/QzdbSearcher.php`
+- PHP: `multi-lang/php/QzdbReader.php`
 - Python: `multi-lang/python/qzdb.py`
 - Rust: `multi-lang/rust/src/lib.rs`
 
@@ -46,7 +46,7 @@ Cross-platform IP geolocation SDK supporting 8 languages: C, C#, Go, Java, Node.
 
 ## Code Conventions
 
-- C: Follow the existing style in `qzdb_searcher.c` (K&R-like, no trailing whitespace)
+- C: Follow the existing style in `qzdb_reader.c` (K&R-like, no trailing whitespace)
 - Go: Standard `gofmt` formatting
 - Rust: Standard `rustfmt` formatting
 - Python: PEP 8, use `black` for formatting

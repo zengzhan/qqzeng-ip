@@ -39,7 +39,7 @@ RESULTS_DIR = os.path.join(TOOLS_DIR, 'results')
 
 # Python reference
 sys.path.insert(0, os.path.join(BASE_DIR, 'python'))
-from qzdb import QzdbSearcher
+from qzdb import QzdbReader
 
 
 # ── Database configuration ──────────────────────────────────────────────
@@ -165,7 +165,7 @@ def generate_test_cases(db_config, rng):
         return []
     
     # Load Python reference
-    searcher = QzdbSearcher()
+    searcher = QzdbReader()
     searcher.load(qzdb_path)
     field_names = searcher._field_names
     float_indices = searcher._float_field_indices
@@ -246,9 +246,9 @@ def generate_expected(cases, qzdb_path):
     """Query Python reference for each test case to get expected results."""
     import sys
     sys.path.insert(0, os.path.join(BASE_DIR, 'python'))
-    from qzdb import QzdbSearcher
+    from qzdb import QzdbReader
     
-    searcher = QzdbSearcher()
+    searcher = QzdbReader()
     searcher.load(qzdb_path)
     
     results = []
@@ -320,9 +320,9 @@ def register_language(name, runner_func):
 # Python runner
 def run_python(db_name, qzdb_path, v4_test, v6_test, v4_out, v6_out):
     sys.path.insert(0, os.path.join(BASE_DIR, 'python'))
-    from qzdb import QzdbSearcher
+    from qzdb import QzdbReader
     
-    searcher = QzdbSearcher()
+    searcher = QzdbReader()
     searcher.load(qzdb_path)
     
     # V4

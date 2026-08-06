@@ -42,14 +42,14 @@
 
 | 语言 | 文件 | 使用方式 |
 |------|------|---------|
-| Python | `qzdb.py` | 拷贝 `qzdb.py` 到项目，`from qzdb import QzdbSearcher` |
-| Node.js | `qzdb.js` | 拷贝 `qzdb.js`，`const QzdbSearcher = require('./qzdb')` |
+| Python | `qzdb.py` | 拷贝 `qzdb.py` 到项目，`from qzdb import QzdbReader` |
+| Node.js | `qzdb.js` | 拷贝 `qzdb.js`，`const QzdbReader = require('./qzdb')` |
 | Go | `qzdb/qzdb.go` | 拷贝 `qzdb/` 目录，`import "your-project/qzdb"` |
-| PHP | `QzdbSearcher.php` | 拷贝文件，`use Qqzeng\Ip\QzdbSearcher` |
+| PHP | `QzdbReader.php` | 拷贝文件，`use Qqzeng\Ip\QzdbReader` |
 | Rust | `lib.rs` | 拷贝 `src/lib.rs` + `Cargo.toml` 依赖 |
-| C | `qzdb_searcher.c/.h` | 拷贝两个文件一起编译 |
-| Java | `QzdbSearcher.java` | 拷贝到项目，`import com.qqzeng.ip.QzdbSearcher` |
-| C# | `QzdbSearcher.cs` | 拷贝到项目，`using Qqzeng` |
+| C | `qzdb_reader.c/.h` | 拷贝两个文件一起编译 |
+| Java | `QzdbReader.java` | 拷贝到项目，`import com.qqzeng.ip.QzdbReader` |
+| C# | `QzdbReader.cs` | 拷贝到项目，`using Qqzeng` |
 
 详见 [multi-lang/README.md](multi-lang/README.md)
 

@@ -1,5 +1,5 @@
 /**
- * QzdbSearcher - Go SDK calling example
+ * QzdbReader - Go SDK calling example
  *
  * Usage: go run main.go
  * Place qqzeng_ip_std_china.qzdb in the same directory or specify the path.
@@ -10,7 +10,7 @@ package main
 import (
 	"fmt"
 	"os"
-	"qzdb_searcher/qzdb"
+	"qzdb_reader/qzdb"
 )
 
 func findDb() string {

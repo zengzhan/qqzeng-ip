@@ -155,7 +155,7 @@ def main():
     # (不重算 CRC: 测试只验证解析器宽度, CRC 不参与 init)
 
     m = load_sdk()
-    s = m.QzdbSearcher(db_path=PATCHED_QZDB)
+    s = m.QzdbReader(db_path=PATCHED_QZDB)
     print("     real SDK loaded: row_geo_width=%d row_asn_width=%d row_usage_width=%d"
           % (s._row_geo_width, s._row_asn_width, s._row_usage_width))
     if (s._row_geo_width, s._row_asn_width, s._row_usage_width) != (2, 2, 0):

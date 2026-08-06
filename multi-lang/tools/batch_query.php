@@ -21,10 +21,10 @@ $v4Out = $argv[3];
 $v6Test = $argv[4];
 $v6Out = $argv[5] ?? '';
 
-require_once __DIR__ . '/../php/QzdbSearcher.php';
-use Qqzeng\Ip\QzdbSearcher;
+require_once __DIR__ . '/../php/QzdbReader.php';
+use Qqzeng\Ip\QzdbReader;
 
-$searcher = QzdbSearcher::getInstance($dbPath);
+$searcher = QzdbReader::getInstance($dbPath);
 
 function geoToPipe($r, $searcher) {
     // Use GeoInfo::toPipe() so output byte-matches Python to_pipe()

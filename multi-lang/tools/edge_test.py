@@ -5,7 +5,7 @@ Tests IP parsing edge cases that are likely to find inconsistencies.
 import sys, os, subprocess, tempfile, json
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'python'))
-from qzdb import QzdbSearcher
+from qzdb import QzdbReader
 
 DATA = os.path.join(os.path.dirname(__file__), '..', 'data')
 
@@ -224,7 +224,7 @@ def test_db(db_name, db_path, label):
     """Test a single database against all edge cases."""
     if not os.path.exists(db_path):
         return None
-    searcher = QzdbSearcher(db_path)
+    searcher = QzdbReader(db_path)
     
     results = {}
     

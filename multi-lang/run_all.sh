@@ -74,8 +74,8 @@ echo "[L1b] Running IPv6 smoke tests..."
 run_layer "L1b_ipv6_smoke" "python3 -c \"
 import sys
 sys.path.insert(0, 'python')
-from qzdb import QzdbSearcher
-searcher = QzdbSearcher.get_instance('$DB_PATH')
+from qzdb import QzdbReader
+searcher = QzdbReader.get_instance('$DB_PATH')
 v6_ips = ['2408:8000:9000::1', '2001:4860:4860::8888', '2606:4700:4700::1111', '2400:3200::1', '2400:da00::1', '2a00:1450:4001:801::200e', '2607:f8b0:4004:800::200e', '2c0f:f248:0:1::cafe', '2402:4e00:0:1::abcd', '::1', '::', 'ff02::1']
 passed = 0
 failed = 0
@@ -108,12 +108,12 @@ echo "[L3b] Running IPv6 batch regression..."
 run_layer "L3b_ipv6_batch" "python3 -c \"
 import csv, sys
 sys.path.insert(0, 'python')
-from qzdb import QzdbSearcher
+from qzdb import QzdbReader
 
 DB_PATH = '$DB_PATH'
 CSV_PATH = '$DATA_DIR/qqzeng_ip_std_china_range.csv'
 
-searcher = QzdbSearcher.get_instance(DB_PATH)
+searcher = QzdbReader.get_instance(DB_PATH)
 
 v6_rows = []
 with open(CSV_PATH, 'r', encoding='utf-8') as f:
@@ -160,10 +160,10 @@ echo "[L4b] Running IPv6 deep accuracy analysis..."
 run_layer "L4b_ipv6_accuracy" "python3 -c \"
 import sys
 sys.path.insert(0, 'python')
-from qzdb import QzdbSearcher
+from qzdb import QzdbReader
 
 DB_PATH = '$DB_PATH'
-searcher = QzdbSearcher.get_instance(DB_PATH)
+searcher = QzdbReader.get_instance(DB_PATH)
 
 v6_ips = [
     '2408:8000:9000::1', '2001:4860:4860::8888', '2606:4700:4700::1111',

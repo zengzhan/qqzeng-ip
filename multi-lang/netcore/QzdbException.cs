@@ -1,4 +1,4 @@
-namespace Qzdb;
+namespace QQZeng.Qzdb;
 
 public enum ErrorCode
 {

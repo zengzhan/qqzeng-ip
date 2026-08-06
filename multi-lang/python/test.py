@@ -1,12 +1,12 @@
 """
-QzdbSearcher - Python SDK calling example
+QzdbReader - Python SDK calling example
 
 Usage: python test.py
 Place qqzeng_ip_std_china.qzdb in the same directory or specify the path.
 """
 
 import os
-from qzdb import QzdbSearcher
+from qzdb import QzdbReader
 
 
 def find_db():
@@ -26,7 +26,7 @@ def main():
         print('Database file not found')
         return
 
-    ipdb = QzdbSearcher.get_instance(db_path)
+    ipdb = QzdbReader.get_instance(db_path)
     print(f'Version code: {ipdb.version_code}, pools: {ipdb.pool_count}')
     print(f'Fields ({len(ipdb.field_names)}): {", ".join(ipdb.field_names)}\n')
 

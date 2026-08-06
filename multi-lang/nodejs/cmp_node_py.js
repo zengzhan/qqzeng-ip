@@ -30,9 +30,9 @@ fs.writeFileSync(tmpV6, v6.join('\n'));
 const pyScript = `
 import sys, json
 sys.path.insert(0, ${JSON.stringify(path.join(__dirname, '..', 'python'))})
-from qzdb import QzdbSearcher
+from qzdb import QzdbReader
 db = ${JSON.stringify(DB)}
-s = QzdbSearcher(db)
+s = QzdbReader(db)
 out = {'v4': [], 'v6': []}
 with open(${JSON.stringify(tmpV4)}) as f:
     for line in f:

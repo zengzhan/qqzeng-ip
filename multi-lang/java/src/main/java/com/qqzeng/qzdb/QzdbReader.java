@@ -21,7 +21,7 @@ import java.util.stream.Stream;
 import java.util.zip.CRC32;
 
 /**
- * QZDB 高性能 IP 数据库查询引擎 (DatabaseReader)
+ * QZDB 高性能 IP 数据库查询引擎 (QzdbReader)
  * <p>
  * 采用无锁 (Lock-Free) 内存视图与原子替换 (Volatile Snapshot) 架构，支持文件 Mmap 与内存 Buffer 两种加载模式。
  * <p>
@@ -29,7 +29,7 @@ import java.util.zip.CRC32;
  * GroupMetadataTable/GROUP_SCHEMA 动态布局、原生标量字段、String Pools、Metadata TLV、CRC32）。
  * API 依据 docs/QZDB_SDK_API.md v2.4。
  */
-public class DatabaseReader implements AutoCloseable {
+public class QzdbReader implements AutoCloseable {
 
     private static final int HEADER_SIZE = 192;
     private static final int SENTINEL = 0x80000000;
@@ -684,12 +684,12 @@ public class DatabaseReader implements AutoCloseable {
     private final File loadedFile;
 
     /**
-     * DatabaseReader 构建器
+     * QzdbReader 构建器
      */
     /**
-     * DatabaseReader 构建器。使用方式：
+     * QzdbReader 构建器。使用方式：
      * <pre>{@code
-     *   DatabaseReader reader = new DatabaseReader.Builder(new File("ip.qzdb"))
+     *   QzdbReader reader = new QzdbReader.Builder(new File("ip.qzdb"))
      *       .verifyCrc(true)
      *       .groupIndex(0)
      *       .build();
@@ -737,12 +737,12 @@ public class DatabaseReader implements AutoCloseable {
         }
 
         /**
-         * 构建 DatabaseReader 实例。
+         * 构建 QzdbReader 实例。
          *
-         * @return 构建好的 DatabaseReader
+         * @return 构建好的 QzdbReader
          * @throws QzdbException 文件不存在/CRC 失败/格式错误时抛出
          */
-        public DatabaseReader build() throws QzdbException {
+        public QzdbReader build() throws QzdbException {
             ByteBuffer buffer;
             File fileRef = databaseFile;
 
@@ -770,20 +770,20 @@ public class DatabaseReader implements AutoCloseable {
             }
 
             Snapshot snapshot = new Snapshot(buffer, groupIndex, verifyCrc);
-            DatabaseReader reader = new DatabaseReader(fileRef);
+            QzdbReader reader = new QzdbReader(fileRef);
             reader.activeSnapshot.set(snapshot);
             return reader;
         }
     }
 
-    private DatabaseReader(File file) {
+    private QzdbReader(File file) {
         this.loadedFile = file;
     }
 
     private Snapshot requireSnapshot() {
         Snapshot s = activeSnapshot.get();
         if (s == null) {
-            throw new IllegalStateException("DatabaseReader is closed");
+            throw new IllegalStateException("QzdbReader is closed");
         }
         return s;
     }
