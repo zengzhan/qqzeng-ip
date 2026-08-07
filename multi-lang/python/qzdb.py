@@ -549,6 +549,8 @@ class QzdbReader:
         self._field_names = []
         self._float_field_indices = set()
         self._version_name = ''
+        self._name_idx = {}
+        self._norm_idx = {}
 
         # Header fields
         self._flags = 0
@@ -1066,6 +1068,9 @@ class QzdbReader:
             if field_names and len(field_names) == self._group_field_counts[0]:
                 self._field_names = field_names
                 self._name_idx = {n: i for i, n in enumerate(field_names)}
+                self._norm_idx = {}
+                for i, n in enumerate(field_names):
+                    self._norm_idx.setdefault(_norm_key(n), i)
                 self._float_field_indices = {
                     i for i, n in enumerate(field_names)
                     if n in FLOAT_FIELDS
@@ -1077,6 +1082,9 @@ class QzdbReader:
         # Fallback placeholder names
         self._field_names = [f'field_{i}' for i in range(self._group_field_counts[0])]
         self._name_idx = {n: i for i, n in enumerate(self._field_names)}
+        self._norm_idx = {}
+        for i, n in enumerate(self._field_names):
+            self._norm_idx.setdefault(_norm_key(n), i)
         self._float_field_indices = set()
         self._edition = self._infer_edition(len(self._field_names))
 
@@ -1123,22 +1131,20 @@ class QzdbReader:
                         group_pool_list.append([])
                         continue
 
-                    # Read string offsets
-                    offsets = []
-                    for _ in range(count + 1):
-                        offsets.append(self.safe_read_u32(pool_cursor))
-                        pool_cursor += 4
+                    # Read string offsets (batch unpack for performance)
+                    fmt = f'<{count + 1}I'
+                    offsets = list(struct.unpack_from(fmt, d, pool_cursor))
+                    pool_cursor += (count + 1) * 4
 
                     # Read string data
+                    str_base = pool_cursor
                     strings = [''] * count
                     for s in range(count):
                         start = offsets[s]
                         end = offsets[s + 1]
                         length = end - start
                         if length > 0:
-                            strings[s] = d[pool_cursor + start:pool_cursor + end].decode('utf-8')
-                        else:
-                            strings[s] = ''
+                            strings[s] = d[str_base + start:str_base + end].decode('utf-8')
                     pool_cursor += offsets[count]
                     group_pool_list.append(strings)
                 self._group_pools[g] = group_pool_list
@@ -1178,7 +1184,7 @@ class QzdbReader:
                 off = noff if bit == 0 else noff + 3
                 child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
                 if child & 0x800000:
-                    return (child & 0x7FFFFF) | SENTINEL
+                    return child & 0x7FFFFF
                 if child == 0:
                     return 0
                 idx = child
@@ -1229,7 +1235,7 @@ class QzdbReader:
                 off = noff if bit == 0 else noff + 3
                 child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
                 if child & 0x800000:
-                    return (child & 0x7FFFFF) | SENTINEL
+                    return child & 0x7FFFFF
                 if child == 0:
                     return 0
                 idx = child
@@ -1382,7 +1388,7 @@ class QzdbReader:
                 off = noff if bit == 0 else noff + 3
                 child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
                 if child & 0x800000:
-                    return (child & 0x7FFFFF) | SENTINEL
+                    return child & 0x7FFFFF
                 if child == 0:
                     return 0
                 idx = child
@@ -1479,13 +1485,13 @@ class QzdbReader:
 
     def _resolve_geo_fields(self, entry_id, group_index, field_indices):
         if group_index < 0 or group_index >= len(self._group_field_counts):
-            return {}
+            return [], []
         if entry_id < 0 or entry_id >= self._group_entry_counts[group_index]:
-            return {}
+            return [], []
         self._ensure_pools_loaded()
         field_count = self._group_field_counts[group_index]
         if field_count <= 0:
-            return {}
+            return [], []
         group_entry_start = self._off_geo_entries + self._group_entry_offsets[group_index]
         stride = self._group_strides[group_index]
         entry_offset = group_entry_start + entry_id * stride
@@ -1519,6 +1525,12 @@ class QzdbReader:
         return values, resolved_names
 
     def find_fields(self, ip_str, field_names=None):
+        """Field-projection query (API contract §9.6).
+
+        Returns a GeoInfo with *only* the requested fields, in the requested
+        order. Unknown fields yield ``""`` (preserving input/output length
+        parity). Returns ``None`` only when the IP itself is not found.
+        """
         if self._closed:
             return None
         if field_names is None:
@@ -1535,19 +1547,18 @@ class QzdbReader:
             row_id = self._trie_walk_v6_bytes(v6)
         if row_id == 0:
             return None
-        # Strip the sentinel bit (0x80000000) before resolving the IPRow — the trie
-        # walk returns the row_id ORed with SENTINEL, and _read_ip_row/_resolve_geo
-        # require the clean 0-based id (same fix already applied in find_uint).
         row_id &= SENTINEL_MASK_31
         geo_id, asn_id, usage_type_id = self._read_ip_row(row_id)
         mask = self._group_dim_masks[self._group_index] if self._group_index < len(self._group_dim_masks) else 0
         entry_id = asn_id if (mask & 0x02) else (usage_type_id if (mask & 0x04) else geo_id)
         if entry_id == 0:
             return None
-        name_to_idx = {n: i for i, n in enumerate(self._field_names)}
-        indices = [name_to_idx.get(n, -1) for n in field_names if n in name_to_idx]
-        if not indices:
-            return None
+        # Use the same pre-built normalized index as get()/hasField() so that
+        # field-name matching is case/underscore/hyphen-insensitive (§6.1).
+        indices = []
+        for n in field_names:
+            idx = self._norm_idx.get(_norm_key(n))
+            indices.append(idx if idx is not None else -1)
         values, resolved_names = self._resolve_geo_fields(entry_id, self._group_index, indices)
         return GeoInfo(values=values, field_names=resolved_names,
                        float_indices=self._float_field_indices)
@@ -1783,11 +1794,7 @@ class QzdbReader:
         return self._field_names
 
     def has_field(self, name):
-        nk = _norm_key(name)
-        for fn in self._field_names:
-            if _norm_key(fn) == nk:
-                return True
-        return False
+        return _norm_key(name) in self._norm_idx
 
     def get_group_count(self):
         return len(self._group_field_counts)
@@ -1802,9 +1809,18 @@ class QzdbReader:
         return self._description
 
     def get_build_time(self):
-        return self._build_date
+        if self._build_date > 0:
+            y = self._build_date // 10000
+            m = (self._build_date // 100) % 100
+            d = self._build_date % 100
+            return f'{y:04d}-{m:02d}-{d:02d}'
+        return ''
 
     def get_data_month(self):
+        if self._build_date > 0:
+            y = self._build_date // 10000
+            m = (self._build_date // 100) % 100
+            return f'{y:04d}-{m:02d}'
         return ''
 
     def get_file_hash(self):

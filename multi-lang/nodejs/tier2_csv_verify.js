@@ -103,14 +103,14 @@ async function verifyDb(qzdbPath, csvPath, opts) {
     try { info = reader.find(networkIp); } catch (e) { info = null; }
     if (info === null) {
       mismatch++;
-      if (diffs.length < 20) diffs.push({ csv: csvLine, ip: networkIp, cidr, expected: expected.join('|'), got: '(NOT_FOUND)' });
+      if (diffs.length < 20) diffs.push({ csv: csvLineNo, ip: networkIp, cidr, expected: expected.join('|'), got: '(NOT_FOUND)' });
       return;
     }
     const got = info.toPipe();
     const expPipe = expected.join('|');
     if (got !== expPipe) {
       mismatch++;
-      if (diffs.length < 20) diffs.push({ csv: csvLine, ip: networkIp, cidr, expected: expPipe, got });
+      if (diffs.length < 20) diffs.push({ csv: csvLineNo, ip: networkIp, cidr, expected: expPipe, got });
     } else matches++;
   }
 
