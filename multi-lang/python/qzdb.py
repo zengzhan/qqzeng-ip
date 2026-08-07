@@ -1,3 +1,4 @@
+import ipaddress
 import mmap
 import os
 import struct
@@ -10,6 +11,27 @@ SENTINEL_MASK_31 = 0x7FFFFFFF
 MAX_TRIE_WALK_STEPS = 1000
 MAX_POOL_COUNT = 1 << 26
 FLOAT_FIELDS = frozenset(['longitude', 'latitude'])
+
+# toJson numeric fields (API contract §6): output as JSON numbers, not strings.
+NUMERIC_FIELDS = frozenset(['longitude', 'latitude', 'asn', 'geo_id'])
+
+
+def _norm_key(name):
+    """Normalize a field name for case/underscore/hyphen-insensitive lookup.
+
+    Matches the cross-language rule (API contract §6): lowercase and drop all
+    ``_`` and ``-`` so ``country_code`` == ``countryCode`` == ``COUNTRY_CODE``
+    == ``Country-Code``.
+    """
+    if not isinstance(name, str):
+        return ''
+    out = []
+    for ch in name:
+        if ch == '_' or ch == '-':
+            continue
+        out.append(ch.lower())
+    return ''.join(out)
+
 
 # ── strict IP parsing (SEC-05 / CODE-03) ───────────────────────────
 
@@ -184,7 +206,7 @@ class QzdbError(Exception):
 
 
 class GeoInfo:
-    __slots__ = ('_values', '_field_names', '_float_indices', '_name_idx')
+    __slots__ = ('_values', '_field_names', '_float_indices', '_name_idx', '_norm_idx')
 
     def __init__(self, values=None, field_names=None, float_indices=None, name_idx=None):
         self._values = values or []
@@ -192,10 +214,15 @@ class GeoInfo:
         self._float_indices = set()
         if name_idx is not None:
             self._name_idx = name_idx
+        elif field_names:
+            self._name_idx = {n: i for i, n in enumerate(field_names)}
         else:
             self._name_idx = {}
-            if field_names:
-                self._name_idx = {n: i for i, n in enumerate(field_names)}
+        # Normalized (case/underscore/hyphen-insensitive) index for get() — built
+        # once per instance from the canonical field names (API contract §6).
+        self._norm_idx = {}
+        for i, n in enumerate(self._field_names):
+            self._norm_idx.setdefault(_norm_key(n), i)
         if field_names and float_indices:
             self._float_indices = {field_names[i] for i in float_indices if i < len(field_names)}
 
@@ -206,7 +233,11 @@ class GeoInfo:
         raise AttributeError(name)
 
     def get(self, name):
-        i = self._name_idx.get(name)
+        """Field access with case/underscore/hyphen-insensitive normalization.
+
+        Returns ``""`` when the field is absent — never raises (API contract §6).
+        """
+        i = self._norm_idx.get(_norm_key(name))
         if i is not None:
             return self._values[i] if i < len(self._values) else ''
         return ''
@@ -246,25 +277,237 @@ class GeoInfo:
         try: return float(v) if v else None
         except ValueError: return None
 
+    # ── semantic getter set (API contract §6) ────────────────────
+    # Missing fields return "" (or None for typed getters). get_cidr() is
+    # contractually ALWAYS "" because CIDR is not a stored field.
+
+    def get_cidr(self):
+        return ''
+
+    @property
+    def country_en(self):
+        return self.get('country_en')
+
+    @property
+    def province_en(self):
+        return self.get('province_en')
+
+    @property
+    def city_en(self):
+        return self.get('city_en')
+
+    @property
+    def district(self):
+        return self.get('district')
+
+    def get_geo_id(self):
+        v = self.get('geo_id')
+        if not v:
+            return None
+        try:
+            return int(v)
+        except ValueError:
+            return None
+
+    @property
+    def timezone(self):
+        return self.get('timezone')
+
+    @property
+    def isp_en(self):
+        return self.get('isp_en')
+
+    def get_asn(self):
+        v = self.get('asn')
+        if not v:
+            return None
+        try:
+            return int(v)
+        except ValueError:
+            return None
+
+    @property
+    def as_name(self):
+        return self.get('as_name')
+
+    @property
+    def as_domain(self):
+        return self.get('as_domain')
+
+    def get_usage_type(self):
+        return UsageType.from_string(self.get('usage_type'))
+
+    @property
+    def country_alpha2(self):
+        return self.get('country_alpha2')
+
+    @property
+    def country_alpha3(self):
+        return self.get('country_alpha3')
+
+    @property
+    def currency_code(self):
+        return self.get('currency_code')
+
+    @property
+    def currency_name(self):
+        return self.get('currency_name')
+
+    @property
+    def phone_prefix(self):
+        return self.get('phone_prefix')
+
+    @property
+    def emoji_flag(self):
+        return self.get('emoji_flag')
+
+    @property
+    def languages(self):
+        return self.get('languages')
+
     def to_dict(self):
         return {fname: self._values[i] if i < len(self._values) else ''
                 for i, fname in enumerate(self._field_names)}
 
+    def to_map(self):
+        """Alias of to_dict() — map of field name → value (all string)."""
+        return self.to_dict()
+
     def to_pipe(self):
+        # Values already carry their canonical string form (native floats are
+        # decoded to 6-decimal strings in the reader), so just join verbatim.
         parts = []
         for i, fname in enumerate(self._field_names):
             val = self._values[i] if i < len(self._values) else ''
-            if fname in self._float_indices and val != '':
-                try:
-                    fv = float(val)
-                    if fv.is_integer():
-                        val = str(int(fv))
-                    else:
-                        val = str(fv)
-                except (ValueError, TypeError):
-                    pass
             parts.append(str(val))
         return '|'.join(parts)
+
+    def to_pipe_string(self):
+        """Alias of to_pipe() (API contract §6)."""
+        return self.to_pipe()
+
+    def to_json(self):
+        """Hand-written JSON serialization (API contract §6).
+
+        Preserves the original snake_case keys. ``longitude`` / ``latitude`` /
+        ``asn`` / ``geo_id`` are emitted as JSON numbers (``null`` if empty or
+        unparsable); all other fields are emitted as JSON strings.
+        """
+        import json as _json
+        out = []
+        for i, fname in enumerate(self._field_names):
+            val = self._values[i] if i < len(self._values) else ''
+            key = _json.dumps(fname, ensure_ascii=False)
+            if fname in NUMERIC_FIELDS:
+                if val == '':
+                    out.append(f'{key}:null')
+                else:
+                    try:
+                        num = float(val)
+                        num_out = int(num) if num.is_integer() else num
+                        out.append(f'{key}:{_json.dumps(num_out)}')
+                    except (ValueError, TypeError):
+                        out.append(f'{key}:null')
+            else:
+                out.append(f'{key}:{_json.dumps(val, ensure_ascii=False)}')
+        return '{' + ','.join(out) + '}'
+
+    def __repr__(self):
+        return self.to_pipe()
+
+    def __str__(self):
+        return self.to_pipe()
+
+
+class UsageType:
+    """IP network usage-type (API contract §6 / §7).
+
+    21 official scenarios plus a safe unknown fallback. ``from_string`` returns a
+    KnownUsageType for recognized raw values and falls back to UnknownUsageType
+    (never raises) for anything else.
+    """
+
+    _KNOWN = {}
+
+    def __init__(self, raw_value, display_zh, display_en, description, known):
+        self._raw = raw_value
+        self._zh = display_zh
+        self._en = display_en
+        self._desc = description
+        self._known = known
+
+    @classmethod
+    def _register(cls, raw, zh, en, desc):
+        inst = cls(raw, zh, en, desc, True)
+        cls._KNOWN[raw.lower()] = inst
+        return inst
+
+    # ── 21 official scenarios (API contract §7) ──
+
+    @classmethod
+    def from_string(cls, raw):
+        if raw is None or raw == '':
+            return cls._KNOWN.get('unknown', UNKNOWN_USAGE)
+        known = cls._KNOWN.get(raw.lower())
+        if known is not None:
+            return known
+        return UnknownUsageType(raw)
+
+    # accessors
+    def raw_value(self):
+        return self._raw
+
+    def get_display_zh(self):
+        return self._zh
+
+    def get_display_en(self):
+        return self._en
+
+    def get_description(self):
+        return self._desc
+
+    def is_known(self):
+        return self._known
+
+    def __repr__(self):
+        return f'UsageType({self._raw!r}, known={self._known})'
+
+
+# Known scenario table (raw, 中文, 英文, 描述)
+_KNOWN_TABLE = [
+    ('AICrawler', 'AI 爬虫', 'AICrawler', 'AI 训练 / AI 搜索爬虫（GPTBot、ClaudeBot 等）'),
+    ('Backbone', '骨干网', 'Backbone', '运营商骨干传输网 / 国际出口'),
+    ('Broadband', '宽带', 'Broadband', '家庭/企业宽带接入（xDSL、光纤、Cable、拨号等）'),
+    ('Business', '企业', 'Business', '企业专线 / 企业组网'),
+    ('CDN', 'CDN', 'CDN', '内容分发网络'),
+    ('Cloud', '云服务', 'Cloud', '公有云 / 托管云（AWS、阿里云、Azure 等）'),
+    ('DNS', 'DNS', 'DNS', 'DNS 基础设施 / Anycast DNS'),
+    ('DataCenter', '数据中心', 'DataCenter', 'IDC / 机房托管'),
+    ('Education', '教育网', 'Education', '高校 / 科研网（CERNET 等）'),
+    ('Finance', '金融', 'Finance', '银行 / 证券 / 保险等金融机构'),
+    ('Government', '政府', 'Government', '政务 / 公共机构网络'),
+    ('ISP', '互联网提供商', 'ISP', '未细分类型的通用 ISP 接入'),
+    ('IXP', '交换中心', 'IXP', '互联网交换中心'),
+    ('IoT', '物联网', 'IoT', '物联网设备接入网络'),
+    ('Mobile', '移动网络', 'Mobile', '蜂窝移动网络（2G/3G/4G/5G）'),
+    ('Reserved', '保留地址', 'Reserved', '保留 / 未分配地址'),
+    ('Satellite', '卫星互联网', 'Satellite', '卫星 / 低轨星座接入（Starlink 等）'),
+    ('Spider', '爬虫', 'Spider', '通用搜索引擎 / 通用网络爬虫'),
+    ('Streaming', '流媒体', 'Streaming', '音视频 / 直播流媒体平台'),
+    ('Unknown', '未知', 'Unknown', '无法判定用途'),
+    ('VPN', 'VPN/代理', 'VPN', 'VPN / 代理 / 隐私网络出口'),
+]
+for _r, _z, _e, _d in _KNOWN_TABLE:
+    UsageType._register(_r, _z, _e, _d)
+
+UNKNOWN_USAGE = UsageType('Unknown', '未知', 'Unknown', '无法判定用途', True)
+
+
+class UnknownUsageType(UsageType):
+    """Safe fallback for unrecognized raw usage strings (API contract §7)."""
+
+    def __init__(self, raw):
+        super().__init__(raw, '未知', raw, f'未知用途: {raw}', False)
 
 
 class QzdbReader:
@@ -291,6 +534,7 @@ class QzdbReader:
                 pass
         self._data = b''
         self._is_mmap = False
+        self._closed = True
 
     def __del__(self):
         self.close()
@@ -323,6 +567,20 @@ class QzdbReader:
         self._v6_node_count = 0
         self._ip_row_size = 6
         self._geo_entry_group_count = 0
+
+        # Metadata (resolved in _resolve_field_names)
+        self._build_date = 0
+        self._description = ''
+        self._primary_version = ''
+        self._edition = ''
+
+        # Lifecycle / performance cache
+        self._closed = False
+        # per-snapshot bounded lock-free GeoInfo cache, keyed by (group_index, entry_id).
+        # On collision (capacity reached) we simply skip caching and recompute —
+        # never returning a value for the wrong key (API contract §3 / §9).
+        self._geo_cache = {}
+        self._geo_cache_max = 1 << 16
 
         # Offsets
         self._off_v4_jump = 0
@@ -365,42 +623,52 @@ class QzdbReader:
         except OSError as exc:
             raise QzdbError(f'Failed to read database file: {exc}', QzdbError.CORRUPTED) from exc
 
-        # Build a shadow object so that a partial load never leaves
-        # the live instance in a broken state (half-old-data / half-new-data).
+        try:
+            fsize = os.fstat(f.fileno()).st_size
+            if fsize >= 1024 * 1024:  # 1MB threshold → mmap for lazy loading
+                data = mmap.mmap(f.fileno(), fsize, access=mmap.ACCESS_READ)
+                is_mmap = True
+            else:
+                data = f.read()
+                is_mmap = False
+        except OSError as exc:
+            f.close()
+            raise QzdbError(f'Failed to memory-map database: {exc}', QzdbError.CORRUPTED) from exc
+        finally:
+            f.close()
+
+        shadow = self._build_shadow(data, is_mmap)
+        self._publish(shadow)
+
+    def _build_shadow(self, data, is_mmap):
+        """Build a fully-parsed shadow snapshot from raw bytes (file or buffer).
+
+        A partial load never mutates the live instance, so a parse failure leaves
+        the running reader fully intact (Fail-Closed, API contract §2/§4).
+        """
         shadow = QzdbReader.__new__(QzdbReader)
-        # Seed shadow with this instance's full runtime state so methods that
-        # touch pools/offsets don't hit AttributeError before _parse_header
-        # repopulates them (shadow is __new__-born and never runs __init__).
+        # Seed shadow with this instance's runtime state so methods touching
+        # pools/offsets don't hit AttributeError before _parse_header repopulates
+        # them (shadow is __new__-born and never runs __init__).
         shadow.__dict__.update(self.__dict__)
-        shadow._data = b''
-        shadow._is_mmap = False
+        shadow._data = data
+        shadow._is_mmap = is_mmap
         shadow._verify_crc = self._verify_crc
         shadow._group_index = self._group_index
         # Reset lazy-pool flags so the new file rebuilds its own pools.
         shadow._pools_loaded = False
         shadow._group_pools = None
         shadow._pools_lock = threading.Lock()
+        # Fresh per-snapshot GeoInfo cache (old snapshot's cache is dropped).
+        shadow._geo_cache = {}
+        shadow._closed = False
         try:
-            try:
-                fsize = os.fstat(f.fileno()).st_size
-                if fsize >= 1024 * 1024:  # 1MB threshold → mmap for lazy loading
-                    data = mmap.mmap(f.fileno(), fsize, access=mmap.ACCESS_READ)
-                    shadow._is_mmap = True
-                else:
-                    data = f.read()
-                shadow._data = data
-            except OSError as exc:
-                f.close()
-                raise QzdbError(f'Failed to memory-map database: {exc}', QzdbError.CORRUPTED) from exc
-            finally:
-                f.close()
             shadow._parse_header()
-            if shadow._verify_crc:
-                if not shadow.verify_crc():
-                    raise QzdbError(
-                        'CRC32 checksum mismatch — the .qzdb file is corrupted or truncated',
-                        QzdbError.CORRUPTED,
-                    )
+            if shadow._verify_crc and not shadow.verify_crc():
+                raise QzdbError(
+                    'CRC32 checksum mismatch — the .qzdb file is corrupted or truncated',
+                    QzdbError.CORRUPTED,
+                )
         except Exception:
             # Shadow failed — close its mmap if it opened one, then re-raise.
             if shadow._is_mmap and hasattr(shadow._data, 'close'):
@@ -409,8 +677,10 @@ class QzdbReader:
                 except OSError:
                     pass
             raise
+        return shadow
 
-        # Shadow succeeded. Publish it atomically, then release the old mmap.
+    def _publish(self, shadow):
+        """Atomically swap in a fully-built shadow snapshot (API contract §2/§3)."""
         old_data = self._data
         # Do NOT alias the dict: sharing shadow.__dict__ lets shadow's
         # __del__ -> close() wipe self._data to b'', breaking every find() call.
@@ -419,11 +689,57 @@ class QzdbReader:
         # Disarm shadow so its destructor cannot close the mmap we took over.
         shadow._is_mmap = False
         shadow._data = b''
+        self._closed = False
         if hasattr(old_data, 'close'):
             try:
                 old_data.close()
             except OSError:
                 pass
+
+    def reload(self, path):
+        """Hot-swap to a new database file. CRC is ALWAYS forced (API contract §2).
+
+        On failure the old snapshot keeps serving and a QzdbError is raised.
+        """
+        if not os.path.exists(path) or not os.access(path, os.R_OK):
+            raise QzdbError(f'Reload file does not exist: {path}', QzdbError.NOT_FOUND)
+        saved_verify = self._verify_crc
+        self._verify_crc = True  # reload forces CRC regardless of open option
+        try:
+            f = open(path, 'rb')
+        except OSError as exc:
+            self._verify_crc = saved_verify
+            raise QzdbError(f'Failed to read reload file: {path}', QzdbError.CORRUPTED) from exc
+        try:
+            fsize = os.fstat(f.fileno()).st_size
+            if fsize >= 1024 * 1024:
+                data = mmap.mmap(f.fileno(), fsize, access=mmap.ACCESS_READ)
+                is_mmap = True
+            else:
+                data = f.read()
+                is_mmap = False
+        except OSError as exc:
+            f.close()
+            self._verify_crc = saved_verify
+            raise QzdbError(f'Failed to memory-map reload file: {exc}', QzdbError.CORRUPTED) from exc
+        finally:
+            f.close()
+        shadow = self._build_shadow(data, is_mmap)
+        self._verify_crc = saved_verify
+        self._publish(shadow)
+
+    def reload_buffer(self, buffer):
+        """Hot-swap to a new in-memory buffer (copy semantics). CRC forced."""
+        if buffer is None or len(buffer) == 0:
+            raise QzdbError('Reload buffer cannot be null or empty', QzdbError.INVALID_PARAM)
+        saved_verify = self._verify_crc
+        self._verify_crc = True
+        data = bytes(buffer)  # copy protection
+        try:
+            shadow = self._build_shadow(data, False)
+        finally:
+            self._verify_crc = saved_verify
+        self._publish(shadow)
 
     def safe_read_u16(self, off):
         return struct.unpack_from('<H', self._data, off)[0]
@@ -457,6 +773,22 @@ class QzdbReader:
         else:
             return self.safe_read_u32(off)
 
+    # Native scalar field decoder — matches Java readNativeValue() exactly so that
+    # cross-language golden vectors are byte-identical:
+    #   - float32/float64 -> 6 decimal places (FLOAT6 / "0.000000"); integer-valued
+    #     floats drop the decimals (e.g. 116.0 -> "116"); NaN/Inf -> "".
+    #   - integer -> decimal string (unsigned for width <= 4).
+    def _decode_native(self, nat_type, w, fo):
+        d = self._data
+        if nat_type == 1:
+            fv = struct.unpack_from('<f', d, fo)[0] if w == 4 else struct.unpack_from('<d', d, fo)[0]
+            if fv != fv or fv in (float('inf'), float('-inf')):
+                return ''
+            if fv == int(fv):
+                return str(int(fv))
+            return f'{fv:.6f}'
+        return str(self.safe_read_uint_width(fo, w))
+
     def _parse_header(self):
         d = self._data
         if len(d) < 192:
@@ -482,6 +814,8 @@ class QzdbReader:
         self._has_v6 = bool(self._flags & 2)
         self._v4_node_24 = bool(self._flags & 0x10)
         self._v6_node_24 = bool(self._flags & 0x20)
+
+        self._build_date = self.safe_read_u32(32)
 
         self._v6_jump_bits = d[11]
         if self._v6_jump_bits == 0:
@@ -723,6 +1057,10 @@ class QzdbReader:
                     self._version_name = val
                 elif t == 2:
                     field_names = val.split('|')
+                elif t == 3:
+                    self._description = val
+                elif t == 4:
+                    self._primary_version = val
                 pos += 4 + length
 
             if field_names and len(field_names) == self._group_field_counts[0]:
@@ -732,12 +1070,20 @@ class QzdbReader:
                     i for i, n in enumerate(field_names)
                     if n in FLOAT_FIELDS
                 }
+                self._edition = (self._primary_version or self._version_name
+                                 or self._infer_edition(len(field_names)))
                 return
 
         # Fallback placeholder names
         self._field_names = [f'field_{i}' for i in range(self._group_field_counts[0])]
         self._name_idx = {n: i for i, n in enumerate(self._field_names)}
         self._float_field_indices = set()
+        self._edition = self._infer_edition(len(self._field_names))
+
+    @staticmethod
+    def _infer_edition(count):
+        """Infer edition tier from field count (mirrors the reference resolver)."""
+        return {6: 'std', 8: 'asn', 11: 'pro', 15: 'max', 25: 'ult'}.get(count, 'std')
 
     def _ensure_pools_loaded(self):
         if self._pools_loaded:
@@ -937,7 +1283,24 @@ class QzdbReader:
 
         if entry_id == 0:
             return None
-        return self._resolve_geo(entry_id, group_index)
+        return self._cached_resolve_geo(entry_id, group_index)
+
+    def _cached_resolve_geo(self, entry_id, group_index):
+        """Per-snapshot bounded lock-free GeoInfo cache (API contract §3/§9).
+
+        Keyed by ``(group_index, entry_id)``. On a miss we resolve and store the
+        GeoInfo (up to ``_geo_cache_max`` entries); once full we simply skip
+        storing and recompute. A cached ``None`` is still correct for its key, so
+        we never return a value for the wrong key (collision → recompute).
+        """
+        key = (group_index, entry_id)
+        cache = self._geo_cache
+        if key in cache:
+            return cache[key]
+        val = self._resolve_geo(entry_id, group_index)
+        if len(cache) < self._geo_cache_max:
+            cache[key] = val
+        return val
 
     def _resolve_geo(self, entry_id, group_index):
         if group_index < 0 or group_index >= len(self._group_field_counts):
@@ -969,17 +1332,7 @@ class QzdbReader:
             
             if is_native:
                 t = nat_types[i] if nat_types and i < len(nat_types) else 0
-                if t == 1:
-                    # float
-                    if w == 4:
-                        val_num = struct.unpack_from('<f', d, fo)[0]
-                    else:
-                        val_num = struct.unpack_from('<d', d, fo)[0]
-                    val = str(val_num)
-                else:
-                    # int
-                    val_num = self.safe_read_uint_width(fo, w)
-                    val = str(val_num)
+                val = self._decode_native(t, w, fo)
             else:
                 idx = self.safe_read_uint_width(fo, w)
                 group_pool = self._group_pools[group_index]
@@ -1051,6 +1404,8 @@ class QzdbReader:
     # ── find / lookup ────────────────────────────────────────────────
 
     def find(self, ip_str):
+        if self._closed:
+            return None
         if not ip_str:
             return None
         parsed = _fast_parse_ip(ip_str)
@@ -1062,6 +1417,8 @@ class QzdbReader:
         return self.find_v6_bytes(v6)
 
     def find_uint(self, ip_int):
+        if self._closed:
+            return None
         if not self._has_v4:
             return None
         row_id = self._trie_walk_v4(ip_int)
@@ -1071,6 +1428,8 @@ class QzdbReader:
 
     def find_v6_bytes(self, ip_bytes):
         """IPv6 lookup using 16-byte packed representation (zero BigInteger alloc)."""
+        if self._closed:
+            return None
         if not self._has_v6:
             return None
         row_id = self._trie_walk_v6_bytes(ip_bytes)
@@ -1080,6 +1439,8 @@ class QzdbReader:
         return self._resolve_row_id(row_id & SENTINEL_MASK_31, self._group_index)
 
     def find_v6_uint(self, ip_int):
+        if self._closed:
+            return None
         if not self._has_v6:
             return None
         row_id = self._trie_walk_v6(ip_int)
@@ -1087,6 +1448,32 @@ class QzdbReader:
             return None
         # FIX: strip sentinel bit (same as find_uint for V4)
         return self._resolve_row_id(row_id & SENTINEL_MASK_31, self._group_index)
+
+    def find_bytes(self, ip_bytes):
+        """Lookup by raw address bytes: 4 bytes → IPv4, 16 bytes → IPv6.
+
+        An IPv4-mapped IPv6 (``::ffff:a.b.c.d``) is downgraded to the V4 trie.
+        Returns ``None`` on no match, closed reader, or invalid length.
+        """
+        if self._closed:
+            return None
+        if ip_bytes is None:
+            return None
+        if len(ip_bytes) == 4:
+            v4 = ((ip_bytes[0] & 0xFF) << 24 | (ip_bytes[1] & 0xFF) << 16
+                  | (ip_bytes[2] & 0xFF) << 8 | (ip_bytes[3] & 0xFF))
+            return self.find_uint(v4)
+        if len(ip_bytes) == 16:
+            if (ip_bytes[10] == 0xFF and ip_bytes[11] == 0xFF
+                    and ip_bytes[0] == 0 and ip_bytes[1] == 0 and ip_bytes[2] == 0
+                    and ip_bytes[3] == 0 and ip_bytes[4] == 0 and ip_bytes[5] == 0
+                    and ip_bytes[6] == 0 and ip_bytes[7] == 0 and ip_bytes[8] == 0
+                    and ip_bytes[9] == 0):
+                v4 = ((ip_bytes[12] & 0xFF) << 24 | (ip_bytes[13] & 0xFF) << 16
+                      | (ip_bytes[14] & 0xFF) << 8 | (ip_bytes[15] & 0xFF))
+                return self.find_uint(v4)
+            return self.find_v6_bytes(ip_bytes)
+        return None
 
     # ── field projection (only resolve requested fields) ─────────────
 
@@ -1119,11 +1506,7 @@ class QzdbReader:
             is_native = natives and i < len(natives) and natives[i]
             if is_native:
                 t = nat_types[i] if nat_types and i < len(nat_types) else 0
-                if t == 1:
-                    val = str(struct.unpack_from('<f' if w == 4 else '<d', d, fo)[0])
-                else:
-                    val_num = self.safe_read_uint_width(fo, w)
-                    val = str(val_num)
+                val = self._decode_native(t, w, fo)
             else:
                 idx = self.safe_read_uint_width(fo, w)
                 group_pool = self._group_pools[group_index]
@@ -1136,6 +1519,8 @@ class QzdbReader:
         return values, resolved_names
 
     def find_fields(self, ip_str, field_names=None):
+        if self._closed:
+            return None
         if field_names is None:
             return self.find(ip_str)
         if not ip_str:
@@ -1150,6 +1535,10 @@ class QzdbReader:
             row_id = self._trie_walk_v6_bytes(v6)
         if row_id == 0:
             return None
+        # Strip the sentinel bit (0x80000000) before resolving the IPRow — the trie
+        # walk returns the row_id ORed with SENTINEL, and _read_ip_row/_resolve_geo
+        # require the clean 0-based id (same fix already applied in find_uint).
+        row_id &= SENTINEL_MASK_31
         geo_id, asn_id, usage_type_id = self._read_ip_row(row_id)
         mask = self._group_dim_masks[self._group_index] if self._group_index < len(self._group_dim_masks) else 0
         entry_id = asn_id if (mask & 0x02) else (usage_type_id if (mask & 0x04) else geo_id)
@@ -1166,6 +1555,8 @@ class QzdbReader:
     # ── lookup row id / ids ──────────────────────────────────────────
 
     def lookup_row_id(self, ip_str):
+        if self._closed:
+            return 0
         if not ip_str:
             return 0
         parsed = _fast_parse_ip(ip_str)
@@ -1177,7 +1568,7 @@ class QzdbReader:
         return self.lookup_row_id_v6_bytes(v6)
 
     def lookup_row_id_uint(self, ip_int):
-        if not self._has_v4:
+        if self._closed or not self._has_v4:
             return 0
         # Strip the sentinel bit so the returned value is a clean 0-based row_id
         # (0 = not found). Mirrors find_uint(), which strips before _resolve_row_id.
@@ -1187,27 +1578,244 @@ class QzdbReader:
         return (rid & SENTINEL_MASK_31) if rid != 0 else 0
 
     def lookup_row_id_v6(self, ip_int):
-        if not self._has_v6:
+        if self._closed or not self._has_v6:
             return 0
         rid = self._trie_walk_v6(ip_int)
         return (rid & SENTINEL_MASK_31) if rid != 0 else 0
 
     def lookup_row_id_v6_bytes(self, ip_bytes):
-        if not self._has_v6:
+        if self._closed or not self._has_v6:
             return 0
         rid = self._trie_walk_v6_bytes(ip_bytes)
         return (rid & SENTINEL_MASK_31) if rid != 0 else 0
 
     def lookup_ids(self, row_id):
+        if self._closed:
+            return None
         if row_id <= 0 or row_id >= self._row_count:
             return None
         return self._read_ip_row(row_id)
 
     def find_str(self, ip_str):
+        if self._closed:
+            return ''
         info = self.find(ip_str)
         if info is None:
             return ''
         return info.to_pipe()
+
+    # ── CIDR reverse lookup (API contract §5 / §8.6) ───────────────
+    # The DB does not store CIDR; the most-specific network is rebuilt from the
+    # trie leaf depth (= prefix length N), with the network address = the IP's
+    # top N bits zeroed. A jump-table hit that is itself a leaf yields prefix =
+    # the jump bits already consumed from the root (never a wrong network).
+
+    def _cidr_walk_v4(self, ip_int):
+        d = self._data
+        off_jump = self._off_v4_jump
+        off_nodes = self._off_v4_nodes
+        v4_node_24 = self._v4_node_24
+        hi16 = (ip_int >> 16) & 0xFFFF
+        ptr = struct.unpack_from('<I', d, off_jump + hi16 * 4)[0]
+        if ptr == 0:
+            return 0, 0
+        if ptr & SENTINEL:
+            return ptr & SENTINEL_MASK_31, 16
+        idx = ptr
+        suffix = (ip_int & 0xFFFF) << 16
+        steps = 0
+        if v4_node_24:
+            while True:
+                steps += 1
+                if steps > 16:
+                    return 0, 0
+                bit = (suffix >> 31) & 1
+                if idx >= self._v4_node_count:
+                    return 0, 0
+                noff = off_nodes + idx * 6
+                off = noff if bit == 0 else noff + 3
+                child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
+                if child & 0x800000:
+                    return child & 0x7FFFFF, 16 + steps
+                if child == 0:
+                    return 0, 0
+                idx = child
+                suffix <<= 1
+        else:
+            while True:
+                steps += 1
+                if steps > 16:
+                    return 0, 0
+                bit = (suffix >> 31) & 1
+                child = struct.unpack_from('<I', d, off_nodes + idx * 8 + bit * 4)[0]
+                if child & SENTINEL:
+                    return child & SENTINEL_MASK_31, 16 + steps
+                if child == 0:
+                    return 0, 0
+                idx = child
+                suffix <<= 1
+
+    def _cidr_walk_v6(self, ip_int):
+        d = self._data
+        off_jump = self._off_v6_jump
+        off_nodes = self._off_v6_nodes
+        v6_node_24 = self._v6_node_24
+        jump_bits = self._v6_jump_bits
+        shift = 128 - jump_bits
+        idx_jump = (ip_int >> shift) & ((1 << jump_bits) - 1)
+        ptr = struct.unpack_from('<I', d, off_jump + idx_jump * 4)[0]
+        if ptr == 0:
+            return 0, 0
+        if ptr & SENTINEL:
+            return ptr & SENTINEL_MASK_31, jump_bits
+        idx = ptr
+        depth = jump_bits
+        if v6_node_24:
+            while depth < 128:
+                bit = (ip_int >> (127 - depth)) & 1
+                if idx >= self._v6_node_count:
+                    return 0, 0
+                noff = off_nodes + idx * 6
+                off = noff if bit == 0 else noff + 3
+                child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
+                if child & 0x800000:
+                    return child & 0x7FFFFF, depth + 1
+                if child == 0:
+                    return 0, 0
+                idx = child
+                depth += 1
+        else:
+            while depth < 128:
+                bit = (ip_int >> (127 - depth)) & 1
+                child = struct.unpack_from('<I', d, off_nodes + idx * 8 + bit * 4)[0]
+                if child & SENTINEL:
+                    return child & SENTINEL_MASK_31, depth + 1
+                if child == 0:
+                    return 0, 0
+                idx = child
+                depth += 1
+        return 0, 0
+
+    @staticmethod
+    def _format_cidr_v4(ip_int, prefix):
+        if prefix >= 32:
+            mask = 0xFFFFFFFF
+        else:
+            mask = (~((1 << (32 - prefix)) - 1)) & 0xFFFFFFFF
+        net = ip_int & mask
+        return f'{ipaddress.IPv4Address(net)}/{prefix}'
+
+    @staticmethod
+    def _format_cidr_v6(ip_int, prefix):
+        if prefix >= 128:
+            mask = (1 << 128) - 1
+        else:
+            mask = (~((1 << (128 - prefix)) - 1)) & ((1 << 128) - 1)
+        net = ip_int & mask
+        return f'{ipaddress.IPv6Address(net)}/{prefix}'
+
+    def lookup_cidr(self, ip_str):
+        if self._closed or not ip_str:
+            return None
+        parsed = _fast_parse_ip(ip_str)
+        if parsed is None:
+            return None
+        v4, v6 = parsed
+        if v4 is not None:
+            row_id, prefix = self._cidr_walk_v4(v4)
+            if row_id == 0:
+                return None
+            return self._format_cidr_v4(v4, prefix)
+        v6_int = int.from_bytes(v6, 'big')
+        row_id, prefix = self._cidr_walk_v6(v6_int)
+        if row_id == 0:
+            return None
+        return self._format_cidr_v6(v6_int, prefix)
+
+    def lookup_cidr_uint(self, ip_int):
+        if self._closed or not self._has_v4:
+            return None
+        row_id, prefix = self._cidr_walk_v4(ip_int)
+        if row_id == 0:
+            return None
+        return self._format_cidr_v4(ip_int, prefix)
+
+    def lookup_cidr_bytes(self, ip_bytes):
+        if self._closed or ip_bytes is None:
+            return None
+        if len(ip_bytes) == 4:
+            v4 = ((ip_bytes[0] & 0xFF) << 24 | (ip_bytes[1] & 0xFF) << 16
+                  | (ip_bytes[2] & 0xFF) << 8 | (ip_bytes[3] & 0xFF))
+            return self.lookup_cidr_uint(v4)
+        if len(ip_bytes) == 16:
+            if (ip_bytes[10] == 0xFF and ip_bytes[11] == 0xFF
+                    and ip_bytes[0] == 0 and ip_bytes[1] == 0 and ip_bytes[2] == 0
+                    and ip_bytes[3] == 0 and ip_bytes[4] == 0 and ip_bytes[5] == 0
+                    and ip_bytes[6] == 0 and ip_bytes[7] == 0 and ip_bytes[8] == 0
+                    and ip_bytes[9] == 0):
+                v4 = ((ip_bytes[12] & 0xFF) << 24 | (ip_bytes[13] & 0xFF) << 16
+                      | (ip_bytes[14] & 0xFF) << 8 | (ip_bytes[15] & 0xFF))
+                return self.lookup_cidr_uint(v4)
+            v6_int = int.from_bytes(ip_bytes, 'big')
+            row_id, prefix = self._cidr_walk_v6(v6_int)
+            if row_id == 0:
+                return None
+            return self._format_cidr_v6(v6_int, prefix)
+        return None
+
+    # ── batch / stream (API contract §5) ───────────────────────────
+
+    def find_batch(self, ips):
+        """Batch lookup. Per-item three-state semantics preserved; no thread pool."""
+        return [BatchResult(ip, self.find(ip), None) for ip in ips]
+
+    def find_batch_fields(self, ips, fields):
+        return [BatchResult(ip, self.find_fields(ip, fields), None) for ip in ips]
+
+    def find_stream(self, ips):
+        """Lazy stream — constant memory, yields each GeoInfo (or None) in turn."""
+        for ip in ips:
+            yield self.find(ip)
+
+    # ── metadata introspection (API contract §5) ───────────────────
+
+    def get_field_names(self):
+        return self._field_names
+
+    def has_field(self, name):
+        nk = _norm_key(name)
+        for fn in self._field_names:
+            if _norm_key(fn) == nk:
+                return True
+        return False
+
+    def get_group_count(self):
+        return len(self._group_field_counts)
+
+    def get_edition(self):
+        return self._edition
+
+    def get_scope(self):
+        return ''
+
+    def get_description(self):
+        return self._description
+
+    def get_build_time(self):
+        return self._build_date
+
+    def get_data_month(self):
+        return ''
+
+    def get_file_hash(self):
+        d = self._data
+        if len(d) < 20:
+            return ''
+        stored = struct.unpack_from('<I', d, 16)[0]
+        return f'{stored:08x}'
+
+    def get_version(self):
+        return self._version_name
 
     @property
     def version(self):
@@ -1240,3 +1848,165 @@ class QzdbReader:
         if len(d) > 20:
             crc = zlib.crc32(d[20:], crc)
         return stored == (crc & 0xFFFFFFFF)
+
+
+class BatchResult:
+    """Result of a single lookup in a batch/stream (API contract §1).
+
+    Attributes:
+        ip: the input IP string.
+        geo_info: a ``GeoInfo`` on hit, else ``None``.
+        error: a ``QzdbError`` if the lookup raised, else ``None``.
+    """
+
+    __slots__ = ('ip', 'geo_info', 'error')
+
+    def __init__(self, ip, geo_info=None, error=None):
+        self.ip = ip
+        self.geo_info = geo_info
+        self.error = error
+
+    def __repr__(self):
+        if self.error is not None:
+            return f'BatchResult(ip={self.ip!r}, error={self.error!r})'
+        if self.geo_info is None:
+            return f'BatchResult(ip={self.ip!r}, geo_info=None)'
+        return f'BatchResult(ip={self.ip!r}, geo_info={self.geo_info.to_pipe()!r})'
+
+
+class QzdbRegistry:
+    """Multi-database registry (API contract §1 / §5).
+
+    Holds several named ``QzdbReader`` instances and answers a query by trying
+    each registered reader in insertion order, returning the first hit. Useful
+    when one logical service spans multiple physical DB editions/groups.
+    """
+
+    def __init__(self):
+        self._readers = {}
+
+    def register(self, name, reader):
+        if not isinstance(reader, QzdbReader):
+            raise QzdbError('registry entry must be a QzdbReader', QzdbError.INVALID_PARAM)
+        self._readers[name] = reader
+        return self
+
+    def get(self, name):
+        return self._readers.get(name)
+
+    def names(self):
+        return list(self._readers.keys())
+
+    def find(self, ip_str):
+        for r in self._readers.values():
+            gi = r.find(ip_str)
+            if gi is not None:
+                return gi
+        return None
+
+    def find_uint(self, ip_int):
+        for r in self._readers.values():
+            gi = r.find_uint(ip_int)
+            if gi is not None:
+                return gi
+        return None
+
+    def find_bytes(self, ip_bytes):
+        for r in self._readers.values():
+            gi = r.find_bytes(ip_bytes)
+            if gi is not None:
+                return gi
+        return None
+
+    def find_fields(self, ip_str, fields=None):
+        for r in self._readers.values():
+            gi = r.find_fields(ip_str, fields)
+            if gi is not None:
+                return gi
+        return None
+
+    def lookup_row_id(self, ip_str):
+        for r in self._readers.values():
+            rid = r.lookup_row_id(ip_str)
+            if rid != 0:
+                return rid
+        return 0
+
+    def lookup_cidr(self, ip_str):
+        for r in self._readers.values():
+            c = r.lookup_cidr(ip_str)
+            if c is not None:
+                return c
+        return None
+
+    def close(self):
+        for r in self._readers.values():
+            r.close()
+
+
+class ChainedReader:
+    """Chained multi-database reader (API contract §1 / §5).
+
+    Wraps an ordered list of ``QzdbReader`` instances; a query returns the first
+    non-``None`` result. Optionally a per-reader dimension mask can be supplied to
+    restrict which dimension each reader answers for, but by default every
+    reader is tried for every dimension.
+    """
+
+    def __init__(self, readers, masks=None):
+        self._readers = list(readers) if readers else []
+        self._masks = list(masks) if masks else None
+
+    def add(self, reader, mask=None):
+        if not isinstance(reader, QzdbReader):
+            raise QzdbError('chained entry must be a QzdbReader', QzdbError.INVALID_PARAM)
+        self._readers.append(reader)
+        if self._masks is not None:
+            self._masks.append(mask)
+        return self
+
+    def find(self, ip_str):
+        for r in self._readers:
+            gi = r.find(ip_str)
+            if gi is not None:
+                return gi
+        return None
+
+    def find_uint(self, ip_int):
+        for r in self._readers:
+            gi = r.find_uint(ip_int)
+            if gi is not None:
+                return gi
+        return None
+
+    def find_bytes(self, ip_bytes):
+        for r in self._readers:
+            gi = r.find_bytes(ip_bytes)
+            if gi is not None:
+                return gi
+        return None
+
+    def find_fields(self, ip_str, fields=None):
+        for r in self._readers:
+            gi = r.find_fields(ip_str, fields)
+            if gi is not None:
+                return gi
+        return None
+
+    def lookup_row_id(self, ip_str):
+        for r in self._readers:
+            rid = r.lookup_row_id(ip_str)
+            if rid != 0:
+                return rid
+        return 0
+
+    def lookup_cidr(self, ip_str):
+        for r in self._readers:
+            c = r.lookup_cidr(ip_str)
+            if c is not None:
+                return c
+        return None
+
+    def close(self):
+        for r in self._readers:
+            r.close()

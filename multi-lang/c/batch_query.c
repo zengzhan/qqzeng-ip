@@ -9,29 +9,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <math.h>
 
-/* Helper: format geo info to pipe string */
+/* Helper: format geo info to pipe string.
+ * Delegates to the SDK's qzdb_geo_info_to_pipe, which joins the already-formatted
+ * field strings verbatim (the reader itself applies the 6-decimal / integer form
+ * rule for floats). We must NOT re-apply %.6f here — that would double-format and
+ * turn integer-valued floats (e.g. "116") into "116.000000", breaking the contract. */
 static void geo_to_pipe(const qzdb_reader_t* ctx, const qzdb_geo_info_t* r, char* buf, size_t size) {
     if (!r) { if (size > 0) buf[0] = '\0'; return; }
-    buf[0] = '\0';
-    size_t pos = 0;
-    int nfields = ctx->field_count > 0 ? ctx->field_count : 0;
-    for (int i = 0; i < nfields && pos < size; i++) {
-        if (i > 0 && pos < size) buf[pos++] = '|';
-        const char* v = r->values[i] ? r->values[i] : "";
-        if (ctx->float_field_flags && ctx->float_field_flags[i] && v[0]) {
-            double f = atof(v);
-            int n = snprintf(buf + pos, size - pos, "%.6f", f);
-            if (n > 0) pos += (size_t)(n < (int)(size - pos) ? n : (int)(size - pos - 1));
-        } else {
-            size_t vlen = strlen(v);
-            size_t to_copy = vlen < (size - pos - 1) ? vlen : (size - pos - 1);
-            memcpy(buf + pos, v, to_copy);
-            pos += to_copy;
-        }
-    }
-    buf[pos] = '\0';
+    qzdb_geo_info_to_pipe((qzdb_reader_t*)ctx, r, buf, size);
 }
 
 static int process_v4(const qzdb_reader_t* ctx, const char* test_path, const char* out_path) {

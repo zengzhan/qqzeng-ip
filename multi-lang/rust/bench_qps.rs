@@ -5,7 +5,7 @@ fn bench(db_name: &str, db_path: &str) {
        println!("  {db_name}: not found");
        return;
    }
-    let searcher = match qzdb_reader::from_file(db_path) {
+    let searcher = match qzdb_reader::QzdbReader::from_file(db_path) {
         Ok(s) => s,
         Err(_) => { println!("  {db_name}: load failed"); return; }
     };

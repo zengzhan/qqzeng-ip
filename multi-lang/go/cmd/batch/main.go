@@ -25,7 +25,8 @@ func main() {
 		if line == "" {
 			continue
 		}
-		res, err := searcher.FindStr(line)
+		res := searcher.FindStr(line)
+		_ = err
 		if err != nil {
 			fmt.Println("")
 		} else {

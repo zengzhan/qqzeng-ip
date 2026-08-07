@@ -119,8 +119,73 @@ static int safe_read_uint_width(const uint8_t* data, size_t data_size, uint64_t 
     return QZDB_OK;
 }
 
-int qzdb_init(qzdb_reader_t* ctx, const char* db_path) {
-    // §10.6: CRC32 verification is ON by default at open time. Pass verify_crc=0
+/* Normalize a field name: lower-case + strip '_' and '-' (API_CONTRACT §6). */
+static void normalize_field_name(const char* name, char* out, size_t out_size) {
+    size_t j = 0;
+    if (!name) { if (out_size) out[0] = '\0'; return; }
+    for (size_t i = 0; name[i] && j + 1 < out_size; i++) {
+        char c = name[i];
+        if (c == '_' || c == '-') continue;
+        if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+        out[j++] = c;
+    }
+    out[j] = '\0';
+}
+
+/* Infer edition from field count / normalized field names (mirrors Java QzdbReader.inferEdition). */
+static const char* infer_edition(int field_count, char** norm_names) {
+    switch (field_count) {
+        case 6:  return "std";
+        case 8:  return "asn";
+        case 11: return "pro";
+        case 15: return "max";
+        case 25: return "ult";
+        default: break;
+    }
+    if (!norm_names) return "std";
+    int has_cc = 0, has_asn = 0, has_district = 0, has_asname = 0;
+    for (int i = 0; i < field_count; i++) {
+        const char* n = norm_names[i];
+        if (!n) continue;
+        if (strcmp(n, "currencycode") == 0) has_cc = 1;
+        else if (strcmp(n, "asn") == 0) has_asn = 1;
+        else if (strcmp(n, "district") == 0) has_district = 1;
+        else if (strcmp(n, "asname") == 0) has_asname = 1;
+    }
+    if (has_cc) return "ult";
+    if (has_asname) return "max";
+    if (has_district) return "pro";
+    if (has_asn) return "asn";
+    return "std";
+}
+
+/* Find field index by (normalized) name. Returns -1 if not found. */
+static int field_index_normalized(qzdb_reader_t* ctx, const char* name) {
+    if (!ctx || !name) return -1;
+    char norm[64];
+    normalize_field_name(name, norm, sizeof(norm));
+    for (int i = 0; i < ctx->field_count; i++) {
+        if (ctx->norm_field_names[i] && strcmp(ctx->norm_field_names[i], norm) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+/* Forward declarations for helpers defined later in this translation unit. */
+static int read_ip_row(qzdb_reader_t* ctx, uint32_t row_id, uint32_t* geo_id,
+                       uint32_t* asn_id, uint32_t* usage_id);
+static int get_geo_info(qzdb_reader_t* ctx, uint32_t entry_id, int group_index,
+                        qzdb_geo_info_t* result);
+static int get_geo_info_buf(qzdb_reader_t* ctx, uint32_t entry_id, int group_index,
+                            char** values, char (*bufs)[64], int buf_size, int* out_count);
+static void geo_cache_init(qzdb_reader_t* ctx);
+static void geo_cache_free(qzdb_reader_t* ctx);
+static char** geo_cache_lookup(qzdb_reader_t* ctx, int group, uint32_t entry_id, int* out_count);
+static int resolve_row_id_cached(qzdb_reader_t* ctx, uint32_t row_id, int group_index,
+                                 qzdb_geo_info_t* result);
+
+int qzdb_init(qzdb_reader_t* ctx, const char* db_path) {    // §10.6: CRC32 verification is ON by default at open time. Pass verify_crc=0
     // (via qzdb_init_ex) only for diagnostics/benchmarks on trusted data.
     return qzdb_init_ex(ctx, db_path, 1);
 }
@@ -182,6 +247,7 @@ int qzdb_init_ex(qzdb_reader_t* ctx, const char* db_path, int verify_crc) {
     }
     ctx->geo_count = READ_LE16(d + 14);
     ctx->row_count = READ_LE32(d + 20);
+    ctx->build_date = READ_LE32(d + 32);
     ctx->v4_rec_count = READ_LE32(d + 24);
     ctx->v6_rec_count = READ_LE32(d + 28);
 
@@ -413,10 +479,12 @@ int qzdb_init_ex(qzdb_reader_t* ctx, const char* db_path, int verify_crc) {
         }
     }
 
-    // Dynamic field names from meta
+    // Dynamic field names / metadata from meta TLV (see API_CONTRACT §5/§6).
     ctx->field_names = NULL;
     ctx->float_field_flags = NULL;
     ctx->version_name = NULL;
+    ctx->description = NULL;
+    char* meta_primary = NULL;   /* type=4 primary version (edition) */
     if (ctx->flags & 4 && ctx->off_meta > 0 && ctx->off_meta + 4 <= ctx->data_size) {
         uint64_t pos = ctx->off_meta;
         while (pos + 4 <= ctx->data_size) {
@@ -428,7 +496,7 @@ int qzdb_init_ex(qzdb_reader_t* ctx, const char* db_path, int verify_crc) {
             memcpy(val, d + pos + 4, length);
             val[length] = '\0';
             if (t == 1) {
-                ctx->version_name = val;
+                free(ctx->version_name); ctx->version_name = val;
             } else if (t == 2) {
                 ctx->field_names = calloc(ctx->group_field_counts[0], sizeof(char*));
                 ctx->float_field_flags = calloc(ctx->group_field_counts[0], sizeof(int));
@@ -452,6 +520,10 @@ int qzdb_init_ex(qzdb_reader_t* ctx, const char* db_path, int verify_crc) {
                     else break;
                 }
                 free(val);
+            } else if (t == 3) {
+                free(ctx->description); ctx->description = val;
+            } else if (t == 4) {
+                free(meta_primary); meta_primary = val;
             } else {
                 free(val);
             }
@@ -468,6 +540,49 @@ int qzdb_init_ex(qzdb_reader_t* ctx, const char* db_path, int verify_crc) {
             snprintf(buf, sizeof(buf), "field_%d", i);
             ctx->field_names[i] = strdup(buf);
         }
+    }
+
+    /* Build normalized (lower-case + strip '_'/'-') field-name index once. */
+    ctx->norm_field_names = calloc(ctx->field_count ? ctx->field_count : 1, sizeof(char*));
+    for (int i = 0; i < ctx->field_count; i++) {
+        const char* fn = ctx->field_names[i] ? ctx->field_names[i] : "";
+        size_t need = strlen(fn) + 1;
+        char* n = malloc(need);
+        size_t j = 0;
+        for (size_t k = 0; fn[k]; k++) {
+            char c = fn[k];
+            if (c == '_' || c == '-') continue;
+            if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+            n[j++] = c;
+        }
+        n[j] = '\0';
+        ctx->norm_field_names[i] = n;
+    }
+
+    /* Edition: meta type=4 wins, else version list (type=1), else infer by field count. */
+    if (meta_primary && meta_primary[0]) {
+        ctx->edition = meta_primary; meta_primary = NULL;
+    } else if (ctx->version_name && ctx->version_name[0]) {
+        ctx->edition = strdup(ctx->version_name);
+    } else {
+        const char* inf = infer_edition(ctx->field_count, ctx->norm_field_names);
+        ctx->edition = strdup(inf ? inf : "std");
+    }
+    free(meta_primary);
+
+    /* Build date (Header offset 32, yyyyMMdd) -> "yyyy-MM" / "yyyy-MM-dd". */
+    if (ctx->build_date > 0) {
+        int y = ctx->build_date / 10000;
+        int m = (ctx->build_date / 100) % 100;
+        int dd = ctx->build_date % 100;
+        char b1[32], b2[32];
+        snprintf(b1, sizeof(b1), "%04d-%02d", y, m);
+        snprintf(b2, sizeof(b2), "%04d-%02d-%02d", y, m, dd);
+        ctx->data_month = strdup(b1);
+        ctx->build_time_str = strdup(b2);
+    } else {
+        ctx->data_month = strdup("");
+        ctx->build_time_str = strdup("");
     }
 
     // Metadata-driven dimensionMask repair (§5.4 / §6.2). A valid current-format
@@ -495,6 +610,7 @@ int qzdb_init_ex(qzdb_reader_t* ctx, const char* db_path, int verify_crc) {
     ctx->group_pools = NULL;
     ctx->group_pool_counts = NULL;
     ensure_pools_loaded(ctx);
+    geo_cache_init(ctx);
 
     switch (ctx->pool_count) {
         case 6: ctx->version_code = 1; break;
@@ -754,45 +870,31 @@ static uint32_t trie_walk_v6(const qzdb_reader_t* ctx, const uint8_t* ip_bin) {
     return 0;
 }
 
-/* Format a double like Java Double.toString / Python str / Go FormatFloat(f,'f',-1,64):
- * the shortest decimal that round-trips to the same double, in fixed-point form.
- * Integer values are printed without a fractional part (Go-compatible, matches
- * the cross-language reference output). */
+/* Native float formatting — cross-language canonical (API CONTRACT §8.2):
+ *   integer value  -> no decimal point ("116")
+ *   non-integer    -> fixed 6 decimal places ("116.400000")
+ *   NaN / Inf      -> "" (empty)
+ * Do NOT use the shortest representation; the pipe string is joined verbatim
+ * from these already-formatted strings (§8.3 forbids re-parsing). */
 static void format_float_value(double dv, char* buf, size_t buf_size) {
+    if (isnan(dv) || isinf(dv)) { buf[0] = '\0'; return; }
     if (dv == floor(dv) && dv >= -9007199254740992.0 && dv <= 9007199254740992.0) {
         snprintf(buf, buf_size, "%ld", (long)dv);
-        return;
+    } else {
+        snprintf(buf, buf_size, "%.6f", dv);
     }
-    char tmp[64];
-    for (int prec = 0; prec <= 17; prec++) {
-        snprintf(tmp, sizeof(tmp), "%.*f", prec, dv);
-        if (strtod(tmp, NULL) == dv) {
-            snprintf(buf, buf_size, "%s", tmp);
-            return;
-        }
-    }
-    /* fallback: 17 significant digits always round-trips for a double */
-    snprintf(buf, buf_size, "%.17g", dv);
 }
 
-/* Format a float32 like Java Float.toString / Go FormatFloat(f,'f',-1,32):
- * shortest decimal that round-trips to the same float32. */
+/* float32 variant — widens to double (exact) then applies the same 6-decimal
+ * rule, matching Java DecimalFormat("0.000000") / C# "F6" (HALF_EVEN). */
 static void format_float32_value(float fv, char* buf, size_t buf_size) {
     double dv = (double)fv;
+    if (isnan(dv) || isinf(dv)) { buf[0] = '\0'; return; }
     if (dv == floor(dv) && dv >= -9007199254740992.0 && dv <= 9007199254740992.0) {
         snprintf(buf, buf_size, "%ld", (long)dv);
-        return;
+    } else {
+        snprintf(buf, buf_size, "%.6f", dv);
     }
-    char tmp[64];
-    for (int prec = 0; prec <= 9; prec++) {
-        snprintf(tmp, sizeof(tmp), "%.*f", prec, dv);
-        if (strtof(tmp, NULL) == fv) {
-            snprintf(buf, buf_size, "%s", tmp);
-            return;
-        }
-    }
-    /* fallback: 9 significant digits always round-trips for a float32 */
-    snprintf(buf, buf_size, "%.9g", dv);
 }
 
 static int get_geo_info(qzdb_reader_t* ctx, uint32_t entry_id, int group_index, qzdb_geo_info_t* result) {
@@ -863,6 +965,131 @@ static void free_geo_info(qzdb_geo_info_t* info) {
             info->values_mask &= ~(1u << i);
         }
     }
+}
+
+/* ---- Per-snapshot bounded GeoInfo decode cache ----------------------------
+ * key = (group << 40) | entry_id. Cached value strings persist for the whole
+ * snapshot lifetime (freed in qzdb_free); a GeoInfo pointing at them sets NO
+ * values_mask bit, so free_geo_info leaves them alone. On a hit the hot path
+ * is pure pointer assignment (zero extra allocation). Collisions / a full
+ * table simply fall back to a fresh decode (never return a wrong value). */
+
+static void geo_cache_init(qzdb_reader_t* ctx) {
+    ctx->geo_cache_cap = 16384;  /* power of two */
+    ctx->geo_cache = calloc(ctx->geo_cache_cap, sizeof(qzdb_cache_slot_t));
+    pthread_mutex_init(&ctx->geo_cache_lock, NULL);
+}
+
+static void geo_cache_free(qzdb_reader_t* ctx) {
+    if (ctx->geo_cache) {
+        for (uint32_t i = 0; i < ctx->geo_cache_cap; i++) {
+            qzdb_cache_slot_t* s = &ctx->geo_cache[i];
+            if (s->key != 0 && s->values) {
+                for (int k = 0; k < s->count; k++) free(s->values[k]);
+                free(s->values);
+            }
+        }
+        free(ctx->geo_cache);
+        ctx->geo_cache = NULL;
+    }
+    pthread_mutex_destroy(&ctx->geo_cache_lock);
+}
+
+/* Decode entry (group,entry_id) and store a persistent copy in slot. */
+static char** geo_cache_store(qzdb_reader_t* ctx, qzdb_cache_slot_t* slot,
+                              int group, uint32_t entry_id, int* out_count) {
+    char bufs[QZDB_MAX_FIELDS][64];
+    char* vals[QZDB_MAX_FIELDS];
+    int cnt = 0;
+    if (get_geo_info_buf(ctx, entry_id, group, vals, bufs, 64, &cnt) != QZDB_OK) {
+        *out_count = 0;
+        return NULL;
+    }
+    char** pv = malloc((size_t)cnt * sizeof(char*));
+    if (!pv) { *out_count = 0; return NULL; }
+    for (int i = 0; i < cnt; i++) {
+        pv[i] = strdup(vals[i] ? vals[i] : "");
+    }
+    slot->key = ((uint64_t)group << 40) | (uint64_t)entry_id;
+    slot->values = pv;
+    slot->count = cnt;
+    *out_count = cnt;
+    return pv;
+}
+
+static char** geo_cache_lookup(qzdb_reader_t* ctx, int group, uint32_t entry_id, int* out_count) {
+    *out_count = 0;
+    if (!ctx->geo_cache) {
+        /* cache disabled (e.g. during construction) -> decode directly */
+        char bufs[QZDB_MAX_FIELDS][64];
+        char* vals[QZDB_MAX_FIELDS];
+        int cnt = 0;
+        if (get_geo_info_buf(ctx, entry_id, group, vals, bufs, 64, &cnt) == QZDB_OK) {
+            /* caller only reads immediately; return the tmp buffer pointers via
+               a one-slot persistent spill is unsafe — instead decode into heap */
+            char** pv = malloc((size_t)cnt * sizeof(char*));
+            if (pv) {
+                for (int i = 0; i < cnt; i++) pv[i] = strdup(vals[i] ? vals[i] : "");
+                *out_count = cnt;
+                return pv; /* leaked on pathological no-cache path; never used in practice */
+            }
+        }
+        return NULL;
+    }
+    uint64_t key = ((uint64_t)group << 40) | (uint64_t)entry_id;
+    uint32_t mask = ctx->geo_cache_cap - 1;
+    uint32_t h = (uint32_t)key * 2654435761u;
+    pthread_mutex_lock(&ctx->geo_cache_lock);
+    for (uint32_t i = 0; i < ctx->geo_cache_cap; i++) {
+        uint32_t idx = (h + i) & mask;
+        qzdb_cache_slot_t* s = &ctx->geo_cache[idx];
+        if (s->key == 0) {
+            char** pv = geo_cache_store(ctx, s, group, entry_id, out_count);
+            pthread_mutex_unlock(&ctx->geo_cache_lock);
+            return pv;
+        }
+        if (s->key == key) {
+            *out_count = s->count;
+            pthread_mutex_unlock(&ctx->geo_cache_lock);
+            return s->values;
+        }
+    }
+    /* Table full: overwrite the home slot (free its old strings first). */
+    qzdb_cache_slot_t* s = &ctx->geo_cache[h & mask];
+    if (s->values) {
+        for (int k = 0; k < s->count; k++) free(s->values[k]);
+        free(s->values);
+        s->values = NULL; s->count = 0; s->key = 0;
+    }
+    char** pv = geo_cache_store(ctx, s, group, entry_id, out_count);
+    pthread_mutex_unlock(&ctx->geo_cache_lock);
+    return pv;
+}
+
+/* Resolve a row_id into a GeoInfo, using the decode cache for zero-alloc hits. */
+static int resolve_row_id_cached(qzdb_reader_t* ctx, uint32_t row_id, int group_index, qzdb_geo_info_t* result) {
+    if (!ctx || !result) return QZDB_ERR_INVALID_PARAM;
+    uint32_t geo_id, asn_id, usage_id;
+    int err = read_ip_row(ctx, row_id, &geo_id, &asn_id, &usage_id);
+    if (err != QZDB_OK) return err;
+
+    uint16_t mask = group_index < ctx->actual_groups ? ctx->group_dim_masks[group_index] : 0;
+    uint32_t entry_id = geo_id;
+    if (mask & 0x02) entry_id = asn_id;
+    else if (mask & 0x04) entry_id = usage_id;
+
+    if (entry_id == 0) return QZDB_ERR_NOT_FOUND;
+
+    int cnt = 0;
+    char** cached = geo_cache_lookup(ctx, group_index, entry_id, &cnt);
+    if (cached) {
+        memset(result, 0, sizeof(*result));
+        for (int i = 0; i < cnt && i < QZDB_MAX_FIELDS; i++) {
+            result->values[i] = cached[i]; /* owned by cache; NOT freed by caller */
+        }
+        return QZDB_OK;
+    }
+    return get_geo_info(ctx, entry_id, group_index, result);
 }
 
 static int get_geo_info_buf(qzdb_reader_t* ctx, uint32_t entry_id, int group_index,
@@ -968,30 +1195,12 @@ static int resolve_row_id_buf(qzdb_reader_t* ctx, uint32_t row_id, int group_ind
     return get_geo_info_buf(ctx, entry_id, group_index, values, bufs, buf_size, out_count);
 }
 
-static int resolve_row_id(qzdb_reader_t* ctx, uint32_t row_id, int group_index, qzdb_geo_info_t* result) {
-    if (!ctx || !result) return QZDB_ERR_INVALID_PARAM;
-    uint32_t geo_id, asn_id, usage_id;
-    int err = read_ip_row(ctx, row_id, &geo_id, &asn_id, &usage_id);
-    if (err != QZDB_OK) return err;
-
-    uint16_t mask = group_index < ctx->actual_groups ? ctx->group_dim_masks[group_index] : 0;
-    uint32_t entry_id = geo_id;
-    if (mask & 0x02) {
-        entry_id = asn_id;
-    } else if (mask & 0x04) {
-        entry_id = usage_id;
-    }
-
-    if (entry_id == 0) return QZDB_ERR_NOT_FOUND;
-    return get_geo_info(ctx, entry_id, group_index, result);
-}
-
 int qzdb_find_uint(qzdb_reader_t* ctx, uint32_t ip_int, qzdb_geo_info_t* result) {
     if (!ctx || !result) return QZDB_ERR_INVALID_PARAM;
     if (!ctx->has_v4) return QZDB_ERR_NOT_FOUND;
     uint32_t row_id = trie_walk_v4(ctx, ip_int);
     if (row_id == 0) return QZDB_ERR_NOT_FOUND;
-    return resolve_row_id(ctx, row_id, ctx->group_index, result);
+    return resolve_row_id_cached(ctx, row_id, ctx->group_index, result);
 }
 
 int qzdb_find_v6(qzdb_reader_t* ctx, const uint8_t* ip_bin, qzdb_geo_info_t* result) {
@@ -999,7 +1208,7 @@ int qzdb_find_v6(qzdb_reader_t* ctx, const uint8_t* ip_bin, qzdb_geo_info_t* res
     if (!ctx->has_v6) return QZDB_ERR_NOT_FOUND;
     uint32_t row_id = trie_walk_v6(ctx, ip_bin);
     if (row_id == 0) return QZDB_ERR_NOT_FOUND;
-    return resolve_row_id(ctx, row_id, ctx->group_index, result);
+    return resolve_row_id_cached(ctx, row_id, ctx->group_index, result);
 }
 
 int qzdb_find_uint_buf(qzdb_reader_t* ctx, uint32_t ip_int,
@@ -1035,6 +1244,18 @@ uint32_t qzdb_lookup_row_id(qzdb_reader_t* ctx, const char* ip_str) {
     return ctx->has_v6 ? trie_walk_v6(ctx, res.v6) : 0;
 }
 
+int qzdb_parse_ip(const char* s, uint32_t* v4_out, uint8_t v6_out[16], int* is_v4) {
+    parse_result_t res;
+    if (!fast_parse_ip(s, &res)) return 0;
+    if (is_v4) *is_v4 = res.is_v4;
+    if (res.is_v4) {
+        if (v4_out) *v4_out = res.v4;
+    } else {
+        if (v6_out) memcpy(v6_out, res.v6, 16);
+    }
+    return 1;
+}
+
 uint32_t qzdb_lookup_row_id_uint(qzdb_reader_t* ctx, uint32_t ip_int) {
     if (!ctx->has_v4) return 0;
     return trie_walk_v4(ctx, ip_int);
@@ -1050,12 +1271,15 @@ int qzdb_lookup_ids(qzdb_reader_t* ctx, uint32_t row_id, qzdb_ids_t* out) {
     memset(out, 0, sizeof(*out));
     if (row_id == 0 || row_id >= (uint32_t)ctx->row_count) return QZDB_ERR_INVALID_PARAM;
 
-    uint64_t off = ctx->off_ip_row + (uint64_t)row_id * ctx->ip_row_size;
-    if (safe_read_u24(ctx->data, ctx->data_size, off, &out->geo_id) != QZDB_OK) return QZDB_ERR_BOUNDS;
-    if (safe_read_u24(ctx->data, ctx->data_size, off + 3, &out->asn_id) != QZDB_OK) return QZDB_ERR_BOUNDS;
-    if (ctx->ip_row_size >= 9) {
-        if (safe_read_u24(ctx->data, ctx->data_size, off + 6, &out->usage_id) != QZDB_OK) return QZDB_ERR_BOUNDS;
-    }
+    /* Decode the IPRow with its dynamic ROW_SCHEMA widths (geo/asn/usage may
+     * each be 1..4 bytes), NOT a hardcoded 3-byte layout — the latter returns
+     * wrong ids when row_width/stride differs (ASN groups, wider ids). */
+    uint32_t geo_id = 0, asn_id = 0, usage_id = 0;
+    int err = read_ip_row(ctx, row_id, &geo_id, &asn_id, &usage_id);
+    if (err != QZDB_OK) return err;
+    out->geo_id = geo_id;
+    out->asn_id = asn_id;
+    out->usage_id = usage_id;
     return QZDB_OK;
 }
 
@@ -1236,25 +1460,13 @@ int qzdb_find_str(qzdb_reader_t* ctx, const char* ip_str, char* out, size_t out_
         if (out_size > 0) out[0] = '\0';
         return QZDB_ERR_NOT_FOUND;
     }
+    /* to_pipe: join the already-format-correct values with '|' verbatim
+     * (API_CONTRACT §8.3 — no re-parsing, no second float formatting). */
     size_t pos = 0;
     int field_count = ctx->group_field_counts[ctx->group_index];
     for (int i = 0; i < field_count && i < QZDB_MAX_FIELDS; i++) {
         if (i > 0 && pos < out_size - 1) out[pos++] = '|';
-        const char* val = info.values[i];
-        if (!val) continue;
-        char float_buf[64];
-        if (ctx->float_field_flags && ctx->float_field_flags[i] && val[0] != '\0') {
-            double f = atof(val);
-            format_float_value(f, float_buf, sizeof(float_buf));
-            int flen = (int)strlen(float_buf);
-            val = float_buf;
-            size_t wlen = (size_t)flen < out_size - pos - 1 ? (size_t)flen : out_size - pos - 1;
-            if (wlen > 0) {
-                memcpy(out + pos, val, wlen);
-                pos += wlen;
-            }
-            continue;
-        }
+        const char* val = info.values[i] ? info.values[i] : "";
         size_t len = strlen(val);
         if (pos + len >= out_size) {
             if (out_size > pos) {
@@ -1357,8 +1569,21 @@ void qzdb_free(qzdb_reader_t* ctx) {
     }
     free(ctx->float_field_flags);
     free(ctx->version_name);
+    free(ctx->description);
+    free(ctx->edition);
+    free(ctx->data_month);
+    free(ctx->build_time_str);
+    if (ctx->norm_field_names) {
+        for (int i = 0; i < ctx->field_count; i++) free(ctx->norm_field_names[i]);
+        free(ctx->norm_field_names);
+    }
+    geo_cache_free(ctx);
 
-    munmap(ctx->data, ctx->data_size);
+    if (ctx->data_is_heap) {
+        free(ctx->data);
+    } else if (ctx->data) {
+        munmap(ctx->data, ctx->data_size);
+    }
     memset(ctx, 0, sizeof(*ctx));
 }
 
@@ -1397,16 +1622,12 @@ static int resolve_row_id_fields(qzdb_reader_t* ctx, uint32_t row_id, int group_
     int total_field_count = ctx->group_field_counts[group_index];
     if (total_field_count <= 0) return QZDB_ERR_CORRUPTED;
 
-    // Build name→index lookup
+    // Build name→index lookup (normalized: case/underscore/hyphen insensitive)
     int indices[QZDB_MAX_FIELDS];
     int idx_count = 0;
     for (int fi = 0; fi < field_count && field_names[fi] != NULL; fi++) {
-        for (int i = 0; i < ctx->field_count; i++) {
-            if (strcmp(ctx->field_names[i], field_names[fi]) == 0) {
-                indices[idx_count++] = i;
-                break;
-            }
-        }
+        int i = field_index_normalized(ctx, field_names[fi]);
+        if (i >= 0) indices[idx_count++] = i;
     }
     if (idx_count == 0) return QZDB_ERR_NOT_FOUND;
 
@@ -1503,4 +1724,368 @@ int qzdb_reload(qzdb_reader_t* ctx, const char* db_path) {
     qzdb_free(ctx);
     memcpy(ctx, &new_ctx, sizeof(*ctx));
     return QZDB_OK;
+}
+
+/* ----------------------------------------------------------------------- */
+/* IPv4-mapped IPv6 detection (API_CONTRACT §8.4)                          */
+/* ----------------------------------------------------------------------- */
+static int is_v4_mapped(const uint8_t* b) {
+    if (!b) return 0;
+    for (int i = 0; i < 10; i++) if (b[i] != 0) return 0;
+    return b[10] == 0xFF && b[11] == 0xFF;
+}
+static uint32_t v4_from_mapped(const uint8_t* b) {
+    return ((uint32_t)b[12] << 24) | ((uint32_t)b[13] << 16) |
+           ((uint32_t)b[14] << 8) | (uint32_t)b[15];
+}
+
+/* ----------------------------------------------------------------------- */
+/* group_index setter (API_CONTRACT §2 Builder.groupIndex)                 */
+/* ----------------------------------------------------------------------- */
+int qzdb_set_group_index(qzdb_reader_t* ctx, int group_index) {
+    if (!ctx) return QZDB_ERR_INVALID_PARAM;
+    if (group_index < 0 || group_index >= ctx->actual_groups) return QZDB_ERR_INVALID_PARAM;
+    ctx->group_index = group_index;
+    return QZDB_OK;
+}
+
+/* ----------------------------------------------------------------------- */
+/* Load from an in-memory byte buffer (copy semantics).                    */
+/* ----------------------------------------------------------------------- */
+int qzdb_init_buffer(qzdb_reader_t* ctx, const uint8_t* buf, size_t len, int verify_crc) {
+    if (!ctx || !buf || len == 0) return QZDB_ERR_INVALID_PARAM;
+    char tmpl[] = "/tmp/qzdb_buf_XXXXXX";
+    int fd = mkstemp(tmpl);
+    if (fd < 0) return QZDB_ERR_OUT_OF_MEMORY;
+    ssize_t w = write(fd, buf, len);
+    int rc;
+    if (w != (ssize_t)len) {
+        rc = QZDB_ERR_CORRUPTED;
+    } else {
+        /* qzdb_init_ex mmaps the temp file; we then unlink so the backing
+         * store is reclaimed while the mapping stays valid until close. */
+        rc = qzdb_init_ex(ctx, tmpl, verify_crc);
+    }
+    close(fd);
+    unlink(tmpl);
+    return rc;
+}
+
+/* ----------------------------------------------------------------------- */
+/* findBytes / lookupRowIdBytes                                            */
+/* ----------------------------------------------------------------------- */
+int qzdb_find_bytes(qzdb_reader_t* ctx, const uint8_t ip_bin[16], qzdb_geo_info_t* result) {
+    if (!ctx || !ip_bin || !result) return QZDB_ERR_INVALID_PARAM;
+    if (is_v4_mapped(ip_bin)) {
+        return qzdb_find_uint(ctx, v4_from_mapped(ip_bin), result);
+    }
+    return qzdb_find_v6(ctx, ip_bin, result);
+}
+
+uint32_t qzdb_lookup_row_id_bytes(qzdb_reader_t* ctx, const uint8_t* ip_bytes, int len) {
+    if (!ctx || !ip_bytes) return 0;
+    if (len == 16) {
+        if (is_v4_mapped(ip_bytes)) return ctx->has_v4 ? trie_walk_v4(ctx, v4_from_mapped(ip_bytes)) : 0;
+        return ctx->has_v6 ? trie_walk_v6(ctx, ip_bytes) : 0;
+    }
+    if (len == 4) {
+        uint32_t v4 = ((uint32_t)ip_bytes[0] << 24) | ((uint32_t)ip_bytes[1] << 16) |
+                      ((uint32_t)ip_bytes[2] << 8) | (uint32_t)ip_bytes[3];
+        return ctx->has_v4 ? trie_walk_v4(ctx, v4) : 0;
+    }
+    return 0;
+}
+
+/* ----------------------------------------------------------------------- */
+/* Field-projection queries returning a full qzdb_geo_info_t.              */
+/* ----------------------------------------------------------------------- */
+int qzdb_find_fields_uint(qzdb_reader_t* ctx, uint32_t ip_int,
+                          const char** fields, qzdb_geo_info_t* result) {
+    if (!ctx || !result) return QZDB_ERR_INVALID_PARAM;
+    if (fields == NULL) return qzdb_find_uint(ctx, ip_int, result);
+    if (!ctx->has_v4) return QZDB_ERR_NOT_FOUND;
+    uint32_t row_id = trie_walk_v4(ctx, ip_int);
+    if (row_id == 0) return QZDB_ERR_NOT_FOUND;
+    uint32_t geo_id, asn_id, usage_id;
+    if (read_ip_row(ctx, row_id, &geo_id, &asn_id, &usage_id) != QZDB_OK) return QZDB_ERR_CORRUPTED;
+    uint16_t mask = ctx->group_index < ctx->actual_groups ? ctx->group_dim_masks[ctx->group_index] : 0;
+    uint32_t entry_id = geo_id;
+    if (mask & 0x02) entry_id = asn_id;
+    else if (mask & 0x04) entry_id = usage_id;
+    if (entry_id == 0) return QZDB_ERR_NOT_FOUND;
+
+    char bufs[QZDB_MAX_FIELDS][64];
+    char* vals[QZDB_MAX_FIELDS];
+    int cnt = 0;
+    if (get_geo_info_buf(ctx, entry_id, ctx->group_index, vals, bufs, 64, &cnt) != QZDB_OK)
+        return QZDB_ERR_CORRUPTED;
+
+    memset(result, 0, sizeof(*result));
+    for (int i = 0; i < QZDB_MAX_FIELDS; i++) result->values[i] = "";  /* literal defaults */
+    for (int fi = 0; fields[fi] != NULL; fi++) {
+        int fidx = field_index_normalized(ctx, fields[fi]);
+        if (fidx >= 0 && fidx < cnt && fidx < QZDB_MAX_FIELDS) {
+            result->values[fidx] = strdup(vals[fidx] ? vals[fidx] : "");
+            result->values_mask |= (1u << fidx);
+        }
+        /* unknown field: its canonical slot stays "" (literal, not freed) */
+    }
+    return QZDB_OK;
+}
+
+int qzdb_find_fields(qzdb_reader_t* ctx, const char* ip_str,
+                     const char** fields, qzdb_geo_info_t* result) {
+    if (!ctx || !ip_str || !result) return QZDB_ERR_INVALID_PARAM;
+    if (fields == NULL) return qzdb_find(ctx, ip_str, result);
+    parse_result_t res;
+    if (!fast_parse_ip(ip_str, &res)) return QZDB_ERR_INVALID_PARAM;
+    if (res.is_v4) return qzdb_find_fields_uint(ctx, res.v4, fields, result);
+    if (!ctx->has_v6) return QZDB_ERR_NOT_FOUND;
+    uint32_t row_id = trie_walk_v6(ctx, res.v6);
+    if (row_id == 0) return QZDB_ERR_NOT_FOUND;
+    uint32_t geo_id, asn_id, usage_id;
+    if (read_ip_row(ctx, row_id, &geo_id, &asn_id, &usage_id) != QZDB_OK) return QZDB_ERR_CORRUPTED;
+    uint16_t mask = ctx->group_index < ctx->actual_groups ? ctx->group_dim_masks[ctx->group_index] : 0;
+    uint32_t entry_id = geo_id;
+    if (mask & 0x02) entry_id = asn_id;
+    else if (mask & 0x04) entry_id = usage_id;
+    if (entry_id == 0) return QZDB_ERR_NOT_FOUND;
+    char bufs[QZDB_MAX_FIELDS][64];
+    char* vals[QZDB_MAX_FIELDS];
+    int cnt = 0;
+    if (get_geo_info_buf(ctx, entry_id, ctx->group_index, vals, bufs, 64, &cnt) != QZDB_OK)
+        return QZDB_ERR_CORRUPTED;
+    memset(result, 0, sizeof(*result));
+    for (int i = 0; i < QZDB_MAX_FIELDS; i++) result->values[i] = "";
+    for (int fi = 0; fields[fi] != NULL; fi++) {
+        int fidx = field_index_normalized(ctx, fields[fi]);
+        if (fidx >= 0 && fidx < cnt && fidx < QZDB_MAX_FIELDS) {
+            result->values[fidx] = strdup(vals[fidx] ? vals[fidx] : "");
+            result->values_mask |= (1u << fidx);
+        }
+    }
+    return QZDB_OK;
+}
+
+/* ----------------------------------------------------------------------- */
+/* GeoInfo field access (API_CONTRACT §6)                                  */
+/* ----------------------------------------------------------------------- */
+const char* qzdb_geo_info_get(qzdb_reader_t* ctx, const qzdb_geo_info_t* info, const char* name) {
+    if (!ctx || !info || !name) return "";
+    int idx = field_index_normalized(ctx, name);
+    if (idx < 0 || idx >= QZDB_MAX_FIELDS) return "";
+    return info->values[idx] ? info->values[idx] : "";
+}
+
+int qzdb_geo_info_to_pipe(qzdb_reader_t* ctx, const qzdb_geo_info_t* info, char* out, size_t out_size) {
+    if (!ctx || !info || !out || out_size == 0) return QZDB_ERR_INVALID_PARAM;
+    size_t pos = 0;
+    int fc = ctx->group_field_counts[ctx->group_index];
+    for (int i = 0; i < fc && i < QZDB_MAX_FIELDS; i++) {
+        if (i > 0 && pos < out_size - 1) out[pos++] = '|';
+        const char* v = info->values[i] ? info->values[i] : "";
+        size_t len = strlen(v);
+        if (pos + len >= out_size) {
+            if (out_size > pos) { memcpy(out + pos, v, out_size - pos - 1); pos = out_size - 1; }
+            break;
+        }
+        memcpy(out + pos, v, len);
+        pos += len;
+    }
+    out[pos] = '\0';
+    return QZDB_OK;
+}
+
+const char* qzdb_geo_info_get_cidr(void) {
+    return "";  /* CIDR is not a stored field (API_CONTRACT §6) */
+}
+
+void qzdb_free_geo_info(qzdb_geo_info_t* info) {
+    free_geo_info(info);
+}
+
+/* ----------------------------------------------------------------------- */
+/* Metadata introspection (API_CONTRACT §5)                                */
+/* ----------------------------------------------------------------------- */
+const char* qzdb_get_version(qzdb_reader_t* ctx) {
+    return ctx && ctx->version_name ? ctx->version_name : "";
+}
+const char* qzdb_get_data_month(qzdb_reader_t* ctx) {
+    return ctx && ctx->data_month ? ctx->data_month : "";
+}
+const char* qzdb_get_edition(qzdb_reader_t* ctx) {
+    return ctx && ctx->edition ? ctx->edition : "";
+}
+const char* qzdb_get_scope(qzdb_reader_t* ctx) {
+    (void)ctx; return "";  /* no scope field in current header */
+}
+const char* qzdb_get_build_time(qzdb_reader_t* ctx) {
+    return ctx && ctx->build_time_str ? ctx->build_time_str : "";
+}
+const char* qzdb_get_description(qzdb_reader_t* ctx) {
+    return ctx && ctx->description ? ctx->description : "";
+}
+int qzdb_get_file_hash(qzdb_reader_t* ctx, char* out, size_t out_size) {
+    if (!ctx || !out || out_size < 9) return QZDB_ERR_INVALID_PARAM;
+    if (!ctx->data || ctx->data_size < 20) return QZDB_ERR_CORRUPTED;
+    uint32_t stored = READ_LE32(ctx->data + 16);
+    (void)stored;
+    uint32_t computed = crc32_compute_file(ctx->data, ctx->data_size);
+    snprintf(out, out_size, "%08x", computed);
+    return QZDB_OK;
+}
+const char** qzdb_get_field_names(qzdb_reader_t* ctx) {
+    return ctx ? (const char**)ctx->field_names : NULL;
+}
+int qzdb_get_field_count(qzdb_reader_t* ctx) {
+    return ctx ? ctx->field_count : 0;
+}
+int qzdb_has_field(qzdb_reader_t* ctx, const char* name) {
+    return field_index_normalized(ctx, name) >= 0 ? 1 : 0;
+}
+int qzdb_get_group_count(qzdb_reader_t* ctx) {
+    return ctx ? ctx->actual_groups : 0;
+}
+int qzdb_get_pool_count(qzdb_reader_t* ctx) {
+    return ctx ? ctx->pool_count : 0;
+}
+
+/* ----------------------------------------------------------------------- */
+/* CIDR reverse lookup (API_CONTRACT §5, §8.6)                             */
+/* ----------------------------------------------------------------------- */
+static int v4_walk_depth(const qzdb_reader_t* ctx, uint32_t ip_int,
+                         uint32_t start_idx, int start_depth, int max_depth) {
+    if (start_depth >= max_depth) return -1;
+    uint32_t idx = start_idx;
+    for (int depth = start_depth; depth < max_depth; depth++) {
+        if (idx >= ctx->v4_node_count) return -1;
+        int bit = (ip_int >> (31 - depth)) & 1;
+        uint32_t child = get_v4_child(ctx, idx, bit);
+        if (child == 0) return -1;
+        if (child & QZDB_SENTINEL) return depth + 1;
+        idx = child;
+    }
+    return -1;
+}
+
+static int lookup_v4_prefix_len(const qzdb_reader_t* ctx, uint32_t ip_int) {
+    if (!ctx->has_v4 || ctx->off_v4_jump <= 0) return -1;
+    uint32_t ptr;
+    if (safe_read_u32(ctx->data, ctx->data_size,
+                      ctx->off_v4_jump + ((ip_int >> 16) & 0xFFFF) * 4, &ptr) != QZDB_OK)
+        return -1;
+    if (ptr == 0) return -1;
+    if (ptr & QZDB_SENTINEL) return v4_walk_depth(ctx, ip_int, 0, 0, 16);
+    return v4_walk_depth(ctx, ip_int, ptr, 16, 32);
+}
+
+static int v6_walk_depth(const qzdb_reader_t* ctx, const uint8_t* ip,
+                         uint32_t start_idx, int start_depth, int max_depth) {
+    if (start_depth >= max_depth) return -1;
+    uint32_t idx = start_idx;
+    for (int depth = start_depth; depth < max_depth; depth++) {
+        if (idx >= ctx->v6_node_count) return -1;
+        int bit = (ip[depth >> 3] >> (7 - (depth & 7))) & 1;
+        uint32_t child = get_v6_child(ctx, idx, bit);
+        if (child == 0) return -1;
+        if (child & QZDB_SENTINEL) return depth + 1;
+        idx = child;
+    }
+    return -1;
+}
+
+static int lookup_v6_prefix_len(const qzdb_reader_t* ctx, const uint8_t* ip) {
+    if (!ctx->has_v6 || ctx->off_v6_jump <= 0) return -1;
+    int jb = ctx->v6_jump_bits;
+    uint32_t pref = 0;
+    for (int i = 0; i < jb; i++) {
+        int bit = (ip[i >> 3] >> (7 - (i & 7))) & 1;
+        pref = (pref << 1) | (uint32_t)bit;
+    }
+    uint32_t ptr;
+    if (safe_read_u32(ctx->data, ctx->data_size, ctx->off_v6_jump + (uint64_t)pref * 4, &ptr) != QZDB_OK)
+        return -1;
+    if (ptr == 0) return -1;
+    if (ptr & QZDB_SENTINEL) return v6_walk_depth(ctx, ip, 0, 0, jb);
+    return v6_walk_depth(ctx, ip, ptr, jb, 128);
+}
+
+static void format_v4_cidr(uint32_t ip, int n, char* out, size_t sz) {
+    uint32_t net = (n == 0) ? 0 : (ip & (0xFFFFFFFFu << (32 - n)));
+    snprintf(out, sz, "%u.%u.%u.%u/%d",
+             (net >> 24) & 0xFF, (net >> 16) & 0xFF, (net >> 8) & 0xFF, net & 0xFF, n);
+}
+
+static void format_v6_cidr(const uint8_t* ip, int n, char* out, size_t sz) {
+    uint8_t net[16];
+    memcpy(net, ip, 16);
+    for (int bit = n; bit < 128; bit++)
+        net[bit >> 3] &= (uint8_t)~(1 << (7 - (bit & 7)));
+    int g[8];
+    for (int i = 0; i < 8; i++)
+        g[i] = ((net[2 * i] & 0xFF) << 8) | (net[2 * i + 1] & 0xFF);
+    int bestStart = -1, bestLen = 0, curStart = -1, curLen = 0;
+    for (int i = 0; i < 8; i++) {
+        if (g[i] == 0) { if (curStart < 0) { curStart = i; curLen = 1; } else curLen++; }
+        else { if (curLen > bestLen) { bestStart = curStart; bestLen = curLen; } curStart = -1; curLen = 0; }
+    }
+    if (curLen > bestLen) { bestStart = curStart; bestLen = curLen; }
+    char tmp[48]; int p = 0;
+    if (bestLen >= 2) {
+        for (int i = 0; i < bestStart; i++) {
+            if (i > 0) tmp[p++] = ':';
+            p += snprintf(tmp + p, sizeof(tmp) - p, "%x", g[i]);
+        }
+        tmp[p++] = ':'; tmp[p++] = ':';
+        int first = 1;
+        for (int i = bestStart + bestLen; i < 8; i++) {
+            if (!first) tmp[p++] = ':';
+            p += snprintf(tmp + p, sizeof(tmp) - p, "%x", g[i]);
+            first = 0;
+        }
+    } else {
+        for (int i = 0; i < 8; i++) {
+            if (i > 0) tmp[p++] = ':';
+            p += snprintf(tmp + p, sizeof(tmp) - p, "%x", g[i]);
+        }
+    }
+    snprintf(out, sz, "%s/%d", tmp, n);
+}
+
+char* qzdb_lookup_cidr(qzdb_reader_t* ctx, const char* ip_str, char* out, size_t out_size) {
+    if (!ctx || !ip_str || !out || out_size == 0) return NULL;
+    parse_result_t res;
+    if (!fast_parse_ip(ip_str, &res)) return NULL;
+    if (res.is_v4) return qzdb_lookup_cidr_uint(ctx, res.v4, out, out_size);
+    int n = lookup_v6_prefix_len(ctx, res.v6);
+    if (n < 0) return NULL;
+    format_v6_cidr(res.v6, n, out, out_size);
+    return out;
+}
+
+char* qzdb_lookup_cidr_uint(qzdb_reader_t* ctx, uint32_t ip_int, char* out, size_t out_size) {
+    if (!ctx || !out || out_size == 0) return NULL;
+    int n = lookup_v4_prefix_len(ctx, ip_int);
+    if (n < 0) return NULL;
+    format_v4_cidr(ip_int, n, out, out_size);
+    return out;
+}
+
+char* qzdb_lookup_cidr_bytes(qzdb_reader_t* ctx, const uint8_t* ip_bytes, int len,
+                             char* out, size_t out_size) {
+    if (!ctx || !ip_bytes || !out || out_size == 0) return NULL;
+    if (len == 16) {
+        if (is_v4_mapped(ip_bytes))
+            return qzdb_lookup_cidr_uint(ctx, v4_from_mapped(ip_bytes), out, out_size);
+        int n = lookup_v6_prefix_len(ctx, ip_bytes);
+        if (n < 0) return NULL;
+        format_v6_cidr(ip_bytes, n, out, out_size);
+        return out;
+    }
+    if (len == 4) {
+        uint32_t v4 = ((uint32_t)ip_bytes[0] << 24) | ((uint32_t)ip_bytes[1] << 16) |
+                      ((uint32_t)ip_bytes[2] << 8) | (uint32_t)ip_bytes[3];
+        return qzdb_lookup_cidr_uint(ctx, v4, out, out_size);
+    }
+    return NULL;
 }

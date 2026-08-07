@@ -1,11 +1,13 @@
 use std::path::Path;
 
-const DATA: &str = "/Users/zengxiangzhan/ZengData/IP数据库/qzdb/multi-lang/data";
-
 fn family(ip: &str) -> &'static str {
-    if ip.contains(':') { "V6" }
-    else if regex_lite::Regex::new(r"^\d+\.\d+\.\d+\.\d+$").map(|r| r.is_match(ip)).unwrap_or(false) { "V4" }
-    else { "?" }
+    if ip.contains(':') {
+        "V6"
+    } else if ip.split('.').count() == 4 && ip.split('.').all(|p| p.parse::<u8>().is_ok()) {
+        "V4"
+    } else {
+        "?"
+    }
 }
 
 fn test(path: &str, ip: &str) {
@@ -13,7 +15,7 @@ fn test(path: &str, ip: &str) {
         println!("  ⚠ {} not found", path);
         return;
     }
-    let searcher = match qzdb_reader::from_file(path) {
+    let searcher = match qzdb_reader::QzdbReader::from_file(path) {
         Ok(s) => s,
         Err(e) => {
             println!("  ⚠ {} load error: {:?}", path, e);
@@ -21,7 +23,7 @@ fn test(path: &str, ip: &str) {
         }
     };
     let s = searcher.find_str(ip);
-    println!("Rust Output: {}", s);
+    println!("Rust Output: {} ({})", s, family(ip));
 }
 
 fn main() {

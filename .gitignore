@@ -61,12 +61,21 @@ multi-lang/data/test.txt
 # Compiled test binaries
 multi-lang/c/bench_qps
 multi-lang/c/qzdb_test
+multi-lang/c/golden_check
+multi-lang/c/test_main
 multi-lang/c/*.o
 multi-lang/rust/bench_qps
 multi-lang/rust/target/
 multi-lang/go/bench_qps
 *.o
 *.obj
+
+# Debug symbol bundles (macOS build artifacts)
+*.dSYM/
+multi-lang/c/*.dSYM/
+
+# PHP Tier1 synthetic test fixtures (generated, not source)
+multi-lang/php/.tier1_synthetic.qzdb*
 
 # Language specific
 node_modules/

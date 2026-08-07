@@ -1,30 +1,53 @@
 <?php
+/**
+ * QZDB PHP 性能基准
+ *
+ * 用法：php bench_all.php
+ * 说明：V4 走 findUint；V6 走 findV6Bin（16 字节原始二进制）。
+ *       随机 IP 大多未命中，更接近真实"缓存最不利"场景。
+ */
 require_once __DIR__ . '/QzdbReader.php';
 use Qqzeng\Ip\QzdbReader;
 
-function bench($name, $dbPath, $count, $v6count, $first) {
-    if (!file_exists($dbPath)) { echo "  $name: not found\n"; return; }
-    if ($first) $s = QzdbReader::getInstance($dbPath);
-    else { $s = QzdbReader::getInstance(); $s->load($dbPath); }
-
-    srand(123);
-    $start = microtime(true);
-    for ($i = 0; $i < $count; $i++) { $s->findUint(rand(0, 4294967295)); }
-    $v4qps = floor($count / (microtime(true) - $start));
-
-    srand(456);
-    $v6start = microtime(true);
-    for ($i = 0; $i < $v6count; $i++) {
-        $high = (rand() & 0x7FFFFFFF) << 32 | (rand() & 0xFFFFFFFF);
-        $low = (rand() & 0xFFFFFFFF) << 32 | (rand() & 0xFFFFFFFF);
-        $s->findV6($high, $low);
+function bench(string $name, string $dbPath, int $count, int $v6count): void
+{
+    if (!file_exists($dbPath)) {
+        echo "  {$name}: not found ({$dbPath})\n";
+        return;
     }
-    $v6qps = floor($v6count / (microtime(true) - $v6start));
-    printf("  %-12s V4 QPS: %d  V6 QPS: %d\n", $name, $v4qps, $v6qps);
+    $s = new QzdbReader($dbPath, 0);
+    echo "--- {$name} ---\n";
+    echo "  fields: " . count($s->getFieldNames()) . ", edition: " . $s->getEdition() . "\n";
+
+    // V4
+    $t0 = microtime(true);
+    $hit = 0;
+    for ($i = 0; $i < $count; $i++) {
+        $ip = rand(0, 0x7FFFFFFF) | (rand(0, 0x7FFFFFFF) << 31 & 0xFFFFFFFF);
+        $ip = $ip & 0xFFFFFFFF;
+        $r = $s->findUint($ip);
+        if ($r !== null) $hit++;
+    }
+    $v4qps = (int)($count / (microtime(true) - $t0));
+    echo "  V4: " . number_format($v4qps) . " QPS  (命中 {$hit}/{$count})\n";
+
+    // V6（16 字节原始二进制）
+    $t1 = microtime(true);
+    $hit6 = 0;
+    for ($i = 0; $i < $v6count; $i++) {
+        $b = '';
+        for ($j = 0; $j < 16; $j++) {
+            $b .= chr(rand(0, 255));
+        }
+        $r = $s->findV6Bin($b);
+        if ($r !== null) $hit6++;
+    }
+    $v6qps = (int)($v6count / (microtime(true) - $t1));
+    echo "  V6: " . number_format($v6qps) . " QPS  (命中 {$hit6}/{$v6count})\n";
 }
 
-$count = 3000000; $v6count = 1000000;
-echo "PHP QPS Benchmarks (M4 Pro)\n";
-bench('std_china', '../data/qqzeng_ip_std_china.qzdb', $count, $v6count, true);
-bench('max_china', '../data/qqzeng_ip_max_china.qzdb', $count, $v6count, false);
-bench('max_global', '../data/qqzeng_ip_max_global.qzdb', $count, $v6count, false);
+$count = 3000000;
+$v6count = 1000000;
+echo "PHP QZDB Benchmarks\n";
+bench('std_china', __DIR__ . '/../data/qqzeng_ip_std_china.qzdb', $count, $v6count);
+bench('ult_china', __DIR__ . '/../data/qqzeng_ip_ult_china.qzdb', $count, $v6count);

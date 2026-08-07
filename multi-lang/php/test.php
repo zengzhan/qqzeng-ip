@@ -1,19 +1,19 @@
 <?php
 /**
- * QzdbReader - PHP SDK calling example
+ * QzdbReader — PHP SDK 调用示例
  *
- * Usage: php test.php
- * Place qqzeng_ip_std_china.qzdb in the same directory or specify the path.
+ * 用法：php test.php
+ * 把 qqzeng_ip_std_china.qzdb 放到本目录或 ../data 下。
  */
-
 require_once __DIR__ . '/QzdbReader.php';
 use Qqzeng\Ip\QzdbReader;
 
-function findDb() {
+function findDb(): ?string
+{
     $candidates = [
         'qqzeng_ip_std_china.qzdb',
         '../data/qqzeng_ip_std_china.qzdb',
-        'data/qqzeng_ip_std_china.qzdb',
+        __DIR__ . '/../data/qqzeng_ip_std_china.qzdb',
     ];
     foreach ($candidates as $c) {
         if (file_exists($c)) return $c;
@@ -21,33 +21,40 @@ function findDb() {
     return null;
 }
 
-ini_set('memory_limit', '256M');
 $dbPath = findDb();
 if (!$dbPath) {
     echo "Database file not found\n";
     exit(1);
 }
 
-$searcher = QzdbReader::getInstance($dbPath);
-$fields = $searcher->getFieldNames();
-echo "Fields (" . count($fields) . "): " . implode(', ', $fields) . "\n\n";
+// 推荐：Builder 模式加载
+$searcher = Qqzeng\Ip\QzdbBuilder::path($dbPath)->build();
 
-// Query sample V4 IPs
+echo "Edition: " . $searcher->getEdition() . "\n";
+echo "DataMonth: " . $searcher->getDataMonth() . "\n";
+echo "Fields (" . count($searcher->getFieldNames()) . "): " . implode(', ', $searcher->getFieldNames()) . "\n\n";
+
+// 单次查询（命中返回 GeoInfo，未命中返回 null）
 foreach (['114.114.114.114', '223.5.5.5', '8.8.8.8'] as $ip) {
-    $result = $searcher->findStr($ip);
-    echo "find(\"{$ip}\") => " . ($result ?: '(null)') . "\n";
+    $result = $searcher->find($ip);
+    echo "find(\"{$ip}\") => " . ($result ? $result->toPipe() : '(null)') . "\n";
 }
 
-// Query a V6 IP
-$result = $searcher->findStr('2408:8000:9000::1');
-echo "find(\"2408:8000:9000::1\") => " . ($result ?: '(null)') . "\n";
+// 管道符格式（未命中返回 ""，适合落库 / 日志）
+echo "findStr(\"240e:390:1:1::1\") => " . $searcher->findStr('240e:390:1:1::1') . "\n";
 
-// Get structured fields
-echo "\n--- Structured fields for 114.114.114.114 ---\n";
+// 结构化取值 + 语义 Getter
+echo "\n--- Structured for 114.114.114.114 ---\n";
 $loc = $searcher->find('114.114.114.114');
 if ($loc) {
-    foreach ($fields as $name) {
-        echo "  {$name}: {$loc[$name]}\n";
-    }
+    echo "  country=" . $loc->getCountry() . ", province=" . $loc->getProvince() . ", city=" . $loc->getCity() . "\n";
+    echo "  usage=" . $loc->getUsageType()->getDisplayZh() . "\n";
 }
-echo "TEST_PASS\n";
+
+// CIDR 反查
+echo "\nlookupCidr(114.114.114.114) => " . var_export($searcher->lookupCidr('114.114.114.114'), true) . "\n";
+
+// 元信息
+echo "fileHash=" . $searcher->getFileHash() . ", verifyCrc=" . var_export($searcher->verifyCrc(), true) . "\n";
+
+echo "\nTEST_PASS\n";

@@ -45,7 +45,8 @@ func main() {
 
 	// Query sample V4 IPs
 	for _, ip := range []string{"114.114.114.114", "223.5.5.5", "8.8.8.8"} {
-		result, err := searcher.FindStr(ip)
+		result := searcher.FindStr(ip)
+		_ = err
 		if err != nil {
 			fmt.Printf("find(\"%-16s\") => error: %v\n", ip, err)
 		} else {
@@ -54,7 +55,8 @@ func main() {
 	}
 
 	// Query a V6 IP
-	result, err := searcher.FindStr("2408:8000:9000::1")
+	result := searcher.FindStr("2408:8000:9000::1")
+	_ = err
 	if err != nil {
 		fmt.Printf("find(\"%-16s\") => error: %v\n", "2408:8000:9000::1", err)
 	} else {
