@@ -4,16 +4,17 @@
 
 | 语言 | 包坐标 | 注册中心 | 包 ID |
 |------|--------|----------|-------|
-| .NET / C# | `QQZeng.Qzdb` 1.0.0 | NuGet (`nuget.org`) | `QQZeng.Qzdb` |
+| .NET / C# | `QQZeng.Qzdb` 1.0.1 | NuGet (`nuget.org`) | `QQZeng.Qzdb` |
 | Java | `com.qqzeng:qzdb` 1.0.0 | Maven Central (`repo1.maven.org`) | `com.qqzeng:qzdb` |
 
-> 版本号已统一为 **1.0.0**，与两份包对齐。包版本独立于 QZDB 数据格式版本（数据格式见 `API_CONTRACT.md`）。
+> 包版本独立于 QZDB 数据格式版本（数据格式见 `API_CONTRACT.md`）。
+> 版本差异说明：.NET 现为 **1.0.1**（net10.0 单目标）。因 NuGet `1.0.0` 不可变，且初版上传仅含 net8.0，已升版重发（见 §1.4）；Java 仍为未发布的 **1.0.0**。
 
 ---
 
 ## 1. .NET / NuGet 包（`QQZeng.Qzdb`）
 
-- 工程：`multi-lang/netcore/QQZeng.Qzdb.csproj`（双框架 `net8.0;net10.0`）
+- 工程：`multi-lang/netcore/QQZeng.Qzdb.csproj`（**net10.0 单目标**，LTS）
 - 包元数据：`PackageProjectUrl` / `RepositoryUrl` 指向 `https://github.com/zengzhan/qqzeng-ip`
 
 ### 1.1 本地打包
@@ -21,19 +22,19 @@
 ```bash
 cd multi-lang/netcore
 dotnet pack -c Release -o ./nupkgs
-# 产出：nupkgs/QQZeng.Qzdb.1.0.0.nupkg  (+ QQZeng.Qzdb.1.0.0.snupkg 符号包)
+# 产出：nupkgs/QQZeng.Qzdb.1.0.1.nupkg  (+ QQZeng.Qzdb.1.0.1.snupkg 符号包)
 ```
 
 ### 1.2 发布到 NuGet
 
 ```bash
-dotnet nuget push ./nupkgs/QQZeng.Qzdb.1.0.0.nupkg \
+dotnet nuget push ./nupkgs/QQZeng.Qzdb.1.0.1.nupkg \
   --api-key <NUGET_API_KEY> \
   --source https://api.nuget.org/v3/index.json
 ```
 
 - 需要 NuGet 账号的 **API Key + 2FA**。
-- `1.0.0` 一经发布**不可覆盖/删除**（NuGet 不可变版本）。如需修复，请升版本号（如 `1.0.1`）。
+- NuGet 版本**不可变**：`1.0.0`（net8-only 初版）已无法覆盖，当前应发布 **1.0.1**。
 - 建议申请 `QQZeng.` **前缀保护**，避免包名被占用。
 - 本仓库 `.gitignore` 已排除 `multi-lang/netcore/nupkgs/`，打包产物不入库。
 
@@ -101,13 +102,13 @@ implementation 'com.qqzeng:qzdb:1.0.0'
 
 ## 3. 一致性约定
 
-- **版本**：所有官方包统一 `1.0.0`；升级时同步 `csproj` 的 `<Version>` 与 `pom.xml` 的 `<version>`。
+- **版本**：.NET = `1.0.1`（net10.0 单目标），Java = `1.0.0`；升级时分别同步 `csproj` 的 `<Version>` 与 `pom.xml` 的 `<version>`，并以新版本号重新发布（NuGet 版本不可变）。
 - **命名空间品牌**：`.NET = QQZeng.*`、`Java = com.qqzeng.*`，二者同源 `qqzeng`。
 - **NEVER push 自动执行**：以上发布步骤涉及远端写操作（NuGet push / Maven Central deploy / 打 tag），
   均需在确认凭据与仓库存在后由人工触发，CI 仅在你主动打 tag 时运行。
 
 ## 4. 当前状态（2026-08-07）
 
-- .NET：nuget.org 已由用户侧处理（包 `QQZeng.Qzdb` 已发布 1.0.0）。
+- .NET：初版 `1.0.0`（仅 net8.0）已上传；因改用 net10.0 单目标且 NuGet `1.0.0` 不可变，需改传 **1.0.1**（`nupkgs/QQZeng.Qzdb.1.0.1.nupkg`，仅 net10.0）。
 - Java：发布配置已就绪（`pom.xml` + workflow 已提交），待用户提供 Central token + GPG 私钥并打 `v1.0.0` tag 触发首次发布。
 - 本机无 JDK / Maven，Java 包的首次真实 `mvn` 校验留待 CI 执行。
