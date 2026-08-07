@@ -448,7 +448,9 @@ const hash = reader.getFileHash();
 | 文件 | 职责 |
 |------|------|
 | `qzdb.js` | 核心实现（单文件）：`QzdbReader`（加载 / Trie / 查询 / 热更新 / CRC / 元信息 / CIDR）、`QzdbBuilder`、`QzdbRegistry`、`ChainedReader`、`BatchResult`、`RowIds`、`GeoInfo`、`UsageType` + 兜底、`QzdbError` |
-| `test_suite.js` | Tier1 单元测试（无 DB，含解析 / 归一化 / 浮点 / Fail-Closed / 缓存 等）+ Tier2 黄金校验（读取 `tools/golden_vectors.json`，0 失败） |
+| `test_suite.js` | Tier1 单元测试（无 DB，含解析 / 归一化 / 浮点 / Fail-Closed / 缓存 等）+ Tier2 黄金校验（读取 `tools/golden_vectors.json`，0 失败；向量由被测代码自身生成，只证跨语言一致） |
+| `tier2_csv_verify.js` | **独立地面真值校验器**（以源数据 `test_data_202608/<ver>/<scope>/*.csv` 为裁判，`toPipe()` 逐字段比对，覆盖 std/pro/max/ult/asn × china/global 共 10 库；浮点字段按 6 位小数归一，证明对*真值*答得对） |
+| `tier3_concurrent.js` | Tier3 并发安全（16 Worker 线程 × 10 万 = 160 万 op，验证无锁快照架构，0 错误） |
 | `batch_cli.js` | 命令行批量查询示例 |
 | `bench_all.js` | 双栈吞吐基准 |
 | `cmp_node_py.js` | 与 Python 实现的交叉比对工具 |
@@ -456,7 +458,10 @@ const hash = reader.getFileHash();
 运行测试：
 
 ```bash
-node test_suite.js          # Tier1 单元测试 + Tier2 黄金校验（需同仓 multi-lang/data 真实库）
+node test_suite.js              # Tier1 单元测试 + Tier2 黄金校验（需同仓 multi-lang/data 真实库）
+node tier2_csv_verify.js        # 独立地面真值校验（需 test_data_202608 源 CSV + qzdb，全 10 库抽样）
+node tier2_csv_verify.js full std china   # 单库全量
+node tier3_concurrent.js        # 并发安全验证
 ```
 
 跨语言完整 API 规范见仓库根 [`API_CONTRACT.md`](../../API_CONTRACT.md)（v2.4，单一事实来源）。

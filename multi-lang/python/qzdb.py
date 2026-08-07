@@ -4,6 +4,8 @@ import os
 import struct
 import threading
 import zlib
+from collections import namedtuple
+from enum import Enum
 
 SENTINEL = 0x80000000
 SENTINEL_MASK_24 = 0x7FFFFF
@@ -47,7 +49,8 @@ for _i in range(6):
 def _fast_parse_ip(s):
     """Parse IP string with strict validation (SEC-05).
     Returns (v4_int, None) for IPv4 or (None, v6_bytes) for IPv6.
-    Returns None for invalid input. Fail-closed on any whitespace (no silent trim).
+    Returns None for invalid input. Fail-closed on any whitespace (no silent trim):
+    embedded whitespace is rejected by the digit/hex validation below, never trimmed.
     Max length 45.
     """
     if not isinstance(s, str):
@@ -55,10 +58,6 @@ def _fast_parse_ip(s):
     n = len(s)
     if n == 0 or n > 45:
         return None
-    # Reject space/tab/CR/LF/VT/FF — SSRF-safe, cross-language consistent
-    for c in s:
-        if c in ' \t\n\r\v\f':
-            return None
     if ':' not in s:
         return _fast_parse_ipv4(s)
     return _fast_parse_ipv6(s)
@@ -67,7 +66,7 @@ def _fast_parse_ip(s):
 def _fast_parse_ipv4(s):
     """Strict IPv4 parse. Returns (uint32, None) or None.
     Exactly 4 dot-separated segments, no leading zeros, each 0-255,
-    no trailing dot, no empty segments, no port suffix.
+    no trailing dot, no empty segments, no port suffix. ASCII-only digits.
     """
     if s[-1] == '.':
         return None
@@ -77,15 +76,9 @@ def _fast_parse_ipv4(s):
     ip = 0
     for p in parts:
         pl = len(p)
-        if pl == 0 or pl > 3:
+        if pl == 0 or pl > 3 or (pl > 1 and p[0] == '0') or not p.isascii() or not p.isdigit():
             return None
-        if pl > 1 and p[0] == '0':
-            return None
-        v = 0
-        for c in p:
-            if c < '0' or c > '9':
-                return None
-            v = v * 10 + (ord(c) - 48)
+        v = int(p)
         if v > 255:
             return None
         ip = (ip << 8) | v
@@ -145,11 +138,12 @@ def _fast_parse_ipv6(s):
             return None
     for g in allg:
         gl = len(g)
-        if gl == 0 or gl > 4:
+        if gl == 0 or gl > 4 or not g.isascii():
             return None
-        for c in g:
-            if _HEX[ord(c)] == 0xFF:
-                return None
+        try:
+            int(g, 16)
+        except ValueError:
+            return None
     zeros = 8 - ng - v4_slots
     if zeros < 0:
         return None
@@ -283,6 +277,39 @@ class GeoInfo:
 
     def get_cidr(self):
         return ''
+
+    # ── typed attribute forms (API contract appendix A.5) ───────────
+    # These shadow the raw-string __getattr__ fallback so that direct
+    # attribute access returns the same typed values as get_*() methods.
+
+    @property
+    def cidr(self):
+        # CIDR is not a stored field; contractually always "" (API §6.3).
+        return ''
+
+    @property
+    def geo_id(self):
+        v = self.get('geo_id')
+        if not v:
+            return None
+        try:
+            return int(v)
+        except ValueError:
+            return None
+
+    @property
+    def asn(self):
+        v = self.get('asn')
+        if not v:
+            return None
+        try:
+            return int(v)
+        except ValueError:
+            return None
+
+    @property
+    def usage_type(self):
+        return UsageType.from_string(self.get('usage_type'))
 
     @property
     def country_en(self):
@@ -419,41 +446,73 @@ class GeoInfo:
         return self.to_pipe()
 
 
-class UsageType:
-    """IP network usage-type (API contract §6 / §7).
+# Usage-type metadata indexed by raw value (module-level so it is visible
+# during Enum member construction, where class attributes are not yet reachable).
+_USAGE_META = {
+    "AICrawler": ("AI 爬虫", "AICrawler", "AI 训练 / AI 搜索爬虫（GPTBot、ClaudeBot 等）"),
+    "Backbone": ("骨干网", "Backbone", "运营商骨干传输网 / 国际出口"),
+    "Broadband": ("宽带", "Broadband", "家庭/企业宽带接入（xDSL、光纤、Cable、拨号等）"),
+    "Business": ("企业", "Business", "企业专线 / 企业组网"),
+    "CDN": ("CDN", "CDN", "内容分发网络"),
+    "Cloud": ("云服务", "Cloud", "公有云 / 托管云（AWS、阿里云、Azure 等）"),
+    "DNS": ("DNS", "DNS", "DNS 基础设施 / Anycast DNS"),
+    "DataCenter": ("数据中心", "DataCenter", "IDC / 机房托管"),
+    "Education": ("教育网", "Education", "高校 / 科研网（CERNET 等）"),
+    "Finance": ("金融", "Finance", "银行 / 证券 / 保险等金融机构"),
+    "Government": ("政府", "Government", "政务 / 公共机构网络"),
+    "ISP": ("互联网提供商", "ISP", "未细分类型的通用 ISP 接入"),
+    "IXP": ("交换中心", "IXP", "互联网交换中心"),
+    "IoT": ("物联网", "IoT", "物联网设备接入网络"),
+    "Mobile": ("移动网络", "Mobile", "蜂窝移动网络（2G/3G/4G/5G）"),
+    "Reserved": ("保留地址", "Reserved", "保留 / 未分配地址"),
+    "Satellite": ("卫星互联网", "Satellite", "卫星 / 低轨星座接入（Starlink 等）"),
+    "Spider": ("爬虫", "Spider", "通用搜索引擎 / 通用网络爬虫"),
+    "Streaming": ("流媒体", "Streaming", "音视频 / 直播流媒体平台"),
+    "Unknown": ("未知", "Unknown", "无法判定用途"),
+    "VPN": ("VPN/代理", "VPN", "VPN / 代理 / 隐私网络出口"),
+}
 
-    21 official scenarios plus a safe unknown fallback. ``from_string`` returns a
-    KnownUsageType for recognized raw values and falls back to UnknownUsageType
-    (never raises) for anything else.
+
+class UsageType(str, Enum):
+    """IP network usage-type (API contract §6 / §7, appendix A.5).
+
+    ``str, Enum`` so known members compare equal to their raw string value
+    (``UsageType.CDN == 'CDN'``) and serialize as plain strings. ``from_string`` /
+    ``from_raw`` return the enum member for a recognized raw value and the raw
+    ``str`` itself for anything else (``UsageType | str`` per appendix A.5).
     """
 
-    _KNOWN = {}
+    AICRAWLER = "AICrawler"
+    BACKBONE = "Backbone"
+    BROADBAND = "Broadband"
+    BUSINESS = "Business"
+    CDN = "CDN"
+    CLOUD = "Cloud"
+    DNS = "DNS"
+    DATACENTER = "DataCenter"
+    EDUCATION = "Education"
+    FINANCE = "Finance"
+    GOVERNMENT = "Government"
+    ISP = "ISP"
+    IXP = "IXP"
+    IOT = "IoT"
+    MOBILE = "Mobile"
+    RESERVED = "Reserved"
+    SATELLITE = "Satellite"
+    SPIDER = "Spider"
+    STREAMING = "Streaming"
+    UNKNOWN = "Unknown"
+    VPN = "VPN"
 
-    def __init__(self, raw_value, display_zh, display_en, description, known):
-        self._raw = raw_value
-        self._zh = display_zh
-        self._en = display_en
-        self._desc = description
-        self._known = known
+    def __init__(self, value):
+        zh, en, desc = _USAGE_META.get(value, ("未知", value, f"未知用途: {value}"))
+        self._zh = zh
+        self._en = en
+        self._desc = desc
+        self._raw = value
+        self._known = True
 
-    @classmethod
-    def _register(cls, raw, zh, en, desc):
-        inst = cls(raw, zh, en, desc, True)
-        cls._KNOWN[raw.lower()] = inst
-        return inst
-
-    # ── 21 official scenarios (API contract §7) ──
-
-    @classmethod
-    def from_string(cls, raw):
-        if raw is None or raw == '':
-            return cls._KNOWN.get('unknown', UNKNOWN_USAGE)
-        known = cls._KNOWN.get(raw.lower())
-        if known is not None:
-            return known
-        return UnknownUsageType(raw)
-
-    # accessors
+    # accessors (explicit get_* form, API contract §6.x)
     def raw_value(self):
         return self._raw
 
@@ -469,45 +528,42 @@ class UsageType:
     def is_known(self):
         return self._known
 
+    # spec-named attribute forms (appendix A.5)
+    @property
+    def raw(self):
+        return self._raw
+
+    @property
+    def display_zh(self):
+        return self._zh
+
+    @property
+    def display_en(self):
+        return self._en
+
+    @property
+    def description(self):
+        return self._desc
+
+    @classmethod
+    def from_string(cls, raw):
+        if raw is None or raw == '':
+            return cls.UNKNOWN
+        known = cls._KNOWN.get(raw.lower())
+        if known is not None:
+            return known
+        return raw  # spec: unknown -> raw str
+
+    @classmethod
+    def from_raw(cls, raw):
+        return cls.from_string(raw)
+
     def __repr__(self):
         return f'UsageType({self._raw!r}, known={self._known})'
 
 
-# Known scenario table (raw, 中文, 英文, 描述)
-_KNOWN_TABLE = [
-    ('AICrawler', 'AI 爬虫', 'AICrawler', 'AI 训练 / AI 搜索爬虫（GPTBot、ClaudeBot 等）'),
-    ('Backbone', '骨干网', 'Backbone', '运营商骨干传输网 / 国际出口'),
-    ('Broadband', '宽带', 'Broadband', '家庭/企业宽带接入（xDSL、光纤、Cable、拨号等）'),
-    ('Business', '企业', 'Business', '企业专线 / 企业组网'),
-    ('CDN', 'CDN', 'CDN', '内容分发网络'),
-    ('Cloud', '云服务', 'Cloud', '公有云 / 托管云（AWS、阿里云、Azure 等）'),
-    ('DNS', 'DNS', 'DNS', 'DNS 基础设施 / Anycast DNS'),
-    ('DataCenter', '数据中心', 'DataCenter', 'IDC / 机房托管'),
-    ('Education', '教育网', 'Education', '高校 / 科研网（CERNET 等）'),
-    ('Finance', '金融', 'Finance', '银行 / 证券 / 保险等金融机构'),
-    ('Government', '政府', 'Government', '政务 / 公共机构网络'),
-    ('ISP', '互联网提供商', 'ISP', '未细分类型的通用 ISP 接入'),
-    ('IXP', '交换中心', 'IXP', '互联网交换中心'),
-    ('IoT', '物联网', 'IoT', '物联网设备接入网络'),
-    ('Mobile', '移动网络', 'Mobile', '蜂窝移动网络（2G/3G/4G/5G）'),
-    ('Reserved', '保留地址', 'Reserved', '保留 / 未分配地址'),
-    ('Satellite', '卫星互联网', 'Satellite', '卫星 / 低轨星座接入（Starlink 等）'),
-    ('Spider', '爬虫', 'Spider', '通用搜索引擎 / 通用网络爬虫'),
-    ('Streaming', '流媒体', 'Streaming', '音视频 / 直播流媒体平台'),
-    ('Unknown', '未知', 'Unknown', '无法判定用途'),
-    ('VPN', 'VPN/代理', 'VPN', 'VPN / 代理 / 隐私网络出口'),
-]
-for _r, _z, _e, _d in _KNOWN_TABLE:
-    UsageType._register(_r, _z, _e, _d)
-
-UNKNOWN_USAGE = UsageType('Unknown', '未知', 'Unknown', '无法判定用途', True)
-
-
-class UnknownUsageType(UsageType):
-    """Safe fallback for unrecognized raw usage strings (API contract §7)."""
-
-    def __init__(self, raw):
-        super().__init__(raw, '未知', raw, f'未知用途: {raw}', False)
+# Raw -> member lookup (preserves old _KNOWN semantics for callers/tests).
+UsageType._KNOWN = {m.value.lower(): m for m in UsageType}
 
 
 class QzdbReader:
@@ -535,6 +591,15 @@ class QzdbReader:
         self._data = b''
         self._is_mmap = False
         self._closed = True
+
+    def __enter__(self):
+        """Context-manager entry (API contract appendix A.5)."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context-manager exit — always releases resources."""
+        self.close()
+        return False
 
     def __del__(self):
         self.close()
@@ -742,6 +807,20 @@ class QzdbReader:
         finally:
             self._verify_crc = saved_verify
         self._publish(shadow)
+
+    @staticmethod
+    def open_buffer(buffer, group_index=0, verify_crc=True):
+        """Build a reader directly from an in-memory buffer (copy semantics).
+
+        The buffer bytes are copied (never aliased) so the caller may free or
+        mutate the original afterwards (API contract §4.1 / appendix A.5).
+        CRC32 is verified by the underlying reload path before serving.
+        """
+        if buffer is None or len(buffer) == 0:
+            raise QzdbError('open_buffer buffer cannot be null or empty', QzdbError.INVALID_PARAM)
+        r = QzdbReader(group_index=group_index, verify_crc=verify_crc)
+        r.reload_buffer(buffer)
+        return r
 
     def safe_read_u16(self, off):
         return struct.unpack_from('<H', self._data, off)[0]
@@ -1413,10 +1492,10 @@ class QzdbReader:
         if self._closed:
             return None
         if not ip_str:
-            return None
+            raise QzdbError(f'invalid IP address: {ip_str!r}', QzdbError.INVALID_PARAM)
         parsed = _fast_parse_ip(ip_str)
         if parsed is None:
-            return None
+            raise QzdbError(f'invalid IP address: {ip_str!r}', QzdbError.INVALID_PARAM)
         v4, v6 = parsed
         if v4 is not None:
             return self.find_uint(v4)
@@ -1433,11 +1512,21 @@ class QzdbReader:
         return self._resolve_row_id(row_id & SENTINEL_MASK_31, self._group_index)
 
     def find_v6_bytes(self, ip_bytes):
-        """IPv6 lookup using 16-byte packed representation (zero BigInteger alloc)."""
+        """IPv6 lookup using 16-byte packed representation (zero BigInteger alloc).
+
+        An IPv4-mapped IPv6 (``::ffff:a.b.c.d``) is downgraded to the V4 trie,
+        matching ``find`` / ``find_bytes`` normalization (API contract §5.3).
+        """
         if self._closed:
             return None
         if not self._has_v6:
             return None
+        if len(ip_bytes) == 16 and ip_bytes[10] == 0xFF and ip_bytes[11] == 0xFF:
+            # Check that bytes 0..9 are all zero → genuine v4-mapped address.
+            if ip_bytes[:10] == b'\x00' * 10:
+                v4 = ((ip_bytes[12] & 0xFF) << 24 | (ip_bytes[13] & 0xFF) << 16
+                      | (ip_bytes[14] & 0xFF) << 8 | (ip_bytes[15] & 0xFF))
+                return self.find_uint(v4)
         row_id = self._trie_walk_v6_bytes(ip_bytes)
         if row_id == 0:
             return None
@@ -1605,12 +1694,15 @@ class QzdbReader:
             return None
         if row_id <= 0 or row_id >= self._row_count:
             return None
-        return self._read_ip_row(row_id)
+        return RowIds(*self._read_ip_row(row_id))
 
     def find_str(self, ip_str):
         if self._closed:
             return ''
-        info = self.find(ip_str)
+        try:
+            info = self.find(ip_str)
+        except QzdbError:
+            return ''
         if info is None:
             return ''
         return info.to_pipe()
@@ -1777,16 +1869,57 @@ class QzdbReader:
     # ── batch / stream (API contract §5) ───────────────────────────
 
     def find_batch(self, ips):
-        """Batch lookup. Per-item three-state semantics preserved; no thread pool."""
-        return [BatchResult(ip, self.find(ip), None) for ip in ips]
+        """Batch lookup. Per-item three-state semantics preserved; no thread pool.
+
+        ``error`` is populated with a ``QzdbError`` when an input is invalid
+        (API contract §8.2), while a clean miss leaves ``error`` as ``None``.
+        """
+        results = []
+        for ip in ips:
+            try:
+                gi = self.find(ip)
+            except QzdbError as e:
+                results.append(BatchResult(ip, None, e))
+                continue
+            results.append(BatchResult(ip, gi, None))
+        return results
 
     def find_batch_fields(self, ips, fields):
-        return [BatchResult(ip, self.find_fields(ip, fields), None) for ip in ips]
+        results = []
+        for ip in ips:
+            try:
+                gi = self.find_fields(ip, fields)
+            except QzdbError as e:
+                results.append(BatchResult(ip, None, e))
+                continue
+            results.append(BatchResult(ip, gi, None))
+        return results
 
     def find_stream(self, ips):
-        """Lazy stream — constant memory, yields each GeoInfo (or None) in turn."""
+        """Lazy stream — constant memory, yields each GeoInfo (or None) in turn.
+
+        Invalid inputs yield ``None`` (lenient GeoInfo|None stream). For the
+        three-state BatchResult stream, use :meth:`find_iter`.
+        """
         for ip in ips:
-            yield self.find(ip)
+            try:
+                yield self.find(ip)
+            except QzdbError:
+                yield None
+
+    def find_iter(self, ips):
+        """Three-state lazy stream (API contract §8.4).
+
+        Yields a :class:`BatchResult` per input IP, preserving the
+        found / not-found / invalid-input distinction via ``geo_info`` / ``error``.
+        """
+        for ip in ips:
+            try:
+                gi = self.find(ip)
+            except QzdbError as e:
+                yield BatchResult(ip, None, e)
+                continue
+            yield BatchResult(ip, gi, None)
 
     # ── metadata introspection (API contract §5) ───────────────────
 
@@ -1866,6 +1999,12 @@ class QzdbReader:
         return stored == (crc & 0xFFFFFFFF)
 
 
+# Named result of lookup_ids() — a tuple subclass (API contract appendix A.5).
+# Still a tuple, so callers that unpack ``geo_id, asn_id, usage_type_id = ...``
+# keep working, while named access (``row.geo_id``) is also available.
+RowIds = namedtuple('RowIds', ['geo_id', 'asn_id', 'usage_type_id'])
+
+
 class BatchResult:
     """Result of a single lookup in a batch/stream (API contract §1).
 
@@ -1881,6 +2020,11 @@ class BatchResult:
         self.ip = ip
         self.geo_info = geo_info
         self.error = error
+
+    @property
+    def info(self):
+        """Spec-named alias of ``geo_info`` (API contract appendix A.5)."""
+        return self.geo_info
 
     def __repr__(self):
         if self.error is not None:
@@ -1959,6 +2103,46 @@ class QzdbRegistry:
         for r in self._readers.values():
             r.close()
 
+    # ── spec-named registry management (API contract §9.5) ──────────
+
+    def register_path(self, name, path, **kwargs):
+        """Load a DB from a file path and register it under ``name``."""
+        reader = QzdbReader(path, **kwargs)
+        self._readers[name] = reader
+        return self
+
+    def register_buffer(self, name, buffer, **kwargs):
+        """Load a DB from an in-memory buffer and register it under ``name``."""
+        reader = QzdbReader.open_buffer(buffer, **kwargs)
+        self._readers[name] = reader
+        return self
+
+    def unregister(self, name):
+        """Remove a registered reader (no-op if absent)."""
+        self._readers.pop(name, None)
+        return self
+
+    def find_batch(self, ips):
+        """Per-IP first-hit across registered readers (three-state BatchResult)."""
+        results = []
+        for ip in ips:
+            gi = None
+            err = None
+            for r in self._readers.values():
+                try:
+                    gi = r.find(ip)
+                except QzdbError as e:
+                    err = e
+                    gi = None
+                if gi is not None:
+                    break
+            results.append(BatchResult(ip, gi, err))
+        return results
+
+
+# API-contract name for the registry class (appendix A.5).
+Registry = QzdbRegistry
+
 
 class ChainedReader:
     """Chained multi-database reader (API contract §1 / §5).
@@ -2022,6 +2206,59 @@ class ChainedReader:
             if c is not None:
                 return c
         return None
+
+    def find_batch(self, ips):
+        """Per-IP first-hit across chained readers (three-state BatchResult)."""
+        results = []
+        for ip in ips:
+            gi = None
+            err = None
+            for r in self._readers:
+                try:
+                    gi = r.find(ip)
+                except QzdbError as e:
+                    err = e
+                    gi = None
+                if gi is not None:
+                    break
+            results.append(BatchResult(ip, gi, err))
+        return results
+
+    # ── spec-named chain factories (API contract §9.5) ──────────────
+
+    @staticmethod
+    def chain(*readers):
+        """Build a ChainedReader from the given readers (first hit wins)."""
+        return ChainedReader(list(readers))
+
+    @staticmethod
+    def chain_merge(*readers):
+        """Alias of :meth:`chain` — merge readers, first (earliest) hit wins."""
+        return ChainedReader(list(readers))
+
+    @staticmethod
+    def chain_merge_override(*readers):
+        """Merge readers with later readers taking priority on conflict.
+
+        Implemented by reversing the resolution order so a later reader's hit
+        shadows an earlier one's.
+        """
+        return ChainedReader(list(reversed(readers)))
+
+    @property
+    def readers(self):
+        """The underlying ordered reader list (API contract §9.3)."""
+        return list(self._readers)
+
+    @property
+    def editions(self):
+        """Per-reader edition strings, in chain order (API contract §9.3)."""
+        return [r.get_edition() for r in self._readers]
+
+    @property
+    def scopes(self):
+        """Per-reader scope strings, in chain order (API contract §9.3)."""
+        return [r.get_scope() for r in self._readers]
 
     def close(self):
         for r in self._readers:

@@ -244,6 +244,7 @@ $row = new RowIds(1, 2, 3);
 check($row->geoId === 1 && $row->asnId === 2 && $row->usageId === 3, 'RowIds 字段');
 $brOk = new BatchResult('1.1.1.1', new GeoInfo(['CN'], ['country']), null);
 check($brOk->isSuccess(), 'BatchResult success');
+check($brOk->info instanceof GeoInfo, 'BatchResult info field');
 $brMiss = new BatchResult('1.1.1.1', null, null);
 check($brMiss->isNotFound(), 'BatchResult notFound');
 $brErr = new BatchResult('x', null, new QzdbException('bad', QzdbReader::ERROR_INVALID_PARAM));

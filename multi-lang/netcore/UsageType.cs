@@ -80,7 +80,11 @@ public readonly struct UsageType
         return Map.TryGetValue(raw, out var k) ? new UsageType(k) : new UsageType(raw);
     }
 
-    public string DisplayZh() => IsKnown ? ZhMap[(int)Known] : RawValue;
-    public string DisplayEn() => IsKnown ? EnMap[(int)Known] : RawValue;
-    public string Description() => IsKnown ? DescMap[(int)Known] : $"未预期的细分场景分类: {RawValue}";
+    public string DisplayZh => IsKnown ? ZhMap[(int)Known] : RawValue;
+    public string DisplayEn => IsKnown ? EnMap[(int)Known] : RawValue;
+    public string Description => IsKnown ? DescMap[(int)Known] : $"未预期的细分场景分类: {RawValue}";
+
+    public string GetDisplayZh() => DisplayZh;
+    public string GetDisplayEn() => DisplayEn;
+    public string GetDescription() => Description;
 }

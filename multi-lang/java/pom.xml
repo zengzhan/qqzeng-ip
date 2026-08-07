@@ -7,7 +7,7 @@
     <!--
       Maven groupId (com.qqzeng) 与 Java 包名 (com.qqzeng.qzdb) 一致。
       已通过 qqzeng.com 域名所有权验证（central.sonatype.com 命名空间校验），
-      与 .NET 端 QQZeng.Qzdb 品牌对齐。
+      与 .NET 端 Qzdb 包及 QQZeng 作者品牌对齐。
     -->
     <groupId>com.qqzeng</groupId>
     <artifactId>qzdb</artifactId>

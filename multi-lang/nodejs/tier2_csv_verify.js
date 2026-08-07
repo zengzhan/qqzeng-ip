@@ -39,6 +39,20 @@ function networkIpFromCidr(cidr) {
   return slash > 0 ? cidr.slice(0, slash) : cidr;
 }
 
+// 字段级等价比较：浮点字段（含小数点）按 6 位小数归一（SDK toPipe 统一 6 位，
+// 源 CSV 为变长精度，如 98.98468 vs 98.984680），其余字段精确字符串比较。
+function eqField(e, g) {
+  const eDot = e.includes('.');
+  const gDot = g.includes('.');
+  if (eDot || gDot) {
+    const a = Number(e);
+    const b = Number(g);
+    if (Number.isNaN(a) || Number.isNaN(b)) return e === g;
+    return a.toFixed(6) === b.toFixed(6);
+  }
+  return e === g;
+}
+
 function isExcludedMappedV6(networkIp) {
   if (networkIp.indexOf(':') < 0) return false;
   const r = QzdbReader.parseIp(networkIp);
@@ -107,11 +121,21 @@ async function verifyDb(qzdbPath, csvPath, opts) {
       return;
     }
     const got = info.toPipe();
-    const expPipe = expected.join('|');
-    if (got !== expPipe) {
+    const gotFields = got.split('|');
+    if (gotFields.length !== expected.length) {
       mismatch++;
-      if (diffs.length < 20) diffs.push({ csv: csvLineNo, ip: networkIp, cidr, expected: expPipe, got });
-    } else matches++;
+      if (diffs.length < 20) diffs.push({ csv: csvLineNo, ip: networkIp, cidr, expected: expected.join('|'), got });
+      return;
+    }
+    let eq = true;
+    for (let i = 0; i < expected.length; i++) {
+      if (!eqField(expected[i], gotFields[i])) { eq = false; break; }
+    }
+    if (eq) matches++;
+    else {
+      mismatch++;
+      if (diffs.length < 20) diffs.push({ csv: csvLineNo, ip: networkIp, cidr, expected: expected.join('|'), got });
+    }
   }
 
   const elapsed = Number(process.hrtime.bigint() - t0) / 1e6;

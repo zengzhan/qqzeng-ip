@@ -383,7 +383,7 @@ impl GeoInfo {
             if name.is_empty() {
                 continue;
             }
-            let val = self.values.get(i).map(|s| s.as_str()).unwrap_or("").to_string();
+            let val = self.values.get(i).map(|s| s.as_str()).unwrap_or("");
             if !first {
                 out.push(',');
             }
@@ -395,14 +395,14 @@ impl GeoInfo {
             if val.is_empty() {
                 out.push_str(if numeric { "null" } else { "\"\"" });
             } else if numeric {
-                if is_json_number(&val) {
-                    out.push_str(&val);
+                if is_json_number(val) {
+                    out.push_str(val);
                 } else {
                     out.push_str("null");
                 }
             } else {
                 out.push('"');
-                out.push_str(&escape_json(&val));
+                out.push_str(&escape_json(val));
                 out.push('"');
             }
         }
@@ -940,8 +940,8 @@ impl SnapshotInner {
         let numeric_indices = Arc::new(numeric_indices);
 
         // ---- 维度掩码修复 ----
-        for g in 0..actual_groups {
-            if group_dim_masks[g] != 0 {
+        for (g, dim_mask) in group_dim_masks.iter_mut().enumerate() {
+            if *dim_mask != 0 {
                 continue;
             }
             let mut has_asn = false;
@@ -958,7 +958,7 @@ impl SnapshotInner {
                     }
                 }
             }
-            group_dim_masks[g] = if has_asn { 0x02 } else { 0x01 };
+            *dim_mask = if has_asn { 0x02 } else { 0x01 };
         }
 
         // ---- pools (eager) ----
@@ -1419,8 +1419,8 @@ impl SnapshotInner {
             let (mut best_start, mut best_len) = (0, 0);
             let (mut cur_start, mut cur_len) = (0, 0);
             let mut run = false;
-            for i in 0..8 {
-                if g[i] == 0 {
+            for (i, &hextet) in g.iter().enumerate() {
+                if hextet == 0 {
                     if !run {
                         cur_start = i;
                         cur_len = 1;
@@ -1443,26 +1443,26 @@ impl SnapshotInner {
 
             let mut out = String::with_capacity(40);
             if best_len >= 2 {
-                for i in 0..best_start {
+                for (i, &hextet) in g.iter().enumerate().take(best_start) {
                     if i > 0 {
                         out.push(':');
                     }
-                    let _ = write!(out, "{:x}", g[i]);
+                    let _ = write!(out, "{:x}", hextet);
                 }
                 out.push_str("::");
                 let end = best_start + best_len;
-                for i in end..8 {
+                for (i, &hextet) in g.iter().enumerate().skip(end) {
                     if i > end {
                         out.push(':');
                     }
-                    let _ = write!(out, "{:x}", g[i]);
+                    let _ = write!(out, "{:x}", hextet);
                 }
             } else {
-                for i in 0..8 {
+                for (i, &hextet) in g.iter().enumerate() {
                     if i > 0 {
                         out.push(':');
                     }
-                    let _ = write!(out, "{:x}", g[i]);
+                    let _ = write!(out, "{:x}", hextet);
                 }
             }
             out.push('/');
@@ -1731,8 +1731,7 @@ fn parse_v4(s: &str) -> Option<u32> {
                 return None;
             }
             let mut val = 0u32;
-            for j in start..i {
-                let d = bytes[j];
+            for &d in &bytes[start..i] {
                 if !d.is_ascii_digit() {
                     return None;
                 }

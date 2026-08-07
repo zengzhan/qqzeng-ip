@@ -2,7 +2,7 @@
 
 > 纯离线、零依赖、高性能的 **QZDB IP 地理定位数据库**官方 PHP SDK（支持 IPv4 / IPv6 双栈）。
 
-- **官方命名空间**：`Qqzeng\Ip`（与认证参考实现 Java `com.qqzeng.qzdb` / C# `QQZeng.Qzdb` 完全对等）
+- **官方命名空间**：`Qqzeng\Ip`（与参考实现 Java `com.qqzeng.qzdb` / .NET 包 `Qzdb` 保持跨语言品牌一致）
 - **定位**：离线解析 `.qzdb` 二进制数据库文件，不依赖任何外部网络请求
 - **架构**：不可变快照（immutable snapshot）——并发查询互不阻塞，`reload` 原子切换
 - **运行要求**：**PHP 8.1+**（推荐 8.5.x；使用了返回类型声明、只读快照、`\Generator` 等特性）
@@ -172,6 +172,7 @@ $reader = QzdbBuilder::stream($fh)->build();
 | 批量查询 | `array findBatch(array $ips)` | `BatchResult[]` | 批量字符串查询，逐条容错 |
 | 批量字段 | `array findBatchFields(array $ips, $fields)` | `BatchResult[]` | 批量 + 字段子集 |
 | 流式查询 | `Generator findStream(iterable $ips)` | `Generator<BatchResult>` | 惰性 `yield` 流式逐条产出，内存恒定 |
+| 流式查询（规范名） | `Generator findIter(iterable $ips)` | `Generator<BatchResult>` | 同 `findStream`，规范 A.7 要求的方法名 |
 
 ### 5.1 IP 输入约定
 
@@ -197,7 +198,7 @@ class RowIds {
 
 ## 6. 结果对象 `GeoInfo`
 
-`find*` 系列返回 `GeoInfo|null`。它是**不可变**的结果对象，提供三种读取形态：
+`find*` 系列返回 `GeoInfo|null`。它是**不可变**的结果对象（`ArrayAccess` 只读，写入/删除抛 `\RuntimeException`），提供三种读取形态：
 
 ### 6.1 通用取字段 `get(name)`
 
@@ -282,7 +283,7 @@ if ($cidr4 !== null) echo $cidr4 . "\n";
 // 批量：一次性返回数组，单条异常不影响其它条目
 $results = $reader->findBatch(['1.1.1.1', '8.8.8.8', 'bad-ip']);
 foreach ($results as $r) {
-    if ($r->isSuccess())  echo $r->result->toPipe() . "\n";
+    if ($r->isSuccess())  echo $r->info->toPipe() . "\n";
     elseif ($r->isNotFound()) echo "未命中\n";
     else echo '错误: ' . $r->error->getMessage() . "\n";
 }
@@ -298,7 +299,7 @@ foreach ($reader->findStream($hugeIpList) as $r) {
 ```php
 class BatchResult {
     public string     $input;   // 原始输入
-    public ?GeoInfo   $result;  // 命中结果（否则 null）
+    public ?GeoInfo   $info;    // 命中结果（否则 null）
     public ?QzdbException $error; // 仅当输入格式非法 / 底层故障时非空
     public function isSuccess(): bool;   // error === null 且 命中
     public function isNotFound(): bool;  // error === null 且 未命中
@@ -334,7 +335,7 @@ $info = $chained->find('8.8.8.8');
 $merged = ChainedReader::chainMerge($china, $global);
 ```
 
-支持的方法：`find` / `findUint` / `findBytes` / `findFields` / `findBatch` / `findBatchFields` / `findStream`；以及聚合元信息 `editions()` / `scopes()` / `dataMonths()` / `readers()`。
+支持的方法：`find` / `findUint` / `findBytes` / `findFields` / `findBatch` / `findBatchFields` / `findStream` / `findIter`；以及聚合元信息 `getEditions()` / `getScopes()` / `getDataMonths()` / `getReaders()`（同 `editions()` / `scopes()` / `dataMonths()` / `readers()`）。
 
 > **资源说明**：`ChainedReader` **不会关闭**其下的底层 `QzdbReader`，下层各 reader 需自行 `close()`（建议各自用 `try/finally` 或 `register_shutdown_function` 释放）。
 
@@ -473,14 +474,16 @@ $hash = $reader->getFileHash();
 | `test.php` | 调用示例（演示 Builder 加载、查询、语义 Getter、CIDR、元信息；`php test.php` 可跑通） |
 | `bench_all.php` | 双栈吞吐基准（IPv4 走 `findUint`，IPv6 走 `findV6Bin`） |
 | `batch_cli.php` | 命令行批量查询工具示例 |
-| `tier1_test.php` | 单元测试（无 DB，104 断言，覆盖解析 / 归一化 / 浮点 / Fail-Closed / 缓存等） |
-| `tier2_golden.php` | 黄金校验（读取 `golden_vectors.json`，对真实库断言 `find(ip)->toPipe() === expected`，0 失败） |
+| `tier1_test.php` | 单元测试（无 DB，105 断言，覆盖解析 / 归一化 / 浮点 / Fail-Closed / 缓存等） |
+| `tier2_golden.php` | 黄金校验（读取 `golden_vectors.json`，对真实库断言 `find(ip)->toPipe() === expected`，0 失败；向量由被测代码自身生成，只证跨语言一致） |
+| `csv_oracle_test.php` | **独立真值校验**（以源数据 `test_data_202608/<edition>/china/*_range.csv` 为裁判，全局 + 区间内抽样共 22000 样本比对 country/province/city/isp，0 失配；证明对*真值*答得对） |
 
 运行测试：
 
 ```bash
 php tier1_test.php                         # 无数据库依赖的单元测试
 php tier2_golden.php                       # 需仓库根 test_data_202608/ 真实库，做黄金向量校验
+php csv_oracle_test.php                    # 独立真值校验（需源 CSV + 真实库）
 ```
 
 跨语言完整 API 规范见仓库根：`multi-lang/API_CONTRACT.md`（v2.4，单一事实来源）。

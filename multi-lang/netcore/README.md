@@ -2,10 +2,12 @@
 
 > 纯离线、零依赖、高性能的 **QZDB IP 地理定位数据库**官方 .NET SDK（支持 IPv4 / IPv6 双栈）。
 
-- **官方品牌**：`QQZeng.Qzdb`（NuGet 包 ID 与根命名空间一致）
+- **NuGet 包 / C# 程序集 / 命名空间**：`QQZeng.Qzdb`
+- **作者 / 公司**：`QQZeng`
+- **规范版本**：QZDB API v2.4
 - **定位**：离线解析 `.qzdb` 二进制数据库文件，不依赖任何外部网络请求
 - **架构**：无锁快照（lock-free snapshot）——并发查询互不阻塞，`Reload` 原子切换（`Interlocked.Exchange`）
-- **目标框架**：`net8.0`、`net10.0`
+- **目标框架**：`net8.0` / `net9.0` / `net10.0`
 - **许可**：MIT
 
 ---
@@ -33,7 +35,7 @@
 
 | 项 | 要求 |
 |----|------|
-| .NET 运行时 | `.NET 8.0` 或 `.NET 10.0`（SDK 不限版本，引用方任选其一即可） |
+| .NET 运行时 | `.NET 8.0+`（.NET 8 LTS / .NET 9 / .NET 10） |
 | 操作系统 | Windows / Linux / macOS 均可 |
 | 数据库文件 | `.qzdb` 格式（由官方数据构建工具生成，含所需分组的二进制数据） |
 | 依赖 | 无第三方运行时依赖（零依赖） |
@@ -51,7 +53,7 @@ dotnet add package QQZeng.Qzdb
 或在 `.csproj` 中直接引用：
 
 ```xml
-<PackageReference Include="QQZeng.Qzdb" Version="1.0.0" />
+<PackageReference Include="QQZeng.Qzdb" Version="1.0.2" />
 ```
 
 C# 代码统一使用命名空间：
@@ -68,9 +70,9 @@ using QQZeng.Qzdb;
 using QQZeng.Qzdb;
 
 // 通过文件路径加载（默认：校验 CRC、加载第 0 个分组）
-using var reader = new QzdbReader.Builder("ip_china.qzdb").Build();
+using var reader = QzdbReader.Open("ip_china.qzdb");
 
-// 单次查询：未命中或 IP 非法时返回 null（不会抛异常）
+// 单次查询：未命中返回 null；IP 格式非法抛 QzdbException(InvalidIp)
 GeoInfo? info = reader.Find("114.114.114.114");
 if (info != null)
 {
@@ -80,32 +82,33 @@ if (info != null)
     Console.WriteLine($"ISP={info.GetIsp()}, ASN={info.GetAsn()}");
 }
 
-// 管道符格式（未命中返回空字符串，适合直接落库/日志）
+// 管道符格式（未命中返回空字符串；非法 IP 仍抛 InvalidIp）
 string pipe = reader.FindStr("240e:390:1:1::1");
 
 // 仅取内部行号（最轻量，不涉及字段解析）
 uint rowId = reader.LookupRowId("8.8.8.8");
 ```
 
-> **查询语义约定**：`Find` / `FindUint` / `FindBytes` 等**在 IP 未命中或格式非法时返回 `null` / `0`，不抛异常**。只有数据库文件损坏、格式不支持、CRC 校验失败等**加载期错误**才会抛出 `QzdbException`（见[第 11 节](#11-错误处理)）。
+> **查询语义约定**：`Find` / `FindFields` / `FindBytes` 在 IP 未命中时返回 `null`，格式非法时抛出 `QzdbException(ErrorCode.InvalidIp)`；`TryFind` 用 `false` 表示未命中或非法输入。批量 API 通过 `BatchResult.Error` 保留非法输入状态，不能与未命中混淆。
 
 ---
 
 ## 4. 加载数据库
 
-所有加载入口都通过 **`QzdbReader.Builder`** 构造。Builder 不可变链式调用，`Build()` 返回 `QzdbReader`（实现 `IDisposable`）。
+推荐使用 **`QzdbReader.Open` / `OpenBuffer`**。`Builder` 保留为兼容入口；所有入口返回实现 `IDisposable` 的 `QzdbReader`。
 
 ### 4.1 从文件路径加载
 
 ```csharp
 // 最简：路径 + 默认第 0 分组 + 校验 CRC
-using var reader = new QzdbReader.Builder("ip_china.qzdb").Build();
+using var reader = QzdbReader.Open("ip_china.qzdb");
 
 // 完整选项
-var reader = new QzdbReader.Builder("ip_all.qzdb")
-    .GroupIndex(1)        // 选择数据库中的第 N 个分组（多分组文件时用于选不同数据维度）
-    .VerifyCrc(false)     // 关闭 CRC32 校验（仅在你已离线校验过、追求极限加载速度时关闭）
-    .Build();
+var reader = QzdbReader.Open("ip_all.qzdb", new ReaderOptions
+{
+    GroupIndex = 1,       // 选择数据库中的第 N 个分组
+    VerifyCrc = false     // 仅在已离线校验文件时关闭加载期 CRC
+});
 ```
 
 ### 4.2 从内存缓冲区加载（Serverless / 内嵌资源）
@@ -114,8 +117,8 @@ var reader = new QzdbReader.Builder("ip_all.qzdb")
 
 ```csharp
 byte[] bytes = await File.ReadAllBytesAsync("ip_china.qzdb");
-using var reader = new QzdbReader.Builder(bytes).Build();
-// 同样支持 .GroupIndex(...) / .VerifyCrc(...)
+using var reader = QzdbReader.OpenBuffer(bytes);
+// OpenBuffer 在返回前复制 bytes；调用方可以安全复用或修改原数组。
 ```
 
 ### 4.3 关于分组（GroupIndex）
@@ -150,23 +153,23 @@ using var reader = new QzdbReader.Builder(bytes).Build();
 | 行号查询 | `uint LookupRowId(string ipStr)` | `uint` | 仅返回内部行号（不含字段，最轻） |
 | 行号（整数） | `uint LookupRowIdUint(uint ipInt)` | `uint` | `FindUint` 的轻量版，只返回行号 |
 | 行号（字节） | `uint LookupRowIdBytes(byte[]? ipBytes)` | `uint` | `FindBytes` 的轻量版，只返回行号 |
-| 反查 ID | `RowIds LookupIds(uint rowId)` | `RowIds` | 由行号反查 Geo/ASN/Usage 三类索引 ID |
-| 批量查询 | `BatchResult[] FindBatch(IEnumerable<string> ipStrs)` | `BatchResult[]` | 批量字符串查询，逐条容错 |
-| 批量字段 | `BatchResult[] FindBatchFields(IEnumerable<string> ipStrs, IEnumerable<string>? fields)` | `BatchResult[]` | 批量 + 字段子集 |
+| 反查 ID | `(uint Geo, uint Asn, uint Usage) LookupIds(uint rowId)` | tuple | 由行号反查 Geo/ASN/Usage 三类索引 ID |
+| 批量查询 | `BatchResult[] FindBatch(string[] ipStrs)` | `BatchResult[]` | 批量字符串查询，逐条保留三态 |
+| 批量字段 | `BatchResult[] FindBatchFields(string[] ipStrs, string[]? fields)` | `BatchResult[]` | 批量 + 字段子集 |
 | 流式查询 | `IEnumerable<BatchResult> FindStream(IEnumerable<string> ipStrs)` | `IEnumerable<BatchResult>` | 惰性 `yield` 流式逐条产出 |
 
 ### 5.1 IP 输入约定
 
-- **`Find(string)`**：接受点分十进制（`1.2.3.4`）与完整/压缩 IPv6（`2001:db8::1`）、IPv4 映射地址（`::ffff:1.2.3.4`）；非法格式直接返回 `null`。
+- **`Find(string)`**：接受点分十进制（`1.2.3.4`）与完整/压缩 IPv6（`2001:db8::1`）、IPv4 映射地址（`::ffff:1.2.3.4`）；非法格式抛 `InvalidIp`。
 - **`FindUint(uint ipInt)`**：`ipInt` 应为 IPv4 地址的 **主机序 `uint`**（即 `（a<<24）|（b<<16）|（c<<8）| d`）。若你手上是网络序字节，请先转换或改用 `FindBytes`。
 - **`FindBytes(byte[])`**：4 字节按网络序（高位在前）解析为 IPv4；16 字节解析为 IPv6。
 
-### 5.2 行号与 `RowIds`
+### 5.2 行号与反查 tuple
 
-`LookupIds(uint rowId)` 返回 `RowIds` 只读结构，包含：
+`LookupIds(uint rowId)` 返回命名 tuple：
 
 ```csharp
-public readonly record struct RowIds(int GeoId, int AsnId, int UsageId);
+// (uint Geo, uint Asn, uint Usage)
 ```
 
 常用于：你想自己持有"行号"做缓存/批处理，再按需用 `Find*` 取完整字段，或构造跨维度关联。
@@ -184,7 +187,7 @@ string country = info.Get("country");        // 大小写、下划线不敏感�
 string isp     = info.Get("isp");
 ```
 
-字段名匹配会**忽略大小写和下划线**（例如 `country_code`、`CountryCode`、`countrycode` 等同）。未命中返回 `""`。
+字段名匹配会**忽略大小写、下划线和连字符**（例如 `country_code`、`CountryCode`、`country-code` 等同）。未命中返回 `""`。
 
 ### 6.2 强类型便捷方法
 
@@ -249,12 +252,14 @@ foreach (var r in reader.FindStream(hugeIpList))
 `BatchResult` 是只读结构：
 
 ```csharp
-public readonly record struct BatchResult(GeoInfo? Info, QzdbException? Error)
+public readonly record struct BatchResult(GeoInfo? Info, QzdbException? Error, string? Input = null)
 {
     public bool IsSuccess => Error == null && Info != null;
     public bool IsNotFound => Error == null && Info == null;
     public bool HasError   => Error != null;
 }
+// Input 携带产生该结果的原始 IP 字符串（批量/流式场景用于把结果与输入一一对应）
+
 ```
 
 > **性能提示**：`FindFields(ip, fields)` 与 `FindBatch` 配合，可只对需要的字段做解析，减少大批量查询下的字符串分配压力。
@@ -272,8 +277,8 @@ public readonly record struct BatchResult(GeoInfo? Info, QzdbException? Error)
 | `ChainedReader.ChainMergeOverride(...)` | `MergeOverride` | 合并所有命中；后库的值**覆盖**先库 |
 
 ```csharp
-using var china = new QzdbReader.Builder("ip_china.qzdb").Build();
-using var global = new QzdbReader.Builder("ip_global.qzdb").Build();
+using var china = QzdbReader.Open("ip_china.qzdb");
+using var global = QzdbReader.Open("ip_global.qzdb");
 
 // 国内优先，未命中回退全球
 var chained = ChainedReader.Chain(china, global);
@@ -342,7 +347,7 @@ reader.ReloadBuffer(newBytes);
 ```csharp
 try
 {
-    using var reader = new QzdbReader.Builder("ip_china.qzdb").Build();
+    using var reader = QzdbReader.Open("ip_china.qzdb");
 }
 catch (QzdbException ex)
 {
@@ -352,7 +357,7 @@ catch (QzdbException ex)
 
 `ErrorCode` 取值：`FileNotFound`、`BadMagic`、`BadHeader`、`Unsupported`、`Corrupted`、`InvalidParam`、`NotFound`、`InvalidIp`。
 
-> **查询期**：普通"未命中"和"IP 格式非法"通过返回 `null` / `0` 表达，**不抛异常**（见[第 3 节](#3-快速开始)说明）。只有底层数据异常（如分组越界）才会抛出，批量接口会将其封装进 `BatchResult.Error` 而不中断整体。
+> **查询期**：合法 IP 未命中返回 `null` / `0`；非法 IP 抛 `QzdbException(InvalidIp)`。批量接口会把该错误封装进 `BatchResult.Error`，不中断整体。
 
 ---
 
@@ -409,8 +414,8 @@ dotnet add package QQZeng.Qzdb --version x.y.z
 
 ### 13.4 兼容性注意
 
-- 包 ID 与命名空间一致（`QQZeng.Qzdb`），升级不会造成命名空间漂移。
-- 目标框架 `net8.0` / `net10.0`：引用方至少需其一；长期支持（LTS）优选 `net8.0`。
+- NuGet 包、程序集和 C# 命名空间统一为 `QQZeng.Qzdb`。
+- 目标框架支持 `net8.0` / `net9.0` / `net10.0`。
 
 ---
 
@@ -421,14 +426,15 @@ dotnet add package QQZeng.Qzdb --version x.y.z
 | 文件 | 职责 |
 |------|------|
 | `QzdbReader.cs` | 核心读取器：加载、trie 遍历、查询、热更新、CRC、生命周期 |
+| `ReaderOptions.cs` | 打开参数：CRC 校验与分组索引 |
 | `GeoInfo.cs` | 查询结果对象：字段解析、序列化（`ToPipe`/`ToJson`/`ToMap`）、强类型取值 |
 | `QzdbRegistry.cs` | 命名 reader 注册表（实例级 + 全局级） |
 | `ChainedReader.cs` | 多库链式组合（Fallback / Merge / MergeOverride） |
 | `BatchResult.cs` | 批量查询的三态结果结构（`Info` / `Error` / 状态位） |
-| `RowIds.cs` | 行号反查结构（`GeoId` / `AsnId` / `UsageId`） |
+| `RowIds.cs` | 历史兼容的行号反查结构；规范 API 使用命名 tuple |
 | `UsageType.cs` | 用途分类枚举与中英映射 |
 | `QzdbException.cs` | 异常类型与 `ErrorCode` 枚举 |
-| `QQZeng.Qzdb.csproj` | SDK 风格项目文件（多目标框架 + NuGet 元数据） |
+| `QQZeng.Qzdb.csproj` | SDK 风格项目文件（net10.0 + NuGet 元数据） |
 
 相邻项目（同 `multi-lang/` 下）：
 

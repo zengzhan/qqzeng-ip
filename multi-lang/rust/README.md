@@ -491,7 +491,12 @@ cargo update -p qzdb_reader
 | `bench_qps.rs` | QPS 基准测试 |
 | `tests/golden.rs` | Tier2 黄金校验（强制 0 失败，读取 `tools/golden_vectors.json`） |
 | `tests/tier1.rs` | Tier1 单元测试（覆盖契约 §10 九大类） |
-| `Cargo.toml` | 包定义与依赖（仅 `arc-swap`） |
+| `tests/csv_oracle.rs` | **独立 CSV 地面真值校验**：以源数据 `test_data_202608/{std,ult}/china/*_range.csv` 为裁判，对 std/ult_china 各约 6000 区间内 + 5000 全局随机样本比对 `country/province/city/isp`，强制 0 失配 |
+| `tests/cidr_oracle.rs` | CIDR 反查独立 Oracle（不依赖内部 Trie，交叉验证网络地址/前缀长度） |
+| `tests/concurrency.rs` / `tests/edge_cases.rs` / `tests/ipv4_scan.rs` / `tests/ipv6_boundary.rs` | 并发安全 / 边界 / 扫描 测试 |
+| `Cargo.toml` | 包定义与依赖（仅 `arc-swap`，crate `qzdb_reader` v1.0.0） |
+
+> **运行测试**：`cargo test`（覆盖 Tier1 + golden + 独立 CSV 真值 + CIDR Oracle + 并发/边界）。其中 `csv_oracle` 需仓库根 `test_data_202608/` 源 CSV 与 `../data/` 真实库，强制 0 失配。
 
 跨语言完整 API 规范见仓库根：`multi-lang/API_CONTRACT.md`。
 

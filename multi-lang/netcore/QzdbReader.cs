@@ -25,10 +25,54 @@ public sealed class QzdbReader : IDisposable
     private const int GeoCacheSize = 1 << 14; // 16384 slots ≈ 196 KB per snapshot
 
     private Snapshot? _activeSnapshot;
+    private int _lifecycleState;
+    private readonly object _lifecycleGate = new();
 
     private QzdbReader(Snapshot snap)
     {
         _activeSnapshot = snap;
+    }
+
+    /// <summary>Open a QZDB file with a copied, immutable snapshot.</summary>
+    public static QzdbReader Open(string path, ReaderOptions? options = null)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(path);
+        var normalized = NormalizeOptions(options);
+        return new QzdbReader(LoadPath(path, normalized.GroupIndex, normalized.VerifyCrc));
+    }
+
+    private static Snapshot LoadPath(string path, int groupIndex, bool verifyCrc)
+    {
+        try { return Snapshot.FromPath(path, groupIndex, verifyCrc); }
+        catch (QzdbException) { throw; }
+        catch (FileNotFoundException ex)
+        {
+            throw new QzdbException(ErrorCode.FileNotFound, $"QZDB file not found: {path}", ex);
+        }
+        catch (DirectoryNotFoundException ex)
+        {
+            throw new QzdbException(ErrorCode.FileNotFound, $"QZDB directory not found: {path}", ex);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            throw new QzdbException(ErrorCode.FileNotFound, $"QZDB file is not readable: {path}", ex);
+        }
+    }
+
+    /// <summary>Open a QZDB byte buffer. The input is copied before this method returns.</summary>
+    public static QzdbReader OpenBuffer(byte[] buffer, ReaderOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(buffer);
+        var normalized = NormalizeOptions(options);
+        return new QzdbReader(Snapshot.FromBuffer(buffer, normalized.GroupIndex, normalized.VerifyCrc));
+    }
+
+    private static ReaderOptions NormalizeOptions(ReaderOptions? options)
+    {
+        options ??= new ReaderOptions();
+        if (options.GroupIndex < 0)
+            throw new QzdbException(ErrorCode.InvalidParam, "groupIndex cannot be negative");
+        return options;
     }
 
     /// <summary>Volatile read of the active snapshot (acquire semantics for lock-free reload/dispose).</summary>
@@ -44,28 +88,22 @@ public sealed class QzdbReader : IDisposable
 
     public sealed class Builder
     {
-        internal FileStream? _fileStream;
+        internal string? _path;
         internal byte[]? _buffer;
         internal int _groupIndex;
         internal bool _verifyCrc = true;
 
-        public Builder(string path) { _fileStream = File.OpenRead(path); }
-        public Builder(byte[] buffer) { _buffer = buffer; }
+        public Builder(string path) { _path = path ?? throw new ArgumentNullException(nameof(path)); }
+        public Builder(byte[] buffer) { _buffer = buffer ?? throw new ArgumentNullException(nameof(buffer)); }
         public Builder GroupIndex(int idx) { _groupIndex = idx; return this; }
         public Builder VerifyCrc(bool enabled) { _verifyCrc = enabled; return this; }
 
         public QzdbReader Build()
         {
-            if (_fileStream != null)
-            {
-                var snap = Snapshot.FromStream(_fileStream, _groupIndex, _verifyCrc);
-                return new QzdbReader(snap);
-            }
+            if (_path != null)
+                return Open(_path, new ReaderOptions { GroupIndex = _groupIndex, VerifyCrc = _verifyCrc });
             if (_buffer != null)
-            {
-                var snap = Snapshot.FromBuffer(_buffer, _groupIndex, _verifyCrc);
-                return new QzdbReader(snap);
-            }
+                return OpenBuffer(_buffer, new ReaderOptions { GroupIndex = _groupIndex, VerifyCrc = _verifyCrc });
             throw new QzdbException(ErrorCode.InvalidParam, "Neither file path nor buffer was provided");
         }
     }
@@ -92,34 +130,47 @@ public sealed class QzdbReader : IDisposable
         internal int _rowGeoWidth, _rowAsnWidth, _rowUsageWidth;
 
         internal int _actualGroups;
-        internal int[] _groupFieldCounts;
-        internal long[] _groupEntryCounts;
-        internal int[] _groupDimMasks;
-        internal long[] _groupEntryOffsets;
-        internal int[] _groupStrides;
-        internal int[][] _groupFieldWidths;
-        internal int[][] _groupFieldOffsets;
-        internal bool[][] _groupFieldNative;
-        internal int[][] _groupFieldNativeType;
+        internal int[] _groupFieldCounts = null!;
+        internal long[] _groupEntryCounts = null!;
+        internal int[] _groupDimMasks = null!;
+        internal long[] _groupEntryOffsets = null!;
+        internal int[] _groupStrides = null!;
+        internal int[][] _groupFieldWidths = null!;
+        internal int[][] _groupFieldOffsets = null!;
+        internal bool[][] _groupFieldNative = null!;
+        internal int[][] _groupFieldNativeType = null!;
 
-        internal string[][][] _pools;
-        internal string[] _fieldNames;
-        internal Dictionary<string, int> _normMap;
-        internal bool[] _numericFlags;
+        internal string[][][] _pools = null!;
+        internal string[] _fieldNames = null!;
+        internal Dictionary<string, int> _normMap = null!;
+        internal bool[] _numericFlags = null!;
 
-        internal uint[]? _cacheKeys;
-        internal GeoInfo?[]? _cacheVals;
+        internal CacheEntry?[]? _cache;
 
-        internal string _version, _description, _dataMonth, _buildTimeStr, _edition, _scope;
+        internal string _version = "", _description = "", _dataMonth = "", _buildTimeStr = "", _edition = "", _scope = "";
         internal long _storedCrc;
         internal long? _canonicalCrc;
 
-        public static Snapshot FromStream(FileStream fs, int groupIndex, bool verifyCrc)
+        internal sealed class CacheEntry
         {
+            internal readonly uint Key;
+            internal readonly GeoInfo Value;
+
+            internal CacheEntry(uint key, GeoInfo value)
+            {
+                Key = key;
+                Value = value;
+            }
+        }
+
+        public static Snapshot FromPath(string path, int groupIndex, bool verifyCrc)
+        {
+            using var fs = File.OpenRead(path);
+            if (fs.Length > int.MaxValue)
+                throw new QzdbException(ErrorCode.Corrupted, "QZDB file is too large");
             var len = (int)fs.Length;
             byte[] buf = GC.AllocateUninitializedArray<byte>(len);
             fs.ReadExactly(buf);
-            fs.Dispose();
             return new Snapshot(buf, groupIndex, verifyCrc, true);
         }
 
@@ -143,8 +194,7 @@ public sealed class QzdbReader : IDisposable
             ParseMetadata();
             ParsePools();
 
-            _cacheKeys = new uint[GeoCacheSize];
-            _cacheVals = new GeoInfo?[GeoCacheSize];
+            _cache = new CacheEntry?[GeoCacheSize];
 
             if (verifyCrc)
             {
@@ -204,6 +254,8 @@ public sealed class QzdbReader : IDisposable
 
             _v4NodeCount = BinaryPrimitives.ReadInt32LittleEndian(span[152..]);
             _v6NodeCount = BinaryPrimitives.ReadInt32LittleEndian(span[156..]);
+            if (_rowCount < 0 || _v4NodeCount < 0 || _v6NodeCount < 0)
+                throw new QzdbException(ErrorCode.Corrupted, "Negative row or trie node count");
 
             _ipRowSize = BinaryPrimitives.ReadInt32LittleEndian(span[160..]);
             if (_ipRowSize < 1 || _ipRowSize > 64)
@@ -212,31 +264,33 @@ public sealed class QzdbReader : IDisposable
 
         internal void ValidateSectionBounds()
         {
-            var span = _data.Span;
             long dlen = _dataLen;
             int v4NodeSize = _v4Node24 ? 6 : 8;
             int v6NodeSize = _v6Node24 ? 6 : 8;
-            CheckSection(_offV4Jump, 65536L * 4, dlen, "v4_jump");
-            CheckSection(_offV4Nodes, (long)_v4NodeCount * v4NodeSize, dlen, "v4_nodes");
-            CheckSection(_offV6Jump, (1L << _v6JumpBits) * 4, dlen, "v6_jump");
-            CheckSection(_offV6Nodes, (long)_v6NodeCount * v6NodeSize, dlen, "v6_nodes");
-            CheckSection(_offIPRow, (long)_rowCount * _ipRowSize, dlen, "ip_row");
-
-            if (_offGeoEntries > 0 && _offGeoEntries >= dlen) throw new QzdbException(ErrorCode.Corrupted, "geo_entries out of bounds");
-            if (_offPools > 0 && _offPools >= dlen) throw new QzdbException(ErrorCode.Corrupted, "pools out of bounds");
-            if (_offMeta > 0 && _offMeta > dlen) throw new QzdbException(ErrorCode.Corrupted, "meta out of bounds");
-
-            if (_hasV4 && _offV4Jump <= 0) throw new QzdbException(ErrorCode.Corrupted, "hasV4 but V4 jump offset is zero");
-            if (_hasV4 && _v4NodeCount > 0 && _offV4Nodes <= 0) throw new QzdbException(ErrorCode.Corrupted, "V4 node offset is zero");
-            if (_hasV6 && _offV6Jump <= 0) throw new QzdbException(ErrorCode.Corrupted, "hasV6 but V6 jump offset is zero");
-            if (_hasV6 && _v6NodeCount > 0 && _offV6Nodes <= 0) throw new QzdbException(ErrorCode.Corrupted, "V6 node offset is zero");
-            if (_offIPRow <= 0) throw new QzdbException(ErrorCode.Corrupted, "Missing IPRow section");
+            if (_hasV4)
+            {
+                CheckSection(_offV4Jump, 65536L * 4, dlen, "v4_jump", required: true);
+                if (_v4NodeCount > 0) CheckSection(_offV4Nodes, (long)_v4NodeCount * v4NodeSize, dlen, "v4_nodes", required: true);
+            }
+            if (_hasV6)
+            {
+                CheckSection(_offV6Jump, (1L << _v6JumpBits) * 4, dlen, "v6_jump", required: true);
+                if (_v6NodeCount > 0) CheckSection(_offV6Nodes, (long)_v6NodeCount * v6NodeSize, dlen, "v6_nodes", required: true);
+            }
+            CheckSection(_offIPRow, (long)_rowCount * _ipRowSize, dlen, "ip_row", required: true);
+            CheckSection(_offGeoEntries, 1, dlen, "geo_entries", required: true);
+            if (_poolCount > 0) CheckSection(_offPools, 1, dlen, "pools", required: true);
+            if (_offRowSchema > 0) CheckSection(_offRowSchema, 4, dlen, "row_schema", required: true);
+            if (_offGroupSchema > 0) CheckSection(_offGroupSchema, 2, dlen, "group_schema", required: true);
+            if (_offMeta > 0) CheckSection(_offMeta, 4, dlen, "meta", required: true);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static void CheckSection(long off, long size, long dlen, string name)
+        private static void CheckSection(long off, long size, long dlen, string name, bool required = false)
         {
-            if (off > 0 && off + size > dlen)
+            if ((!required && off == 0) || (off >= HeaderSize && size >= 0 && off <= dlen && size <= dlen - off))
+                return;
+            if (required || off != 0)
                 throw new QzdbException(ErrorCode.Corrupted, $"Section {name} out of bounds");
         }
 
@@ -248,7 +302,8 @@ public sealed class QzdbReader : IDisposable
             int sp = (int)_offRowSchema;
             int fCount = span[sp];
             int stride = span[sp + 1];
-            if (fCount < 1 || fCount > 8 || sp + 4 + fCount * 4 > _dataLen || stride != _ipRowSize) return;
+            if (fCount < 1 || fCount > 8 || sp + 4 + fCount * 4 > _dataLen || stride != _ipRowSize)
+                throw new QzdbException(ErrorCode.Corrupted, "Invalid row schema");
 
             int g2 = 0, a2 = 0, u2 = 0, total = 0;
             int wpos = sp + 4;
@@ -264,18 +319,19 @@ public sealed class QzdbReader : IDisposable
                 wpos += 4;
                 total += w;
             }
-            if (ok && total == _ipRowSize)
-            {
-                _rowGeoWidth = g2;
-                _rowAsnWidth = a2;
-                _rowUsageWidth = u2;
-            }
+            if (!ok || total != _ipRowSize || g2 <= 0)
+                throw new QzdbException(ErrorCode.Corrupted, "Invalid row schema widths");
+            _rowGeoWidth = g2;
+            _rowAsnWidth = a2;
+            _rowUsageWidth = u2;
         }
 
         internal void ParseGroups()
         {
             var span = _data.Span;
             int gCount = BinaryPrimitives.ReadInt32LittleEndian(span[164..]);
+            if (gCount < 1 || gCount > 4)
+                throw new QzdbException(ErrorCode.Corrupted, $"Invalid group count: {gCount}");
 
             long[] headerGeoOffsets = new long[4];
             for (int i = 0; i < 4; i++)
@@ -283,12 +339,15 @@ public sealed class QzdbReader : IDisposable
                 headerGeoOffsets[i] = ReadU48(span, 168 + i * 6);
             }
 
-            int gmOff = (int)_offGeoEntries;
+            int gmOff = checked((int)_offGeoEntries);
+            if (gmOff < HeaderSize || gmOff >= _dataLen)
+                throw new QzdbException(ErrorCode.Corrupted, "Group table is out of bounds");
             int tableGroups = span[gmOff];
             gmOff++;
 
-            int groups = Math.Min(tableGroups, gCount);
-            if (groups > 4) groups = 4;
+            if (tableGroups < 1 || tableGroups > 4 || tableGroups != gCount)
+                throw new QzdbException(ErrorCode.Corrupted, $"Invalid group table count: {tableGroups}");
+            int groups = tableGroups;
             if (groups < 1) throw new QzdbException(ErrorCode.Corrupted, "Group count is 0");
             if (_groupIndex < 0 || _groupIndex >= groups)
                 throw new QzdbException(ErrorCode.InvalidParam, $"groupIndex {_groupIndex} out of range");
@@ -306,7 +365,11 @@ public sealed class QzdbReader : IDisposable
 
             for (int gi = 0; gi < groups; gi++)
             {
+                if (gmOff + 7 > _dataLen)
+                    throw new QzdbException(ErrorCode.Corrupted, "Group table is truncated");
                 _groupFieldCounts[gi] = span[gmOff];
+                if (_groupFieldCounts[gi] < 1 || _groupFieldCounts[gi] > 256)
+                    throw new QzdbException(ErrorCode.Corrupted, "Invalid group field count");
                 gmOff++;
                 _groupEntryCounts[gi] = BinaryPrimitives.ReadUInt32LittleEndian(span[gmOff..]) & 0xFFFFFFFF;
                 gmOff += 4;
@@ -319,11 +382,13 @@ public sealed class QzdbReader : IDisposable
             {
                 int sp = (int)_offGroupSchema;
                 int gsGroupCount = BinaryPrimitives.ReadUInt16LittleEndian(span[sp..]);
+                if (gsGroupCount != groups)
+                    throw new QzdbException(ErrorCode.Corrupted, "Group schema count does not match group table");
                 sp += 2;
-                int maxGsGroups = Math.Min(gsGroupCount, groups);
-                for (int gi = 0; gi < maxGsGroups; gi++)
+                for (int gi = 0; gi < groups; gi++)
                 {
-                    if (sp + 14 > _dataLen) break;
+                    if (sp + 14 > _dataLen)
+                        throw new QzdbException(ErrorCode.Corrupted, "Group schema is truncated");
                     sp += 2;
                     int fldCount = BinaryPrimitives.ReadUInt16LittleEndian(span[sp..]);
                     sp += 2;
@@ -331,8 +396,11 @@ public sealed class QzdbReader : IDisposable
                     int stride = BinaryPrimitives.ReadInt32LittleEndian(span[sp..]);
                     sp += 4;
                     sp += 4;
+                    if (stride <= 0 || stride > 4096)
+                        throw new QzdbException(ErrorCode.Corrupted, "Invalid group schema stride");
 
-                    if (sp + (long)fldCount * 12 > _dataLen) break;
+                    if (fldCount != _groupFieldCounts[gi] || fldCount > 256 || sp + (long)fldCount * 12 > _dataLen)
+                        throw new QzdbException(ErrorCode.Corrupted, "Invalid group schema field count");
 
                     _groupStrides[gi] = stride;
                     var widths = new int[fldCount];
@@ -343,12 +411,22 @@ public sealed class QzdbReader : IDisposable
                     {
                         sp += 2;
                         widths[fi] = span[sp];
+                        if (widths[fi] is < 1 or > 8)
+                            throw new QzdbException(ErrorCode.Corrupted, "Invalid group field width");
                         sp++;
                         int fieldFlags = span[sp];
                         sp++;
-                        natives[fi] = (fieldFlags & 0x01) != 0;
-                        natTypes[fi] = (fieldFlags >> 1) & 0x03;
+                        bool native = (fieldFlags & 0x01) != 0;
+                        int nativeType = (fieldFlags >> 1) & 0x03;
+                        if ((!native && widths[fi] > 4) ||
+                            (native && nativeType == 1 && widths[fi] is not (4 or 8)) ||
+                            (native && nativeType != 1 && widths[fi] > 4))
+                            throw new QzdbException(ErrorCode.Corrupted, "Invalid native field width");
+                        natives[fi] = native;
+                        natTypes[fi] = nativeType;
                         offsets[fi] = BinaryPrimitives.ReadInt32LittleEndian(span[sp..]);
+                        if (offsets[fi] < 0 || offsets[fi] > stride - widths[fi])
+                            throw new QzdbException(ErrorCode.Corrupted, "Group field exceeds stride");
                         sp += 4;
                         sp += 4;
                     }
@@ -372,6 +450,10 @@ public sealed class QzdbReader : IDisposable
                 }
                 if (_groupFieldNative[g] == null) _groupFieldNative[g] = new bool[fc];
                 if (_groupFieldNativeType[g] == null) _groupFieldNativeType[g] = new int[fc];
+                if (_groupStrides[g] <= 0 || _groupStrides[g] > 4096)
+                    throw new QzdbException(ErrorCode.Corrupted, "Invalid group stride");
+                CheckSection(_groupEntryOffsets[g], _groupEntryCounts[g] * (long)_groupStrides[g], _dataLen,
+                    $"group_{g}_entries", required: true);
             }
         }
 
@@ -394,13 +476,17 @@ public sealed class QzdbReader : IDisposable
                     int type = span[cursor];
                     int length = BinaryPrimitives.ReadUInt16LittleEndian(span[(cursor + 2)..]);
                     if (type == 0 || length == 0) break;
-                    if (cursor + 4L + length > _dataLen) break;
+                    if (cursor + 4L + length > _dataLen)
+                        throw new QzdbException(ErrorCode.Corrupted, "Metadata record is truncated");
                     var val = Encoding.UTF8.GetString(span.Slice(cursor + 4, length));
                     switch (type)
                     {
                         case 1: _version = val; break;
                         case 2: metaFields = val.Split('|'); break;
                         case 3: _description = val; break;
+                        case 4: _edition = val; break; // legacy primary edition/version
+                        case 5: _dataMonth = val; break; // v2.4 explicit data month
+                        case 6: _scope = val; break; // v2.4 explicit scope
                     }
                     cursor += 4 + length;
                 }
@@ -433,11 +519,9 @@ public sealed class QzdbReader : IDisposable
                 int y = _buildDate / 10000;
                 int m = (_buildDate / 100) % 100;
                 int dd = _buildDate % 100;
-                _dataMonth = $"{y:D4}-{m:D2}";
+                if (_dataMonth.Length == 0) _dataMonth = $"{y:D4}-{m:D2}";
                 _buildTimeStr = $"{y:D4}-{m:D2}-{dd:D2}";
             }
-
-            _edition = InferEdition(numFields);
         }
 
         private static string[] FallbackFieldNames(int count) => count switch
@@ -450,16 +534,6 @@ public sealed class QzdbReader : IDisposable
             _ => Enumerable.Range(0, count).Select(i => $"field_{i}").ToArray()
         };
 
-        internal string InferEdition(int count) => count switch
-        {
-            6 => "std",
-            8 => "asn",
-            11 => "pro",
-            15 => "max",
-            25 => "ult",
-            _ => "std"
-        };
-
         internal void ParsePools()
         {
             var span = _data.Span;
@@ -468,6 +542,8 @@ public sealed class QzdbReader : IDisposable
 
             long poolCursor = _offPools;
             long poolEnd = _offMeta > 0 ? _offMeta : _dataLen;
+            if (poolEnd < poolCursor)
+                throw new QzdbException(ErrorCode.Corrupted, "Pool section precedes its start");
 
             for (int g = 0; g < _actualGroups; g++)
             {
@@ -478,30 +554,41 @@ public sealed class QzdbReader : IDisposable
                 for (int f = 0; f < fieldCount; f++)
                 {
                     if (natives.Length > f && natives[f]) { groupPoolList[f] = []; continue; }
-                    if (poolCursor + 4 > poolEnd) { groupPoolList[f] = []; continue; }
+                    if (poolCursor < HeaderSize || poolCursor > poolEnd || poolEnd - poolCursor < 4)
+                        throw new QzdbException(ErrorCode.Corrupted, "Pool header is out of bounds");
 
                     int count = BinaryPrimitives.ReadInt32LittleEndian(span[(int)poolCursor..]);
                     poolCursor += 4;
-                    if (_offRowSchema > 0) poolCursor += 4;
-                    if (count <= 0 || count > MaxPoolCount) { groupPoolList[f] = []; continue; }
+                    if (_offRowSchema > 0)
+                    {
+                        if (poolEnd - poolCursor < 4) throw new QzdbException(ErrorCode.Corrupted, "Pool header is truncated");
+                        poolCursor += 4;
+                    }
+                    if (count < 0 || count > MaxPoolCount)
+                        throw new QzdbException(ErrorCode.Corrupted, "Invalid pool count");
+                    if (count == 0) { groupPoolList[f] = []; continue; }
 
                     int cnt = count;
-                    long stringDataStart = poolCursor + (count + 1) * 4;
-                    if (stringDataStart > poolEnd) { groupPoolList[f] = []; continue; }
+                    long indexBytes = ((long)count + 1) * 4;
+                    if (indexBytes > poolEnd - poolCursor)
+                        throw new QzdbException(ErrorCode.Corrupted, "Pool index table is out of bounds");
+                    long stringDataStart = poolCursor + indexBytes;
 
                     var strings = new string[cnt];
                     for (int i = 0; i < cnt; i++)
                     {
                         int strOff = BinaryPrimitives.ReadInt32LittleEndian(span[(int)(poolCursor + i * 4)..]);
                         int nextOff = BinaryPrimitives.ReadInt32LittleEndian(span[(int)(poolCursor + (i + 1) * 4)..]);
+                        if (strOff < 0 || nextOff < strOff || stringDataStart + nextOff > poolEnd)
+                            throw new QzdbException(ErrorCode.Corrupted, "Pool string offset is out of bounds");
                         int len = nextOff - strOff;
-                        if (len > 0 && stringDataStart + strOff + len <= _dataLen)
-                            strings[i] = Encoding.UTF8.GetString(span.Slice((int)(stringDataStart + strOff), len));
-                        else
-                            strings[i] = "";
+                        strings[i] = len == 0 ? "" : Encoding.UTF8.GetString(span.Slice((int)(stringDataStart + strOff), len));
                     }
                     groupPoolList[f] = strings;
-                    poolCursor = stringDataStart + BinaryPrimitives.ReadUInt32LittleEndian(span[(int)(poolCursor + count * 4)..]);
+                    int finalOffset = BinaryPrimitives.ReadInt32LittleEndian(span[(int)(poolCursor + count * 4)..]);
+                    if (finalOffset < 0 || stringDataStart + finalOffset > poolEnd)
+                        throw new QzdbException(ErrorCode.Corrupted, "Pool terminator offset is out of bounds");
+                    poolCursor = stringDataStart + finalOffset;
                 }
                 _pools[g] = groupPoolList;
             }
@@ -525,11 +612,9 @@ public sealed class QzdbReader : IDisposable
 
     public GeoInfo? Find(string ipStr)
     {
-        if (string.IsNullOrEmpty(ipStr)) return null;
-        if (!TryParseIp(ipStr, out var v4, out var v6High, out var v6Low, out var isV4)) return null;
-
         var snap = RequireSnapshot();
-        if (snap == null) return null;
+        if (string.IsNullOrEmpty(ipStr) || !TryParseIp(ipStr, out var v4, out var v6High, out var v6Low, out var isV4))
+            throw new QzdbException(ErrorCode.InvalidIp, $"Invalid IP address: '{ipStr}'");
 
         if (isV4)
         {
@@ -543,13 +628,33 @@ public sealed class QzdbReader : IDisposable
         }
     }
 
+    public GeoInfo? Find(System.Net.IPAddress address)
+    {
+        ArgumentNullException.ThrowIfNull(address);
+        return FindBytes(address.GetAddressBytes());
+    }
+
+    public bool TryFind(string ipStr, out GeoInfo? info)
+    {
+        try
+        {
+            info = Find(ipStr);
+            return info != null;
+        }
+        catch (QzdbException e) when (e.ErrorCode == ErrorCode.InvalidIp)
+        {
+            info = null;
+            return false;
+        }
+    }
+
     public GeoInfo? FindBytes(byte[]? ipBytes)
     {
-        if (ipBytes == null) return null;
         var snap = RequireSnapshot();
-        if (snap == null) return null;
+        if (ipBytes == null || (ipBytes.Length != 4 && ipBytes.Length != 16))
+            throw new QzdbException(ErrorCode.InvalidIp, "IP bytes must contain exactly 4 or 16 bytes");
 
-        uint rowId;
+        uint rowId = 0;
         if (ipBytes.Length == 16)
         {
             bool mapped = IsV4Mapped(ipBytes);
@@ -565,7 +670,6 @@ public sealed class QzdbReader : IDisposable
             uint v4 = (uint)((ipBytes[0] << 24) | (ipBytes[1] << 16) | (ipBytes[2] << 8) | ipBytes[3]);
             rowId = TrieWalkV4(snap, v4);
         }
-        else return null;
 
         return rowId > 0 ? ResolveRowId(snap, rowId) : null;
     }
@@ -590,7 +694,6 @@ public sealed class QzdbReader : IDisposable
     public GeoInfo? FindUint(uint ipInt)
     {
         var snap = RequireSnapshot();
-        if (snap == null) return null;
         uint rowId = TrieWalkV4(snap, ipInt);
         return rowId > 0 ? ResolveRowId(snap, rowId) : null;
     }
@@ -621,10 +724,10 @@ public sealed class QzdbReader : IDisposable
         return 0;
     }
 
-    public RowIds LookupIds(uint rowId)
+    public (uint Geo, uint Asn, uint Usage) LookupIds(uint rowId)
     {
         var snap = RequireSnapshot();
-        if (snap == null || rowId >= (uint)snap._rowCount) return default;
+        if (rowId >= (uint)snap._rowCount) return default;
 
         var span = snap._data.Span;
         long rOff = snap._offIPRow + (long)rowId * snap._ipRowSize;
@@ -633,16 +736,14 @@ public sealed class QzdbReader : IDisposable
         uint asnId = snap._rowAsnWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowGeoWidth), snap._rowAsnWidth) : 0;
         uint usageId = snap._rowUsageWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowGeoWidth + snap._rowAsnWidth), snap._rowUsageWidth) : 0;
 
-        return new RowIds((int)geoId, (int)asnId, (int)usageId);
+        return (geoId, asnId, usageId);
     }
 
     public GeoInfo? FindFields(string ipStr, string[]? fields)
     {
-        if (ipStr == null) return null;
-        if (!TryParseIp(ipStr, out var v4, out var v6High, out var v6Low, out var isV4)) return null;
-
         var snap = RequireSnapshot();
-        if (snap == null) return null;
+        if (string.IsNullOrEmpty(ipStr) || !TryParseIp(ipStr, out var v4, out var v6High, out var v6Low, out var isV4))
+            throw new QzdbException(ErrorCode.InvalidIp, $"Invalid IP address: '{ipStr}'");
 
         uint rowId = isV4 ? TrieWalkV4(snap, v4) : TrieWalkV6(snap, v6High, v6Low);
         if (rowId == 0) return null;
@@ -651,32 +752,34 @@ public sealed class QzdbReader : IDisposable
         return ResolveFields(snap, rowId, fields);
     }
 
-    public BatchResult[] FindBatch(IEnumerable<string> ipStrs)
+    public BatchResult[] FindBatch(string[] ipStrs)
     {
-        if (ipStrs == null) return Array.Empty<BatchResult>();
-        var list = ipStrs as string[] ?? ipStrs.ToArray();
-        var results = new BatchResult[list.Length];
-        for (int i = 0; i < list.Length; i++) results[i] = FindResult(list[i]);
+        ArgumentNullException.ThrowIfNull(ipStrs);
+        var results = new BatchResult[ipStrs.Length];
+        for (int i = 0; i < ipStrs.Length; i++) results[i] = FindResult(ipStrs[i]);
         return results;
     }
 
-    public BatchResult[] FindBatchFields(IEnumerable<string> ipStrs, IEnumerable<string>? fields)
+    public BatchResult[] FindBatch(IEnumerable<string> ipStrs) => FindBatch(ipStrs?.ToArray() ?? throw new ArgumentNullException(nameof(ipStrs)));
+
+    public BatchResult[] FindBatchFields(string[] ipStrs, string[]? fields)
     {
-        if (ipStrs == null) return Array.Empty<BatchResult>();
-        var list = ipStrs as string[] ?? ipStrs.ToArray();
-        var flds = fields?.ToArray();
-        var results = new BatchResult[list.Length];
-        for (int i = 0; i < list.Length; i++)
+        ArgumentNullException.ThrowIfNull(ipStrs);
+        var results = new BatchResult[ipStrs.Length];
+        for (int i = 0; i < ipStrs.Length; i++)
         {
             try
             {
-                var info = FindFields(list[i], flds);
-                results[i] = new BatchResult(info, null);
+                var info = FindFields(ipStrs[i], fields);
+                results[i] = new BatchResult(info, null, ipStrs[i]);
             }
-            catch (QzdbException e) { results[i] = new BatchResult(null, e); }
+            catch (QzdbException e) { results[i] = new BatchResult(null, e, ipStrs[i]); }
         }
         return results;
     }
+
+    public BatchResult[] FindBatchFields(IEnumerable<string> ipStrs, IEnumerable<string>? fields) =>
+        FindBatchFields(ipStrs?.ToArray() ?? throw new ArgumentNullException(nameof(ipStrs)), fields?.ToArray());
 
     public IEnumerable<BatchResult> FindStream(IEnumerable<string> ipStrs)
     {
@@ -689,9 +792,9 @@ public sealed class QzdbReader : IDisposable
         try
         {
             var info = Find(ip);
-            return new BatchResult(info, null);
+            return new BatchResult(info, null, ip);
         }
-        catch (QzdbException e) { return new BatchResult(null, e); }
+        catch (QzdbException e) { return new BatchResult(null, e, ip); }
     }
 
     #endregion
@@ -824,29 +927,22 @@ public sealed class QzdbReader : IDisposable
     }
 
     // Bounded, lock-free per-snapshot cache of resolved GeoInfo keyed by entryId.
-    // The snapshot is immutable, so a given entryId always resolves to the same GeoInfo.
-    // Cache is bounded (GeoCacheSize slots) to avoid unbounded memory growth on large DBs;
-    // collisions simply cause a recompute and never a wrong value (see read order below).
+    // A complete immutable CacheEntry is published as one reference. This prevents a
+    // colliding writer from exposing a key from one result with the value of another.
     private static GeoInfo? ResolveGeo(Snapshot snap, uint entryId)
     {
         if (entryId == 0) return null;
         if (entryId >= snap._groupEntryCounts[snap._groupIndex]) return null;
 
-        var keys = snap._cacheKeys!;
-        var vals = snap._cacheVals!;
+        var cache = snap._cache!;
         int h = (int)(entryId & (uint)(GeoCacheSize - 1));
 
-        // Read value BEFORE key, and only return when key matches: this guarantees we never
-        // return a GeoInfo belonging to a different entryId, even under concurrent races
-        // where another writer overwrites the same slot with a different entry.
-        var cached = Volatile.Read(ref vals[h]);
-        if (cached != null && Volatile.Read(ref keys[h]) == entryId)
-            return cached;
+        var cached = Volatile.Read(ref cache[h]);
+        if (cached != null && cached.Key == entryId)
+            return cached.Value;
 
         var geo = BuildGeo(snap, entryId);
-
-        Volatile.Write(ref vals[h], geo);
-        Volatile.Write(ref keys[h], entryId);
+        Volatile.Write(ref cache[h], new Snapshot.CacheEntry(entryId, geo));
         return geo;
     }
 
@@ -892,7 +988,7 @@ public sealed class QzdbReader : IDisposable
             }
         }
 
-        return new GeoInfo(snap._fieldNames, values, snap._normMap, snap._numericFlags);
+        return new GeoInfo(snap._fieldNames, values, snap._normMap, snap._numericFlags, takeOwnership: true);
     }
 
     private static GeoInfo? ResolveFields(Snapshot snap, uint rowId, string[] fields)
@@ -1037,8 +1133,8 @@ public sealed class QzdbReader : IDisposable
         v4 = 0;
         int n = s.Length;
         if (n == 0) { hasColon = false; return false; }
-        if (n > 15) { hasColon = s.Contains(':'); return false; }
-        hasColon = false;
+        hasColon = s.Contains(':');
+        if (hasColon || n > 15) return false;
         uint result = 0;
         int val = 0, dots = 0, start = 0;
         for (int i = 0; i <= n; i++)
@@ -1061,10 +1157,7 @@ public sealed class QzdbReader : IDisposable
                 dots++;
                 start = i + 1;
             }
-            else if (c == ':')
-            {
-                hasColon = true;
-            }
+            else if (c < '0' || c > '9') return false;
         }
         if (dots != 4) return false;
         v4 = result;
@@ -1083,65 +1176,30 @@ public sealed class QzdbReader : IDisposable
     private static V6Result TryParseV6(ReadOnlySpan<char> s)
     {
         V6Result r = default;
-        if (s.IsEmpty) return r;
-        if (s.Contains('%')) return r;
+        if (s.IsEmpty || s.Length > 45 || s.Contains('%')) return r;
 
         int dc = s.IndexOf("::");
         if (dc >= 0 && s[(dc + 2)..].IndexOf("::") >= 0) return r;
+        if (dc < 0 && (s[0] == ':' || s[^1] == ':')) return r;
 
         ReadOnlySpan<char> left = dc >= 0 ? s[..dc] : s;
         ReadOnlySpan<char> right = dc >= 0 ? s[(dc + 2)..] : ReadOnlySpan<char>.Empty;
 
-        // Parse colon-separated non-empty segments of both halves into a stack buffer.
-        Span<ushort> groups = stackalloc ushort[8];
-        int leftCount = 0, rightCount = 0;
-        bool hasV4 = false;
-        uint v4Int = 0;
-
-        for (int half = 0; half < 2; half++)
-        {
-            ReadOnlySpan<char> segs = half == 0 ? left : right;
-            int segStart = 0;
-            for (int i = 0; i <= segs.Length; i++)
-            {
-                if (i == segs.Length || segs[i] == ':')
-                {
-                    int len = i - segStart;
-                    if (len > 0)
-                    {
-                        ReadOnlySpan<char> seg = segs.Slice(segStart, len);
-                        bool isLastRight = half == 1 && i == segs.Length;
-                        if (isLastRight && seg.Contains('.'))
-                        {
-                            if (!TryParseV4(seg, out v4Int, out _)) return r;
-                            hasV4 = true;
-                        }
-                        else
-                        {
-                            if (!TryParseHexGroup(seg, out ushort gv)) return r;
-                            if (half == 0)
-                            {
-                                if (leftCount >= 8) return r;
-                                groups[leftCount++] = gv;
-                            }
-                            else
-                            {
-                                if (rightCount >= 8) return r;
-                                groups[leftCount + rightCount++] = gv;
-                            }
-                        }
-                    }
-                    segStart = i + 1;
-                }
-            }
-        }
+        Span<ushort> leftGroups = stackalloc ushort[8];
+        Span<ushort> rightGroups = stackalloc ushort[8];
+        int leftCount = ParseV6Side(left, leftGroups, allowV4: dc < 0, out bool leftHasV4, out uint leftV4);
+        if (leftCount < 0) return r;
+        int rightCount = ParseV6Side(right, rightGroups, allowV4: dc >= 0, out bool rightHasV4, out uint rightV4);
+        if (rightCount < 0 || (leftHasV4 && rightHasV4)) return r;
+        bool hasV4 = leftHasV4 || rightHasV4;
+        uint v4Int = leftHasV4 ? leftV4 : rightV4;
 
         int totalGroups = leftCount + rightCount;
         int v4Slots = hasV4 ? 2 : 0;
         int zeros;
         if (dc >= 0)
         {
-            if (totalGroups + v4Slots > 7) return r;
+            if (totalGroups + v4Slots >= 8) return r;
             zeros = 8 - totalGroups - v4Slots;
         }
         else
@@ -1155,12 +1213,12 @@ public sealed class QzdbReader : IDisposable
         int off = 0;
         for (int g = 0; g < leftCount; g++, off += 2)
         {
-            buf[off] = (byte)(groups[g] >> 8); buf[off + 1] = (byte)groups[g];
+            buf[off] = (byte)(leftGroups[g] >> 8); buf[off + 1] = (byte)leftGroups[g];
         }
         off += zeros * 2;
-        for (int g = leftCount; g < leftCount + rightCount; g++, off += 2)
+        for (int g = 0; g < rightCount; g++, off += 2)
         {
-            buf[off] = (byte)(groups[g] >> 8); buf[off + 1] = (byte)groups[g];
+            buf[off] = (byte)(rightGroups[g] >> 8); buf[off + 1] = (byte)rightGroups[g];
         }
         if (hasV4)
         {
@@ -1186,6 +1244,36 @@ public sealed class QzdbReader : IDisposable
         r.Low = lo;
         r.Valid = true;
         return r;
+    }
+
+    private static int ParseV6Side(ReadOnlySpan<char> side, Span<ushort> groups, bool allowV4,
+        out bool hasV4, out uint v4)
+    {
+        hasV4 = false;
+        v4 = 0;
+        if (side.IsEmpty) return 0;
+
+        int count = 0;
+        int start = 0;
+        for (int i = 0; i <= side.Length; i++)
+        {
+            if (i != side.Length && side[i] != ':') continue;
+            int length = i - start;
+            if (length == 0) return -1;
+            var segment = side.Slice(start, length);
+            if (segment.Contains('.'))
+            {
+                if (!allowV4 || i != side.Length || hasV4 || !TryParseV4(segment, out v4, out _)) return -1;
+                hasV4 = true;
+            }
+            else
+            {
+                if (count >= groups.Length || !TryParseHexGroup(segment, out groups[count])) return -1;
+                count++;
+            }
+            start = i + 1;
+        }
+        return count;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1233,7 +1321,14 @@ public sealed class QzdbReader : IDisposable
     public string Scope => RequireSnapshot()._scope;
     public string BuildTime => RequireSnapshot()._buildTimeStr;
     public string Description => RequireSnapshot()._description;
-    public string FileHash => RequireSnapshot()._canonicalCrc?.ToString("x8") ?? "N/A";
+    public string FileHash
+    {
+        get
+        {
+            var snapshot = RequireSnapshot();
+            return (snapshot._canonicalCrc ?? ComputeCanonicalCrc(snapshot)).ToString("x8");
+        }
+    }
     public string[] FieldNames => (string[])RequireSnapshot()._fieldNames.Clone();
     public int GroupCount => RequireSnapshot()._actualGroups;
     public int PoolCount => RequireSnapshot()._poolCount;
@@ -1245,6 +1340,8 @@ public sealed class QzdbReader : IDisposable
         return ComputeCanonicalCrc(s) == s._storedCrc;
     }
 
+    public bool VerifyCRC() => VerifyCrc();
+
     #endregion
 
     #region Lifecycle
@@ -1252,10 +1349,10 @@ public sealed class QzdbReader : IDisposable
     /// <summary>Atomically swap in a freshly loaded snapshot from <paramref name="path"/> (CRC always enforced).</summary>
     public void Reload(string path)
     {
-        using var fs = File.OpenRead(path);
+        ArgumentException.ThrowIfNullOrEmpty(path);
         int groupIndex = RequireSnapshot()._groupIndex;
-        var snap = Snapshot.FromStream(fs, groupIndex, verifyCrc: true);
-        Interlocked.Exchange(ref _activeSnapshot, snap);
+        var snap = LoadPath(path, groupIndex, verifyCrc: true);
+        PublishSnapshot(snap);
     }
 
     /// <summary>Atomically swap in a freshly loaded snapshot from <paramref name="buffer"/> (CRC always enforced).</summary>
@@ -1264,12 +1361,26 @@ public sealed class QzdbReader : IDisposable
         ArgumentNullException.ThrowIfNull(buffer);
         int groupIndex = RequireSnapshot()._groupIndex;
         var snap = Snapshot.FromBuffer(buffer, groupIndex, verifyCrc: true);
-        Interlocked.Exchange(ref _activeSnapshot, snap);
+        PublishSnapshot(snap);
     }
 
     public void Dispose()
     {
-        Interlocked.Exchange(ref _activeSnapshot, null);
+        lock (_lifecycleGate)
+        {
+            if (Interlocked.Exchange(ref _lifecycleState, 1) != 0) return;
+            Interlocked.Exchange(ref _activeSnapshot, null);
+        }
+    }
+
+    private void PublishSnapshot(Snapshot snapshot)
+    {
+        lock (_lifecycleGate)
+        {
+            if (Volatile.Read(ref _lifecycleState) != 0)
+                throw new ObjectDisposedException(nameof(QzdbReader));
+            Interlocked.Exchange(ref _activeSnapshot, snapshot);
+        }
     }
 
     #endregion

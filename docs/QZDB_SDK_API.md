@@ -435,7 +435,18 @@ findBatchFields(ips[], fields) -> BatchResult[]
 
 ### 9.2 方法矩阵与 QzdbReader 对等（v2.4 修正：不再只有 find）
 
-`ChainedReader` 必须实现与单库 `QzdbReader` 对等的查询方法矩阵：`find`/`findUint`/`findBytes`/`findFields`/`findBatch`/`findBatchFields`/`findStream`（`lookupRowId`/`lookupIds` 因为直接绑定单个物理库的内部行号体系，在联合场景语义不清晰，**不要求** `ChainedReader` 实现，调用方如需底层行号级别的操作应直接对某个具体 `QzdbReader` 调用）。
+`ChainedReader` 必须实现与单库 `QzdbReader` **对等的方法全集**（下方为规范要求的必选清单，CI 逐项校验）：
+
+**查询方法（必选）**：
+- `find(ip)` / `findUint(ipUint)` / `findBytes(ip16)` / `findFields(ip, fields)`
+- `findBatch(ips)` / `findBatchFields(ips, fields)` / `findStream(ips)`（或语言等价名 `findIter` / `FindEach`）
+
+**元信息聚合（必选，见 9.3）**：
+- `editions()` / `scopes()` / `dataMonths()` / `readers()`
+
+**不要求**：`lookupRowId` / `lookupIds` 直接绑定单个物理库的内部行号体系，联合场景语义不清晰，`ChainedReader` **不要求**实现；调用方如需底层行号级别操作应直接对某个具体 `QzdbReader` 调用。
+
+> **冲突解决 / 模式细节**见 9.1；**生命周期（不拥有成员库）**见 9.4。
 
 ### 9.3 ChainedReader 元信息聚合标准（v2.4 新增，此前目录承诺但正文缺失）
 
@@ -572,6 +583,16 @@ sequenceDiagram
 | Registry（可实例化+进程级默认） | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | 原子发布 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | 资源自动释放 | — | ✅ `Drop` | ✅ `AutoCloseable` | ✅ `IDisposable` | ✅ `with` | — | — | — |
+
+### 12.4 跨语言一致性 CI 清单（v2.4.1 新增，把审查结论回流为硬校验）
+
+下列项纳入 CI，任一语言不符即红灯（源自跨语言一致性审查 `docs/cross_lang_consistency_review_20260807.md`）：
+
+1. **哨兵 0 禁令**：`geo_id`/`asn`/`usage_type` 等数值字段缺失时，解码层必须输出空值 / `""`，禁止 `0`（对应 `API_CONTRACT §8.7`）。
+2. **批量三态**：`findBatch`/`findStream` 的 `BatchResult.Error` 必须区分「未命中」与「非法 IP」，不得互相归并。
+3. **命名规范**：核心类名 `QzdbReader`、批量结果 `BatchResult`、行号 `RowIds`、链式 `ChainedReader` 与 §10.2 方法命名表逐语言一致（CI lint 比对 8 语言公共方法名集合）。
+4. **ChainedReader 矩阵**：§9.2 必选方法全集（查询 7 + 元信息 4）在已实现 `ChainedReader` 中齐备。
+5. **Geo 字段黄金零偏差**：对 `golden_vectors.json` 与源 CSV 真值，8 语言输出字段级 0 失配。
 
 ---
 

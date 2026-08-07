@@ -57,18 +57,24 @@ Builder(stream: InputStream)     # 输入流（按需支持）
 
 ## 4. 未命中 / 非法 IP 的语义（跨语言一致性）
 
+**核心约束（全语言一致，硬指标）**：「找到 / 未命中 / 参数错误」三态必须在 **批量/流式路径**（`findBatch` / `findBatchFields` / `findStream` / `findIter`）通过 `BatchResult.Error` 完整保留——非法 IP 在批量路径**不得被归并到未命中**，调用方必须能据此区分。
+
+单条 `find` 的表层表达允许语言惯用法差异：
+
 | 语言 | 未命中返回 | 非法 IP 行为 |
 |------|-----------|-------------|
 | Java | `Optional.empty()` | **抛 `QzdbException(INVALID_IP)`** |
 | C# | `null` | **抛 `QzdbException(INVALID_IP)`** |
-| Go | `(nil, nil)` | `(nil, nil)`（或 error，需文档说明） |
-| Rust | `Option::None` | `Option::None` |
-| Python | `None` | `None` |
-| Node | `null` | `null` |
-| PHP | `null` | `null` |
-| C | 返回 `NULL` 指针 / 错误码 | 错误码（如 `QZDB_ERR_INVALID_IP`） |
+| Python | `None` | **抛 `QzdbError(INVALID_PARAM)`** |
+| Go | `(nil, nil)` | `(nil, nil)`（与未命中同形；批量路径经 `BatchResult.Error` 区分） |
+| Rust | `Option::None` | `Option::None`（与未命中同形；批量路径经 `BatchResult.Error` 区分） |
+| Node | `null` | `null`（与未命中同形；批量路径经 `BatchResult.Error` 区分） |
+| PHP | `null` | `null`（与未命中同形；批量路径经 `BatchResult.Error` 区分） |
+| C | 错误码 `QZDB_ERR_NOT_FOUND` | 错误码 `QZDB_ERR_INVALID_PARAM` |
 
-**Golden 校验约定**：golden 的 `invalid` 用例期望 `""`。所有语言的校验包装器把「空值 / 异常 / 错误码」统一映射为 `""`，因此非法 IP 返回空值即视为通过。**但**：Java/C# 必须在非法 IP 时抛异常（不可静默返回 empty），其余语言返回空值即可。
+> **口径修订（v2.4.1，消除与 §7.1 的历史矛盾）**：
+> - 旧文档曾写「Python 非法 IP 返回 `None`」，与 Python 实际实现（抛 `QzdbError`）及 §7.1 冲突，此处以**实现为准**更正（契约为 Single Source of Truth，但实现优先于过时文字）。
+> - 单条 `find` 对非法 IP：Java/C#/Python **抛异常**（不返回空值）；Go/Rust/Node/PHP 当前返回语言空值（与未命中同形），其 golden 校验包装器统一把「空值 / 异常 / 错误码」映射为 `""`，故非法 IP 返回空值即视为通过。**若业务需要单条 `find` 也严格区分非法 IP，后续版本可让 Go/Rust/Node/PHP 改为抛异常——此为已知分歧，不阻断当前发布（跟踪项见 `QZDB_SDK_API.md` §12.4 / 实施清单）。**
 
 ---
 
@@ -140,6 +146,8 @@ Builder(stream: InputStream)     # 输入流（按需支持）
 5. **Fail-Closed**：非法 Magic / HeaderVersion≠1 / CRC 不匹配（且 `verifyCrc` 开启）/ 截断文件 → 构造即拒绝，绝不部分加载。
 
 6. **CIDR 重建**：最具体网段 = Trie 叶子深度 = 前缀长度 N；网络地址 = IP 高 N 位清零。Jump Table 直接命中叶子时，内部自动从根补走还原深度（不得返回错误网段）。V6 按 RFC 5952 压缩。
+
+7. **缺失数值字段严禁哨兵 0**：解码层对缺失的原生数值字段（`geo_id` / `asn` / `usage_type` 等）必须归为语言空值 / `""`（`null` / `None` / `Option::None` / `""`），**严禁存储或输出哨兵值 `0`**。`0` 是合法业务值，用它表示缺失会让跨语言字段级比对失配。Java/C#/Python/Go/Rust/Node/PHP 已合规；C 须在重构后遵守。
 
 ---
 

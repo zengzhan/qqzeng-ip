@@ -1,15 +1,14 @@
 using System;
 using System.IO;
 using System.Linq;
-using System.Numerics;
-using Qqzeng;
+using QQZeng.Qzdb;
 
 class BatchQueryCsharp
 {
     // Use GeoInfo.ToPipe() so output byte-matches Python to_pipe()
-    static string GeoToPipe(GeoInfo info)
+    static string GeoToPipe(GeoInfo? info)
     {
-        if (info == null || info.IsEmpty) return "";
+        if (info == null) return "";
         return info.ToPipe();
     }
 
@@ -25,18 +24,7 @@ class BatchQueryCsharp
                 string pipeStr;
                 if (isV6)
                 {
-                    var parts = line.Split(':');
-                    if (parts.Length == 2 &&
-                        ulong.TryParse(parts[0], out var high) &&
-                        ulong.TryParse(parts[1], out var low))
-                    {
-                        var info = searcher.FindV6Uint(high, low);
-                        pipeStr = GeoToPipe(info);
-                    }
-                    else
-                    {
-                        pipeStr = "";
-                    }
+                    pipeStr = GeoToPipe(searcher.Find(line));
                 }
                 else
                 {
@@ -60,7 +48,7 @@ class BatchQueryCsharp
 
     static void Main(string[] args)
     {
-        if (args.Length < 4)
+        if (args.Length < 5)
         {
             Console.Error.WriteLine("Usage: BatchQuery <db_path> <v4_test> <v4_out> <v6_test> <v6_out>");
             Environment.Exit(1);
@@ -78,8 +66,7 @@ class BatchQueryCsharp
             Environment.Exit(1);
         }
 
-        var searcher = QzdbReader.Instance;
-        searcher.Load(dbPath);
+        using var searcher = QzdbReader.Open(dbPath);
 
         var n4 = ProcessFile(searcher, v4Test, v4Out, false);
         Console.Error.WriteLine($"  C# V4: {n4} queries");

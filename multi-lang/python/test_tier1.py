@@ -77,11 +77,13 @@ known = ['AICrawler', 'Backbone', 'Broadband', 'Business', 'CDN', 'Cloud', 'DNS'
 check(len(UsageType._KNOWN) == 21, f'21 known scenarios ({len(UsageType._KNOWN)})')
 for raw in known:
     ut = UsageType.from_string(raw)
-    check(ut.is_known(), f'{raw} is known')
+    check(isinstance(ut, UsageType) and ut.is_known(), f'{raw} is known')
 unknown = UsageType.from_string('TotallyMadeUp')
-check(not unknown.is_known(), 'unknown raw -> fallback (not known)')
-check(UsageType.from_string('') is not None, 'empty -> safe Unknown')
-check(UsageType.from_string(None) is not None, 'None -> safe Unknown')
+check(isinstance(unknown, str) and not isinstance(unknown, UsageType),
+      'unknown raw -> plain str (not enum)')
+check(unknown == 'TotallyMadeUp', 'unknown returns raw string')
+check(UsageType.from_string('') is UsageType.UNKNOWN, 'empty -> Unknown member')
+check(UsageType.from_string(None) is UsageType.UNKNOWN, 'None -> Unknown member')
 
 # ── 5. Corrupted file Fail-Closed ──────────────────────────────────
 section('Fail-Closed on corrupt/missing')

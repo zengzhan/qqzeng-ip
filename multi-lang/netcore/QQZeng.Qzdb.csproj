@@ -1,8 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <!-- 目标框架：net10.0 单目标（LTS，覆盖现代运行时；net8 已被有意放弃以简化发布） -->
-    <TargetFramework>net10.0</TargetFramework>
+    <!-- 目标框架：多框架支持 net8.0 (LTS), net9.0, net10.0 -->
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
     <OutputType>Library</OutputType>
 
     <!-- 语言/编译选项 -->
@@ -12,11 +12,11 @@
     <LangVersion>latest</LangVersion>
     <InvariantGlobalization>true</InvariantGlobalization>
 
-    <!-- 包标识：与根命名空间保持一致（公司.产品） -->
+    <!-- 包、程序集与规范命名空间统一：QQZeng.Qzdb -->
     <PackageId>QQZeng.Qzdb</PackageId>
     <RootNamespace>QQZeng.Qzdb</RootNamespace>
     <AssemblyName>QQZeng.Qzdb</AssemblyName>
-    <Version>1.0.1</Version>
+    <Version>1.0.2</Version>
 
     <!-- 作者 / 公司 / 描述 -->
     <Authors>QQZeng</Authors>

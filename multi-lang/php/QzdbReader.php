@@ -213,26 +213,26 @@ class RowIds
 class BatchResult
 {
     public $input;
-    public $result;   // GeoInfo | null
+    public $info;     // GeoInfo | null
     public $error;    // QzdbException | null
 
-    public function __construct(string $input, ?GeoInfo $result, ?QzdbException $error)
+    public function __construct(string $input, ?GeoInfo $info, ?QzdbException $error)
     {
         $this->input = $input;
-        $this->result = $result;
+        $this->info = $info;
         $this->error = $error;
     }
 
     /** 查询成功且命中记录 */
     public function isSuccess(): bool
     {
-        return $this->error === null && $this->result !== null;
+        return $this->error === null && $this->info !== null;
     }
 
     /** 合法 IP 但未找到记录 */
     public function isNotFound(): bool
     {
-        return $this->error === null && $this->result === null;
+        return $this->error === null && $this->info === null;
     }
 
     /** 输入格式错误或底层故障 */
@@ -325,28 +325,22 @@ class GeoInfo implements \ArrayAccess
         return $this->get((string)$offset);
     }
 
+    /**
+     * GeoInfo 是不可变对象，禁止写入。
+     * @throws \RuntimeException 始终抛出
+     */
     public function offsetSet($offset, $value): void
     {
-        if (is_int($offset)) {
-            $this->values[$offset] = (string)$value;
-        } else {
-            $idx = $this->fieldIndex((string)$offset);
-            if ($idx !== null) {
-                $this->values[$idx] = (string)$value;
-            }
-        }
+        throw new \RuntimeException('GeoInfo is immutable; cannot modify fields');
     }
 
+    /**
+     * GeoInfo 是不可变对象，禁止删除。
+     * @throws \RuntimeException 始终抛出
+     */
     public function offsetUnset($offset): void
     {
-        if (is_int($offset)) {
-            unset($this->values[$offset]);
-        } else {
-            $idx = $this->fieldIndex((string)$offset);
-            if ($idx !== null) {
-                $this->values[$idx] = '';
-            }
-        }
+        throw new \RuntimeException('GeoInfo is immutable; cannot unset fields');
     }
 
     /**
@@ -749,8 +743,8 @@ class QzdbReader
 
     public function reloadBuffer(string $bytes): void
     {
-        if ($bytes === '' || $bytes === null) {
-            throw new QzdbException('Reload buffer cannot be null or empty', self::ERROR_INVALID_PARAM);
+        if ($bytes === '') {
+            throw new QzdbException('Reload buffer cannot be empty', self::ERROR_INVALID_PARAM);
         }
         $snap = new QzdbReader(null, $this->groupIndex, true);
         $snap->loadBytes($bytes, true);
@@ -941,6 +935,12 @@ class QzdbReader
                 yield new BatchResult((string)$ip, null, $e);
             }
         }
+    }
+
+    /** 流式查询（规范命名，同 findIter）。规范 A.7 要求的方法名。 */
+    public function findIter(iterable $ips): \Generator
+    {
+        return $this->findStream($ips);
     }
 
     // ------------------------------------------------------------------
@@ -2510,9 +2510,20 @@ class ChainedReader
         }
     }
 
+    /** 流式查询（规范命名，同 findIter）。规范 A.7 要求的方法名。 */
+    public function findIter(iterable $ips): \Generator
+    {
+        return $this->findStream($ips);
+    }
+
     public function editions(): array
     {
         return array_map(fn($r) => $r->getEdition(), $this->readers);
+    }
+
+    public function getEditions(): array
+    {
+        return $this->editions();
     }
 
     public function scopes(): array
@@ -2520,12 +2531,27 @@ class ChainedReader
         return array_map(fn($r) => $r->getScope(), $this->readers);
     }
 
+    public function getScopes(): array
+    {
+        return $this->scopes();
+    }
+
     public function dataMonths(): array
     {
         return array_map(fn($r) => $r->getDataMonth(), $this->readers);
     }
 
+    public function getDataMonths(): array
+    {
+        return $this->dataMonths();
+    }
+
     public function readers(): array
+    {
+        return $this->readers;
+    }
+
+    public function getReaders(): array
     {
         return $this->readers;
     }

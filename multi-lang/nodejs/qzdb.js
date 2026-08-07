@@ -215,7 +215,7 @@ class GeoInfo {
   // =========================================================================
   // 语义 Getter 全集（§6）
   // =========================================================================
-  getCidr() { return ''; } // CIDR 不是数据库字段（§6：恒返回 ''）
+  getCidr() { return this.get('cidr'); } // CIDR 不是数据库字段（§6：恒返回 ''）；统一走 get() 路径
   getCountry() { return this.get('country'); }
   getCountryEn() { return this.get('country_en'); }
   getCountryAlpha2() { return this.get('country_alpha2'); }
@@ -384,6 +384,7 @@ class BatchResult {
     this.result = result; // GeoInfo | null
     this.error = error;   // QzdbError | null（Node 不抛非法 IP，故通常 null）
   }
+  get info() { return this.result; }
   isSuccess() { return this.error === null && this.result !== null; }
   isNotFound() { return this.error === null && this.result === null; }
   hasError() { return this.error !== null; }
@@ -474,15 +475,14 @@ class QzdbReader {
     }
   }
 
-  // 进程级单例（兼容既有脚本）
-  static getInstance(dbPath = null, groupIndex = 0) {
-    if (!QzdbReader._instance) {
-      QzdbReader._instance = new QzdbReader(dbPath, groupIndex);
-    } else if (dbPath !== null) {
-      QzdbReader._instance.load(dbPath);
-      QzdbReader._instance._groupIndex = groupIndex;
-    }
-    return QzdbReader._instance;
+  static open(path, options = {}) {
+    return new QzdbReader(path, options.groupIndex || 0, options.verifyCrc !== false);
+  }
+
+  static openBuffer(buffer, options = {}) {
+    const r = new QzdbReader(null, options.groupIndex || 0, options.verifyCrc !== false);
+    r.loadBuffer(buffer);
+    return r;
   }
 
   // -------------------------------------------------------------------------
@@ -637,6 +637,13 @@ class QzdbReader {
     }
     if (this._offIPRow > 0 && this._offIPRow + this._rowCount * this._ipRowSize > dlen) {
       throw new QzdbError('IP row table offset out of bounds', QzdbError.OUT_OF_BOUNDS);
+    }
+    // offPools / offMeta 越界校验（对齐 Java parseSectionBounds）
+    if (this._offPools > 0 && this._offPools >= dlen) {
+      throw new QzdbError('Pools section offset out of bounds', QzdbError.OUT_OF_BOUNDS);
+    }
+    if (this._offMeta > 0 && this._offMeta > dlen) {
+      throw new QzdbError('Meta section offset out of bounds', QzdbError.OUT_OF_BOUNDS);
     }
 
     // GeoEntryOffsets[4]
@@ -1060,7 +1067,13 @@ class QzdbReader {
     const natives = this._groupFieldNative[groupIndex];
     const natTypes = this._groupFieldNativeType[groupIndex];
     const gp = this._groupPools[groupIndex];
-    const names = this._fieldNames;
+    const names = this._groupFieldNames[groupIndex] || this._fieldNames;
+    const floatFlags = names.map((n) => GeoInfo.isNumericFieldName(n));
+    const normMap = Object.create(null);
+    for (let i = 0; i < names.length; i++) {
+      const nk = GeoInfo.normalizeKey(names[i]);
+      if (!(nk in normMap)) normMap[nk] = i;
+    }
     const vals = new Array(gc);
     for (let i = 0; i < gc; i++) {
       const w = widths[i];
@@ -1076,7 +1089,7 @@ class QzdbReader {
       }
       vals[i] = val;
     }
-    return new GeoInfo(vals, names, this._floatFlags, this._normFieldMap);
+    return new GeoInfo(vals, names, floatFlags, normMap);
   }
 
   // -------------------------------------------------------------------------
@@ -1233,7 +1246,7 @@ class QzdbReader {
     return out;
   }
 
-  *findStream(ips) {
+  *findIter(ips) {
     if (ips == null) return;
     for (const ip of ips) {
       try {
@@ -1243,6 +1256,8 @@ class QzdbReader {
       }
     }
   }
+
+  *findStream(ips) { yield* this.findIter(ips); }
 
   // -------------------------------------------------------------------------
   // 低级行号（§5）

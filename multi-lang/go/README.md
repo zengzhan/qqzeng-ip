@@ -387,6 +387,22 @@ if qe, ok := err.(*qzdb.QzdbError); ok {
 
 ---
 
+## 测试与验证
+
+```bash
+cd go
+go test ./...                 # 全量：Tier1 + Tier2(golden) + Tier3(并发/性能) + chain_merge + README API
+go test -run TestCSVOracle ./qzdb/...   # Tier0 独立真值校验（对源 CSV）
+go vet ./...                 # 静态检查
+```
+
+- **Tier0（CSV 真值）**：`csv_oracle_test.go` 以 `.qzdb` 的源数据 `test_data_202608/{std,ult}/china/*_range.csv`（带 `start_ip_num/end_ip_num` + 地理字段）为独立裁判，全局随机 + 区间内随机共约 18000 样本比对 `country/province/city/isp`，**0 失配**。注意：`TestGoldenTier2` 的向量由被测代码自身生成，只证确定性 / 跨语言一致；本测试证明"返回正确答案"。源 CSV 缺失时优雅跳过。
+- **Tier1**：严格 IP 解析（含 SSRF 防护）、Mapped 降级、字段归一化、UsageType 21 + 未知兜底、损坏文件 Fail-Closed、CRC 强制、无锁 Reload、CIDR 反查、资源释放、Find 语义、浮点 6 位格式、字段投影。
+- **Tier2**：加载 `qqzeng_ip_std_china.qzdb` 与 `qqzeng_ip_ult_china.qzdb`，对 `golden_vectors.json` 断言 `Find(ip).ToPipe() == expected`，**必须 0 失败**。
+- **Tier3**：`TestTier3ConcurrentSafety`（多 goroutine 查询 + 热更新无撕裂读）、`TestTier3DualStackPerformance`（双栈吞吐基准）。
+
+---
+
 ## 项目结构
 
 ```
@@ -403,6 +419,6 @@ go/
 │   ├── builder.go     # Builder 构造器
 │   ├── ip.go          # 严格 IP 解析 / IPv4-mapped 降级
 │   ├── errors.go      # ErrorCode / QzdbError
-│   ├── *_test.go      # Tier1 单测 + Tier2 黄金校验
+│   ├── *_test.go      # Tier1 单测 + Tier2 黄金校验 + Tier0 CSV 真值 + Tier3 并发/性能
 └── cmd/               # demo / batch / bench / dump / regress 等示例
 ```

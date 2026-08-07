@@ -39,7 +39,16 @@ def main():
             for e in g[dbk][cat]:
                 ip = e['ip']
                 exp = e.get('expected', '')
-                gi = reader.find(ip)
+                if cat == 'invalid':
+                    # Per API contract §7.1, invalid input raises QzdbError
+                    # (distinct from a clean "not found"). Map that to '' so the
+                    # golden still verifies no wrong data is returned.
+                    try:
+                        gi = reader.find(ip)
+                    except qzdb.QzdbError:
+                        gi = None
+                else:
+                    gi = reader.find(ip)
                 got = gi.to_pipe() if gi is not None else ''
                 total += 1
                 if got != exp:

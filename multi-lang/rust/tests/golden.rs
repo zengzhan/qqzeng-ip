@@ -40,13 +40,11 @@ fn run_golden(edition: &str, file: &str) {
             let expected = entry.get("expected").and_then(|v| v.as_str()).unwrap_or("");
             let got = reader.find_str(ip);
             total += 1;
-            if got != expected {
-                if failures.len() < 20 {
-                    failures.push(format!(
-                        "[{}] ip={:?} expected={:?} got={:?}",
-                        cat, ip, expected, got
-                    ));
-                }
+            if got != expected && failures.len() < 20 {
+                failures.push(format!(
+                    "[{}] ip={:?} expected={:?} got={:?}",
+                    cat, ip, expected, got
+                ));
             }
         }
     }

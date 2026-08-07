@@ -41,6 +41,7 @@ multi-lang/c/bench_qps
 .agent/
 .omc/
 .omo/
+.omx/
 .workbuddy/
 
 # Paid data derived dumps (never commit query results of purchased DBs)

@@ -14,6 +14,17 @@ public sealed class GeoInfo
 
     public GeoInfo(string[] fieldNames, string[] values, Dictionary<string, int>? normMap, bool[]? numericFlags)
     {
+        ArgumentNullException.ThrowIfNull(fieldNames);
+        ArgumentNullException.ThrowIfNull(values);
+        _fieldNames = (string[])fieldNames.Clone();
+        _values = (string[])values.Clone();
+        _normMap = normMap == null ? BuildNormalizedMap(_fieldNames) : new Dictionary<string, int>(normMap, StringComparer.Ordinal);
+        _numericFlags = numericFlags == null ? null : (bool[])numericFlags.Clone();
+    }
+
+    internal GeoInfo(string[] fieldNames, string[] values, Dictionary<string, int>? normMap,
+        bool[]? numericFlags, bool takeOwnership)
+    {
         _fieldNames = fieldNames;
         _values = values;
         _normMap = normMap;
@@ -24,7 +35,7 @@ public sealed class GeoInfo
     public string[] Values => (string[])_values.Clone();
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public string Get(string name)
+    public string Get(string? name)
     {
         if (string.IsNullOrEmpty(name) || _normMap == null) return "";
         if (!_normMap.TryGetValue(NormalizeKey(name), out var idx) || idx >= _values.Length) return "";
@@ -32,7 +43,7 @@ public sealed class GeoInfo
         return v ?? "";
     }
 
-    public static string NormalizeKey(string key)
+    public static string NormalizeKey(string? key)
     {
         if (string.IsNullOrEmpty(key)) return "";
         int n = key.Length;
@@ -43,7 +54,7 @@ public sealed class GeoInfo
             for (int i = 0; i < n; i++)
             {
                 char c = key[i];
-                if (c != '_') buf[k++] = char.IsAsciiLetter(c) ? char.ToLowerInvariant(c) : c;
+                if (c != '_' && c != '-') buf[k++] = char.IsAsciiLetter(c) ? char.ToLowerInvariant(c) : c;
             }
             return new string(buf[..k]);
         }
@@ -51,7 +62,7 @@ public sealed class GeoInfo
         for (int i = 0; i < n; i++)
         {
             char c = key[i];
-            if (c != '_') sb.Append(char.IsAsciiLetter(c) ? char.ToLowerInvariant(c) : c);
+            if (c != '_' && c != '-') sb.Append(char.IsAsciiLetter(c) ? char.ToLowerInvariant(c) : c);
         }
         return sb.ToString();
     }
@@ -71,17 +82,10 @@ public sealed class GeoInfo
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static bool IsNumericFieldName(string name)
+    public static bool IsNumericFieldName(string? name)
     {
         if (name == null) return false;
-        return name.Length switch
-        {
-            3 => name.Equals("asn", StringComparison.OrdinalIgnoreCase),
-            6 => name.Equals("geoid", StringComparison.OrdinalIgnoreCase) || name.Equals("geo_id", StringComparison.OrdinalIgnoreCase),
-            8 => name.Equals("latitude", StringComparison.OrdinalIgnoreCase),
-            9 => name.Equals("longitude", StringComparison.OrdinalIgnoreCase),
-            _ => false
-        };
+        return NormalizeKey(name) is "asn" or "geoid" or "latitude" or "longitude";
     }
 
     public string ToPipe()
@@ -142,15 +146,33 @@ public sealed class GeoInfo
         if (val.Length == 0) return false;
         int i = 0;
         if (val[0] == '-') { if (val.Length == 1) return false; i = 1; }
-        bool digit = false, dot = false;
-        for (; i < val.Length; i++)
+        if (i >= val.Length) return false;
+        if (val[i] == '0')
         {
-            char c = val[i];
-            if (c is >= '0' and <= '9') digit = true;
-            else if (c == '.' && !dot) dot = true;
-            else return false;
+            i++;
+            if (i < val.Length && val[i] is >= '0' and <= '9') return false;
         }
-        return digit;
+        else
+        {
+            if (val[i] is < '1' or > '9') return false;
+            while (++i < val.Length && val[i] is >= '0' and <= '9') { }
+        }
+        if (i < val.Length && val[i] == '.')
+        {
+            i++;
+            int fractionStart = i;
+            while (i < val.Length && val[i] is >= '0' and <= '9') i++;
+            if (i == fractionStart) return false;
+        }
+        if (i < val.Length && (val[i] == 'e' || val[i] == 'E'))
+        {
+            i++;
+            if (i < val.Length && (val[i] == '+' || val[i] == '-')) i++;
+            int exponentStart = i;
+            while (i < val.Length && val[i] is >= '0' and <= '9') i++;
+            if (i == exponentStart) return false;
+        }
+        return i == val.Length;
     }
 
     private static readonly char[] HexChars = "0123456789abcdef".ToCharArray();
@@ -182,6 +204,32 @@ public sealed class GeoInfo
         return sb.ToString();
     }
 
+    public string Cidr => GetCidr();
+    public string Country => GetCountry();
+    public string CountryEn => GetCountryEn();
+    public string Province => GetProvince();
+    public string ProvinceEn => GetProvinceEn();
+    public string City => GetCity();
+    public string CityEn => GetCityEn();
+    public string District => GetDistrict();
+    public uint? GeoId => GetGeoId();
+    public double? Longitude => GetLongitude();
+    public double? Latitude => GetLatitude();
+    public string Timezone => GetTimezone();
+    public string Isp => GetIsp();
+    public string IspEn => GetIspEn();
+    public uint? Asn => GetAsn();
+    public string AsName => GetAsName();
+    public string AsDomain => GetAsDomain();
+    public UsageType UsageType => GetUsageType();
+    public string CountryAlpha2 => GetCountryAlpha2();
+    public string CountryAlpha3 => GetCountryAlpha3();
+    public string CurrencyCode => GetCurrencyCode();
+    public string CurrencyName => GetCurrencyName();
+    public string PhonePrefix => GetPhonePrefix();
+    public string EmojiFlag => GetEmojiFlag();
+    public string Languages => GetLanguages();
+
     public string GetCidr() => Get("cidr");
     public string GetCountry() => Get("country");
     public string GetCountryEn() => Get("country_en");
@@ -191,11 +239,11 @@ public sealed class GeoInfo
     public string GetCityEn() => Get("city_en");
     public string GetDistrict() => Get("district");
 
-    public ulong? GetGeoId()
+    public uint? GetGeoId()
     {
         var v = Get("geo_id");
         if (string.IsNullOrEmpty(v)) return null;
-        return ulong.TryParse(v, out var r) ? r : null;
+        return uint.TryParse(v, out var r) ? r : null;
     }
 
     public double? GetLongitude()
@@ -216,11 +264,11 @@ public sealed class GeoInfo
     public string GetIsp() => Get("isp");
     public string GetIspEn() => Get("isp_en");
 
-    public ulong? GetAsn()
+    public uint? GetAsn()
     {
         var v = Get("asn");
         if (string.IsNullOrEmpty(v)) return null;
-        return ulong.TryParse(v, out var r) ? r : null;
+        return uint.TryParse(v, out var r) ? r : null;
     }
 
     public string GetAsName() => Get("as_name");
