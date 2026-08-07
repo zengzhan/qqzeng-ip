@@ -26,22 +26,17 @@ func (s *Snapshot) walkV4Depth(ip uint32, startIdx uint32, startDepth, maxDepth 
 		return -1
 	}
 	idx := startIdx
-	mask := s.v4Node24Mask()
+	mask := s.nodeMask(true)
 	for depth := startDepth; depth < maxDepth; depth++ {
 		if idx >= s.v4NodeCount {
 			return -1
 		}
-		bit := (ip >> (31 - uint(depth))) & 1
-		child := s.readV4Child(idx, bit)
-		if s.v4Node24 {
-			if child&0x800000 != 0 {
-				return depth + 1
-			}
-		} else if child&SENTINEL != 0 {
-			return depth + 1
-		}
+		child := s.readV4Child(idx, (ip>>(31-uint(depth)))&1)
 		if child == 0 {
 			return -1
+		}
+		if s.isLeaf(child, true) {
+			return depth + 1
 		}
 		idx = child & mask
 	}
@@ -52,8 +47,7 @@ func (s *Snapshot) lookupV6PrefixLen(ip [16]byte) int {
 	if !s.hasV6 || s.offV6Jump <= 0 {
 		return -1
 	}
-	pref := s.readV6PrefixBits(ip, s.v6JumpBits)
-	ptr := safeReadU32(s.data, s.offV6Jump+uint64(pref)*4)
+	ptr := safeReadU32(s.data, s.offV6Jump+uint64(readV6Prefix(ip, s.v6JumpBits))*4)
 	if ptr == 0 {
 		return -1
 	}
@@ -68,22 +62,17 @@ func (s *Snapshot) walkV6Depth(ip [16]byte, startIdx uint32, startDepth, maxDept
 		return -1
 	}
 	idx := startIdx
-	mask := s.v6Node24Mask()
+	mask := s.nodeMask(false)
 	for depth := startDepth; depth < maxDepth; depth++ {
 		if idx >= s.v6NodeCount {
 			return -1
 		}
-		bit := uint32((ip[depth>>3] >> (7 - uint(depth&7))) & 1)
-		child := s.readV6Child(idx, bit)
-		if s.v6Node24 {
-			if child&0x800000 != 0 {
-				return depth + 1
-			}
-		} else if child&SENTINEL != 0 {
-			return depth + 1
-		}
+		child := s.readV6Child(idx, uint32((ip[depth>>3]>>(7-uint(depth&7)))&1))
 		if child == 0 {
 			return -1
+		}
+		if s.isLeaf(child, false) {
+			return depth + 1
 		}
 		idx = child & mask
 	}

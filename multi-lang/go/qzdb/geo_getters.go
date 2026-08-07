@@ -73,42 +73,47 @@ func (g *GeoInfo) ToJson() string {
 	if g == nil {
 		return "{}"
 	}
-	var sb strings.Builder
-	sb.WriteByte('{')
-	first := true
+	// 预分配容量：键 + 值 + 标点符号
+	var cap int
+	for i, v := range g.Values {
+		cap += len(g.FieldNames[i]) + len(v) + 10
+	}
+	var b strings.Builder
+	b.Grow(cap)
+	b.WriteByte('{')
 	for i, name := range g.FieldNames {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteByte('"')
+		b.WriteString(escapeJson(name))
+		b.WriteString("\":")
 		val := ""
 		if i < len(g.Values) {
 			val = g.Values[i]
 		}
-		if !first {
-			sb.WriteByte(',')
-		}
-		first = false
-		sb.WriteByte('"')
-		sb.WriteString(escapeJson(name))
-		sb.WriteString("\":")
 		numeric := i < len(g.numeric) && g.numeric[i]
-		if val == "" {
+		switch {
+		case val == "":
 			if numeric {
-				sb.WriteString("null")
+				b.WriteString("null")
 			} else {
-				sb.WriteString("\"\"")
+				b.WriteString("\"\"")
 			}
-		} else if numeric {
+		case numeric:
 			if isJsonNumber(val) {
-				sb.WriteString(val)
+				b.WriteString(val)
 			} else {
-				sb.WriteString("null")
+				b.WriteString("null")
 			}
-		} else {
-			sb.WriteByte('"')
-			sb.WriteString(escapeJson(val))
-			sb.WriteByte('"')
+		default:
+			b.WriteByte('"')
+			b.WriteString(escapeJson(val))
+			b.WriteByte('"')
 		}
 	}
-	sb.WriteByte('}')
-	return sb.String()
+	b.WriteByte('}')
+	return b.String()
 }
 
 // ---------- 语义化 Getter 全集（缺失返回 "" 或 nil） ----------

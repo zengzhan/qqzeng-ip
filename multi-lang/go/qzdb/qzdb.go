@@ -674,13 +674,14 @@ func (s *Snapshot) readV6Child(idx uint32, bit uint32) uint32 {
 	return safeReadU32(d, off)
 }
 
+// use24BitNode 判断当前 IP 版本是否使用 24 位紧凑节点。
+func (s *Snapshot) use24BitNode(v4 bool) bool {
+	return (s.v4Node24 && v4) || (s.v6Node24 && !v4)
+}
+
 // nodeMask 返回当前节点类型的哨兵剥离掩码。
 func (s *Snapshot) nodeMask(v4 bool) uint32 {
-	if v4 {
-		if s.v4Node24 {
-			return SENTINEL_MASK_24
-		}
-	} else if s.v6Node24 {
+	if s.use24BitNode(v4) {
 		return SENTINEL_MASK_24
 	}
 	return SENTINEL_MASK_31
@@ -688,7 +689,7 @@ func (s *Snapshot) nodeMask(v4 bool) uint32 {
 
 // isLeaf 判断子节点指针是否为叶子（携带哨兵位）。
 func (s *Snapshot) isLeaf(child uint32, v4 bool) bool {
-	if v4 && s.v4Node24 {
+	if s.use24BitNode(v4) {
 		return child&0x800000 != 0
 	}
 	return child&SENTINEL != 0
@@ -696,7 +697,7 @@ func (s *Snapshot) isLeaf(child uint32, v4 bool) bool {
 
 // leafValue 从叶子指针提取 row_id。
 func (s *Snapshot) leafValue(child uint32, v4 bool) uint32 {
-	if v4 && s.v4Node24 {
+	if s.use24BitNode(v4) {
 		return child & SENTINEL_MASK_24
 	}
 	return child & SENTINEL_MASK_31
@@ -810,55 +811,60 @@ func (s *Snapshot) extractGeoInfo(rowID uint32) *GeoInfo {
 	return g
 }
 
-func (s *Snapshot) computeGeoInfo(rowID uint32) *GeoInfo {
-	geoID, asnID, usageID := s.readIPRow(rowID)
-	if int(rowID) >= s.rowCount {
-		return nil
+// resolveEntry 根据 row_id 解析 entryID 与 entry 字节偏移。
+func (s *Snapshot) resolveEntry(rowID uint32) (entryID uint32, entryOff uint64, fc int, ok bool) {
+	if rowID == 0 {
+		return 0, 0, 0, false
 	}
+	geoID, asnID, usageID := s.readIPRow(rowID)
 	gi := s.groupIndex
-	mask := s.groupDimMasks[gi]
-	var entryID uint32
-	switch {
-	case mask&0x02 != 0:
+	switch s.groupDimMasks[gi] & 0x06 {
+	case 0x02:
 		entryID = asnID
-	case mask&0x04 != 0:
+	case 0x04:
 		entryID = usageID
 	default:
 		entryID = geoID
 	}
 	if entryID == 0 || entryID >= s.groupEntryCounts[gi] {
-		return nil
+		return 0, 0, 0, false
 	}
-	fc := s.groupFieldCounts[gi]
-	if fc <= 0 {
-		return nil
-	}
-	entryOff := s.groupEntryOffsets[gi] + uint64(entryID)*uint64(s.groupStrides[gi])
+	fc = s.groupFieldCounts[gi]
+	entryOff = s.groupEntryOffsets[gi] + uint64(entryID)*uint64(s.groupStrides[gi])
 	if entryOff+uint64(s.groupStrides[gi]) > uint64(len(s.data)) {
+		return 0, 0, 0, false
+	}
+	return entryID, entryOff, fc, true
+}
+
+// readFieldValue 读取单个字段的值（支持原生标量与池索引）。
+func (s *Snapshot) readFieldValue(entryOff uint64, fi int) string {
+	fo := entryOff + uint64(s.groupFieldOffsets[s.groupIndex][fi])
+	w := s.groupFieldWidths[s.groupIndex][fi]
+	natives := s.groupFieldNative[s.groupIndex]
+	if natives != nil && fi < len(natives) && natives[fi] {
+		nt := 0
+		if natTypes := s.groupFieldNativeType[s.groupIndex]; natTypes != nil && fi < len(natTypes) {
+			nt = natTypes[fi]
+		}
+		return s.readNativeValue(fo, w, nt)
+	}
+	idx := s.readUintWidth(fo, w)
+	pool := s.groupPools[s.groupIndex]
+	if pool != nil && fi < len(pool) && int(idx) < len(pool[fi]) {
+		return pool[fi][idx]
+	}
+	return ""
+}
+
+func (s *Snapshot) computeGeoInfo(rowID uint32) *GeoInfo {
+	_, entryOff, fc, ok := s.resolveEntry(rowID)
+	if !ok {
 		return nil
 	}
-	widths := s.groupFieldWidths[gi]
-	offsets := s.groupFieldOffsets[gi]
-	natives := s.groupFieldNative[gi]
-	natTypes := s.groupFieldNativeType[gi]
-	pool := s.groupPools[gi]
 	values := make([]string, fc)
 	for i := 0; i < fc; i++ {
-		w := widths[i]
-		fo := entryOff + uint64(offsets[i])
-		isNative := natives != nil && i < len(natives) && natives[i]
-		if isNative {
-			nt := 0
-			if natTypes != nil && i < len(natTypes) {
-				nt = natTypes[i]
-			}
-			values[i] = s.readNativeValue(fo, w, nt)
-		} else {
-			idx := s.readUintWidth(fo, w)
-			if pool != nil && i < len(pool) && int(idx) < len(pool[i]) {
-				values[i] = pool[i][idx]
-			}
-		}
+		values[i] = s.readFieldValue(entryOff, i)
 	}
 	return &GeoInfo{
 		FieldNames: s.fieldNames,
@@ -869,62 +875,18 @@ func (s *Snapshot) computeGeoInfo(rowID uint32) *GeoInfo {
 }
 
 // computeGeoInfoProjected 只读取 fields 指定的字段（按请求顺序），避免全字段解析。
-// 对标 Java 的 fieldFilter 投影模式（§9.6）。
 func (s *Snapshot) computeGeoInfoProjected(rowID uint32, fields []string) *GeoInfo {
-	if rowID == 0 || int(rowID) >= s.rowCount {
+	_, entryOff, fc, ok := s.resolveEntry(rowID)
+	if !ok {
 		return nil
 	}
-	gi := s.groupIndex
-	mask := s.groupDimMasks[gi]
-	var entryID uint32
-	switch {
-	case mask&0x02 != 0:
-		_, asnID, _ := s.readIPRow(rowID)
-		entryID = asnID
-	case mask&0x04 != 0:
-		_, _, usageID := s.readIPRow(rowID)
-		entryID = usageID
-	default:
-		geoID, _, _ := s.readIPRow(rowID)
-		entryID = geoID
-	}
-	if entryID == 0 || entryID >= s.groupEntryCounts[gi] {
-		return nil
-	}
-	entryOff := s.groupEntryOffsets[gi] + uint64(entryID)*uint64(s.groupStrides[gi])
-	if entryOff+uint64(s.groupStrides[gi]) > uint64(len(s.data)) {
-		return nil
-	}
-
-	widths := s.groupFieldWidths[gi]
-	offsets := s.groupFieldOffsets[gi]
-	natives := s.groupFieldNative[gi]
-	natTypes := s.groupFieldNativeType[gi]
-	pool := s.groupPools[gi]
-	fc := s.groupFieldCounts[gi]
-
 	values := make([]string, len(fields))
 	for i, f := range fields {
-		origIdx, ok := s.normalizedMap[normalizeKey(f)]
-		if !ok || origIdx >= fc {
-			values[i] = ""
+		origIdx, found := s.normalizedMap[normalizeKey(f)]
+		if !found || origIdx >= fc {
 			continue
 		}
-		w := widths[origIdx]
-		fo := entryOff + uint64(offsets[origIdx])
-		isNative := natives != nil && origIdx < len(natives) && natives[origIdx]
-		if isNative {
-			nt := 0
-			if natTypes != nil && origIdx < len(natTypes) {
-				nt = natTypes[origIdx]
-			}
-			values[i] = s.readNativeValue(fo, w, nt)
-		} else {
-			idx := s.readUintWidth(fo, w)
-			if pool != nil && origIdx < len(pool) && int(idx) < len(pool[origIdx]) {
-				values[i] = pool[origIdx][idx]
-			}
-		}
+		values[i] = s.readFieldValue(entryOff, origIdx)
 	}
 	return &GeoInfo{
 		FieldNames: fields,

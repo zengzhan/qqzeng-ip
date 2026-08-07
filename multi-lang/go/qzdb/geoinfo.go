@@ -2,6 +2,7 @@ package qzdb
 
 import (
 	"strconv"
+	"strings"
 	"sync/atomic"
 )
 
@@ -63,18 +64,40 @@ func buildNormalizedMap(fields []string) map[string]int {
 }
 
 // isNumericFieldName 判断 toJson 数值类型字段（longitude/latitude/asn/geo_id）。
+// 使用非分配归一化避免字符串分配。
 func isNumericFieldName(name string) bool {
 	switch len(name) {
 	case 3:
-		return normalizeKey(name) == "asn"
+		return equalNormalized(name, "asn")
 	case 5:
-		return normalizeKey(name) == "geoid"
+		return equalNormalized(name, "geoid")
 	case 8:
-		return normalizeKey(name) == "latitude"
+		return equalNormalized(name, "latitude")
 	case 9:
-		return normalizeKey(name) == "longitude"
+		return equalNormalized(name, "longitude")
 	}
 	return false
+}
+
+// equalNormalized 比较 key 归一化后是否等于 target（零分配）。
+func equalNormalized(key, target string) bool {
+	if len(key) != len(target) {
+		// 归一化后长度可能因移除 _/- 而不同，需要实际归一化
+		return normalizeKey(key) == target
+	}
+	for i := 0; i < len(key); i++ {
+		c := key[i]
+		if c == '_' || c == '-' {
+			return normalizeKey(key) == target
+		}
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != target[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // Get 动态访问字段（大小写/下划线/连字符不敏感）。未匹配返回 ""，绝不 panic。
@@ -106,11 +129,21 @@ func (g *GeoInfo) ToPipe() string {
 	if g == nil || len(g.Values) == 0 {
 		return ""
 	}
-	out := g.Values[0]
-	for i := 1; i < len(g.Values); i++ {
-		out += "|" + g.Values[i]
+	if len(g.Values) == 1 {
+		return g.Values[0]
 	}
-	return out
+	var n int
+	for _, v := range g.Values {
+		n += len(v) + 1
+	}
+	var b strings.Builder
+	b.Grow(n - 1)
+	b.WriteString(g.Values[0])
+	for _, v := range g.Values[1:] {
+		b.WriteByte('|')
+		b.WriteString(v)
+	}
+	return b.String()
 }
 
 // String 等价于 ToPipe()。
