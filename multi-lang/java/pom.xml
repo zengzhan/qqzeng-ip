@@ -4,13 +4,41 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
+    <!--
+      Maven groupId (com.qqzeng) 与 Java 包名 (com.qqzeng.qzdb) 一致。
+      已通过 qqzeng.com 域名所有权验证（central.sonatype.com 命名空间校验），
+      与 .NET 端 QQZeng.Qzdb 品牌对齐。
+    -->
     <groupId>com.qqzeng</groupId>
     <artifactId>qzdb</artifactId>
-    <version>2.4.0</version>
+    <version>1.0.0</version>
     <packaging>jar</packaging>
 
     <name>QZDB Java SDK</name>
-    <description>High-performance QZDB IP geolocation database reader (v2.4 API: com.qqzeng.qzdb.QzdbReader)</description>
+    <description>High-performance offline QZDB IP geolocation database reader (v2.4 API: com.qqzeng.qzdb.QzdbReader). Pure Java, zero runtime dependencies, supports IPv4/IPv6 dual-stack.</description>
+    <url>https://github.com/zengzhan/qqzeng-ip</url>
+
+    <licenses>
+        <license>
+            <name>MIT License</name>
+            <url>https://opensource.org/licenses/MIT</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
+    <developers>
+        <developer>
+            <id>zengzhan</id>
+            <name>zengzhan</name>
+            <url>https://github.com/zengzhan</url>
+        </developer>
+    </developers>
+
+    <scm>
+        <connection>scm:git:git://github.com/zengzhan/qqzeng-ip.git</connection>
+        <developerConnection>scm:git:git@github.com:zengzhan/qqzeng-ip.git</developerConnection>
+        <url>https://github.com/zengzhan/qqzeng-ip</url>
+    </scm>
 
     <properties>
         <maven.compiler.release>21</maven.compiler.release>
@@ -27,9 +55,9 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.13.0</version>
             </plugin>
-            <!-- 单元测试为 main 驱动（DatabaseReaderTest），且依赖外部 test_data_202608 数据，
+            <!-- 单元测试为 main 驱动（QzdbReaderTest），且依赖外部 test_data_202608 数据，
                  故跳过 surefire 自动执行；手工运行：
-                 java -cp target/classes com.qqzeng.qzdb.DatabaseReaderTest -->
+                 java -cp target/classes com.qqzeng.qzdb.QzdbReaderTest -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
@@ -38,6 +66,84 @@
                     <skipTests>true</skipTests>
                 </configuration>
             </plugin>
+            <!--
+              Central Publishing 插件（替代已退役的 OSSRH）。
+              仅在 `mvn deploy` 时介入，将构件发布到 Maven Central。
+              凭证通过环境变量 CENTRAL_TOKEN 传入（CI 中来自仓库 Secret）。
+              本地 `mvn package` / `mvn install` 不受影响。
+            -->
+            <plugin>
+                <groupId>org.sonatype.central</groupId>
+                <artifactId>central-publishing-maven-plugin</artifactId>
+                <version>0.7.0</version>
+                <extensions>true</extensions>
+                <configuration>
+                    <publishingServerId>central</publishingServerId>
+                    <token>${env.CENTRAL_TOKEN}</token>
+                </configuration>
+            </plugin>
         </plugins>
     </build>
+
+    <!--
+      发布专用 profile：附加 -sources.jar / -javadoc.jar 并做 GPG 签名。
+      Central 要求每个构件必须带 sources、javadoc、GPG 签名，故发布时必须激活：
+          mvn -Ppublish-central -Dgpg.passphrase=*** deploy
+      未激活此 profile 时（常规构建）不会签名，也不产出 sources/javadoc，便于本地开发。
+    -->
+    <profiles>
+        <profile>
+            <id>publish-central</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-source-plugin</artifactId>
+                        <version>3.3.1</version>
+                        <executions>
+                            <execution>
+                                <id>attach-sources</id>
+                                <goals>
+                                    <goal>jar-no-fork</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>3.11.1</version>
+                        <executions>
+                            <execution>
+                                <id>attach-javadocs</id>
+                                <goals>
+                                    <goal>jar</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                    </plugin>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-gpg-plugin</artifactId>
+                        <version>3.2.4</version>
+                        <executions>
+                            <execution>
+                                <id>sign-artifacts</id>
+                                <phase>verify</phase>
+                                <goals>
+                                    <goal>sign</goal>
+                                </goals>
+                            </execution>
+                        </executions>
+                        <configuration>
+                            <gpgArguments>
+                                <arg>--pinentry-mode</arg>
+                                <arg>loopback</arg>
+                            </gpgArguments>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

@@ -2,7 +2,7 @@
 
 > 纯离线、零依赖、高性能的 **QZDB IP 地理定位数据库**官方 Java SDK（支持 IPv4 / IPv6 双栈）。
 
-- **官方坐标**：`com.qqzeng:qzdb`（Maven `groupId:artifactId` 与 Java 包名 `com.qqzeng.qzdb` 一致）
+- **官方坐标**：`com.qqzeng:qzdb`（已发布至 Maven Central）；Java 包名即 `com.qqzeng.qzdb`
 - **定位**：离线解析 `.qzdb` 二进制数据库文件，不依赖任何外部网络请求
 - **架构**：无锁快照（lock-free snapshot）——并发查询互不阻塞，`reload` 原子切换（原子引用替换）
 - **运行要求**：JDK 21+（编译目标 `maven.compiler.release=21`）
@@ -44,17 +44,30 @@
 
 ## 2. 安装
 
-### 2.1 Maven 坐标
+### 2.1 Maven / Gradle 坐标
+
+已发布至 **Maven Central**，构建工具会自动拉取 `qzdb-1.0.0.jar` 及其 `-sources.jar` / `-javadoc.jar`，**无需克隆本仓库源码**。
 
 ```xml
+<!-- Maven -->
 <dependency>
     <groupId>com.qqzeng</groupId>
     <artifactId>qzdb</artifactId>
-    <version>2.4.0</version>
+    <version>1.0.0</version>
 </dependency>
 ```
 
-> 若尚未发布到公共仓库，可克隆本仓库后在 `multi-lang/java/` 目录执行 `mvn install` 安装到本地仓库，或直接把 `src/main/java/com/qqzeng/qzdb/` 目录加入你的源码树编译。
+```groovy
+// Gradle (Groovy DSL)
+implementation 'com.qqzeng:qzdb:1.0.0'
+```
+
+```kotlin
+// Gradle (Kotlin DSL)
+implementation("com.qqzeng:qzdb:1.0.0")
+```
+
+> 若需本地构建：在 `multi-lang/java/` 执行 `mvn install` 安装到本地仓库；或直接把 `src/main/java/com/qqzeng/qzdb/` 目录加入你的源码树编译。
 
 ### 2.2 源码编译
 
