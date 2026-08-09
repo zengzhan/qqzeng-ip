@@ -33,7 +33,7 @@ QZDB 支持 magic 头部为 `QZDB` 的标准版、旗舰版、至尊版、ASN �
 from qzdb import QzdbReader
 
 # 加载并查询（无单例；需按路径复用请用 QzdbRegistry）
-searcher = QzdbReader("qqzeng_ip_max_china.qzdb")
+searcher = QzdbReader("qqzeng_ip_ult_china.qzdb")
 
 # 查询返回 Pipe 字符串
 print(searcher.find_str("114.114.114.114"))
@@ -50,7 +50,7 @@ if loc:
 import "qzdb_reader/qzdb"
 
 // 创建并持有 QzdbReader 实例（无单例；跨版本/多文件可各持一个）
-searcher, err := qzdb.Open("qqzeng_ip_max_china.qzdb", 0, true)
+searcher, err := qzdb.Open("qqzeng_ip_ult_china.qzdb", 0, true)
 
 // 查询 Pipe 字符串
 res := searcher.FindStr("114.114.114.114")
@@ -68,7 +68,7 @@ import com.qqzeng.qzdb.QzdbReader;
 import com.qqzeng.qzdb.GeoInfo;
 
 // 构建读取器（Builder 模式，支持 groupIndex / verifyCrc）
-try (QzdbReader reader = new QzdbReader.Builder(new File("qqzeng_ip_max_china.qzdb")).build()) {
+try (QzdbReader reader = new QzdbReader.Builder(new File("qqzeng_ip_ult_china.qzdb")).build()) {
     // 查询返回 GeoInfo
     GeoInfo loc = reader.find("114.114.114.114").orElse(null);
     if (loc != null) {
@@ -83,7 +83,7 @@ try (QzdbReader reader = new QzdbReader.Builder(new File("qqzeng_ip_max_china.qz
 ```rust
 use qzdb_reader::{from_file, QzdbReader};
 
-let searcher = from_file("qqzeng_ip_max_china.qzdb");
+let searcher = from_file("qqzeng_ip_ult_china.qzdb");
 if let Some(loc) = searcher.find("114.114.114.114") {
     // 直接字段访问 (O(1))
     println!("Country: {}, City: {}", loc.country(), loc.city());
@@ -100,7 +100,7 @@ if let Some(loc) = searcher.find("114.114.114.114") {
 ```csharp
 using QQZeng.Qzdb;
 
-using var reader = QzdbReader.Open("qqzeng_ip_max_china.qzdb");
+using var reader = QzdbReader.Open("qqzeng_ip_ult_china.qzdb");
 GeoInfo loc = reader.Find("114.114.114.114");
 if (loc != null) {
     Console.WriteLine($"Province: {loc.Get("province")}");
@@ -112,7 +112,7 @@ if (loc != null) {
 #include "qzdb_reader.h"
 
 qzdb_reader_t searcher;
-qzdb_init(&searcher, "qqzeng_ip_max_china.qzdb");   // 栈上持有实例，无单例
+qzdb_init(&searcher, "qqzeng_ip_ult_china.qzdb");   // 栈上持有实例，无单例
 char buf[256];
 qzdb_find_str(&searcher, "114.114.114.114", buf, sizeof(buf));
 printf("Result: %s\n", buf);
@@ -122,7 +122,7 @@ printf("Result: %s\n", buf);
 ```javascript
 const QzdbReader = require('./qzdb');
 
-const reader = new QzdbReader.Builder("qqzeng_ip_max_china.qzdb").build();
+const reader = new QzdbReader.Builder("qqzeng_ip_ult_china.qzdb").build();
 const loc = reader.find("114.114.114.114");
 console.log(loc.get("country"), loc.get("city"));
 ```
@@ -131,7 +131,7 @@ console.log(loc.get("country"), loc.get("city"));
 ```php
 use Qqzeng\Ip\QzdbReader;
 
-$reader = new QzdbReader("qqzeng_ip_max_china.qzdb");
+$reader = new QzdbReader("qqzeng_ip_ult_china.qzdb");
 $loc = $reader->find("114.114.114.114");
 echo $loc->get('country') . ' ' . $loc->get('city');
 ```

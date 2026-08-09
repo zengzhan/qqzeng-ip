@@ -29,12 +29,30 @@ function main() {
         return r ? r.toPipe() : '';
     }
 
+    // Parse a V4 key: "a.b.c.d" dotted-quad or decimal u32. Returns null on invalid input.
+    function parseV4Key(s) {
+        const parts = s.split('.');
+        if (parts.length === 4) {
+            let v = 0;
+            for (let i = 0; i < 4; i++) {
+                const octet = Number(parts[i]);
+                if (!Number.isInteger(octet) || octet < 0 || octet > 255) return null;
+                v = v * 256 + octet;
+            }
+            return v >>> 0;
+        }
+        const v = Number(s);
+        if (!Number.isInteger(v) || v < 0 || v > 4294967295) return null;
+        return v >>> 0;
+    }
+
     // Process V4
     if (fs.existsSync(v4Test)) {
         const v4Ips = fs.readFileSync(v4Test, 'utf8').trim().split('\n').filter(l => l.trim());
         const v4Results = v4Ips.map(ipStr => {
-            const ip = parseInt(ipStr);
-            const info = searcher.findUint(ip >>> 0);
+            const ip = parseV4Key(ipStr);
+            if (ip === null) return `${ipStr}|`;
+            const info = searcher.findUint(ip);
             return `${ipStr}|${geoToPipe(info)}`;
         });
         fs.writeFileSync(v4Out, v4Results.join('\n') + '\n');

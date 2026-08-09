@@ -19,6 +19,26 @@ func geoToPipe(info *qzdb.GeoInfo) string {
 	return info.ToPipe()
 }
 
+// parseV4Key parses a V4 key: "a.b.c.d" dotted-quad or decimal u32.
+func parseV4Key(s string) (uint32, bool) {
+	if parts := strings.Split(s, "."); len(parts) == 4 {
+		var v uint32
+		for _, p := range parts {
+			octet, err := strconv.ParseUint(p, 10, 8)
+			if err != nil {
+				return 0, false
+			}
+			v = v<<8 | uint32(octet)
+		}
+		return v, true
+	}
+	v, err := strconv.ParseUint(s, 10, 32)
+	if err != nil {
+		return 0, false
+	}
+	return uint32(v), true
+}
+
 func processFile(searcher *qzdb.QzdbReader, testPath, outPath string, isV6 bool) int {
 	data, err := os.ReadFile(testPath)
 	if err != nil {
@@ -52,8 +72,12 @@ func processFile(searcher *qzdb.QzdbReader, testPath, outPath string, isV6 bool)
 				pipeStr = geoToPipe(info)
 			}
 		} else {
-			ip, _ := strconv.ParseUint(line, 10, 32)
-			info, err := searcher.FindUint(uint32(ip))
+			ip, ok := parseV4Key(line)
+			if !ok {
+				results = append(results, fmt.Sprintf("%s|", line))
+				continue
+			}
+			info, err := searcher.FindUint(ip)
 			if err != nil {
 				pipeStr = ""
 			} else {

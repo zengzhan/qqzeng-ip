@@ -32,6 +32,8 @@ def run_python_v6(ip_list):
     return results
 
 def run_nodejs_v6(ip_list):
+    # NOTE: 生成文件必须写到 nodejs/ 目录、cwd 也要切到 nodejs/，
+    # 否则 require('./qzdb') 会按多语言根目录解析而找不到模块。
     js_code = f"""
 const QzdbReader = require('./qzdb');
 const s = new QzdbReader('{DB_PATH}');
@@ -42,11 +44,11 @@ for (const ip of {json.dumps(ip_list)}) {{
 }}
 console.log(JSON.stringify(results));
 """
-    tmp = os.path.join(SCRIPT_DIR, ".cross_v6_js_tmp.js")
+    tmp = os.path.join(SCRIPT_DIR, "nodejs", "_cross_v6_tmp.js")
     with open(tmp, "w") as f:
         f.write(js_code)
     try:
-        out = subprocess.check_output(["node", tmp], cwd=SCRIPT_DIR, timeout=30).decode()
+        out = subprocess.check_output(["node", tmp], cwd=os.path.join(SCRIPT_DIR, "nodejs"), timeout=30).decode()
         return json.loads(out.strip())
     except Exception as e:
         print(f"  [SKIP Node.js IPv6: {e}]")
@@ -56,23 +58,27 @@ console.log(JSON.stringify(results));
             os.unlink(tmp)
 
 def run_php_v6(ip_list):
+    # NOTE: GeoInfo 不是数组，不能用 implode('|', $r)，必须用 $r->toPipe()。
+    # require_once 使用绝对路径 + cwd 切到 php/，避免相对路径解析歧义。
+    php_ips = "array(" + ", ".join(f'"{ip}"' for ip in ip_list) + ")"
     php_code = f"""<?php
-require_once 'QzdbReader.php';
-use Qqzeng\Ip\QzdbReader;
+require_once '{os.path.join(SCRIPT_DIR, "php", "QzdbReader.php")}';
+use Qqzeng\\Ip\\QzdbReader;
+$ips = {php_ips};
 $s = new QzdbReader('{DB_PATH}');
 $results = array();
-$ips = {json.dumps(ip_list)};
 foreach ($ips as $ip) {{
     $r = $s->find($ip);
-    $results[$ip] = $r ? implode('|', $r) : '';
+    $results[$ip] = $r ? $r->toPipe() : '';
 }}
 echo json_encode($results);
-?>"""
+"""
     tmp = os.path.join(SCRIPT_DIR, "php", "_cross_v6_tmp.php")
     with open(tmp, "w") as f:
         f.write(php_code)
     try:
-        out = subprocess.check_output(["php", tmp], cwd=SCRIPT_DIR, timeout=30).decode()
+        out = subprocess.check_output(["php", "-d", "memory_limit=256M", tmp],
+                                       cwd=os.path.join(SCRIPT_DIR, "php"), timeout=30).decode()
         return json.loads(out.strip())
     except Exception as e:
         print(f"  [SKIP PHP IPv6: {e}]")
@@ -81,7 +87,12 @@ echo json_encode($results);
         if os.path.exists(tmp):
             os.unlink(tmp)
 
+
 def run_c_v6(ip_list):
+    def _iprow(ip_str):
+        ipv6 = ipaddress.IPv6Address(ip_str)
+        return ipv6.packed.hex()
+
     c_code = f"""#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -90,11 +101,13 @@ def run_c_v6(ip_list):
 int main() {{
     const char* ips[] = {{{", ".join(f'"{ip}"' for ip in ip_list)}}};
     int n = {len(ip_list)};
+
     qzdb_reader_t ctx;
     if (qzdb_init(&ctx, "{DB_PATH}") != 0) {{
         fprintf(stderr, "load failed\\n");
         return 1;
     }}
+
     printf("{{");
     for (int i = 0; i < n; i++) {{
         char out[4096];
@@ -126,30 +139,53 @@ int main() {{
             if os.path.exists(f):
                 os.unlink(f)
 
+def _find_java_home():
+    import glob as _glob
+    candidates = []
+    for pat in (
+        "/opt/homebrew/Cellar/openjdk@21/*/libexec/openjdk.jdk/Contents/Home",
+        "/opt/homebrew/opt/openjdk@21",
+        "/opt/homebrew/opt/openjdk",
+        "/Library/Java/JavaVirtualMachines/*/Contents/Home",
+    ):
+        candidates.extend(_glob.glob(pat))
+    for h in candidates:
+        if os.path.exists(os.path.join(h, "bin", "javac")):
+            return h
+    return None
+
+
 def run_java_v6(ip_list):
+    # NOTE: 不能用 json.dumps(ip_list)（生成 Python 风格 [".."]），
+    # Java 数组必须用 {".."} 形式。javac 必须连同 SDK 源码一起编译。
+    java_ips = "{" + ", ".join(f'"{ip}"' for ip in ip_list) + "}"
     java_code = f"""import com.qqzeng.qzdb.QzdbReader;
 import com.qqzeng.qzdb.GeoInfo;
 import java.io.File;
-import java.util.*;
+import java.util.LinkedHashMap;
+import java.util.Optional;
+
 public class CrossVerifyV6 {{
-    public static void main(String[] args) {{
+    public static void main(String[] args) throws Exception {{
+        String[] ips = {java_ips};
         QzdbReader reader = new QzdbReader.Builder(new File("{DB_PATH}")).build();
-        String[] ips = {json.dumps(ip_list)};
-        java.util.Map<String, String> results = new java.util.HashMap<>();
+        LinkedHashMap<String, String> results = new LinkedHashMap<>();
         for (String ip : ips) {{
-            GeoInfo loc = reader.find(ip).orElse(null);
-            results.put(ip, loc != null ? loc.toPipeString() : "");
+            Optional<GeoInfo> r = reader.find(ip);
+            results.put(ip, r.isPresent() ? r.get().toPipeString() : "");
         }}
-        StringBuilder sb = new StringBuilder("{{");
+        StringBuilder sb = new StringBuilder();
+        sb.append("{{");
         boolean first = true;
-        for (Map.Entry<String, String> e : results.entrySet()) {{
+        for (var e : results.entrySet()) {{
             if (!first) sb.append(",");
             first = false;
-            sb.append("\\\"").append(e.getKey().replace("\\\\", "\\\\\\\\").replace("\\\"", "\\\\\\"")).append("\\\":\\\"")
-              .append(e.getValue().replace("\\\\", "\\\\\\\\").replace("\\\"", "\\\\\\"")).append("\\\"");
+            sb.append("\\\"").append(e.getKey()).append("\\\":\\\"")
+              .append(e.getValue().replace("\\\\", "\\\\\\\\").replace("\\\"", "\\\\\\\"")).append("\\\"");
         }}
         sb.append("}}");
         System.out.println(sb.toString());
+        reader.close();
     }}
 }}
 """
@@ -159,20 +195,31 @@ public class CrossVerifyV6 {{
     with open(tmp, "w") as f:
         f.write(java_code)
     try:
-        javac_cmd = ["javac", "-d", build_dir, tmp]
-        subprocess.check_output(javac_cmd, cwd=SCRIPT_DIR, timeout=30, stderr=subprocess.DEVNULL)
+        java_home = _find_java_home()
+        if not java_home:
+            print("  [SKIP Java IPv6: no JDK found]")
+            return None
+        javac_cmd = [f"{java_home}/bin/javac", "-encoding", "UTF-8", "-d", build_dir]
+        srcs = [tmp]
+        for root, dirs, files in os.walk(os.path.join(SCRIPT_DIR, "java", "src")):
+            for fn in files:
+                if fn.endswith(".java"):
+                    srcs.append(os.path.join(root, fn))
+        javac_cmd.extend(srcs)
+        subprocess.check_output(javac_cmd, timeout=30, stderr=subprocess.STDOUT)
         out = subprocess.check_output(
-            ["java", "-cp", build_dir, "CrossVerifyV6"],
-            cwd=SCRIPT_DIR, timeout=30
+            [f"{java_home}/bin/java", "-cp", build_dir, "CrossVerifyV6"],
+            timeout=30, stderr=subprocess.STDOUT
         ).decode()
         return json.loads(out.strip())
     except Exception as e:
         print(f"  [SKIP Java IPv6: {e}]")
         return None
     finally:
-        for f in [tmp, os.path.join(build_dir, "CrossVerifyV6.class")]:
-            if os.path.exists(f):
-                os.unlink(f)
+        for f in ["CrossVerifyV6.java", "CrossVerifyV6.class"]:
+            p = os.path.join(build_dir, f)
+            if os.path.exists(p):
+                os.unlink(p)
 
 def main():
     print(f"Cross-Language IPv6 Verification: {len(TEST_IPS_V6)} IPs")

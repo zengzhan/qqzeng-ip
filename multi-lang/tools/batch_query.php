@@ -33,11 +33,30 @@ function geoToPipe($r, $searcher) {
     return $r->toPipe();
 }
 
+function parseV4Key(string $s): ?int {
+    $parts = explode('.', $s);
+    if (count($parts) === 4) {
+        $v = 0;
+        foreach ($parts as $p) {
+            if (!ctype_digit($p) || (int)$p > 255) return null;
+            $v = ($v << 8) | (int)$p;
+        }
+        return $v;
+    }
+    if (!ctype_digit($s) || strlen($s) > 10) return null;
+    $v = (int)$s;
+    return ($v < 0 || $v > 4294967295) ? null : $v;
+}
+
 // V4
 $lines = file($v4Test, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
 $results = [];
 foreach ($lines as $line) {
-    $ip = intval(trim($line));
+    $ip = parseV4Key(trim($line));
+    if ($ip === null) {
+        $results[] = $line . '|';
+        continue;
+    }
     $r = $searcher->findUint($ip);
     $results[] = $line . '|' . geoToPipe($r, $searcher);
 }

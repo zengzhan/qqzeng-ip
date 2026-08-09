@@ -34,6 +34,21 @@ static void geo_to_pipe(const qzdb_reader_t* ctx, const qzdb_geo_info_t* r, char
     buf[pos] = '\0';
 }
 
+/* Parse a V4 key: "a.b.c.d" dotted-quad or decimal u32. Returns 0 on success. */
+static int parse_v4_key(const char* s, uint32_t* out) {
+    unsigned a, b, c, d;
+    if (sscanf(s, "%u.%u.%u.%u", &a, &b, &c, &d) == 4) {
+        if (a > 255 || b > 255 || c > 255 || d > 255) return -1;
+        *out = ((uint32_t)a << 24) | ((uint32_t)b << 16) | ((uint32_t)c << 8) | (uint32_t)d;
+        return 0;
+    }
+    char* end = NULL;
+    unsigned long long v = strtoull(s, &end, 10);
+    if (end == s || *end != '\0' || v > 0xFFFFFFFFULL) return -1;
+    *out = (uint32_t)v;
+    return 0;
+}
+
 /* ctx 不可声明为 const：qzdb_find_* 经 resolve_row_id_cached 写入内部行缓存 */
 static int process_v4(qzdb_reader_t* ctx, const char* test_path, const char* out_path) {
     FILE* f = fopen(test_path, "r");
@@ -49,7 +64,12 @@ static int process_v4(qzdb_reader_t* ctx, const char* test_path, const char* out
         if (nl) *nl = '\0';
         if (line[0] == '\0') continue;
         
-        uint32_t ip = (uint32_t)atol(line);
+        uint32_t ip;
+        if (parse_v4_key(line, &ip) != 0) {
+            fprintf(out, "%s|\n", line);
+            count++;
+            continue;
+        }
         qzdb_geo_info_t result;
         char pipe_buf[4096];
         
