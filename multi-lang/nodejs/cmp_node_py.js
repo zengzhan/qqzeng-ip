@@ -56,7 +56,7 @@ execFileSync('python3', [pyFile], { stdio: 'ignore' });
 const py = JSON.parse(fs.readFileSync(tmpOut, 'utf8'));
 
 const Q = require('./qzdb');
-const sn = Q.getInstance(DB);
+const sn = Q.open(DB);
 const nv4 = v4.map(ip => { const r = sn.findUint(ip); return r ? r.toPipe() : ''; });
 const nv6 = v6.map(pair => { const [h, l] = pair.split(':'); const r = sn.findV6(BigInt(h), BigInt(l)); return r ? r.toPipe() : ''; });
 

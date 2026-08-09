@@ -122,10 +122,7 @@ cp "$DEV/c/qzdb_reader.h" "$GITHUB/c/"
 cp "$DEV/go/qzdb/qzdb.go" "$GITHUB/go/qzdb/"
 
 # Java
-cp "$DEV/java/src/main/java/qzdb/QzdbReader.java" "$GITHUB/java/src/main/java/qzdb/"
-cp "$DEV/java/src/main/java/qzdb/ErrorCode.java" "$GITHUB/java/src/main/java/qzdb/" 2>/dev/null || true
-cp "$DEV/java/src/main/java/qzdb/QzdbException.java" "$GITHUB/java/src/main/java/qzdb/" 2>/dev/null || true
-cp "$DEV/java/src/main/java/qzdb/IpLocation.java" "$GITHUB/java/src/main/java/qzdb/" 2>/dev/null || true
+cp "$DEV/java/src/main/java/com/qqzeng/qzdb/"*.java "$GITHUB/java/src/main/java/com/qqzeng/qzdb/"
 
 # .NET / C#
 cp "$DEV/netcore/QzdbReader.cs" "$GITHUB/netcore/"

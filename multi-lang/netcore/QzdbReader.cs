@@ -1,6 +1,7 @@
 namespace QQZeng.Qzdb;
 
 using System.Buffers.Binary;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -19,6 +20,80 @@ public sealed class QzdbReader : IDisposable
     private const uint SentinelMask24 = 0x7FFFFF;
     private const uint SentinelMask31 = 0x7FFFFFFF;
     private const int MaxPoolCount = 1 << 24;
+
+    // ------------------------------------------------------------------
+    // Edition registry (FORMAT §3.1 / §10.3).
+    //
+    // The file is self-describing: Header.VersionMask (offset 6) and every
+    // GROUP_SCHEMA.groupId carry a one-hot edition bitmask. That bitmask — not
+    // the field count — is the authoritative edition signal. EditionByBit is the
+    // spec's bit -> name registry; adding a future edition means appending one
+    // bit here and one row to EditionFieldNames, with no parser changes anywhere.
+    // ------------------------------------------------------------------
+    internal static readonly string[] EditionByBit = ["std", "asn", "pro", "max", "ult"]; // bit0..bit4
+
+    /// <summary>Canonical field order per edition (FORMAT appendix 1). Used ONLY when a file
+    /// carries no Metadata field_names; never overrides the file's own names.</summary>
+    internal static readonly Dictionary<string, string[]> EditionFieldNames = new()
+    {
+        ["std"] = ["continent", "country_code", "country", "province", "city", "isp"],
+        ["asn"] = ["continent", "country_code", "country", "isp", "asn", "as_name", "as_domain", "usage_type"],
+        ["pro"] = ["continent", "country_code", "country", "province", "city", "district", "geo_id", "longitude", "latitude", "timezone", "isp"],
+        ["max"] = ["continent", "country_code", "country", "province", "city", "district", "geo_id", "longitude", "latitude", "timezone", "isp", "asn", "as_name", "as_domain", "usage_type"],
+        ["ult"] = ["continent", "continent_en", "country_code", "country_alpha3", "country", "country_en", "province", "province_en", "city", "city_en", "district", "district_en", "geo_id", "longitude", "latitude", "timezone", "languages", "currency_code", "phone_prefix", "emoji_flag", "isp", "asn", "as_name", "as_domain", "usage_type"],
+    };
+
+    // Provenance markers. Identical string values in all 8 SDKs so cross-language
+    // verification can compare them directly.
+    /// <summary>Edition came from VersionMask/groupId (authoritative).</summary>
+    public const string EditionSourceVersionMask = "version_mask";
+    /// <summary>Edition came from Metadata primary_version/version_list.</summary>
+    public const string EditionSourceMetadata = "metadata";
+    /// <summary>Edition was inferred from an unambiguous field count (last resort).</summary>
+    public const string EditionSourceInferred = "inferred";
+    /// <summary>Edition is genuinely undeterminable.</summary>
+    public const string EditionSourceUnknown = "unknown";
+
+    /// <summary>Field names came from the file's own Metadata.</summary>
+    public const string FieldNamesSourceMetadata = "metadata";
+    /// <summary>Field names came from the canonical table of a known edition.</summary>
+    public const string FieldNamesSourceEdition = "edition";
+    /// <summary>Field names are field_0..field_N-1 placeholders.</summary>
+    public const string FieldNamesSourceSynthetic = "synthetic";
+
+    /// <summary>Reverse index: field count -> edition, only when the count is unambiguous.</summary>
+    private static readonly Dictionary<int, string?> EditionByFieldCount = BuildEditionByFieldCount();
+
+    private static Dictionary<int, string?> BuildEditionByFieldCount()
+    {
+        var map = new Dictionary<int, string?>();
+        foreach (var (edition, names) in EditionFieldNames)
+            map[names.Length] = map.ContainsKey(names.Length) ? null : edition; // arity clash -> unusable
+        return map;
+    }
+
+    /// <summary>Resolve a one-hot edition bitmask to its name, or "" if not one-hot.</summary>
+    internal static string EditionFromMask(int mask)
+    {
+        if (mask <= 0 || (mask & (mask - 1)) != 0) return ""; // zero, or more than one bit set
+        int bit = BitOperations.TrailingZeroCount(mask);
+        return bit < EditionByBit.Length ? EditionByBit[bit] : "";
+    }
+
+    /// <summary>Return the sole entry of a comma-separated version_list, or null when it is not exactly one.</summary>
+    private static string? SingleVersionToken(string versionList)
+    {
+        if (string.IsNullOrEmpty(versionList)) return null;
+        string? only = null;
+        foreach (var part in versionList.Split(','))
+        {
+            var t = part.Trim();
+            if (t.Length == 0) continue;
+            if (only != null) return null; // more than one
+            only = t;
+        }
+        return only;
+    }
 
     // Bounded, lock-free per-snapshot cache of resolved GeoInfo keyed by entryId.
     // Power of two; collisions cause a recompute, never a wrong value (see ResolveGeo).
@@ -139,6 +214,10 @@ public sealed class QzdbReader : IDisposable
         internal int[][] _groupFieldOffsets = null!;
         internal bool[][] _groupFieldNative = null!;
         internal int[][] _groupFieldNativeType = null!;
+        /// <summary>Per-group one-hot edition bitmask (GROUP_SCHEMA.groupId; 0 = not declared).</summary>
+        internal int[] _groupIds = null!;
+        /// <summary>Field names resolved per group — dimensionMask repair needs names of other groups too.</summary>
+        internal string[][] _groupFieldNames = null!;
 
         internal string[][][] _pools = null!;
         internal string[] _fieldNames = null!;
@@ -148,6 +227,12 @@ public sealed class QzdbReader : IDisposable
         internal CacheEntry?[]? _cache;
 
         internal string _version = "", _description = "", _dataMonth = "", _buildTimeStr = "", _edition = "", _scope = "";
+        /// <summary>Header offset 6: file-level one-hot edition bitmask.</summary>
+        internal int _versionMask;
+        /// <summary>Which rule produced <see cref="_edition"/>.</summary>
+        internal string _editionSource = EditionSourceUnknown;
+        /// <summary>Whether <see cref="_fieldNames"/> was read from the file or filled in by the SDK.</summary>
+        internal string _fieldNamesSource = FieldNamesSourceSynthetic;
         internal long _storedCrc;
         internal long? _canonicalCrc;
 
@@ -217,6 +302,10 @@ public sealed class QzdbReader : IDisposable
             var span = _data.Span;
             int fmtVer = span[4];
             if (fmtVer != 1) throw new QzdbException(ErrorCode.Unsupported, $"Unsupported version: {fmtVer}");
+
+            // VersionMask (offset 6): file-level one-hot edition bitmask, the
+            // authoritative edition signal (FORMAT §3.1).
+            _versionMask = BinaryPrimitives.ReadUInt16LittleEndian(span[6..]);
 
             _flags = BinaryPrimitives.ReadUInt16LittleEndian(span[8..]);
             _hasV4 = (_flags & 1) != 0;
@@ -362,6 +451,7 @@ public sealed class QzdbReader : IDisposable
             _groupFieldOffsets = new int[groups][];
             _groupFieldNative = new bool[groups][];
             _groupFieldNativeType = new int[groups][];
+            _groupIds = new int[groups];
 
             for (int gi = 0; gi < groups; gi++)
             {
@@ -389,6 +479,9 @@ public sealed class QzdbReader : IDisposable
                 {
                     if (sp + 14 > _dataLen)
                         throw new QzdbException(ErrorCode.Corrupted, "Group schema is truncated");
+                    // groupId is this group's one-hot edition bitmask (FORMAT §3.1) — the
+                    // authoritative edition signal for the group, consumed by ParseMetadata().
+                    _groupIds[gi] = BinaryPrimitives.ReadUInt16LittleEndian(span[sp..]);
                     sp += 2;
                     int fldCount = BinaryPrimitives.ReadUInt16LittleEndian(span[sp..]);
                     sp += 2;
@@ -409,6 +502,7 @@ public sealed class QzdbReader : IDisposable
                     var natTypes = new int[fldCount];
                     for (int fi = 0; fi < fldCount; fi++)
                     {
+                        // fieldId is just the slot ordinal (0..N-1); no cross-edition meaning.
                         sp += 2;
                         widths[fi] = span[sp];
                         if (widths[fi] is < 1 or > 8)
@@ -492,24 +586,102 @@ public sealed class QzdbReader : IDisposable
                 }
             }
 
-            int numFields = _groupFieldCounts[_groupIndex];
-            _fieldNames = metaFields != null && metaFields.Length == numFields
-                ? metaFields
-                : FallbackFieldNames(numFields);
+            // --- Resolve edition + field names for every group ------------------
+            //
+            // Both answers come only from what the file declares about itself, with an
+            // identical priority order in all 8 SDKs (FORMAT §10.3):
+            //
+            //   edition      1. GROUP_SCHEMA.groupId / Header.VersionMask one-hot bit
+            //                2. Metadata primary_version, or a single-entry version_list
+            //                3. unambiguous field-count match (last resort)
+            //                4. "" (unknown) — we do not invent an answer
+            //   fieldNames   1. Metadata field_names, when its arity matches the group
+            //                2. canonical table for a *known* edition of matching arity
+            //                3. field_0..field_N-1 placeholders
+            //
+            // EditionSource / FieldNamesSource report which rule fired, so callers can
+            // tell a name read off disk from one filled in by the SDK.
+            string metaPrimary = _edition; // Metadata type=4, captured above
+            _groupFieldNames = new string[_actualGroups][];
+            var groupEditions = new string[_actualGroups];
+            var groupEditionSources = new string[_actualGroups];
+            var groupNameSources = new string[_actualGroups];
+
+            for (int g = 0; g < _actualGroups; g++)
+            {
+                int nFields = _groupFieldCounts[g];
+
+                // edition: this group's own bitmask first, then the file-level mask.
+                int mask = _groupIds[g] != 0 ? _groupIds[g] : _versionMask;
+                string edition = EditionFromMask(mask);
+                string source = EditionSourceVersionMask;
+                if (edition.Length == 0)
+                {
+                    edition = metaPrimary.Trim();
+                    if (edition.Length == 0)
+                        edition = SingleVersionToken(_version) ?? "";
+                    if (edition.Length != 0) source = EditionSourceMetadata;
+                }
+                if (edition.Length == 0)
+                {
+                    edition = EditionByFieldCount.TryGetValue(nFields, out var byCount) && byCount != null
+                        ? byCount
+                        : "";
+                    source = edition.Length == 0 ? EditionSourceUnknown : EditionSourceInferred;
+                }
+
+                // field names
+                string[] names;
+                string namesSource;
+                if (metaFields != null && metaFields.Length == nFields)
+                {
+                    names = (string[])metaFields.Clone();
+                    namesSource = FieldNamesSourceMetadata;
+                }
+                else if (EditionFieldNames.TryGetValue(edition, out var canonical) && canonical.Length == nFields)
+                {
+                    names = (string[])canonical.Clone();
+                    namesSource = FieldNamesSourceEdition;
+                }
+                else
+                {
+                    names = new string[nFields];
+                    for (int i = 0; i < nFields; i++) names[i] = $"field_{i}";
+                    namesSource = FieldNamesSourceSynthetic;
+                }
+
+                _groupFieldNames[g] = names;
+                groupEditions[g] = edition;
+                groupEditionSources[g] = source;
+                groupNameSources[g] = namesSource;
+            }
+
+            int gi2 = _groupIndex >= 0 && _groupIndex < _actualGroups ? _groupIndex : 0;
+            _fieldNames = _groupFieldNames[gi2];
+            _edition = groupEditions[gi2];
+            _editionSource = groupEditionSources[gi2];
+            _fieldNamesSource = groupNameSources[gi2];
 
             _normMap = GeoInfo.BuildNormalizedMap(_fieldNames);
             _numericFlags = new bool[_fieldNames.Length];
             for (int i = 0; i < _fieldNames.Length; i++)
                 _numericFlags[i] = GeoInfo.IsNumericFieldName(_fieldNames[i]);
 
-            // Repair dimension masks
+            // Repair dimensionMask (§5.4 / §6.2).
+            //
+            // A valid current-format file always stores a non-zero dimensionMask, so this
+            // normally does nothing. When a group's mask is 0 (malformed/legacy), derive it
+            // from that group's *resolved field names* — never from fieldId (just a slot
+            // ordinal) and never from the group index (the real asn file keeps its asn group
+            // at index 0 with a stored mask of 0x02, so an index rule would be wrong).
+            string asnKey = GeoInfo.NormalizeKey("asn");
             for (int g = 0; g < _actualGroups; g++)
             {
                 if (_groupDimMasks[g] != 0) continue;
                 bool hasAsn = false;
-                for (int fi = 0; fi < _fieldNames.Length; fi++)
+                foreach (var fn in _groupFieldNames[g])
                 {
-                    if (_fieldNames[fi] == "asn") { hasAsn = true; break; }
+                    if (GeoInfo.NormalizeKey(fn) == asnKey) { hasAsn = true; break; }
                 }
                 _groupDimMasks[g] = hasAsn ? 0x02 : 0x01;
             }
@@ -523,16 +695,6 @@ public sealed class QzdbReader : IDisposable
                 _buildTimeStr = $"{y:D4}-{m:D2}-{dd:D2}";
             }
         }
-
-        private static string[] FallbackFieldNames(int count) => count switch
-        {
-            6 => ["continent", "country_code", "country", "province", "city", "isp"],
-            8 => ["continent", "country_code", "country", "isp", "asn", "as_name", "as_domain", "usage_type"],
-            11 => ["continent", "country_code", "country", "province", "city", "district", "geo_id", "longitude", "latitude", "timezone", "isp"],
-            15 => ["continent", "country_code", "country", "province", "city", "district", "geo_id", "longitude", "latitude", "timezone", "isp", "asn", "as_name", "as_domain", "usage_type"],
-            25 => ["continent", "continent_en", "country_code", "country_alpha3", "country", "country_en", "province", "province_en", "city", "city_en", "district", "district_en", "geo_id", "longitude", "latitude", "timezone", "languages", "currency_code", "phone_prefix", "emoji_flag", "isp", "asn", "as_name", "as_domain", "usage_type"],
-            _ => Enumerable.Range(0, count).Select(i => $"field_{i}").ToArray()
-        };
 
         internal void ParsePools()
         {
@@ -574,13 +736,20 @@ public sealed class QzdbReader : IDisposable
                         throw new QzdbException(ErrorCode.Corrupted, "Pool index table is out of bounds");
                     long stringDataStart = poolCursor + indexBytes;
 
+                    // 偏移表是累积结构：offsets[i+1] >= offsets[i]。单调性必须跨条目强制，
+                    // 只做单条 [strOff, nextOff] 合法性判断是不够的 —— 伪造表可让每一项都取
+                    // [0, sectionLen]，逐条都"合法"，但 count 段 × section 长度会放大成 GB 级
+                    // UTF8.GetString 分配（同类构造实测达 7.2 GB → OOM）。
+                    // 加上 strOff >= prevEnd 后各段互不重叠，总解码量必 <= section 长度。
                     var strings = new string[cnt];
+                    int prevEnd = 0;
                     for (int i = 0; i < cnt; i++)
                     {
                         int strOff = BinaryPrimitives.ReadInt32LittleEndian(span[(int)(poolCursor + i * 4)..]);
                         int nextOff = BinaryPrimitives.ReadInt32LittleEndian(span[(int)(poolCursor + (i + 1) * 4)..]);
-                        if (strOff < 0 || nextOff < strOff || stringDataStart + nextOff > poolEnd)
+                        if (strOff < prevEnd || nextOff < strOff || stringDataStart + nextOff > poolEnd)
                             throw new QzdbException(ErrorCode.Corrupted, "Pool string offset is out of bounds");
+                        prevEnd = nextOff;
                         int len = nextOff - strOff;
                         strings[i] = len == 0 ? "" : Encoding.UTF8.GetString(span.Slice((int)(stringDataStart + strOff), len));
                     }
@@ -676,8 +845,16 @@ public sealed class QzdbReader : IDisposable
 
     public string FindStr(string ipStr)
     {
-        var info = Find(ipStr);
-        return info == null ? "" : info.ToPipe();
+        try
+        {
+            var info = Find(ipStr);
+            return info == null ? "" : info.ToPipe();
+        }
+        catch (QzdbException)
+        {
+            // 非法 IP：宽松语义，对齐 findStr 规范（§3 未命中/非法统一返回 ""）
+            return "";
+        }
     }
 
     public uint LookupRowId(string ipStr)
@@ -1055,13 +1232,19 @@ public sealed class QzdbReader : IDisposable
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static uint ReadUintWidth(ReadOnlySpan<byte> s, int off, int width) => width switch
+    private static uint ReadUintWidth(ReadOnlySpan<byte> s, int off, int width)
     {
-        <= 1 => s[off],
-        2 => BinaryPrimitives.ReadUInt16LittleEndian(s[off..]),
-        3 => (uint)(s[off] | (s[off + 1] << 8) | (s[off + 2] << 16)),
-        _ => BinaryPrimitives.ReadUInt32LittleEndian(s[off..])
-    };
+        int need = width switch { <= 1 => 1, 2 => 2, 3 => 3, _ => 4 };
+        if (off < 0 || off + need > s.Length)
+            throw new QzdbException(ErrorCode.Corrupted, $"ReadUintWidth out of bounds: off={off} width={width} len={s.Length}");
+        return width switch
+        {
+            <= 1 => s[off],
+            2 => BinaryPrimitives.ReadUInt16LittleEndian(s[off..]),
+            3 => (uint)(s[off] | (s[off + 1] << 8) | (s[off + 2] << 16)),
+            _ => BinaryPrimitives.ReadUInt32LittleEndian(s[off..])
+        };
+    }
 
     #endregion
 
@@ -1317,7 +1500,25 @@ public sealed class QzdbReader : IDisposable
 
     public string Version => RequireSnapshot()._version;
     public string DataMonth => RequireSnapshot()._dataMonth;
+    /// <summary>
+    /// Edition name ("std"|"pro"|"asn"|"max"|"ult"), or "" when undeterminable (never invented).
+    /// Priority per FORMAT §10.3: groupId/VersionMask → Metadata → unambiguous field count.
+    /// Use <see cref="EditionSource"/> to learn which rule fired.
+    /// </summary>
     public string Edition => RequireSnapshot()._edition;
+
+    /// <summary>
+    /// File-level one-hot edition bitmask (Header offset 6).
+    /// bit0=std(1) bit1=asn(2) bit2=pro(4) bit3=max(8) bit4=ult(16).
+    /// </summary>
+    public int VersionMask => RequireSnapshot()._versionMask;
+
+    /// <summary>How <see cref="Edition"/> was resolved: version_mask | metadata | inferred | unknown.</summary>
+    public string EditionSource => RequireSnapshot()._editionSource;
+
+    /// <summary>Where <see cref="FieldNames"/> came from: metadata | edition | synthetic.</summary>
+    public string FieldNamesSource => RequireSnapshot()._fieldNamesSource;
+
     public string Scope => RequireSnapshot()._scope;
     public string BuildTime => RequireSnapshot()._buildTimeStr;
     public string Description => RequireSnapshot()._description;

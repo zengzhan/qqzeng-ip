@@ -9,18 +9,33 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 
-/* Helper: format geo info to pipe string.
- * Delegates to the SDK's qzdb_geo_info_to_pipe, which joins the already-formatted
- * field strings verbatim (the reader itself applies the 6-decimal / integer form
- * rule for floats). We must NOT re-apply %.6f here — that would double-format and
- * turn integer-valued floats (e.g. "116") into "116.000000", breaking the contract. */
+/* Helper: format geo info to pipe string */
 static void geo_to_pipe(const qzdb_reader_t* ctx, const qzdb_geo_info_t* r, char* buf, size_t size) {
     if (!r) { if (size > 0) buf[0] = '\0'; return; }
-    qzdb_geo_info_to_pipe((qzdb_reader_t*)ctx, r, buf, size);
+    buf[0] = '\0';
+    size_t pos = 0;
+    int nfields = ctx->field_count > 0 ? ctx->field_count : 0;
+    for (int i = 0; i < nfields && pos < size; i++) {
+        if (i > 0 && pos < size) buf[pos++] = '|';
+        const char* v = r->values[i] ? r->values[i] : "";
+        if (ctx->float_field_flags && ctx->float_field_flags[i] && v[0]) {
+            double f = atof(v);
+            int n = snprintf(buf + pos, size - pos, "%.6f", f);
+            if (n > 0) pos += (size_t)(n < (int)(size - pos) ? n : (int)(size - pos - 1));
+        } else {
+            size_t vlen = strlen(v);
+            size_t to_copy = vlen < (size - pos - 1) ? vlen : (size - pos - 1);
+            memcpy(buf + pos, v, to_copy);
+            pos += to_copy;
+        }
+    }
+    buf[pos] = '\0';
 }
 
-static int process_v4(const qzdb_reader_t* ctx, const char* test_path, const char* out_path) {
+/* ctx 不可声明为 const：qzdb_find_* 经 resolve_row_id_cached 写入内部行缓存 */
+static int process_v4(qzdb_reader_t* ctx, const char* test_path, const char* out_path) {
     FILE* f = fopen(test_path, "r");
     if (!f) { fprintf(stderr, "  C: Cannot open %s\n", test_path); return 0; }
     
@@ -52,7 +67,7 @@ static int process_v4(const qzdb_reader_t* ctx, const char* test_path, const cha
     return count;
 }
 
-static int process_v6(const qzdb_reader_t* ctx, const char* test_path, const char* out_path) {
+static int process_v6(qzdb_reader_t* ctx, const char* test_path, const char* out_path) {
     FILE* f = fopen(test_path, "r");
     if (!f) return 0;
     
@@ -66,8 +81,13 @@ static int process_v6(const qzdb_reader_t* ctx, const char* test_path, const cha
         if (nl) *nl = '\0';
         if (line[0] == '\0') continue;
         
-        uint64_t high, low;
-        sscanf(line, "%llu:%llu", &high, &low);
+        /* 未检查 sscanf 返回值会让 high/low 保持未初始化（UB），必须显式判定 */
+        unsigned long long high = 0, low = 0;
+        if (sscanf(line, "%llu:%llu", &high, &low) != 2) {
+            fprintf(out, "%s|\n", line);
+            count++;
+            continue;
+        }
 
         /* SDK expects a 16-byte big-endian IPv6 address (high:low, 8 bytes each) */
         uint8_t ip_bin[16];

@@ -6,7 +6,7 @@
 
 QZDB (qqzeng IP 数据库) 是一款面向生产环境的 IP 地理位置查询二进制格式与搜索引擎。采用 **Jump Table + Patricia Trie 双阶段检索**、动态 Schema 以及零分配内存映射（mmap）技术，在海量 IP 数据集上提供**单机微秒级**查询延迟。
 
-[简体中文](./README_zh.md) | [English](./README.md)
+[简体中文](./README.md)
 
 ---
 
@@ -26,14 +26,14 @@ QZDB 支持 magic 头部为 `QZDB` 的标准版、旗舰版、至尊版、ASN �
 
 ## 🛠️ 多语言快速入门
 
-所有语言 SDK 均提供一致的接口设计，生产环境推荐使用单例（Singleton）模式。
+所有语言 SDK 均提供一致的接口设计。v2.4 起**已彻底移除单例（Singleton）**，核心类统一为 `QzdbReader`（C 语言用 `qzdb_reader_t`）：创建即持有实例，按需复用（跨文件/跨版本请各自持有实例，或用 `QzdbRegistry` 便利层），多实例并发互不干扰。
 
 ### 🐍 Python
 ```python
 from qzdb import QzdbReader
 
-# 加载并查询 (推荐单例)
-searcher = QzdbReader.get_instance("qqzeng_ip_max_china.qzdb")
+# 加载并查询（无单例；需按路径复用请用 QzdbRegistry）
+searcher = QzdbReader("qqzeng_ip_max_china.qzdb")
 
 # 查询返回 Pipe 字符串
 print(searcher.find_str("114.114.114.114"))
@@ -49,8 +49,8 @@ if loc:
 ```go
 import "qzdb_reader/qzdb"
 
-// 初始化单例
-searcher, err := qzdb.Instance("qqzeng_ip_max_china.qzdb")
+// 创建并持有 QzdbReader 实例（无单例；跨版本/多文件可各持一个）
+searcher, err := qzdb.Open("qqzeng_ip_max_china.qzdb", 0, true)
 
 // 查询 Pipe 字符串
 res := searcher.FindStr("114.114.114.114")
@@ -64,18 +64,18 @@ if info != nil {
 
 ### ☕ Java
 ```java
-import qzdb.QzdbReader;
-import qzdb.IpLocation;
+import com.qqzeng.qzdb.QzdbReader;
+import com.qqzeng.qzdb.GeoInfo;
 
-// 初始化单例
-QzdbReader searcher = QzdbReader.getInstance();
-searcher.load("qqzeng_ip_max_china.qzdb");
-
-// 查询
-IpLocation loc = searcher.find("114.114.114.114");
-if (loc != null) {
-    String[] values = loc.getValues();
-    // 对应 searcher.getFieldNames() 的索引获取数据
+// 构建读取器（Builder 模式，支持 groupIndex / verifyCrc）
+try (QzdbReader reader = new QzdbReader.Builder(new File("qqzeng_ip_max_china.qzdb")).build()) {
+    // 查询返回 GeoInfo
+    GeoInfo loc = reader.find("114.114.114.114").orElse(null);
+    if (loc != null) {
+        System.out.println(loc.getCountry() + " " + loc.getProvince() + " " + loc.getCity());
+    }
+    // 查询返回 Pipe 字符串
+    System.out.println(reader.findStr("114.114.114.114"));
 }
 ```
 
@@ -98,10 +98,10 @@ if let Some(loc) = searcher.find("114.114.114.114") {
 
 ### ⚡ C# (.NET)
 ```csharp
-using Qqzeng;
+using QQZeng.Qzdb;
 
-var searcher = QzdbReader.GetInstance("qqzeng_ip_max_china.qzdb");
-var loc = searcher.Find("114.114.114.114");
+using var reader = QzdbReader.Open("qqzeng_ip_max_china.qzdb");
+GeoInfo loc = reader.Find("114.114.114.114");
 if (loc != null) {
     Console.WriteLine($"Province: {loc.Get("province")}");
 }
@@ -111,28 +111,29 @@ if (loc != null) {
 ```c
 #include "qzdb_reader.h"
 
-qzdb_reader_t* searcher = qzdb_instance("qqzeng_ip_max_china.qzdb");
+qzdb_reader_t searcher;
+qzdb_init(&searcher, "qqzeng_ip_max_china.qzdb");   // 栈上持有实例，无单例
 char buf[256];
-qzdb_find_str(searcher, "114.114.114.114", buf, sizeof(buf));
+qzdb_find_str(&searcher, "114.114.114.114", buf, sizeof(buf));
 printf("Result: %s\n", buf);
 ```
 
 ### 🟢 Node.js
 ```javascript
-const { QzdbReader } = require('./qzdb');
+const QzdbReader = require('./qzdb');
 
-const searcher = QzdbReader.getInstance("qqzeng_ip_max_china.qzdb");
-const loc = searcher.find("114.114.114.114");
-console.log(loc.country, loc.city);
+const reader = new QzdbReader.Builder("qqzeng_ip_max_china.qzdb").build();
+const loc = reader.find("114.114.114.114");
+console.log(loc.get("country"), loc.get("city"));
 ```
 
 ### 🐘 PHP
 ```php
 use Qqzeng\Ip\QzdbReader;
 
-$searcher = QzdbReader::getInstance("qqzeng_ip_max_china.qzdb");
-$loc = $searcher->find("114.114.114.114");
-echo $loc['country'] . ' ' . $loc['city'];
+$reader = new QzdbReader("qqzeng_ip_max_china.qzdb");
+$loc = $reader->find("114.114.114.114");
+echo $loc->get('country') . ' ' . $loc->get('city');
 ```
 
 ---
@@ -170,7 +171,7 @@ QZDB 引擎核心采用专门定制的 **双阶段 Patricia Trie 树型检索算
 
 ## ⚠️ 生产环境使用注意事项
 
-1. **务必以单例模式复用 Searcher**：加载数据库涉及解析头部元数据、CRC 校验、预装载字符串索引池，有一定初始化开销。请务必在程序启动时初始化**一次**并全局复用。
+1. **复用实例而非每次重建**：加载数据库涉及解析头部元数据、CRC 校验、预装载字符串索引池，有一定初始化开销。请在程序启动时创建 `QzdbReader` 实例**一次**并长期持有复用（跨文件/跨版本各自持有一个实例，或用 `QzdbRegistry` 管理）。v2.4 已无单例，所谓「复用」指的是持有同一实例引用，而非依赖全局单例。
 2. **内存考虑**：在 C、Go、Rust 中数据库通过内存映射（`mmap`）加载，可在多进程间共享物理内存。在 JVM 等托管运行环境中，请确保堆内存上限（Heap limits）能够容纳数据库大小。
 3. **线程安全性**：所有查询 API（`find`、`find_str`）皆为无状态设计，且核心字段在初始化后均为只读，完全支持多线程高并发免锁查询。
 

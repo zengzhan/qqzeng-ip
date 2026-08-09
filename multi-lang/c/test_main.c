@@ -176,9 +176,13 @@ static void test_free_null_safety(void) {
 }
 
 /* ---- Category: CRC caching (OPT #4) ---- */
-static void test_crc_caching(void) {
+static void test_crc_caching(const char* db_path) {
+    /* 原实现写死 "multi-lang/c/qqzeng_ip_std_china.qzdb"，该文件并不在仓库中，
+     * 导致本用例恒失败、C 端 Tier1 永远 TIER1_FAIL。改用统一解析出的 DB 路径，
+     * 无可用 DB 时跳过而不是判失败。 */
+    if (!db_path) return;
     qzdb_reader_t ctx;
-    int rc = qzdb_init_ex(&ctx, "multi-lang/c/qqzeng_ip_std_china.qzdb", 1);
+    int rc = qzdb_init_ex(&ctx, db_path, 1);
     ASSERT(rc == QZDB_OK, "crc_cache init OK");
     if (rc != QZDB_OK) return;
 
@@ -223,9 +227,9 @@ static void* stress_worker(void* arg) {
     return NULL;
 }
 
-static void test_concurrent_stress(void) {
+static void test_concurrent_stress(const char* dbpath) {
     qzdb_reader_t ctx;
-    int rc = qzdb_init_ex(&ctx, "multi-lang/c/qqzeng_ip_std_china.qzdb", 1);
+    int rc = qzdb_init_ex(&ctx, dbpath, 1);
     ASSERT(rc == QZDB_OK, "concurrent init OK");
     if (rc != QZDB_OK) return;
 
@@ -736,10 +740,10 @@ int main(int argc, char** argv) {
     test_resource_release();
     test_fail_closed();
     test_free_null_safety();
-    test_crc_caching();
     test_usage_type_helpers();
 
     const char* db = locate_db(argc, argv);
+    test_crc_caching(db);
     if (db) {
         fprintf(stderr, "[Tier1] using DB: %s\n", db);
         test_db_backed(db);
@@ -751,6 +755,8 @@ int main(int argc, char** argv) {
         test_registry(db);
         test_buffer_loading(db);
         test_field_norm_o1(db);
+        test_find_fields_buf_consistency(db);
+        test_concurrent_stress(db);
     } else {
         fprintf(stderr, "[Tier1] no DB found; skipping DB-backed assertions\n");
     }

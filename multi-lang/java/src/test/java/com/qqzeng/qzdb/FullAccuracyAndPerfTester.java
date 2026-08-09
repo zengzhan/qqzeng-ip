@@ -62,13 +62,26 @@ public class FullAccuracyAndPerfTester {
         return null;
     }
 
+    /**
+     * 报告目录固定落在仓库内的 {@code multi-lang/java/test_reports}。
+     * <p>旧实现按 CWD 逐个尝试相对路径并在失败时 {@code mkdirs()}：从
+     * {@code multi-lang/java/} 启动会造出 {@code multi-lang/java/java/test_reports}，
+     * 而该路径不被 .gitignore 覆盖，会污染工作区。改为向上回溯定位
+     * {@code multi-lang} 目录，结果与 CWD 无关。
+     */
     private static String findReportDir() {
-        for (String c : new String[]{"java/test_reports", "multi-lang/java/test_reports", "../java/test_reports"}) {
-            File f = new File(c);
-            if (f.exists() || f.mkdirs()) return new File(c).getAbsolutePath();
+        File dir = new File("").getAbsoluteFile();
+        for (int depth = 0; dir != null && depth < 8; depth++, dir = dir.getParentFile()) {
+            File multiLang = "multi-lang".equals(dir.getName()) ? dir : new File(dir, "multi-lang");
+            if (multiLang.isDirectory()) {
+                File reports = new File(multiLang, "java/test_reports");
+                if (reports.isDirectory() || reports.mkdirs()) return reports.getAbsolutePath();
+            }
         }
-        new File("java/test_reports").mkdirs();
-        return new File("java/test_reports").getAbsolutePath();
+        // 兜底写系统临时目录：宁可落在仓库外，也不在仓库里制造未跟踪垃圾
+        File fallback = new File(System.getProperty("java.io.tmpdir"), "qzdb_test_reports");
+        fallback.mkdirs();
+        return fallback.getAbsolutePath();
     }
 
     public static void main(String[] args) throws Exception {

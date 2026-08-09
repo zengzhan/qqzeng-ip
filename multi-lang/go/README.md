@@ -122,7 +122,7 @@ reader, err := qzdb.NewBuilderReader(f).Build()
 
 构造期 **Fail-Closed**：Magic≠`QZDB`、HeaderVersion≠1、CRC 不匹配（且 `VerifyCRC(true)`）、文件截断，都会直接返回错误，绝不部分加载或静默降级。
 
-> 兼容旧 API：`NewSearcher(path, groupIndex, verifyCrc)` 与进程级单例 `qzdb.Instance(path)` 仍然可用。
+> **无单例设计**：v2.4 起 Go SDK 不再提供 `NewSearcher` 或 `qzdb.Instance(path)` 进程级单例，统一入口为 `qzdb.Open(path, groupIndex, verifyCrc)`（返回 `*QzdbReader`）。跨文件/跨版本复用请持有各自的 `*QzdbReader` 实例（或用 `QzdbRegistry` 便利层），多实例并发互不干扰。
 
 ---
 

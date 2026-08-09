@@ -75,6 +75,27 @@ fn err(code: ErrorCode, msg: impl Into<String>) -> QzdbError {
     QzdbError { code, message: msg.into() }
 }
 
+/// 解析期边界守卫：把 `Option` 收口为 `QzdbError::OutOfBounds`，使畸形 .qzdb 文件
+/// Fail-Closed（返回错误而非 panic 导致宿主进程崩溃）。
+macro_rules! ro {
+    ($opt:expr, $name:expr) => {
+        $opt.ok_or_else(|| err(ErrorCode::OutOfBounds, $name))
+    };
+}
+
+/// 安全单字节读取（越界返回 None，配合 `ro!` 收口）。
+fn rget(d: &[u8], off: usize) -> Option<u8> {
+    d.get(off).copied()
+}
+
+/// 把 `Vec<Option<T>>` 整体收口成 `Vec<T>`：任一元素缺失即返回 `Corrupted`，
+/// 而不是 `unwrap()` panic。`collect::<Result<_,_>>()` 短路于首个错误。
+fn take_all<T>(v: Vec<Option<T>>, name: &'static str) -> Result<Vec<T>, QzdbError> {
+    v.into_iter()
+        .map(|o| o.ok_or_else(|| err(ErrorCode::Corrupted, format!("{name} not initialized"))))
+        .collect()
+}
+
 // ---------------------------------------------------------------------------
 // CRC32
 // ---------------------------------------------------------------------------
@@ -121,50 +142,49 @@ fn compute_canonical_crc(data: &[u8]) -> u32 {
 // 安全读取助手
 // ---------------------------------------------------------------------------
 
+/// 定长读取的统一入口：`off + N` 用 `checked_add` 防止 usize 回绕
+/// （回绕会让 `off + N > len` 判为 false 而后续切片 panic），
+/// 越界一律返回 `None`。const 泛型使长度在编译期确定，零额外开销。
+#[inline(always)]
+fn read_arr<const N: usize>(d: &[u8], off: usize) -> Option<[u8; N]> {
+    let end = off.checked_add(N)?;
+    let slice = d.get(off..end)?;
+    let mut out = [0u8; N];
+    out.copy_from_slice(slice);
+    Some(out)
+}
+
 #[inline(always)]
 fn safe_read_u16(d: &[u8], off: usize) -> Option<u16> {
-    if off + 2 > d.len() {
-        return None;
-    }
-    Some(u16::from_le_bytes(d[off..off + 2].try_into().ok()?))
+    Some(u16::from_le_bytes(read_arr::<2>(d, off)?))
 }
 
 #[inline(always)]
 fn safe_read_u24(d: &[u8], off: usize) -> Option<u32> {
-    if off + 3 > d.len() {
-        return None;
-    }
-    Some(d[off] as u32 | (d[off + 1] as u32) << 8 | (d[off + 2] as u32) << 16)
+    let b = read_arr::<3>(d, off)?;
+    Some(b[0] as u32 | (b[1] as u32) << 8 | (b[2] as u32) << 16)
 }
 
 #[inline(always)]
 fn safe_read_u32(d: &[u8], off: usize) -> Option<u32> {
-    if off + 4 > d.len() {
-        return None;
-    }
-    Some(u32::from_le_bytes(d[off..off + 4].try_into().ok()?))
+    Some(u32::from_le_bytes(read_arr::<4>(d, off)?))
 }
 
 #[inline(always)]
 fn safe_read_u64(d: &[u8], off: usize) -> Option<u64> {
-    if off + 8 > d.len() {
-        return None;
-    }
-    Some(u64::from_le_bytes(d[off..off + 8].try_into().ok()?))
+    Some(u64::from_le_bytes(read_arr::<8>(d, off)?))
 }
 
 #[inline(always)]
 fn safe_read_u48(d: &[u8], off: usize) -> Option<u64> {
-    if off + 6 > d.len() {
-        return None;
-    }
+    let b = read_arr::<6>(d, off)?;
     Some(
-        d[off] as u64
-            | (d[off + 1] as u64) << 8
-            | (d[off + 2] as u64) << 16
-            | (d[off + 3] as u64) << 24
-            | (d[off + 4] as u64) << 32
-            | (d[off + 5] as u64) << 40,
+        b[0] as u64
+            | (b[1] as u64) << 8
+            | (b[2] as u64) << 16
+            | (b[3] as u64) << 24
+            | (b[4] as u64) << 32
+            | (b[5] as u64) << 40,
     )
 }
 
@@ -182,6 +202,96 @@ fn safe_read_uint_width(d: &[u8], off: usize, width: usize) -> u32 {
         3 => safe_read_u24(d, off).unwrap_or(0),
         _ => safe_read_u32(d, off).unwrap_or(0),
     }
+}
+
+// ---------------------------------------------------------------------------
+// 版本档次判定契约（FORMAT §10.3 —— 8 种 SDK 逐字一致）
+//
+// 档次的权威来源是 Header.VersionMask（offset 6，u16 LE）与
+// GROUP_SCHEMA.groupId，二者都是 one-hot 位掩码：
+//   bit0=std(1) bit1=asn(2) bit2=pro(4) bit3=max(8) bit4=ult(16)
+// 字段个数只是最后兜底。EDITION_BY_BIT 按 bit0..bit4 顺序给出档次名。
+// ---------------------------------------------------------------------------
+
+/// bit0..bit4 对应的档次名。
+pub const EDITION_BY_BIT: [&str; 5] = ["std", "asn", "pro", "max", "ult"];
+
+/// 各档次的规范字段表（仅在文件未自带 Metadata field_names 时使用）。
+pub fn edition_field_names(edition: &str) -> Option<&'static [&'static str]> {
+    match edition {
+        "std" => Some(&["continent", "country_code", "country", "province", "city", "isp"]),
+        "asn" => Some(&[
+            "continent", "country_code", "country", "isp", "asn", "as_name", "as_domain",
+            "usage_type",
+        ]),
+        "pro" => Some(&[
+            "continent", "country_code", "country", "province", "city", "district", "geo_id",
+            "longitude", "latitude", "timezone", "isp",
+        ]),
+        "max" => Some(&[
+            "continent", "country_code", "country", "province", "city", "district", "geo_id",
+            "longitude", "latitude", "timezone", "isp", "asn", "as_name", "as_domain",
+            "usage_type",
+        ]),
+        "ult" => Some(&[
+            "continent", "continent_en", "country_code", "country_alpha3", "country",
+            "country_en", "province", "province_en", "city", "city_en", "district",
+            "district_en", "geo_id", "longitude", "latitude", "timezone", "languages",
+            "currency_code", "phone_prefix", "emoji_flag", "isp", "asn", "as_name", "as_domain",
+            "usage_type",
+        ]),
+        _ => None,
+    }
+}
+
+/// 档次来源：来自 VersionMask/groupId（权威）。
+pub const EDITION_SOURCE_VERSION_MASK: &str = "version_mask";
+/// 档次来源：来自 Metadata primary_version / 单条目 version_list。
+pub const EDITION_SOURCE_METADATA: &str = "metadata";
+/// 档次来源：兜底，字段数唯一匹配。
+pub const EDITION_SOURCE_INFERRED: &str = "inferred";
+/// 档次来源：确实判定不出，不臆造。
+pub const EDITION_SOURCE_UNKNOWN: &str = "unknown";
+
+/// 字段名来源：文件自带 Metadata field_names。
+pub const FIELD_NAMES_SOURCE_METADATA: &str = "metadata";
+/// 字段名来源：已知档次的规范表。
+pub const FIELD_NAMES_SOURCE_EDITION: &str = "edition";
+/// 字段名来源：field_0..field_N-1 占位符。
+pub const FIELD_NAMES_SOURCE_SYNTHETIC: &str = "synthetic";
+
+/// one-hot 掩码 → 档次名；非 one-hot 或越界返回 ""。
+pub fn edition_from_mask(mask: u16) -> &'static str {
+    if mask == 0 || (mask & (mask - 1)) != 0 {
+        return "";
+    }
+    let bit = mask.trailing_zeros() as usize;
+    if bit < EDITION_BY_BIT.len() {
+        EDITION_BY_BIT[bit]
+    } else {
+        ""
+    }
+}
+
+/// 字段数 → 档次名（仅当该基数在规范表中唯一时才成立）。
+fn edition_by_field_count(count: usize) -> &'static str {
+    let mut hit = "";
+    for ed in EDITION_BY_BIT.iter() {
+        if let Some(names) = edition_field_names(ed) {
+            if names.len() == count {
+                if !hit.is_empty() {
+                    return ""; // 基数不唯一，不猜
+                }
+                hit = ed;
+            }
+        }
+    }
+    hit
+}
+
+/// field_0..field_{n-1} 占位符。
+fn synthetic_field_names(count: usize) -> Vec<String> {
+    (0..count).map(|i| format!("field_{}", i)).collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -617,6 +727,9 @@ pub struct SnapshotInner {
     data_month: String,
     build_time: String,
     edition: String,
+    version_mask: u16,
+    edition_source: &'static str,
+    field_names_source: &'static str,
     canonical_crc: u32,
 
     // per-snapshot 有界无锁 GeoInfo 缓存
@@ -651,6 +764,9 @@ impl SnapshotInner {
                 format!("unsupported version: {} (only v1 supported)", fmt_ver),
             ));
         }
+
+        // VersionMask（offset 6）是档次判定的权威来源，必须在 flags 之前读出。
+        let version_mask = safe_read_u16(d, 6).unwrap();
 
         let flags = safe_read_u16(d, 8).unwrap();
         let has_v4 = flags & 1 != 0;
@@ -770,8 +886,10 @@ impl SnapshotInner {
         let mut row_usage_width = 0;
         if off_row_schema > 0 {
             let sp = off_row_schema as usize;
-            let f_count = d[sp] as usize;
-            let stride = d[sp + 1] as usize;
+            // 注意：上面的 check_offset 只保证 sp 本身可读（required=1），
+            // 而这里还要读 sp+1（stride），必须各自单独收口。
+            let f_count = ro!(rget(d, sp), "row_schema.field_count")? as usize;
+            let stride = ro!(rget(d, sp + 1), "row_schema.stride")? as usize;
             if (1..=8).contains(&f_count)
                 && sp + 4 + f_count * 4 <= d.len()
                 && stride == ip_row_size
@@ -809,11 +927,11 @@ impl SnapshotInner {
         // ---- 组入口偏移（头部 48 位） ----
         let mut group_entry_offsets = Vec::with_capacity(4);
         for i in 0..4 {
-            group_entry_offsets.push(safe_read_u48(d, 168 + i * 6).unwrap());
+            group_entry_offsets.push(ro!(safe_read_u48(d, 168 + i * 6), "group_entry_offsets")?);
         }
 
         let gm_off = off_geo_entries as usize;
-        let group_count_in_table = d[gm_off] as usize;
+        let group_count_in_table = ro!(rget(d, gm_off), "geo_entries.group_count")? as usize;
         let mut gm_off = gm_off + 1;
 
         let mut actual_groups = group_count_in_table.min(1.max(geo_entry_group_count));
@@ -833,14 +951,15 @@ impl SnapshotInner {
         let mut group_field_counts = vec![0; actual_groups];
         let mut group_entry_counts = vec![0; actual_groups];
         let mut group_dim_masks = vec![0u16; actual_groups];
-        let mut group_field_ids: Vec<Vec<u16>> = vec![Vec::new(); actual_groups];
+        // GROUP_SCHEMA.groupId：每组自己的 one-hot 版本位掩码（FORMAT §10.2）。
+        let mut group_ids: Vec<u16> = vec![0; actual_groups];
 
         for gi in 0..actual_groups {
-            group_field_counts[gi] = d[gm_off] as usize;
+            group_field_counts[gi] = ro!(rget(d, gm_off), "group_field_count")? as usize;
             gm_off += 1;
-            group_entry_counts[gi] = safe_read_u32(d, gm_off).unwrap();
+            group_entry_counts[gi] = ro!(safe_read_u32(d, gm_off), "group_entry_count")?;
             gm_off += 4;
-            group_dim_masks[gi] = safe_read_u16(d, gm_off).unwrap();
+            group_dim_masks[gi] = ro!(safe_read_u16(d, gm_off), "group_dim_mask")?;
             gm_off += 2;
         }
 
@@ -852,15 +971,16 @@ impl SnapshotInner {
 
         if off_group_schema > 0 {
             let mut sp = off_group_schema as usize;
-            let gs_group_count = safe_read_u16(d, sp).unwrap() as usize;
+            let gs_group_count = ro!(safe_read_u16(d, sp), "group_schema_count")? as usize;
             sp += 2;
             let max_gs = gs_group_count.min(actual_groups);
             for gi in 0..max_gs {
+                group_ids[gi] = ro!(safe_read_u16(d, sp), "group_schema_group_id")?;
                 sp += 2;
-                let fld_count = safe_read_u16(d, sp).unwrap() as usize;
+                let fld_count = ro!(safe_read_u16(d, sp), "group_field_count")? as usize;
                 sp += 2;
                 sp += 4;
-                let stride = safe_read_u32(d, sp).unwrap() as usize;
+                let stride = ro!(safe_read_u32(d, sp), "group_stride")? as usize;
                 sp += 4;
                 sp += 4;
                 if gi < actual_groups {
@@ -869,22 +989,19 @@ impl SnapshotInner {
                     let mut offsets = vec![0; fld_count];
                     let mut natives = vec![false; fld_count];
                     let mut nat_types = vec![0; fld_count];
-                    let mut ids = Vec::with_capacity(fld_count);
                     for fi in 0..fld_count {
-                        let fid = safe_read_u16(d, sp).unwrap();
-                        ids.push(fid);
+                        // fieldId 只是槽位序号 0..N-1，不带跨档语义，读过即弃。
                         sp += 2;
-                        widths[fi] = d[sp] as usize;
+                        widths[fi] = ro!(rget(d, sp), "group_field_width")? as usize;
                         sp += 1;
-                        let ff = d[sp];
+                        let ff = ro!(rget(d, sp), "group_field_flags")?;
                         sp += 1;
                         natives[fi] = (ff & 0x01) != 0;
                         nat_types[fi] = ((ff >> 1) & 0x03) as usize;
-                        offsets[fi] = safe_read_u32(d, sp).unwrap() as usize;
+                        offsets[fi] = ro!(safe_read_u32(d, sp), "group_field_offset")? as usize;
                         sp += 4;
                         sp += 4;
                     }
-                    group_field_ids[gi] = ids;
                     group_field_widths[gi] = Some(widths);
                     group_field_offsets[gi] = Some(offsets);
                     group_field_native[gi] = Some(natives);
@@ -914,16 +1031,117 @@ impl SnapshotInner {
             }
         }
 
-        // ---- Meta / 字段名 ----
-        let (version, field_names, description) = parse_metadata(d, off_meta);
+        // 上面的补齐循环保证每个槽位都已填充；这里统一收口为具体类型，
+        // 万一将来补齐逻辑被改坏也只会返回 Corrupted，而不会 panic。
+        let mut group_field_widths = take_all(group_field_widths, "group_field_widths")?;
+        let mut group_field_offsets = take_all(group_field_offsets, "group_field_offsets")?;
+        let mut group_field_native = take_all(group_field_native, "group_field_native")?;
+        let mut group_field_native_type =
+            take_all(group_field_native_type, "group_field_native_type")?;
 
-        let field_names: Arc<Vec<String>> = if !field_names.is_empty()
-            && field_names.len() == group_field_counts[group_index]
-        {
-            Arc::new(field_names)
-        } else {
-            Arc::new(fallback_field_names(group_field_counts[group_index]))
+        // 关键不变量：字段数有两个来源——GEO_ENTRIES 表的 group_field_counts[g]
+        // 与 GROUP_SCHEMA 的 fld_count。畸形文件可让二者不一致，而查询热路径
+        // 以 group_field_counts[g] 为循环上界、直接下标访问 widths/offsets/...，
+        // 长度不足即越界 panic。这里在解析期一次性对齐：不一致则该组回退到
+        // pool_idx_size 默认布局，使 `len() == group_field_counts[g]` 恒成立，
+        // 热路径因此无需任何逐次边界判断。
+        for g in 0..actual_groups {
+            let fc = group_field_counts[g];
+            if group_field_widths[g].len() == fc
+                && group_field_offsets[g].len() == fc
+                && group_field_native[g].len() == fc
+                && group_field_native_type[g].len() == fc
+            {
+                continue;
+            }
+            group_strides[g] = fc * pool_idx_size;
+            group_field_widths[g] = vec![pool_idx_size; fc];
+            group_field_offsets[g] = (0..fc).map(|i| i * pool_idx_size).collect();
+            group_field_native[g] = vec![false; fc];
+            group_field_native_type[g] = vec![0; fc];
+        }
+
+        // ---- Meta / 档次 / 字段名（FORMAT §10.3 统一契约） ----
+        //
+        //   edition      1. GROUP_SCHEMA.groupId / Header.VersionMask 的 one-hot 位
+        //                2. Metadata primary_version，或只有一项的 version_list
+        //                3. 字段数唯一匹配（兜底）
+        //                4. ""（unknown）—— 判定不出就不臆造
+        //   field_names  1. Metadata field_names（基数与该组一致时）
+        //                2. 已知档次且基数一致时用规范表
+        //                3. field_0..field_N-1 占位符
+        let meta = parse_metadata(d, off_meta);
+        let version = meta.version_name;
+        let description = meta.description;
+
+        let mut group_field_names: Vec<Vec<String>> = Vec::with_capacity(actual_groups);
+        let mut group_editions: Vec<&'static str> = Vec::with_capacity(actual_groups);
+        let mut group_edition_sources: Vec<&'static str> = Vec::with_capacity(actual_groups);
+        let mut group_name_sources: Vec<&'static str> = Vec::with_capacity(actual_groups);
+
+        // Metadata 里的档次名（type 4 优先，其次只有一项的 type 1 列表）。
+        let meta_edition: String = {
+            let pv = meta.primary_version.trim();
+            if !pv.is_empty() {
+                pv.to_string()
+            } else {
+                let tokens: Vec<&str> = version
+                    .split(',')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if tokens.len() == 1 { tokens[0].to_string() } else { String::new() }
+            }
         };
+
+        for g in 0..actual_groups {
+            let num_fields = group_field_counts[g];
+
+            // edition：先用本组自己的掩码，再回落到文件级掩码
+            let mask = if group_ids[g] != 0 { group_ids[g] } else { version_mask };
+            let mut edition: &'static str = edition_from_mask(mask);
+            let mut source: &'static str = EDITION_SOURCE_VERSION_MASK;
+            if edition.is_empty() && !meta_edition.is_empty() {
+                // 只接受规范表里已知的档次名，避免把任意字符串当档次外传。
+                if let Some(known) = EDITION_BY_BIT.iter().find(|e| **e == meta_edition) {
+                    edition = known;
+                    source = EDITION_SOURCE_METADATA;
+                }
+            }
+            if edition.is_empty() {
+                edition = edition_by_field_count(num_fields);
+                source = if edition.is_empty() {
+                    EDITION_SOURCE_UNKNOWN
+                } else {
+                    EDITION_SOURCE_INFERRED
+                };
+            }
+
+            // 字段名
+            let (names, names_source) = if meta.field_names.len() == num_fields
+                && num_fields > 0
+            {
+                (meta.field_names.clone(), FIELD_NAMES_SOURCE_METADATA)
+            } else {
+                match edition_field_names(edition) {
+                    Some(canon) if canon.len() == num_fields => (
+                        canon.iter().map(|s| s.to_string()).collect(),
+                        FIELD_NAMES_SOURCE_EDITION,
+                    ),
+                    _ => (synthetic_field_names(num_fields), FIELD_NAMES_SOURCE_SYNTHETIC),
+                }
+            };
+
+            group_field_names.push(names);
+            group_editions.push(edition);
+            group_edition_sources.push(source);
+            group_name_sources.push(names_source);
+        }
+
+        let edition = group_editions[group_index].to_string();
+        let edition_source = group_edition_sources[group_index];
+        let field_names_source = group_name_sources[group_index];
+        let field_names: Arc<Vec<String>> = Arc::new(group_field_names[group_index].clone());
 
         let mut norm_map: HashMap<String, usize> = HashMap::with_capacity(field_names.len());
         for (i, n) in field_names.iter().enumerate() {
@@ -940,34 +1158,25 @@ impl SnapshotInner {
         let numeric_indices = Arc::new(numeric_indices);
 
         // ---- 维度掩码修复 ----
+        // 只看该组解析出来的字段名里有没有 asn。fieldId 只是槽位序号（0..N-1），
+        // 不带任何跨档语义，绝不可用来判定维度。
+        let asn_key = normalize_key("asn");
         for (g, dim_mask) in group_dim_masks.iter_mut().enumerate() {
             if *dim_mask != 0 {
                 continue;
             }
-            let mut has_asn = false;
-            if let Some(ids) = group_field_ids.get(g) {
-                if ids.contains(&1) {
-                    has_asn = true;
-                }
-            }
-            if !has_asn {
-                for n in field_names.iter() {
-                    if n == "asn" {
-                        has_asn = true;
-                        break;
-                    }
-                }
-            }
+            let has_asn = group_field_names
+                .get(g)
+                .map(|names| names.iter().any(|n| normalize_key(n) == asn_key))
+                .unwrap_or(false);
             *dim_mask = if has_asn { 0x02 } else { 0x01 };
         }
 
         // ---- pools (eager) ----
-        let group_field_native_resolved: Vec<Vec<bool>> =
-            group_field_native.iter().map(|o| o.clone().unwrap()).collect();
         let pools = parse_pools(
             d,
             &group_field_counts,
-            &group_field_native_resolved,
+            &group_field_native,
             off_pools,
             off_meta,
             &off_row_schema,
@@ -986,7 +1195,6 @@ impl SnapshotInner {
         } else {
             (String::new(), String::new())
         };
-        let edition = infer_edition(group_field_counts[group_index]);
 
         let canonical_crc = compute_canonical_crc(d);
         if verify_crc {
@@ -1040,10 +1248,10 @@ impl SnapshotInner {
             group_dim_masks,
             group_entry_offsets,
             group_strides,
-            group_field_widths: group_field_widths.into_iter().map(|o| o.unwrap()).collect(),
-            group_field_offsets: group_field_offsets.into_iter().map(|o| o.unwrap()).collect(),
-            group_field_native: group_field_native.into_iter().map(|o| o.unwrap()).collect(),
-            group_field_native_type: group_field_native_type.into_iter().map(|o| o.unwrap()).collect(),
+            group_field_widths,
+            group_field_offsets,
+            group_field_native,
+            group_field_native_type,
             pools,
             field_names,
             norm_map,
@@ -1053,6 +1261,9 @@ impl SnapshotInner {
             data_month,
             build_time,
             edition,
+            version_mask,
+            edition_source,
+            field_names_source,
             canonical_crc,
             geo_cache,
         })
@@ -1477,12 +1688,23 @@ impl SnapshotInner {
     }
 }
 
-fn parse_metadata(d: &[u8], off_meta: u64) -> (String, Vec<String>, String) {
-    let mut version = String::new();
-    let mut field_names = Vec::new();
-    let mut description = String::new();
+/// Metadata TLV 段解析结果（FORMAT §8.1）。
+#[derive(Default)]
+struct MetaInfo {
+    /// type 1：version_list（可能是逗号分隔的多档次串）
+    version_name: String,
+    /// type 2：field_names（`|` 分隔）
+    field_names: Vec<String>,
+    /// type 3：description
+    description: String,
+    /// type 4：primary_version（单一权威档次名）
+    primary_version: String,
+}
+
+fn parse_metadata(d: &[u8], off_meta: u64) -> MetaInfo {
+    let mut m = MetaInfo::default();
     if (d[8] & 4) == 0 || off_meta == 0 || off_meta + 4 > d.len() as u64 {
-        return (version, field_names, description);
+        return m;
     }
     let mut pos = off_meta as usize;
     while pos + 4 <= d.len() {
@@ -1491,115 +1713,23 @@ fn parse_metadata(d: &[u8], off_meta: u64) -> (String, Vec<String>, String) {
         if t == 0 || length == 0 {
             break;
         }
-        if pos + 4 + length > d.len() {
+        // 伪造的 TLV 可以声明一个越过 EOF 的长度；直接停止遍历，
+        // 不去解码被截断的尾巴。
+        if length > d.len() - (pos + 4) {
             break;
         }
         let val = String::from_utf8_lossy(&d[pos + 4..pos + 4 + length]).into_owned();
         match t {
-            1 => version = val,
-            2 => field_names = val.split('|').map(|s| s.to_string()).collect(),
-            3 => description = val,
+            1 => m.version_name = val,
+            2 => m.field_names = val.split('|').map(|s| s.to_string()).collect(),
+            3 => m.description = val,
+            4 => m.primary_version = val,
+            // 未知 type 按设计跳过（FORMAT §8.1）
             _ => {}
         }
         pos += 4 + length;
     }
-    (version, field_names, description)
-}
-
-fn fallback_field_names(count: usize) -> Vec<String> {
-    let names: &[&str] = match count {
-        6 => &[
-            "continent",
-            "country_code",
-            "country",
-            "province",
-            "city",
-            "isp",
-        ],
-        8 => &[
-            "continent",
-            "country_code",
-            "country",
-            "isp",
-            "asn",
-            "as_name",
-            "as_domain",
-            "usage_type",
-        ],
-        11 => &[
-            "continent",
-            "country_code",
-            "country",
-            "province",
-            "city",
-            "district",
-            "geo_id",
-            "longitude",
-            "latitude",
-            "timezone",
-            "isp",
-        ],
-        15 => &[
-            "continent",
-            "country_code",
-            "country",
-            "province",
-            "city",
-            "district",
-            "geo_id",
-            "longitude",
-            "latitude",
-            "timezone",
-            "isp",
-            "asn",
-            "as_name",
-            "as_domain",
-            "usage_type",
-        ],
-        25 => &[
-            "continent",
-            "continent_en",
-            "country_code",
-            "country_alpha3",
-            "country",
-            "country_en",
-            "province",
-            "province_en",
-            "city",
-            "city_en",
-            "district",
-            "district_en",
-            "geo_id",
-            "longitude",
-            "latitude",
-            "timezone",
-            "languages",
-            "currency_code",
-            "phone_prefix",
-            "emoji_flag",
-            "isp",
-            "asn",
-            "as_name",
-            "as_domain",
-            "usage_type",
-        ],
-        _ => {
-            return (0..count).map(|i| format!("field_{}", i)).collect();
-        }
-    };
-    names.iter().map(|s| s.to_string()).collect()
-}
-
-fn infer_edition(count: usize) -> String {
-    match count {
-        6 => "std",
-        8 => "asn",
-        11 => "pro",
-        15 => "max",
-        25 => "ult",
-        _ => "std",
-    }
-    .to_string()
+    m
 }
 
 fn parse_pools(
@@ -1665,20 +1795,42 @@ fn parse_pools(
                 group_pools.push(Vec::new());
                 continue;
             }
+            // 偏移表是累积结构：offsets[i+1] >= offsets[i]，末项为字符串区总字节数。
+            // 单调性必须强制校验 —— 仅判断 b <= d.len() 时，伪造表可让每一项都横跨整个
+            // section，count 段 × section 长度会放大成 GB 级 String 拷贝（同类构造实测
+            // 达 7.2 GB → OOM）。加上 start >= prev_end && end <= tail 后，各段互不重叠
+            // 且落在 [0, tail]，总拷贝量必 <= tail <= avail。
+            let avail = pool_end.min(d.len()).saturating_sub(string_data_start);
+            let tail = offsets[count];
+            if tail > avail {
+                group_pools.push(Vec::new());
+                pool_cursor = string_data_start;
+                continue;
+            }
             let mut strings = vec![String::new(); count];
+            let mut prev_end = 0usize;
             for s in 0..count {
                 let start = offsets[s];
                 let end = offsets[s + 1];
-                let len = end - start;
-                if len > 0 {
-                    let a = string_data_start + start;
-                    let b = string_data_start + end;
-                    if b <= d.len() {
-                        strings[s] = String::from_utf8_lossy(&d[a..b]).into_owned();
-                    }
+                // end < start 会让 `end - start` 发生 usize 下溢（debug panic /
+                // release 回绕），进而使 &d[a..b] 区间倒置 panic。
+                if start < prev_end || end < start || end > tail {
+                    continue;
+                }
+                prev_end = end;
+                if end == start {
+                    continue;
+                }
+                let (Some(a), Some(b)) =
+                    (string_data_start.checked_add(start), string_data_start.checked_add(end))
+                else {
+                    continue;
+                };
+                if b <= d.len() {
+                    strings[s] = String::from_utf8_lossy(&d[a..b]).into_owned();
                 }
             }
-            pool_cursor = string_data_start + offsets[count];
+            pool_cursor = string_data_start.saturating_add(tail);
             group_pools.push(strings);
         }
         result[g] = group_pools;
@@ -2166,6 +2318,19 @@ impl QzdbReader {
     pub fn get_edition(&self) -> String {
         self.inner().edition.clone()
     }
+    /// Header.VersionMask 原值（offset 6，u16 LE）。one-hot：
+    /// bit0=std bit1=asn bit2=pro bit3=max bit4=ult。
+    pub fn get_version_mask(&self) -> u16 {
+        self.inner().version_mask
+    }
+    /// `get_edition()` 的判定依据：version_mask / metadata / inferred / unknown。
+    pub fn get_edition_source(&self) -> String {
+        self.inner().edition_source.to_string()
+    }
+    /// `get_field_names()` 的来源：metadata / edition / synthetic。
+    pub fn get_field_names_source(&self) -> String {
+        self.inner().field_names_source.to_string()
+    }
     /// scope 恒返回 ""（API_CONTRACT §5）。
     pub fn get_scope(&self) -> String {
         String::new()
@@ -2271,6 +2436,9 @@ fn empty_snapshot() -> SnapshotInner {
         data_month: String::new(),
         build_time: String::new(),
         edition: String::new(),
+        version_mask: 0,
+        edition_source: EDITION_SOURCE_UNKNOWN,
+        field_names_source: FIELD_NAMES_SOURCE_SYNTHETIC,
         canonical_crc: 0,
         geo_cache: (0..GEO_CACHE_SIZE)
             .map(|_| std::sync::Mutex::new(CacheSlot { key: u32::MAX, val: None }))

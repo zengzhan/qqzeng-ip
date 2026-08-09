@@ -5,6 +5,10 @@
 
 # Build artifacts
 bin/
+# Exception: Rust convention puts BINARY SOURCE files in src/bin/, not build output.
+# Without this negation the `bin/` rule above silently drops the 4 [[bin]] source
+# targets declared in rust/Cargo.toml, and `cargo build` fails on a fresh clone.
+!multi-lang/rust/src/bin/
 obj/
 *.csproj.user
 *.suo

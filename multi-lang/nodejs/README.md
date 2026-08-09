@@ -139,10 +139,14 @@ const reader = QzdbReader.Builder('qqzeng_ip_std_china.qzdb')
 
 > 必须在任何查询调用**之前**确定 `group_index`；它影响全部 `find*` / `lookup*` API。
 
-### 4.5 进程级单例
+### 4.5 没有单例
+
+v2.4 起全语言删除了 `getInstance()`。进程级共享一个可变实例，在并发下无法回答
+「我现在查的到底是哪个库」，因此被彻底移除。Reader 构造开销很小且读路径线程安全，
+直接 new 即可；需要按路径复用请用 [`QzdbRegistry`](#10-命名注册表-qzdbregistry)。
 
 ```js
-const reader = QzdbReader.getInstance('qqzeng_ip_std_china.qzdb'); // 首次惰性构建，后续复用
+const reader = QzdbReader.open('qqzeng_ip_std_china.qzdb');
 ```
 
 ---

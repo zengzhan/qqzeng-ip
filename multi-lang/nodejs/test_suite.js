@@ -28,7 +28,10 @@ function eq(a, b, msg) { ASSERTS++; assert.strictEqual(a, b, msg); }
 function neq(a, b, msg) { ASSERTS++; assert.notStrictEqual(a, b, msg); }
 
 // 路径
-const STD_DB = path.join(__dirname, 'qqzeng_ip_std_china.qzdb');
+// 数据库统一放在 multi-lang/data/ 下（各语言测试共用同一份），不要在
+// 语言子目录里再拷一份 —— 之前 STD_DB 指向 nodejs/ 目录内的副本，
+// 仓库里并不存在该文件，导致 test_suite.js 每次都以 ENOENT 直接崩掉。
+const STD_DB = path.join(__dirname, '..', 'data', 'qqzeng_ip_std_china.qzdb');
 const ULT_DB  = path.join(__dirname, '..', 'data', 'qqzeng_ip_ult_china.qzdb');
 const GOLDEN  = path.join(__dirname, '..', 'tools', 'golden_vectors.json');
 
@@ -541,7 +544,10 @@ function t1_extended(t) {
   const batch = r2.findBatch(['114.114.114.114', 'bad-ip', '8.8.8.8', '223.5.5.5']);
   eq(batch.length, 4, 'findBatch 长度与输入等长');
   ok(batch[0].isSuccess(), 'batch[0] 命中');
-  ok(batch[1].isNotFound(), 'batch[1] 非法 IP notfound');
+  // §5 批量三态：非法输入落在 error 态（hasError），而不是"未命中"态。
+  ok(batch[1].hasError() && batch[1].error instanceof QzdbReader.QzdbError,
+     'batch[1] 非法 IP 填充 QzdbError（三态之 error）');
+  ok(batch[1].result === null, 'batch[1] 非法 IP 无结果');
   ok(batch[2].isNotFound() || batch[2].isSuccess(), 'batch[2] 三态保留');
   // 字段投影批量
   const bf = r2.findBatchFields(['114.114.114.114', 'bad'], ['country', 'isp']);

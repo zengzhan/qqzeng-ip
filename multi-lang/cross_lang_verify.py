@@ -83,7 +83,7 @@ if not os.path.exists(DB_PATH):
 def run_python(ip_list):
     sys.path.insert(0, os.path.join(SCRIPT_DIR, "python"))
     from qzdb import QzdbReader
-    searcher = QzdbReader.get_instance(DB_PATH)
+    searcher = QzdbReader(DB_PATH)
     results = {}
     for ip in ip_list:
         r = searcher.find(ip)
@@ -120,7 +120,7 @@ def run_php(ip_list):
 require_once '{os.path.join(SCRIPT_DIR, "php", "QzdbReader.php")}';
 use Qqzeng\\Ip\\QzdbReader;
 $ips = {php_ips};
-$s = QzdbReader::getInstance('{DB_PATH}');
+$s = new QzdbReader('{DB_PATH}');
 $results = array();
 foreach ($ips as $ip) {{
     $r = $s->find($ip);

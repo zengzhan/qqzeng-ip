@@ -350,7 +350,7 @@ def run_comprehensive_test(db_path):
     print(f"  文件大小: {os.path.getsize(db_path) / 1024 / 1024:.1f} MB")
     print(f"{'='*80}")
 
-    sdk = QzdbReader.get_instance(db_path)
+    sdk = QzdbReader(db_path)
     analyzer = QzdbAnalyzer(db_path)
 
     is_china = 'china' in os.path.basename(db_path).lower()

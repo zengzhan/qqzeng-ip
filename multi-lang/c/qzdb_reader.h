@@ -1,5 +1,9 @@
-#ifndef QZDB_IP_SEARCH_H
-#define QZDB_IP_SEARCH_H
+#ifndef QZDB_READER_H
+#define QZDB_READER_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #include <stdint.h>
 #include <stddef.h>
@@ -40,6 +44,7 @@ typedef struct {
     int      group_index;
 
     // Header fields
+    uint16_t version_mask;   /* offset 6: one-hot 版本位掩码（档次判定权威来源） */
     uint16_t flags;
     int      has_v4;
     int      has_v6;
@@ -85,7 +90,7 @@ typedef struct {
     int**    group_field_native;
     int**    group_field_native_type;
 
-    uint16_t** group_field_ids;
+    uint16_t*  group_ids;              /* GROUP_SCHEMA.groupId：每组 one-hot 掩码 */
     uint32_t** group_pool_section_ids;
 
     char**** group_pools;
@@ -93,12 +98,21 @@ typedef struct {
     int      pools_loaded;
     char*    pool_arena;
 
-    char**   field_names;
+    /* 每组字段名表（owned）。field_names 借用当前 group_index 对应的那一行，
+     * 因此 qzdb_free 只释放 group_field_names，不重复释放 field_names。 */
+    char***  group_field_names;
+    const char** group_editions;        /* 静态字符串，无需释放 */
+    const char** group_edition_sources;
+    const char** group_name_sources;
+
+    char**   field_names;               /* 借用 group_field_names[group_index] */
     int*     float_field_flags;
     int      field_count;
     char*    version_name;
     char*    description;
     char*    edition;
+    const char* edition_source;         /* version_mask / metadata / inferred / unknown */
+    const char* field_names_source;     /* metadata / edition / synthetic */
     char*    data_month;
     char*    build_time_str;
     int      build_date;
@@ -171,9 +185,6 @@ int  qzdb_init_buffer_borrowed(qzdb_reader_t* ctx, const uint8_t* buf, size_t le
 int  qzdb_reload(qzdb_reader_t* ctx, const char* db_path);
 int  qzdb_reload_buffer(qzdb_reader_t* ctx, const uint8_t* buf, size_t len);
 
-qzdb_reader_t* qzdb_instance(const char* db_path);
-int            qzdb_instance_load(const char* db_path);
-
 int  qzdb_set_group_index(qzdb_reader_t* ctx, int group_index);
 int  qzdb_verify_crc(qzdb_reader_t* ctx);
 
@@ -240,6 +251,15 @@ int          qzdb_get_field_count(qzdb_reader_t* ctx);
 int          qzdb_has_field(qzdb_reader_t* ctx, const char* name);
 int          qzdb_get_group_count(qzdb_reader_t* ctx);
 int          qzdb_get_pool_count(qzdb_reader_t* ctx);
+/* Header.VersionMask 原值（offset 6）。one-hot:
+ * bit0=std bit1=asn bit2=pro bit3=max bit4=ult */
+uint16_t     qzdb_get_version_mask(qzdb_reader_t* ctx);
+/* qzdb_get_edition() 的判定依据：version_mask / metadata / inferred / unknown */
+const char*  qzdb_get_edition_source(qzdb_reader_t* ctx);
+/* qzdb_get_field_names() 的来源：metadata / edition / synthetic */
+const char*  qzdb_get_field_names_source(qzdb_reader_t* ctx);
+/* one-hot 掩码 → 档次名；非 one-hot 或越界返回 "" */
+const char*  qzdb_edition_from_mask(uint16_t mask);
 
 /* ---- UsageType helpers (spec §6.4) ---- */
 /* Resolves usage_type by field name (correct). Requires ctx to map the
@@ -289,5 +309,9 @@ static inline int qzdb_open_ex_impl(const char* path, int verify_crc, int group_
     if (rc == QZDB_OK && group_index > 0) rc = qzdb_set_group_index(ctx, group_index);
     return rc;
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

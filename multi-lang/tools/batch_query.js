@@ -12,7 +12,7 @@ const path = require('path');
 
 function main() {
     const args = process.argv.slice(2);
-    if (args.length < 4) {
+    if (args.length < 5) {
         console.error('Usage: node batch_query.js <db_path> <v4_test> <v4_out> <v6_test> <v6_out>');
         process.exit(1);
     }
@@ -21,7 +21,8 @@ function main() {
     // Load SDK resolved relative to this script (tools/), NOT cwd, so it works
     // regardless of where cross_verify.py is invoked from.
     const QzdbReader = require(path.join(__dirname, '..', 'nodejs', 'qzdb'));
-    const searcher = QzdbReader.getInstance(dbPath);
+    // v2.4 起 getInstance() 已移除，统一用 QzdbReader.open()
+    const searcher = QzdbReader.open(dbPath);
 
     // Helper: format geo info to pipe string matching Python reference to_pipe()
     function geoToPipe(r) {

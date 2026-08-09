@@ -188,7 +188,7 @@ def main():
         BatchProcessAdapter("Node.js", ["node", os.path.join(SCRIPT_DIR, "nodejs", "batch_cli.js")], args.db),
         BatchProcessAdapter("PHP", ["php", os.path.join(SCRIPT_DIR, "php", "batch_cli.php")], args.db),
         BatchProcessAdapter("C", [os.path.join(SCRIPT_DIR, "test_runner_bin", "c_batch")], args.db),
-        BatchProcessAdapter("C#", ["dotnet", os.path.join(SCRIPT_DIR, "test_runner_bin", "netcore_bin", "qzdb-searcher.dll")], args.db),
+        BatchProcessAdapter("C#", ["dotnet", os.path.join(SCRIPT_DIR, "test_runner_bin", "netcore_bin", "QQZeng.Qzdb.dll")], args.db),
         BatchProcessAdapter("Go", [os.path.join(SCRIPT_DIR, "test_runner_bin", "go_batch")], args.db),
         BatchProcessAdapter("Rust", [os.path.join(SCRIPT_DIR, "test_runner_bin", "rust_batch")], args.db),
     ]

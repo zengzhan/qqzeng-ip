@@ -54,7 +54,7 @@ echo ""
 
 # ── Step 5: Update version ──
 echo "[5/6] Updating version..."
-CURRENT_VERSION=$(grep -oP '(?<=version: ")[^"]+' "$BASE_DIR/FORMAT.md" 2>/dev/null || echo "0.0.0")
+CURRENT_VERSION=$(grep -oP '(?<=版本\*\*：v)[0-9.]+' "$BASE_DIR/multi-lang/API_CONTRACT.md" 2>/dev/null || echo "0.0.0")
 echo "Current version: $CURRENT_VERSION"
 
 # Bump version based on type
@@ -78,7 +78,7 @@ git commit -m "release: v$NEW_VERSION
 - Accuracy analysis completed
 - Production readiness checks passed
 
-Co-authored-by: qzdb-searcher"
+Co-authored-by: qzdb"
 
 echo ""
 echo "=========================================="

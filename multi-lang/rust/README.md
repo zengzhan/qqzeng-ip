@@ -348,21 +348,7 @@ if let Some(r) = reg.get("china") {
 let pipe = reg.find_str("8.8.8.8");
 ```
 
-此外，crate 提供进程级单例（首次调用惰性构建）：
-
-```rust
-use qzdb_reader::{QzdbReader, QzdbRegistry};
-
-let mut reg = QzdbRegistry::new();
-reg.register("china", QzdbReader::from_file("ip_china.qzdb")?);
-reg.register("global", QzdbReader::from_file("ip_global.qzdb")?);
-
-if let Some(r) = reg.get("china") {
-    println!("{}", r.find_str("114.114.114.114"));
-}
-// 按注册顺序返回首个命中
-let pipe = reg.find_str("8.8.8.8");
-```
+> **无进程级单例**：v2.4 起 Rust crate 不再提供全局 `QzdbReader` 单例。`QzdbRegistry` 只是用户持有的 `Map<name, QzdbReader>`，可独立实例化、可多实例并存；`OnceLock` 仅用于内部 CRC 表与空快照缓存，与读取器单例无关。跨文件/跨版本请各自持有 `QzdbReader` 实例。
 
 ---
 

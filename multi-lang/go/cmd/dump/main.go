@@ -16,7 +16,7 @@ func main() {
 	}
 	db := os.Args[1]
 	ipf := os.Args[2]
-	s, err := qzdb.Instance(db)
+	s, err := qzdb.Open(db, 0, true)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "load error:", err)
 		os.Exit(1)

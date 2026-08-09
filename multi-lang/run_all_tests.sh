@@ -94,7 +94,7 @@ if command -v gcc &> /dev/null || command -v clang &> /dev/null; then
     fi
 fi
 
-# Java (v2.4 API: com.qqzeng.qzdb.DatabaseReader + DatabaseReaderTest)
+# Java (v2.4 API: com.qqzeng.qzdb.QzdbReader + QzdbReaderTest)
 find_java_home() {
     local homes=(
         /opt/homebrew/Cellar/openjdk@21/*/libexec/openjdk.jdk/Contents/Home
@@ -122,9 +122,9 @@ if [ -n "$JAVA_HOME" ]; then
         TEST_NAMES+=("Java")
         TEST_PIDS+=(0)
     else
-        # DatabaseReaderTest 覆盖 Tier 1 全场景，成功时打印 TEST_PASS；
+        # QzdbReaderTest 覆盖 Tier 1 全场景，成功时打印 TEST_PASS；
         # 以 multi-lang/ 为 CWD 运行时按相对路径候选自动定位 test_data_202608 数据。
-        run_test "Java" "$JAVA_HOME/bin/java -cp java/build com.qqzeng.qzdb.DatabaseReaderTest" ""
+        run_test "Java" "$JAVA_HOME/bin/java -cp java/build com.qqzeng.qzdb.QzdbReaderTest" ""
         run_test "Java-Tier2" "$JAVA_HOME/bin/java -cp java/build com.qqzeng.qzdb.FullAccuracyAndPerfTester" ""
         run_test "Java-Tier3" "$JAVA_HOME/bin/java -Xmx4g -cp java/build com.qqzeng.qzdb.DualStackBenchmark" ""
     fi

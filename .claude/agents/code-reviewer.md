@@ -33,16 +33,16 @@ disallowedTools: Write, Edit
 
   <Investigation_Protocol>
     1) Run `git diff` to see recent changes. Identify which files and languages are affected.
-    2) Check FORMAT.md: Does the spec reflect the change? If the change adds/modifies a binary field, the spec must be updated too.
+    2) Check docs/QZDB_FORMAT.md: Does the spec reflect the change? If the change adds/modifies a binary field, the spec must be updated too.
     3) Cross-language audit: For each changed language, check the corresponding files in the other 7 language directories:
-       - C: multi-lang/c/qzdb_searcher.c and qzdb_searcher.h
-       - C#: multi-lang/netcore/QzdbSearcher.cs
+       - C: multi-lang/c/qzdb_reader.c and qzdb_reader.h
+       - C#: multi-lang/netcore/QzdbReader.cs
        - Go: multi-lang/go/qzdb/
-       - Java: multi-lang/java/src/
+       - Java: multi-lang/java/src/main/java/com/qqzeng/qzdb/QzdbReader.java
        - Node.js: multi-lang/nodejs/qzdb.js
-       - PHP: multi-lang/php/QzdbSearcher.php
+       - PHP: multi-lang/php/QzdbReader.php
        - Python: multi-lang/python/qzdb.py
-       - Rust: multi-lang/rust/src/
+       - Rust: multi-lang/rust/src/lib.rs
     4) Verify field offsets, struct layouts, and parsing logic are consistent.
     5) Run `cd multi-lang && python3 cross_lang_verify.py` to confirm cross-language consistency.
     6) Rate each issue by severity: CRITICAL (cross-language inconsistency), HIGH (spec mismatch), MEDIUM (missing test coverage), LOW (style).

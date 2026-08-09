@@ -4,4 +4,4 @@ JAVA_HOME=$(ls -d /opt/homebrew/Cellar/openjdk@21/*/libexec/openjdk.jdk/Contents
 if [ -z "$JAVA_HOME" ]; then
     JAVA_HOME=$(find / -name "javac" -type f 2>/dev/null | head -1 | xargs dirname | xargs dirname)
 fi
-exec "$JAVA_HOME/bin/java" -cp "$SCRIPT_DIR/java_build" qzdb.BatchQuery "$@"
+exec "$JAVA_HOME/bin/java" -cp "$SCRIPT_DIR/java_build" com.qqzeng.qzdb.BatchQuery "$@"

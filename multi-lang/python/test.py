@@ -26,7 +26,7 @@ def main():
         print('Database file not found')
         return
 
-    ipdb = QzdbReader.get_instance(db_path)
+    ipdb = QzdbReader(db_path)
     print(f'Version code: {ipdb.version_code}, pools: {ipdb.pool_count}')
     print(f'Fields ({len(ipdb.field_names)}): {", ".join(ipdb.field_names)}\n')
 

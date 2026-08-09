@@ -79,11 +79,12 @@ func main() {
 	v6Test := os.Args[4]
 	v6Out := os.Args[5]
 	
-	searcher, err := qzdb.NewSearcher(dbPath, 0, true)
+	searcher, err := qzdb.Open(dbPath, 0, false)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Go: Failed to load database: %v\n", err)
 		os.Exit(1)
 	}
+	defer searcher.Close()
 	
 	n4 := processFile(searcher, v4Test, v4Out, false)
 	fmt.Fprintf(os.Stderr, "  Go V4: %d queries\n", n4)

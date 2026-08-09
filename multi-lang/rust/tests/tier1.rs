@@ -462,7 +462,7 @@ fn t1_meta_accessors() {
     assert_eq!(rs.get_edition(), "std");
     assert_eq!(rs.get_scope(), "", "scope always empty");
     assert_eq!(rs.get_data_month(), "2026-08");
-    assert_eq!(rs.get_build_time(), "2026-08-02");
+    assert_eq!(rs.get_build_time(), "2026-08-09");
     assert!(!rs.get_description().is_empty());
     assert!(rs.has_field("country_code"));
     assert!(!rs.has_field("nonexistent"));

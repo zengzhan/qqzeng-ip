@@ -1,4 +1,4 @@
-# qzdb-searcher — 跨平台 IP 地理位置查询 SDK
+# qzdb — 跨平台 IP 地理位置查询 SDK
 
 高性能、跨平台的 IP 地理位置数据库查询引擎，支持 **8 种语言**：C, C#, Go, Java, Node.js, PHP, Python, Rust。
 
@@ -13,7 +13,7 @@
 │   ├── c/                      C SDK (qzdb)
 │   ├── csharp/                 C# (.NET) SDK
 │   ├── go/                     Go Package SDK
-│   ├── java/                   Java SDK (DatabaseReader + GeoInfo)
+│   ├── java/                   Java SDK (QzdbReader + GeoInfo)
 │   ├── nodejs/                 Node.js SDK
 │   ├── php/                    PHP SDK
 │   ├── python/                 Python SDK
@@ -48,8 +48,8 @@
 | PHP | `QzdbReader.php` | 拷贝文件，`use Qqzeng\Ip\QzdbReader` |
 | Rust | `lib.rs` | 拷贝 `src/lib.rs` + `Cargo.toml` 依赖 |
 | C | `qzdb_reader.c/.h` | 拷贝两个文件一起编译 |
-| Java | `QzdbReader.java` | 拷贝到项目，`import com.qqzeng.ip.QzdbReader` |
-| C# | `QzdbReader.cs` | 拷贝到项目，`using Qqzeng` |
+| Java | `QzdbReader.java` | 拷贝到项目，`import com.qqzeng.qzdb.QzdbReader` |
+| C# | `QzdbReader.cs` | 拷贝到项目，`using QQZeng.Qzdb` |
 
 详见 [multi-lang/README.md](multi-lang/README.md)
 

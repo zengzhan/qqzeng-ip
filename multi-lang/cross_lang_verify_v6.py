@@ -24,7 +24,7 @@ DB_PATH = os.path.join(SCRIPT_DIR, "data", "qqzeng_ip_std_china.qzdb")
 def run_python_v6(ip_list):
     sys.path.insert(0, os.path.join(SCRIPT_DIR, "python"))
     from qzdb import QzdbReader
-    searcher = QzdbReader.get_instance(DB_PATH)
+    searcher = QzdbReader(DB_PATH)
     results = {}
     for ip in ip_list:
         r = searcher.find(ip)
@@ -59,7 +59,7 @@ def run_php_v6(ip_list):
     php_code = f"""<?php
 require_once 'QzdbReader.php';
 use Qqzeng\Ip\QzdbReader;
-$s = QzdbReader::getInstance('{DB_PATH}');
+$s = new QzdbReader('{DB_PATH}');
 $results = array();
 $ips = {json.dumps(ip_list)};
 foreach ($ips as $ip) {{
@@ -127,19 +127,29 @@ int main() {{
                 os.unlink(f)
 
 def run_java_v6(ip_list):
-    java_code = f"""import qzdb.QzdbReader;
-import qzdb.IpLocation;
+    java_code = f"""import com.qqzeng.qzdb.QzdbReader;
+import com.qqzeng.qzdb.GeoInfo;
+import java.io.File;
+import java.util.*;
 public class CrossVerifyV6 {{
     public static void main(String[] args) {{
-        QzdbReader searcher = QzdbReader.getInstance();
-        searcher.load("{DB_PATH}");
+        QzdbReader reader = new QzdbReader.Builder(new File("{DB_PATH}")).build();
         String[] ips = {json.dumps(ip_list)};
         java.util.Map<String, String> results = new java.util.HashMap<>();
         for (String ip : ips) {{
-            IpLocation loc = searcher.find(ip);
-            results.put(ip, loc != null ? loc.toPipe() : "");
+            GeoInfo loc = reader.find(ip).orElse(null);
+            results.put(ip, loc != null ? loc.toPipeString() : "");
         }}
-        System.out.println(new com.google.gson.Gson().toJson(results));
+        StringBuilder sb = new StringBuilder("{{");
+        boolean first = true;
+        for (Map.Entry<String, String> e : results.entrySet()) {{
+            if (!first) sb.append(",");
+            first = false;
+            sb.append("\\\"").append(e.getKey().replace("\\\\", "\\\\\\\\").replace("\\\"", "\\\\\\"")).append("\\\":\\\"")
+              .append(e.getValue().replace("\\\\", "\\\\\\\\").replace("\\\"", "\\\\\\"")).append("\\\"");
+        }}
+        sb.append("}}");
+        System.out.println(sb.toString());
     }}
 }}
 """

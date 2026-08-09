@@ -383,9 +383,9 @@ int  qzdb_reload(qzdb_reader_t* ctx, const char* db_path);
 int  qzdb_set_group_index(qzdb_reader_t* ctx, int group_index);
 const char* qzdb_strerror(int error_code);
 int  qzdb_verify_crc(qzdb_reader_t* ctx);              /* 手动重新校验 CRC，返回错误码 */
-qzdb_reader_t* qzdb_instance(const char* db_path);     /* 进程内单例（谨慎用于多线程） */
-int  qzdb_instance_load(const char* db_path);
 ```
+
+> **无单例设计**：v2.4 起 C SDK 不提供任何进程级单例。每个 `qzdb_reader_t` 由调用方在栈/堆上持有，自行决定生命周期与复用策略（如存入全局指针或线程局部变量）。多文件/多版本请用多个 `qzdb_reader_t` 实例分别 `qzdb_init`，互不干扰。
 
 ### 12.2 查询
 

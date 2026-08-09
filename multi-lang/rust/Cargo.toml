@@ -33,3 +33,7 @@ path = "src/bin/dump_rust.rs"
 [[bin]]
 name = "regress_rust"
 path = "src/bin/regress_rust.rs"
+
+[[bin]]
+name = "metaprobe"
+path = "src/bin/metaprobe.rs"

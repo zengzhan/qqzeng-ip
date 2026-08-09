@@ -34,7 +34,7 @@ func main() {
 		return
 	}
 
-	searcher, err := qzdb.Instance(dbPath)
+	searcher, err := qzdb.Open(dbPath, 0, true)
 	if err != nil {
 		fmt.Printf("Failed to load database: %v\n", err)
 		return

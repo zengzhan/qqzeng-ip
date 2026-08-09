@@ -24,7 +24,8 @@ $v6Out = $argv[5] ?? '';
 require_once __DIR__ . '/../php/QzdbReader.php';
 use Qqzeng\Ip\QzdbReader;
 
-$searcher = QzdbReader::getInstance($dbPath);
+// v2.4 起 getInstance() 已移除；PHP 侧统一用构造函数
+$searcher = new QzdbReader($dbPath);
 
 function geoToPipe($r, $searcher) {
     // Use GeoInfo::toPipe() so output byte-matches Python to_pipe()

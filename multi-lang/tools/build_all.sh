@@ -1,6 +1,9 @@
 #!/bin/bash
 # Build all compiled batch runners for cross-language verification
+# pipefail 必需：多处构建命令通过 `| tail -N` 截断输出，
+# 若不开启，编译失败的退出码会被 tail 的 0 覆盖而静默通过。
 set -e
+set -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BASE_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
@@ -73,10 +76,9 @@ if [ -n "$JAVA_HOME" ]; then
     BUILD_DIR="$SCRIPT_DIR/java_build"
     rm -rf "$BUILD_DIR"
     mkdir -p "$BUILD_DIR"
-    SDK_DIR="$BASE_DIR/java/src/main/java"
+    SDK_DIR="$BASE_DIR/java/src/main/java/com/qqzeng/qzdb"
     "$JAVA_HOME/bin/javac" -d "$BUILD_DIR" \
-        "$SDK_DIR/qzdb/QzdbReader.java" \
-        "$SDK_DIR/qzdb/IpLocation.java" \
+        $(find "$SDK_DIR" -name '*.java') \
         "$SCRIPT_DIR/BatchQuery.java"
     # Create wrapper script
     cat > "$SCRIPT_DIR/batch_java.sh" << 'JAVAEOF'
@@ -86,7 +88,7 @@ JAVA_HOME=$(ls -d /opt/homebrew/Cellar/openjdk@21/*/libexec/openjdk.jdk/Contents
 if [ -z "$JAVA_HOME" ]; then
     JAVA_HOME=$(find / -name "javac" -type f 2>/dev/null | head -1 | xargs dirname | xargs dirname)
 fi
-exec "$JAVA_HOME/bin/java" -cp "$SCRIPT_DIR/java_build" qzdb.BatchQuery "$@"
+exec "$JAVA_HOME/bin/java" -cp "$SCRIPT_DIR/java_build" com.qqzeng.qzdb.BatchQuery "$@"
 JAVAEOF
     chmod +x "$SCRIPT_DIR/batch_java.sh"
     echo "  -> tools/batch_java.sh"

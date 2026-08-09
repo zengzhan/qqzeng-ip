@@ -17,6 +17,60 @@ FLOAT_FIELDS = frozenset(['longitude', 'latitude'])
 # toJson numeric fields (API contract §6): output as JSON numbers, not strings.
 NUMERIC_FIELDS = frozenset(['longitude', 'latitude', 'asn', 'geo_id'])
 
+# ---------------------------------------------------------------------------
+# Edition registry (FORMAT §3.1 / §10.3).
+#
+# The file is self-describing: `Header.VersionMask` (offset 6) and each
+# `GROUP_SCHEMA.groupId` carry a one-hot edition bitmask. That bitmask — not
+# the field count — is the authoritative edition signal. EDITION_BY_BIT is the
+# spec's bit -> name registry; adding a future edition means appending one bit
+# here and one row to EDITION_FIELD_NAMES, with no parser changes anywhere.
+# ---------------------------------------------------------------------------
+EDITION_BY_BIT = ('std', 'asn', 'pro', 'max', 'ult')  # bit0..bit4
+
+# Canonical field order per edition (FORMAT appendix 1). Used ONLY when a file
+# carries no Metadata `field_names`; never overrides the file's own names.
+EDITION_FIELD_NAMES = {
+    'std': ('continent', 'country_code', 'country', 'province', 'city', 'isp'),
+    'asn': ('continent', 'country_code', 'country', 'isp', 'asn', 'as_name',
+            'as_domain', 'usage_type'),
+    'pro': ('continent', 'country_code', 'country', 'province', 'city', 'district',
+            'geo_id', 'longitude', 'latitude', 'timezone', 'isp'),
+    'max': ('continent', 'country_code', 'country', 'province', 'city', 'district',
+            'geo_id', 'longitude', 'latitude', 'timezone', 'isp', 'asn', 'as_name',
+            'as_domain', 'usage_type'),
+    'ult': ('continent', 'continent_en', 'country_code', 'country_alpha3', 'country',
+            'country_en', 'province', 'province_en', 'city', 'city_en', 'district',
+            'district_en', 'geo_id', 'longitude', 'latitude', 'timezone', 'languages',
+            'currency_code', 'phone_prefix', 'emoji_flag', 'isp', 'asn', 'as_name',
+            'as_domain', 'usage_type'),
+}
+
+# Provenance markers. Identical string values in all 8 SDKs so cross-language
+# verification can compare them directly.
+EDITION_SOURCE_VERSION_MASK = 'version_mask'  # from VersionMask/groupId (authoritative)
+EDITION_SOURCE_METADATA = 'metadata'          # from Metadata primary_version/version_list
+EDITION_SOURCE_INFERRED = 'inferred'          # last resort: unique field-count match
+EDITION_SOURCE_UNKNOWN = 'unknown'            # genuinely undeterminable
+
+FIELD_NAMES_SOURCE_METADATA = 'metadata'      # file's own Metadata field_names
+FIELD_NAMES_SOURCE_EDITION = 'edition'        # canonical table for a known edition
+FIELD_NAMES_SOURCE_SYNTHETIC = 'synthetic'    # field_0..field_N-1 placeholders
+
+# Reverse index: field count -> edition, only when the count is unambiguous.
+_EDITION_BY_FIELD_COUNT = {}
+for _ed, _names in EDITION_FIELD_NAMES.items():
+    _EDITION_BY_FIELD_COUNT[len(_names)] = None if len(_names) in _EDITION_BY_FIELD_COUNT else _ed
+del _ed, _names
+
+
+def edition_from_mask(mask):
+    """Resolve a one-hot edition bitmask to its name, or '' if not one-hot."""
+    if mask <= 0 or (mask & (mask - 1)) != 0:
+        return ''  # zero, or more than one bit set -> not a single edition
+    bit = mask.bit_length() - 1
+    return EDITION_BY_BIT[bit] if bit < len(EDITION_BY_BIT) else ''
+
 
 def _norm_key(name):
     """Normalize a field name for case/underscore/hyphen-insensitive lookup.
@@ -138,12 +192,12 @@ def _fast_parse_ipv6(s):
             return None
     for g in allg:
         gl = len(g)
-        if gl == 0 or gl > 4 or not g.isascii():
+        if gl == 0 or gl > 4:
             return None
-        try:
-            int(g, 16)
-        except ValueError:
-            return None
+        for c in g:
+            # 仅接受 0-9 a-f A-F；拒绝 + - _ 0x 空白等（与 Rust 逐字符白名单对齐）
+            if _HEX[ord(c)] > 15:
+                return None
     zeros = 8 - ng - v4_slots
     if zeros < 0:
         return None
@@ -567,19 +621,10 @@ UsageType._KNOWN = {m.value.lower(): m for m in UsageType}
 
 
 class QzdbReader:
-    _instance = None
-    _lock = threading.Lock()
-
-    @classmethod
-    def get_instance(cls, db_path=None):
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = cls(db_path)
-        elif db_path is not None:
-            with cls._lock:
-                cls._instance.load(db_path)
-        return cls._instance
+    # No singleton. v2.4 removed get_instance() in every language: a process-wide
+    # mutable instance made "which file am I querying?" unanswerable under
+    # concurrency. Construct readers directly (they are cheap and thread-safe for
+    # reads) and use QzdbRegistry when you want process-wide sharing by path.
 
     def close(self):
         """Release mapped file resources. Idempotent — safe to call multiple times."""
@@ -619,6 +664,7 @@ class QzdbReader:
 
         # Header fields
         self._flags = 0
+        self._version_mask = 0
         self._has_v4 = False
         self._has_v6 = False
         self._v4_node_24 = False
@@ -640,6 +686,12 @@ class QzdbReader:
         self._description = ''
         self._primary_version = ''
         self._edition = ''
+        self._edition_source = EDITION_SOURCE_UNKNOWN
+        self._field_names_source = FIELD_NAMES_SOURCE_SYNTHETIC
+        self._group_ids = []
+        self._group_field_names = []
+        self._group_name_idx = []
+        self._group_float_indices = []
 
         # Lifecycle / performance cache
         self._closed = False
@@ -822,31 +874,65 @@ class QzdbReader:
         r.reload_buffer(buffer)
         return r
 
+    # ---- Fail-Closed primitive readers -------------------------------------
+    # §7 / appendix A.8: a malformed or hostile .qzdb must NEVER surface a raw
+    # ``struct.error`` / ``IndexError`` / ``OverflowError`` to the caller — every
+    # out-of-range access is translated into a structured ``QzdbError``.
+    # The ``try`` blocks are zero-cost on the happy path in CPython (the
+    # exception table is only consulted when an exception actually fires), so
+    # the hot query path keeps its original speed.
+    def _oob(self, off, need):
+        raise QzdbError(
+            f'Read out of bounds: offset={off}, need={need}, size={len(self._data)}',
+            QzdbError.CORRUPTED,
+        )
+
     def safe_read_u16(self, off):
-        return struct.unpack_from('<H', self._data, off)[0]
+        try:
+            return struct.unpack_from('<H', self._data, off)[0]
+        except (struct.error, IndexError, OverflowError, TypeError, ValueError):
+            self._oob(off, 2)
 
     def safe_read_u32(self, off):
-        return struct.unpack_from('<I', self._data, off)[0]
+        try:
+            return struct.unpack_from('<I', self._data, off)[0]
+        except (struct.error, IndexError, OverflowError, TypeError, ValueError):
+            self._oob(off, 4)
 
     def safe_read_u64(self, off):
-        return struct.unpack_from('<Q', self._data, off)[0]
+        try:
+            return struct.unpack_from('<Q', self._data, off)[0]
+        except (struct.error, IndexError, OverflowError, TypeError, ValueError):
+            self._oob(off, 8)
+
+    def safe_read_u8(self, off):
+        try:
+            return self._data[off]
+        except (IndexError, OverflowError, TypeError, ValueError):
+            self._oob(off, 1)
 
     def safe_read_u24(self, off):
         d = self._data
-        return d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
+        try:
+            return d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
+        except (IndexError, OverflowError, TypeError, ValueError):
+            self._oob(off, 3)
 
     def safe_read_u48(self, off):
         d = self._data
-        return (d[off]
-                | (d[off + 1] << 8)
-                | (d[off + 2] << 16)
-                | (d[off + 3] << 24)
-                | (d[off + 4] << 32)
-                | (d[off + 5] << 40))
+        try:
+            return (d[off]
+                    | (d[off + 1] << 8)
+                    | (d[off + 2] << 16)
+                    | (d[off + 3] << 24)
+                    | (d[off + 4] << 32)
+                    | (d[off + 5] << 40))
+        except (IndexError, OverflowError, TypeError, ValueError):
+            self._oob(off, 6)
 
     def safe_read_uint_width(self, off, width):
         if width <= 1:
-            return self._data[off]
+            return self.safe_read_u8(off)
         elif width == 2:
             return self.safe_read_u16(off)
         elif width == 3:
@@ -862,7 +948,10 @@ class QzdbReader:
     def _decode_native(self, nat_type, w, fo):
         d = self._data
         if nat_type == 1:
-            fv = struct.unpack_from('<f', d, fo)[0] if w == 4 else struct.unpack_from('<d', d, fo)[0]
+            try:
+                fv = struct.unpack_from('<f', d, fo)[0] if w == 4 else struct.unpack_from('<d', d, fo)[0]
+            except (struct.error, IndexError, OverflowError, TypeError, ValueError):
+                self._oob(fo, 4 if w == 4 else 8)
             if fv != fv or fv in (float('inf'), float('-inf')):
                 return ''
             if fv == int(fv):
@@ -890,6 +979,7 @@ class QzdbReader:
                 QzdbError.UNSUPPORTED,
             )
 
+        self._version_mask = self.safe_read_u16(6)
         self._flags = self.safe_read_u16(8)
         self._has_v4 = bool(self._flags & 1)
         self._has_v6 = bool(self._flags & 2)
@@ -940,26 +1030,38 @@ class QzdbReader:
             raise QzdbError(f'geo_entry_group_count out of range [1,255]: {self._geo_entry_group_count}', QzdbError.INVALID_PARAM)
 
         # Bounds validation: raise on corrupt files instead of OOB reads.
+        #
+        # Every section offset in the 192-byte header is attacker-controlled, so
+        # each one is validated against the real buffer length *here*, at parse
+        # time — never deferred to the query hot path. ``required`` is compared
+        # as ``required > dlen - offset`` so the addition can never overflow
+        # (mirrors the Go ``checkOffset`` / Rust ``check_offset`` helpers).
         dlen = len(d)
         node_size = 6 if self._v4_node_24 else 8
         v6_node_size = 6 if self._v6_node_24 else 8
 
-        if self._off_v4_jump > 0 and self._off_v4_jump + 65536 * 4 > dlen:
-            raise QzdbError('Section v4_jump out of bounds', QzdbError.CORRUPTED)
-        if self._off_v4_nodes > 0 and self._off_v4_nodes + self._v4_node_count * node_size > dlen:
-            raise QzdbError('Section v4_nodes out of bounds', QzdbError.CORRUPTED)
-        if self._off_v6_jump > 0 and self._off_v6_jump + (1 << self._v6_jump_bits) * 4 > dlen:
-            raise QzdbError('Section v6_jump out of bounds', QzdbError.CORRUPTED)
-        if self._off_v6_nodes > 0 and self._off_v6_nodes + self._v6_node_count * v6_node_size > dlen:
-            raise QzdbError('Section v6_nodes out of bounds', QzdbError.CORRUPTED)
-        if self._off_ip_row > 0 and self._off_ip_row + self._row_count * self._ip_row_size > dlen:
-            raise QzdbError('Section ip_row out of bounds', QzdbError.CORRUPTED)
-        if self._off_geo_entries > 0 and self._off_geo_entries >= dlen:
-            raise QzdbError('Section geo_entries out of bounds', QzdbError.CORRUPTED)
-        if self._off_pools > 0 and self._off_pools >= dlen:
-            raise QzdbError('Section pools out of bounds', QzdbError.CORRUPTED)
-        if self._off_meta > 0 and self._off_meta > dlen:
-            raise QzdbError('Section meta out of bounds', QzdbError.CORRUPTED)
+        def _chk(offset, required, field):
+            if offset == 0:
+                return
+            if offset > dlen or required > dlen - offset:
+                raise QzdbError(
+                    f'Section {field} out of bounds (offset={offset}, need={required}, size={dlen})',
+                    QzdbError.CORRUPTED,
+                )
+
+        # Mandatory trie/row sections.
+        _chk(self._off_v4_jump, 65536 * 4, 'v4_jump')
+        _chk(self._off_v4_nodes, self._v4_node_count * node_size, 'v4_nodes')
+        _chk(self._off_v6_jump, (1 << self._v6_jump_bits) * 4, 'v6_jump')
+        _chk(self._off_v6_nodes, self._v6_node_count * v6_node_size, 'v6_nodes')
+        _chk(self._off_ip_row, self._row_count * self._ip_row_size, 'ip_row')
+        # Optional/variable-length sections: only the minimum header of each
+        # section is validated here; the walkers below re-check every step.
+        _chk(self._off_geo_entries, 1, 'geo_entries')
+        _chk(self._off_pools, 4, 'pools')
+        _chk(self._off_meta, 4, 'meta')
+        _chk(self._off_row_schema, 4, 'row_schema')
+        _chk(self._off_group_schema, 2, 'group_schema')
 
         # ROW_SCHEMA parsing (v5 dynamic-width IPRow schema).
         # On-disk layout (matches C# QZDBReader.ParseRowSchema AND the builder's
@@ -982,6 +1084,14 @@ class QzdbReader:
             f_count = d[sp] & 0xFF
             schema_stride = d[sp + 1] & 0xFF
             wpos = sp + 4
+            # The declared field count is attacker-controlled; refuse a schema
+            # whose descriptor array does not fit in the buffer instead of
+            # walking past the end of the file.
+            if f_count * 4 > dlen - wpos:
+                raise QzdbError(
+                    f'ROW_SCHEMA truncated (fieldCount={f_count}, offset={sp}, size={dlen})',
+                    QzdbError.CORRUPTED,
+                )
             geo_w, asn_w, usage_w = 0, 0, 0
             for _ in range(f_count):
                 fid = d[wpos]
@@ -1010,21 +1120,28 @@ class QzdbReader:
         # no version-dependent layout. (HeaderVersion != 1 is already rejected
         # above, so no legacy width branching is needed here.)
         gm_off = self._off_geo_entries
-        group_count = d[gm_off]
+        group_count = self.safe_read_u8(gm_off)
         gm_off += 1
 
         actual_groups = min(group_count, max(1, self._geo_entry_group_count))
         if actual_groups > 4:
             actual_groups = 4
+        # A file with zero groups carries no queryable dimension at all; reject
+        # it rather than building an empty reader that would IndexError later
+        # (same contract as the Rust/Go readers).
+        if actual_groups < 1:
+            raise QzdbError('GroupMetadataTable groupCount is 0', QzdbError.CORRUPTED)
+        # Each group entry is fieldCount(1) + entryCount(4) + dimensionMask(2).
+        if actual_groups * 7 > dlen - gm_off:
+            raise QzdbError('GroupMetadataTable truncated', QzdbError.CORRUPTED)
         self._group_field_counts = [0] * actual_groups
         self._group_entry_counts = [0] * actual_groups
         self._group_dim_masks = [0] * actual_groups
-        # Field ids declared by GROUP_SCHEMA per group (used for the
-        # metadata-driven dimensionMask fallback when the stored mask is 0).
-        self._group_schema_field_ids = [None] * actual_groups
+        # Per-group edition bitmask from GROUP_SCHEMA.groupId (0 = not declared).
+        self._group_ids = [0] * actual_groups
 
         for gi in range(actual_groups):
-            self._group_field_counts[gi] = d[gm_off]
+            self._group_field_counts[gi] = self.safe_read_u8(gm_off)
             gm_off += 1
             # §6.2: entryCount is always uint32 LE in the current format.
             self._group_entry_counts[gi] = self.safe_read_u32(gm_off)
@@ -1042,6 +1159,13 @@ class QzdbReader:
         self._group_field_native = [None] * actual_groups
         self._group_field_native_type = [None] * actual_groups
 
+        # Field count declared by GROUP_SCHEMA for each group. This is a *second*
+        # source of truth next to GroupMetadataTable's fieldCount; a forged file
+        # can make the two disagree, and every consumer indexes the width /
+        # offset / native arrays by the GroupMetadataTable value. The mismatch is
+        # reconciled right after the walk (see the invariant block below).
+        schema_fld_counts = [None] * actual_groups
+
         # Parse GROUP_SCHEMA if present
         if self._off_group_schema > 0:
             sp = self._off_group_schema
@@ -1049,13 +1173,28 @@ class QzdbReader:
             sp += 2
             max_gs_groups = min(gs_group_count, actual_groups)
             for gi in range(max_gs_groups):
-                sp += 2  # skip groupId
+                # Per-group header is 16 bytes: groupId(2) fldCount(2)
+                # entryCount(4) stride(4) flags(4). Stop the walk as soon as the
+                # declared layout would run past the buffer — the groups already
+                # parsed stay valid and the rest fall back to defaults below.
+                if 16 > dlen - sp:
+                    break
+                # groupId is the per-group one-hot edition bitmask (FORMAT §3.1).
+                # It is the authoritative edition signal for this group and must
+                # not be skipped — see _resolve_field_names().
+                group_id = self.safe_read_u16(sp)
+                sp += 2
+                if gi < len(self._group_ids):
+                    self._group_ids[gi] = group_id
                 fld_count = self.safe_read_u16(sp)
                 sp += 2
                 sp += 4  # skip entryCount (uint32)
                 stride = self.safe_read_u32(sp)
                 sp += 4
                 sp += 4  # skip flags
+                if fld_count * 12 > dlen - sp:
+                    break
+                schema_fld_counts[gi] = fld_count
 
                 if gi < actual_groups:
                     self._group_strides[gi] = stride
@@ -1063,11 +1202,10 @@ class QzdbReader:
                     offsets = [0] * fld_count
                     natives = [False] * fld_count
                     nat_types = [0] * fld_count
-                    fids = [0] * fld_count
                     for fi in range(fld_count):
-                        fid = self.safe_read_u16(sp)  # fieldId (was skipped)
+                        # fieldId is just the slot ordinal (0..N-1); it carries no
+                        # cross-edition semantics, so it is read and discarded.
                         sp += 2
-                        fids[fi] = fid
                         widths[fi] = d[sp]
                         sp += 1
                         field_flags = d[sp]
@@ -1081,9 +1219,27 @@ class QzdbReader:
                     self._group_field_offsets[gi] = offsets
                     self._group_field_native[gi] = natives
                     self._group_field_native_type[gi] = nat_types
-                    self._group_schema_field_ids[gi] = fids
                 else:
                     sp += fld_count * 12
+
+        # INVARIANT: len(widths/offsets/native/native_type[g]) == group_field_counts[g].
+        #
+        # GroupMetadataTable and GROUP_SCHEMA each declare a field count. Real
+        # files always agree, but a forged file can shrink the GROUP_SCHEMA one
+        # while leaving GroupMetadataTable large — every downstream consumer
+        # (pool loader, field extractor) iterates `range(group_field_counts[g])`
+        # and would then index past the end of the schema arrays. Drop the
+        # inconsistent schema entirely and let the default layout below rebuild
+        # it (same reconciliation as the Rust/Go/C readers).
+        for g in range(actual_groups):
+            if schema_fld_counts[g] is None:
+                continue
+            if schema_fld_counts[g] != self._group_field_counts[g]:
+                self._group_strides[g] = 0
+                self._group_field_widths[g] = None
+                self._group_field_offsets[g] = None
+                self._group_field_native[g] = None
+                self._group_field_native_type[g] = None
 
         # Fallback for groups without schema info
         for g in range(actual_groups):
@@ -1106,71 +1262,135 @@ class QzdbReader:
 
         A valid current-format file always stores a non-zero dimensionMask in
         GroupMetadataTable, so this normally does nothing. If a group's mask is
-        0 (malformed/legacy), we derive it from the group's *actual* fields
-        rather than any hardcoded ``groupIndex == 2 → asn`` assumption — the
-        real asn file keeps its asn group at GroupMetadataTable index 0 with a
-        stored mask of 0x02, so an index-based rule would be wrong.
+        0 (malformed/legacy), we derive it from the group's *resolved field
+        names* — never from ``fieldId`` (which is only the slot ordinal
+        0..N-1 and carries no cross-edition meaning) and never from the group
+        index (the real asn file keeps its asn group at index 0 with a stored
+        mask of 0x02, so an index-based rule would be wrong).
         """
+        asn_key = _norm_key('asn')
         for g in range(len(self._group_dim_masks)):
             if self._group_dim_masks[g] != 0:
                 continue
-            has_asn = False
-            fids = self._group_schema_field_ids[g]
-            if fids:
-                has_asn = 1 in fids  # fieldId 1 = asn_id
-            elif g == 0 and self._field_names:
-                has_asn = 'asn' in self._field_names
+            names = self._group_field_names[g] if g < len(self._group_field_names) else None
+            has_asn = any(_norm_key(n) == asn_key for n in (names or ()))
             self._group_dim_masks[g] = 0x02 if has_asn else 0x01
 
     def _resolve_field_names(self):
+        """Resolve edition + field names from the file's own self-description.
+
+        Both answers are derived from what the file declares, in a strict
+        precedence order that is identical in all 8 SDKs (FORMAT §10.3):
+
+        edition      1. GROUP_SCHEMA.groupId / Header.VersionMask one-hot bit
+                     2. Metadata primary_version, or a single-entry version_list
+                     3. unambiguous field-count match (last resort)
+                     4. '' (unknown) — we do not invent an answer
+        field_names  1. Metadata field_names, when its arity matches the group
+                     2. canonical table for a *known* edition of matching arity
+                     3. field_0..field_N-1 placeholders
+
+        get_edition_source() / get_field_names_source() report which rule fired,
+        so callers can tell a name read off disk from one filled in by the SDK.
+        """
         d = self._data
         off_meta = self._off_meta
+        gi = self._group_index if self._group_index < len(self._group_field_counts) else 0
+
+        # --- Metadata TLV walk -------------------------------------------------
+        meta_field_names = None
         if (self._flags & 4) and off_meta > 0 and off_meta + 4 <= len(d):
-            field_names = None
             pos = off_meta
             while pos + 4 <= len(d):
                 t = d[pos]
                 length = self.safe_read_u16(pos + 2)
                 if t == 0 or length == 0:
                     break
-                val = d[pos + 4:pos + 4 + length].decode('utf-8')
+                # A forged TLV can claim a length that runs past EOF; stop the
+                # walk instead of decoding a truncated (and possibly invalid)
+                # UTF-8 tail. Well-formed but non-UTF-8 payloads are decoded
+                # lossily, matching the Go/Rust readers' behaviour.
+                if length > len(d) - (pos + 4):
+                    break
+                val = d[pos + 4:pos + 4 + length].decode('utf-8', errors='replace')
                 if t == 1:
                     self._version_name = val
                 elif t == 2:
-                    field_names = val.split('|')
+                    meta_field_names = val.split('|')
                 elif t == 3:
                     self._description = val
                 elif t == 4:
                     self._primary_version = val
+                # Unknown types are skipped by design (FORMAT §8.1).
                 pos += 4 + length
 
-            if field_names and len(field_names) == self._group_field_counts[0]:
-                self._field_names = field_names
-                self._name_idx = {n: i for i, n in enumerate(field_names)}
-                self._norm_idx = {}
-                for i, n in enumerate(field_names):
-                    self._norm_idx.setdefault(_norm_key(n), i)
-                self._float_field_indices = {
-                    i for i, n in enumerate(field_names)
-                    if n in FLOAT_FIELDS
-                }
-                self._edition = (self._primary_version or self._version_name
-                                 or self._infer_edition(len(field_names)))
-                return
+        # --- Resolve every group, not just the active one -----------------------
+        # dimensionMask repair and per-group field-name lookups both need the
+        # names of groups other than the current one, so the whole table is
+        # resolved up front (same shape as the Node/Go/Rust/C readers).
+        group_count = len(self._group_field_counts)
+        self._group_field_names = [None] * group_count
+        self._group_name_idx = [None] * group_count
+        self._group_float_indices = [None] * group_count
+        group_editions = [''] * group_count
+        group_edition_sources = [EDITION_SOURCE_UNKNOWN] * group_count
+        group_name_sources = [FIELD_NAMES_SOURCE_SYNTHETIC] * group_count
 
-        # Fallback placeholder names
-        self._field_names = [f'field_{i}' for i in range(self._group_field_counts[0])]
-        self._name_idx = {n: i for i, n in enumerate(self._field_names)}
+        for g in range(group_count):
+            n_fields = self._group_field_counts[g]
+
+            # edition: this group's own bitmask first, then the file-level mask.
+            mask = self._group_ids[g] if g < len(self._group_ids) and self._group_ids[g] else self._version_mask
+            edition = edition_from_mask(mask)
+            source = EDITION_SOURCE_VERSION_MASK
+            if not edition:
+                edition = self._primary_version.strip()
+                if not edition:
+                    tokens = [t.strip() for t in self._version_name.split(',') if t.strip()]
+                    if len(tokens) == 1:
+                        edition = tokens[0]
+                if edition:
+                    source = EDITION_SOURCE_METADATA
+            if not edition:
+                edition = _EDITION_BY_FIELD_COUNT.get(n_fields) or ''
+                source = EDITION_SOURCE_INFERRED if edition else EDITION_SOURCE_UNKNOWN
+
+            # field names
+            if meta_field_names and len(meta_field_names) == n_fields:
+                g_names = list(meta_field_names)
+                g_names_source = FIELD_NAMES_SOURCE_METADATA
+            else:
+                canonical = EDITION_FIELD_NAMES.get(edition)
+                if canonical and len(canonical) == n_fields:
+                    g_names = list(canonical)
+                    g_names_source = FIELD_NAMES_SOURCE_EDITION
+                else:
+                    g_names = [f'field_{i}' for i in range(n_fields)]
+                    g_names_source = FIELD_NAMES_SOURCE_SYNTHETIC
+
+            self._group_field_names[g] = g_names
+            group_editions[g] = edition
+            group_edition_sources[g] = source
+            group_name_sources[g] = g_names_source
+            # Per-group lookup tables, built once here so _resolve_geo() never
+            # pays for rebuilding them and never borrows another group's names.
+            g_name_idx = {}
+            for i, n in enumerate(g_names):
+                g_name_idx.setdefault(n, i)
+            self._group_name_idx[g] = g_name_idx
+            self._group_float_indices[g] = {i for i, n in enumerate(g_names) if n in FLOAT_FIELDS}
+
+        names = self._group_field_names[gi] if gi < group_count else []
+        self._edition = group_editions[gi] if gi < group_count else ''
+        self._edition_source = group_edition_sources[gi] if gi < group_count else EDITION_SOURCE_UNKNOWN
+        self._field_names = names
+        self._field_names_source = (group_name_sources[gi] if gi < group_count
+                                    else FIELD_NAMES_SOURCE_SYNTHETIC)
+        self._name_idx = {n: i for i, n in enumerate(names)}
         self._norm_idx = {}
-        for i, n in enumerate(self._field_names):
+        for i, n in enumerate(names):
             self._norm_idx.setdefault(_norm_key(n), i)
-        self._float_field_indices = set()
-        self._edition = self._infer_edition(len(self._field_names))
-
-    @staticmethod
-    def _infer_edition(count):
-        """Infer edition tier from field count (mirrors the reference resolver)."""
-        return {6: 'std', 8: 'asn', 11: 'pro', 15: 'max', 25: 'ult'}.get(count, 'std')
+        self._float_field_indices = {i for i, n in enumerate(names) if n in FLOAT_FIELDS}
 
     def _ensure_pools_loaded(self):
         if self._pools_loaded:
@@ -1210,6 +1430,14 @@ class QzdbReader:
                         group_pool_list.append([])
                         continue
 
+                    # The (count + 1) offset table must fit inside the POOLS
+                    # section; `count` came straight off disk, so this is the
+                    # boundary that stops a forged pool header from walking the
+                    # cursor past EOF.
+                    if pool_cursor > pool_end or (count + 1) * 4 > pool_end - pool_cursor:
+                        group_pool_list.append([])
+                        continue
+
                     # Read string offsets (batch unpack for performance)
                     fmt = f'<{count + 1}I'
                     offsets = list(struct.unpack_from(fmt, d, pool_cursor))
@@ -1217,14 +1445,32 @@ class QzdbReader:
 
                     # Read string data
                     str_base = pool_cursor
+                    avail = pool_end - str_base
+                    # The offset table is cumulative: offsets[i+1] >= offsets[i]
+                    # and the last entry is the total byte length. Monotonicity
+                    # MUST be enforced, not merely assumed -- a forged table can
+                    # otherwise make every entry span the whole section, so
+                    # `count` slices of section-length each amplify into
+                    # gigabytes of decoded text (measured 138977 x 11 MB = 7.2 GB
+                    # on a single flipped header byte). With start >= prev_end and
+                    # end <= tail the slices are disjoint inside [0, tail], which
+                    # caps total decoded bytes at `tail`.
+                    tail = offsets[count]
+                    if tail > avail:
+                        group_pool_list.append([])
+                        continue
                     strings = [''] * count
+                    prev_end = 0
                     for s in range(count):
                         start = offsets[s]
                         end = offsets[s + 1]
-                        length = end - start
-                        if length > 0:
-                            strings[s] = d[str_base + start:str_base + end].decode('utf-8')
-                    pool_cursor += offsets[count]
+                        if start < prev_end or end < start or end > tail:
+                            continue
+                        prev_end = end
+                        if end > start:
+                            strings[s] = d[str_base + start:str_base + end].decode(
+                                'utf-8', errors='replace')
+                    pool_cursor += tail
                     group_pool_list.append(strings)
                 self._group_pools[g] = group_pool_list
 
@@ -1428,9 +1674,16 @@ class QzdbReader:
 
             values.append(val)
 
-        return GeoInfo(values=values, field_names=self._field_names,
-                       float_indices=self._float_field_indices,
-                       name_idx=self._name_idx)
+        # Always use *this group's* names — groups can have different field
+        # counts, so borrowing the active group's table would mislabel values.
+        g_names = self._group_field_names[group_index] or self._field_names
+        g_name_idx = self._group_name_idx[group_index] or self._name_idx
+        g_floats = self._group_float_indices[group_index]
+        if g_floats is None:
+            g_floats = self._float_field_indices
+        return GeoInfo(values=values, field_names=g_names,
+                       float_indices=g_floats,
+                       name_idx=g_name_idx)
 
     # ── bytes-based IPv6 helpers ──────────────────────────────────────
 
@@ -1932,8 +2185,33 @@ class QzdbReader:
     def get_group_count(self):
         return len(self._group_field_counts)
 
+    def get_pool_count(self):
+        """Number of string pools declared in the header (offset 12)."""
+        return self._pool_count
+
     def get_edition(self):
         return self._edition
+
+    def get_version_mask(self):
+        """Raw ``Header.VersionMask`` (offset 6) — the one-hot edition bitmask.
+
+        bit0=std, bit1=asn, bit2=pro, bit3=max, bit4=ult (FORMAT §3.1).
+        """
+        return self._version_mask
+
+    def get_edition_source(self):
+        """How get_edition() was resolved: version_mask|metadata|inferred|unknown."""
+        return self._edition_source
+
+    def get_field_names_source(self):
+        """How get_field_names() was resolved: metadata|edition|synthetic.
+
+        ``metadata`` means the names were read from the file. ``edition`` means
+        the file omitted them and the SDK supplied the canonical set for its
+        declared edition. ``synthetic`` means neither was available and the
+        names are positional placeholders, so name-based lookup is meaningless.
+        """
+        return self._field_names_source
 
     def get_scope(self):
         return ''

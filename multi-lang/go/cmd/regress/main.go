@@ -21,7 +21,7 @@ func main() {
 	}
 
 	// verifyCrc defaults true via Instance
-	s, err := qzdb.Instance(db)
+	s, err := qzdb.Open(db, 0, true)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "load failed: %v\n", err)
 		os.Exit(2)

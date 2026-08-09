@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"math"
+	"math/bits"
 	"net/netip"
 	"os"
 	"strconv"
@@ -34,6 +35,68 @@ const (
 )
 
 const maxTrieWalkSteps = 1000
+
+// -----------------------------------------------------------------------------
+// 版本档次与字段名的自描述契约（FORMAT §10.3）
+//
+// Header.VersionMask（偏移 6）与每个 GROUP_SCHEMA 组头的 groupId 是同一套 one-hot
+// 版本位掩码，这才是判定档次的权威信号；字段个数只能作为最后兜底。
+// -----------------------------------------------------------------------------
+
+// EditionByBit 把 one-hot 位序号映射到档次名：bit0..bit4。
+var EditionByBit = [...]string{"std", "asn", "pro", "max", "ult"}
+
+// EditionFieldNames 各档次的规范字段顺序（FORMAT 附录 1）。
+// 仅在文件没有 Metadata field_names 时使用，永远不覆盖文件自带的字段名。
+var EditionFieldNames = map[string][]string{
+	"std": {"continent", "country_code", "country", "province", "city", "isp"},
+	"asn": {"continent", "country_code", "country", "isp", "asn", "as_name", "as_domain", "usage_type"},
+	"pro": {"continent", "country_code", "country", "province", "city", "district", "geo_id",
+		"longitude", "latitude", "timezone", "isp"},
+	"max": {"continent", "country_code", "country", "province", "city", "district", "geo_id",
+		"longitude", "latitude", "timezone", "isp", "asn", "as_name", "as_domain", "usage_type"},
+	"ult": {"continent", "continent_en", "country_code", "country_alpha3", "country", "country_en",
+		"province", "province_en", "city", "city_en", "district", "district_en", "geo_id",
+		"longitude", "latitude", "timezone", "languages", "currency_code", "phone_prefix",
+		"emoji_flag", "isp", "asn", "as_name", "as_domain", "usage_type"},
+}
+
+// 来源标记：8 种语言取值完全一致，跨语言对拍可直接比较。
+const (
+	EditionSourceVersionMask = "version_mask" // 来自 VersionMask/groupId（权威）
+	EditionSourceMetadata    = "metadata"     // 来自 Metadata primary_version/version_list
+	EditionSourceInferred    = "inferred"     // 兜底：字段数唯一匹配
+	EditionSourceUnknown     = "unknown"      // 确实判定不出，不臆造
+
+	FieldNamesSourceMetadata  = "metadata"  // 文件自带 Metadata field_names
+	FieldNamesSourceEdition   = "edition"   // 已知档次的规范表
+	FieldNamesSourceSynthetic = "synthetic" // field_0..field_N-1 占位符
+)
+
+// editionByFieldCount 反向索引：字段数 -> 档次，仅在该字段数唯一时有值。
+var editionByFieldCount = func() map[int]string {
+	m := make(map[int]string, len(EditionFieldNames))
+	for ed, names := range EditionFieldNames {
+		if _, dup := m[len(names)]; dup {
+			m[len(names)] = "" // 有歧义 -> 不猜
+			continue
+		}
+		m[len(names)] = ed
+	}
+	return m
+}()
+
+// EditionFromMask 把 one-hot 版本位掩码解析成档次名；非 one-hot 返回 ""。
+func EditionFromMask(mask uint16) string {
+	if mask == 0 || mask&(mask-1) != 0 {
+		return "" // 0 或多于一位 -> 不是单一档次
+	}
+	bit := bits.TrailingZeros16(mask)
+	if bit < len(EditionByBit) {
+		return EditionByBit[bit]
+	}
+	return ""
+}
 
 // Snapshot 是不可变的只读数据视图。构造完成后不再修改，可安全被多 goroutine 并发读取。
 type Snapshot struct {
@@ -93,12 +156,16 @@ type Snapshot struct {
 	numericFlags []bool
 
 	// Meta accessors
-	version      string
-	description  string
-	edition      string
-	dataMonth    string
-	buildTimeStr string
-	scope        string
+	version          string
+	description      string
+	edition          string
+	versionMask      uint16
+	editionSource    string
+	fieldNamesSource string
+	groupIds         []uint16
+	dataMonth        string
+	buildTimeStr     string
+	scope            string
 
 	storedCrc   uint32
 	crcOnce     sync.Once
@@ -114,15 +181,42 @@ type QzdbReader struct {
 
 // ---------- 基础 LE 读取 ----------
 
-func safeReadU16(b []byte, off uint64) uint16 { return binary.LittleEndian.Uint16(b[off:]) }
-func safeReadU32(b []byte, off uint64) uint32 { return binary.LittleEndian.Uint32(b[off:]) }
-func safeReadU64(b []byte, off uint64) uint64 { return binary.LittleEndian.Uint64(b[off:]) }
+// boundsPanic 是解析期越界访问的统一哨兵，由 buildSnapshot 的 recover 收口为 ErrCodeOutOfBounds，
+// 使畸形 .qzdb 文件 Fail-Closed（返回错误而非 panic 导致宿主进程崩溃）。
+type boundsPanic struct{ msg string }
+
+func (e *boundsPanic) Error() string { return e.msg }
+
+func safeReadU16(b []byte, off uint64) uint16 {
+	if off+2 > uint64(len(b)) {
+		panic(&boundsPanic{fmt.Sprintf("readU16 OOB: off=%d len=%d", off, len(b))})
+	}
+	return binary.LittleEndian.Uint16(b[off:])
+}
+func safeReadU32(b []byte, off uint64) uint32 {
+	if off+4 > uint64(len(b)) {
+		panic(&boundsPanic{fmt.Sprintf("readU32 OOB: off=%d len=%d", off, len(b))})
+	}
+	return binary.LittleEndian.Uint32(b[off:])
+}
+func safeReadU64(b []byte, off uint64) uint64 {
+	if off+8 > uint64(len(b)) {
+		panic(&boundsPanic{fmt.Sprintf("readU64 OOB: off=%d len=%d", off, len(b))})
+	}
+	return binary.LittleEndian.Uint64(b[off:])
+}
 
 func (s *Snapshot) readU24(off uint64) uint32 {
+	if off+3 > uint64(len(s.data)) {
+		panic(&boundsPanic{fmt.Sprintf("readU24 OOB: off=%d len=%d", off, len(s.data))})
+	}
 	d := s.data
 	return uint32(d[off]) | uint32(d[off+1])<<8 | uint32(d[off+2])<<16
 }
 func (s *Snapshot) readU48(off uint64) uint64 {
+	if off+6 > uint64(len(s.data)) {
+		panic(&boundsPanic{fmt.Sprintf("readU48 OOB: off=%d len=%d", off, len(s.data))})
+	}
 	d := s.data
 	return uint64(d[off]) | uint64(d[off+1])<<8 | uint64(d[off+2])<<16 |
 		uint64(d[off+3])<<24 | uint64(d[off+4])<<32 | uint64(d[off+5])<<40
@@ -130,6 +224,9 @@ func (s *Snapshot) readU48(off uint64) uint64 {
 func (s *Snapshot) readUintWidth(off uint64, width int) uint32 {
 	switch {
 	case width <= 1:
+		if off >= uint64(len(s.data)) {
+			panic(&boundsPanic{fmt.Sprintf("readUintWidth OOB: off=%d len=%d", off, len(s.data))})
+		}
 		return uint32(s.data[off])
 	case width == 2:
 		return uint32(safeReadU16(s.data, off))
@@ -142,7 +239,18 @@ func (s *Snapshot) readUintWidth(off uint64, width int) uint32 {
 
 // ---------- 快照加载（Fail-Closed） ----------
 
-func buildSnapshot(data []byte, release func(), groupIndex int, verifyCrc bool) (*Snapshot, error) {
+func buildSnapshot(data []byte, release func(), groupIndex int, verifyCrc bool) (snap *Snapshot, err error) {
+	// 收口解析期越界访问（畸形文件 DoS）：仅捕获 boundsPanic 哨兵，其余 panic 照常上浮。
+	defer func() {
+		if r := recover(); r != nil {
+			if bp, ok := r.(*boundsPanic); ok {
+				snap = nil
+				err = newErr(ErrCodeOutOfBounds, bp.msg)
+				return
+			}
+			panic(r)
+		}
+	}()
 	if len(data) < 192 {
 		return nil, newErr(ErrCodeBadHeader, "file too small for QZDB header")
 	}
@@ -183,6 +291,9 @@ func (s *Snapshot) parseHeader() error {
 		return newErr(ErrCodeUnsupported,
 			fmt.Sprintf("unsupported format version: %d (only version 1 is supported)", d[4]))
 	}
+	// VersionMask（偏移 6）：one-hot 版本位掩码，判定档次的权威信号
+	s.versionMask = safeReadU16(d, 6)
+
 	s.flags = safeReadU16(d, 8)
 	s.hasV4 = s.flags&1 != 0
 	s.hasV6 = s.flags&2 != 0
@@ -225,6 +336,53 @@ func (s *Snapshot) parseHeader() error {
 	}
 	s.geoEntryGroupCount = gc
 	s.storedCrc = safeReadU32(d, 16)
+
+	// ---- Section 边界校验（Fail-Closed）----
+	// 头部里的 section 偏移全部来自文件、可被伪造。若不在此处一次性验证，
+	// 越界只会在查询期 trie 游走时才暴露成 panic，直接击穿调用方进程。
+	// 这里提前把「偏移 + 该 section 最小必需长度」与文件长度比对，
+	// 校验通过后查询热路径即可无判界地直接寻址。
+	dataLen := uint64(len(d))
+	checkOffset := func(offset, required uint64, field string) error {
+		if offset > math.MaxUint64-required { // 加法回绕防护
+			return newErr(ErrCodeOutOfBounds, fmt.Sprintf("offset overflow at %s", field))
+		}
+		if end := offset + required; end > dataLen {
+			return newErr(ErrCodeOutOfBounds,
+				fmt.Sprintf("section %s out of bounds (need %d, have %d)", field, end, dataLen))
+		}
+		return nil
+	}
+	v4NodeSize, v6NodeSize := uint64(8), uint64(8)
+	if s.v4Node24 {
+		v4NodeSize = 6
+	}
+	if s.v6Node24 {
+		v6NodeSize = 6
+	}
+	for _, c := range []struct {
+		off, need uint64
+		name      string
+		optional  bool
+	}{
+		{s.offV4Jump, 65536 * 4, "off_v4_jump", false},
+		{s.offV4Nodes, uint64(s.v4NodeCount) * v4NodeSize, "off_v4_nodes", false},
+		{s.offV6Jump, uint64(1)<<uint(s.v6JumpBits) * 4, "off_v6_jump", false},
+		{s.offV6Nodes, uint64(s.v6NodeCount) * v6NodeSize, "off_v6_nodes", false},
+		{s.offIPRow, uint64(s.rowCount) * uint64(s.ipRowSize), "off_ip_row", false},
+		{s.offGeoEntries, 16, "off_geo_entries", true},
+		{s.offPools, 4, "off_pools", true},
+		{s.offMeta, 4, "off_meta", true},
+		{s.offGroupSchema, 2, "off_group_schema", true},
+		{s.offRowSchema, 1, "off_row_schema", true},
+	} {
+		if c.optional && c.off == 0 {
+			continue
+		}
+		if err := checkOffset(c.off, c.need, c.name); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -308,6 +466,7 @@ func (s *Snapshot) parseGroups() error {
 	s.groupFieldNative = make([][]bool, groups)
 	s.groupFieldNativeType = make([][]int, groups)
 	s.groupFieldIds = make([][]uint16, groups)
+	s.groupIds = make([]uint16, groups)
 
 	for gi := 0; gi < groups; gi++ {
 		s.groupFieldCounts[gi] = int(d[gmOff])
@@ -335,7 +494,9 @@ func (s *Snapshot) parseGroups() error {
 			if sp+14 > uint64(len(d)) {
 				break
 			}
-			sp += 2 // groupId
+			// groupId 就是该组的 one-hot 版本位掩码，与 Header.VersionMask 同一套编码
+			s.groupIds[gi] = safeReadU16(d, sp)
+			sp += 2
 			fldCount := int(safeReadU16(d, sp))
 			sp += 2
 			sp += 4 // entryCount
@@ -390,6 +551,30 @@ func (s *Snapshot) parseGroups() error {
 			s.groupFieldNativeType[g] = make([]int, s.groupFieldCounts[g])
 		}
 	}
+	// 关键不变量：字段数有两个来源——GEO_ENTRIES 表的 groupFieldCounts[g]
+	// 与 GROUP_SCHEMA 的 fldCount。畸形文件可让二者不一致，而查询热路径以
+	// groupFieldCounts[g] 为循环上界直接下标访问 widths/offsets/...，长度不足
+	// 即 index out of range panic（且不在 buildSnapshot 的 recover 范围内）。
+	// 这里在解析期一次性对齐：不一致则该组回退到 poolIdxSize 默认布局，
+	// 使 len(...) == groupFieldCounts[g] 恒成立，热路径无需逐次判界。
+	for g := 0; g < groups; g++ {
+		fc := s.groupFieldCounts[g]
+		if len(s.groupFieldWidths[g]) == fc && len(s.groupFieldOffsets[g]) == fc &&
+			len(s.groupFieldNative[g]) == fc && len(s.groupFieldNativeType[g]) == fc {
+			continue
+		}
+		s.groupStrides[g] = fc * s.poolIdxSize
+		widths := make([]int, fc)
+		offsets := make([]int, fc)
+		for i := 0; i < fc; i++ {
+			widths[i] = s.poolIdxSize
+			offsets[i] = i * s.poolIdxSize
+		}
+		s.groupFieldWidths[g] = widths
+		s.groupFieldOffsets[g] = offsets
+		s.groupFieldNative[g] = make([]bool, fc)
+		s.groupFieldNativeType[g] = make([]int, fc)
+	}
 	return nil
 }
 
@@ -407,7 +592,8 @@ func (s *Snapshot) parseMetadata() error {
 			if t == 0 || length == 0 {
 				break
 			}
-			if cursor+4+length > size {
+			// 伪造的 TLV 可以声明一个越过 EOF 的长度；直接停止遍历
+			if length > size-(cursor+4) {
 				break
 			}
 			val := string(d[cursor+4 : cursor+4+length])
@@ -427,11 +613,62 @@ func (s *Snapshot) parseMetadata() error {
 	s.version = metaVersion
 	s.description = metaDesc
 
-	numFields := s.groupFieldCounts[s.groupIndex]
-	if metaFields != nil && len(metaFields) == numFields {
+	gi := s.groupIndex
+	if gi < 0 || gi >= len(s.groupFieldCounts) {
+		gi = 0
+	}
+	numFields := s.groupFieldCounts[gi]
+
+	// --- edition：先用本组自己的掩码，再回落到文件级掩码 -----------------------
+	mask := s.versionMask
+	if gi < len(s.groupIds) && s.groupIds[gi] != 0 {
+		mask = s.groupIds[gi]
+	}
+	edition := EditionFromMask(mask)
+	editionSource := EditionSourceVersionMask
+	if edition == "" {
+		edition = strings.TrimSpace(metaPrimary)
+		if edition == "" {
+			var tokens []string
+			for _, tok := range strings.Split(metaVersion, ",") {
+				if tok = strings.TrimSpace(tok); tok != "" {
+					tokens = append(tokens, tok)
+				}
+			}
+			if len(tokens) == 1 {
+				edition = tokens[0]
+			}
+		}
+		if edition != "" {
+			editionSource = EditionSourceMetadata
+		}
+	}
+	if edition == "" {
+		if edition = editionByFieldCount[numFields]; edition != "" {
+			editionSource = EditionSourceInferred
+		} else {
+			editionSource = EditionSourceUnknown
+		}
+	}
+	s.edition = edition
+	s.editionSource = editionSource
+
+	// --- 字段名 ---------------------------------------------------------------
+	canonical := EditionFieldNames[edition]
+	switch {
+	case metaFields != nil && len(metaFields) == numFields:
 		s.fieldNames = metaFields
-	} else {
-		s.fieldNames = fallbackFieldNames(numFields)
+		s.fieldNamesSource = FieldNamesSourceMetadata
+	case canonical != nil && len(canonical) == numFields:
+		s.fieldNames = append([]string(nil), canonical...)
+		s.fieldNamesSource = FieldNamesSourceEdition
+	default:
+		names := make([]string, numFields)
+		for i := range names {
+			names[i] = fmt.Sprintf("field_%d", i)
+		}
+		s.fieldNames = names
+		s.fieldNamesSource = FieldNamesSourceSynthetic
 	}
 	s.normalizedMap = buildNormalizedMap(s.fieldNames)
 	s.numericFlags = make([]bool, len(s.fieldNames))
@@ -439,27 +676,12 @@ func (s *Snapshot) parseMetadata() error {
 		s.numericFlags[i] = isNumericFieldName(n)
 	}
 
-	// 维度掩码兜底
+	// 维度掩码兜底：只看解析出来的字段名里有没有 asn。fieldId 只是槽位序号
+	// （0..N-1），不带任何跨档语义，绝不可用来判定维度。
+	_, hasAsn := s.normalizedMap["asn"]
 	for g := 0; g < s.actualGroups; g++ {
 		if s.groupDimMasks[g] != 0 {
 			continue
-		}
-		hasAsn := false
-		if g < len(s.groupFieldIds) && s.groupFieldIds[g] != nil {
-			for _, fid := range s.groupFieldIds[g] {
-				if fid == 1 {
-					hasAsn = true
-					break
-				}
-			}
-		}
-		if !hasAsn {
-			for _, n := range s.fieldNames {
-				if n == "asn" {
-					hasAsn = true
-					break
-				}
-			}
 		}
 		if hasAsn {
 			s.groupDimMasks[g] = 0x02
@@ -477,14 +699,6 @@ func (s *Snapshot) parseMetadata() error {
 		s.dataMonth = fmt.Sprintf("%04d-%02d", y, m)
 		s.buildTimeStr = fmt.Sprintf("%04d-%02d-%02d", y, m, dd)
 	}
-	ed := metaPrimary
-	if ed == "" && metaVersion != "" {
-		ed = metaVersion
-	}
-	if ed == "" {
-		ed = inferEdition(numFields, s.normalizedMap)
-	}
-	s.edition = ed
 	s.scope = ""
 	return nil
 }
@@ -502,57 +716,6 @@ func splitFieldNames(raw string) []string {
 		parts[i] = strings.TrimSpace(parts[i])
 	}
 	return parts
-}
-
-// fallbackFieldNames 各版本兜底字段表（与 Java 参考实现一致）。
-func fallbackFieldNames(count int) []string {
-	switch count {
-	case 6:
-		return []string{"continent", "country_code", "country", "province", "city", "isp"}
-	case 8:
-		return []string{"continent", "country_code", "country", "isp", "asn", "as_name", "as_domain", "usage_type"}
-	case 11:
-		return []string{"continent", "country_code", "country", "province", "city", "district", "geo_id", "longitude", "latitude", "timezone", "isp"}
-	case 15:
-		return []string{"continent", "country_code", "country", "province", "city", "district", "geo_id", "longitude", "latitude", "timezone", "isp", "asn", "as_name", "as_domain", "usage_type"}
-	case 25:
-		return []string{"continent", "continent_en", "country_code", "country_alpha3", "country", "country_en", "province", "province_en", "city", "city_en", "district", "district_en", "geo_id", "longitude", "latitude", "timezone", "languages", "currency_code", "phone_prefix", "emoji_flag", "isp", "asn", "as_name", "as_domain", "usage_type"}
-	default:
-		res := make([]string, count)
-		for i := 0; i < count; i++ {
-			res[i] = fmt.Sprintf("field_%d", i)
-		}
-		return res
-	}
-}
-
-func inferEdition(count int, norm map[string]int) string {
-	switch count {
-	case 6:
-		return "std"
-	case 8:
-		return "asn"
-	case 11:
-		return "pro"
-	case 15:
-		return "max"
-	case 25:
-		return "ult"
-	default:
-		if _, ok := norm["currencycode"]; ok {
-			return "ult"
-		}
-		if _, ok := norm["asname"]; ok {
-			return "max"
-		}
-		if _, ok := norm["district"]; ok {
-			return "pro"
-		}
-		if _, ok := norm["asn"]; ok {
-			return "asn"
-		}
-		return "std"
-	}
 }
 
 func (s *Snapshot) parsePools() error {
@@ -606,20 +769,39 @@ func (s *Snapshot) parsePools() error {
 				offsets[o] = safeReadU32(d, poolCursor)
 				poolCursor += 4
 			}
+			// 偏移表是累积结构：offsets[i+1] >= offsets[i]，末项为字符串区总字节数。
+			// 单调性必须强制校验 —— 仅判断 segEnd <= len(d) 时，伪造表可让每一项都横跨
+			// 整个 section，count 段 × section 长度会放大成 GB 级 string 拷贝（实测同类
+			// 构造在 Java 上达 7.2 GB → OOM）。加上 start >= prevEnd && end <= tail 后，
+			// 各段互不重叠且落在 [0, tail]，总拷贝量必 <= tail <= avail。
+			strBase := poolCursor
+			if poolEnd > uint64(len(d)) {
+				poolEnd = uint64(len(d))
+			}
+			if strBase > poolEnd {
+				list[f] = []string{}
+				continue
+			}
+			avail := poolEnd - strBase
+			tail := uint64(offsets[count])
+			if tail > avail {
+				list[f] = []string{}
+				continue
+			}
 			strs := make([]string, count)
+			var prevEnd uint32
 			for idx := uint32(0); idx < count; idx++ {
 				start := offsets[idx]
 				end := offsets[idx+1]
-				length := end - start
-				if length > 0 {
-					segStart := poolCursor + uint64(start)
-					segEnd := poolCursor + uint64(end)
-					if segEnd <= uint64(len(d)) && segStart <= segEnd {
-						strs[idx] = string(d[segStart:segEnd])
-					}
+				if start < prevEnd || end < start || uint64(end) > tail {
+					continue
+				}
+				prevEnd = end
+				if end > start {
+					strs[idx] = string(d[strBase+uint64(start) : strBase+uint64(end)])
 				}
 			}
-			poolCursor += uint64(offsets[count])
+			poolCursor = strBase + tail
 			list[f] = strs
 		}
 		s.groupPools[g] = list
@@ -1180,6 +1362,35 @@ func (r *QzdbReader) GetEdition() string {
 	return ""
 }
 
+// GetVersionMask 返回 Header.VersionMask（偏移 6）原值：one-hot 版本位掩码。
+// bit0=std, bit1=asn, bit2=pro, bit3=max, bit4=ult（FORMAT §3.1）。
+func (r *QzdbReader) GetVersionMask() uint16 {
+	if s := r.snapshot(); s != nil {
+		return s.versionMask
+	}
+	return 0
+}
+
+// GetEditionSource 报告 GetEdition 命中了哪条规则：
+// version_mask | metadata | inferred | unknown。
+func (r *QzdbReader) GetEditionSource() string {
+	if s := r.snapshot(); s != nil {
+		return s.editionSource
+	}
+	return EditionSourceUnknown
+}
+
+// GetFieldNamesSource 报告 GetFieldNames 的来源：metadata | edition | synthetic。
+//
+// metadata 表示字段名是从文件里读出来的；edition 表示文件没写、由 SDK 按其声明的
+// 档次补上规范表；synthetic 表示两者都没有，名字只是位置占位符，按名取值无意义。
+func (r *QzdbReader) GetFieldNamesSource() string {
+	if s := r.snapshot(); s != nil {
+		return s.fieldNamesSource
+	}
+	return FieldNamesSourceSynthetic
+}
+
 // GetScope 始终返回 ""（当前格式 Header 尚无 scope 字段）。
 func (r *QzdbReader) GetScope() string { return "" }
 
@@ -1268,8 +1479,9 @@ func (r *QzdbReader) GetGroupIndex() int {
 
 // ---------- 加载 / 热更新 / 释放 ----------
 
-// NewSearcher 便捷构造器（兼容旧 API）。verifyCrc=true 时强制校验。
-func NewSearcher(dbPath string, groupIndex int, verifyCrc bool) (*QzdbReader, error) {
+// Open 便捷构造器：从文件路径打开一个 QzdbReader。verifyCrc=true 时强制校验。
+// 需要更多选项时用 NewBuilder。
+func Open(dbPath string, groupIndex int, verifyCrc bool) (*QzdbReader, error) {
 	return NewBuilder(dbPath).GroupIndex(groupIndex).VerifyCRC(verifyCrc).Build()
 }
 
@@ -1321,50 +1533,6 @@ func (r *QzdbReader) ReloadBuffer(b []byte) error {
 		old.release()
 	}
 	return nil
-}
-
-// ---------- 进程级单例（兼容 cmd） ----------
-
-var (
-	instMu      sync.RWMutex
-	instance    *QzdbReader
-	instanceErr error
-)
-
-// Instance 返回进程级单例。传入路径则重新加载该路径。
-func Instance(dbPath ...string) (*QzdbReader, error) {
-	instMu.RLock()
-	inst := instance
-	err := instanceErr
-	instMu.RUnlock()
-	if inst != nil && err == nil {
-		if len(dbPath) == 0 {
-			return inst, nil
-		}
-		if rerr := inst.Reload(dbPath[0]); rerr != nil {
-			return nil, rerr
-		}
-		return inst, nil
-	}
-	instMu.Lock()
-	defer instMu.Unlock()
-	if instance != nil && instanceErr == nil {
-		if len(dbPath) == 0 {
-			return instance, nil
-		}
-		if rerr := instance.Reload(dbPath[0]); rerr != nil {
-			return nil, rerr
-		}
-		return instance, nil
-	}
-	path := "qqzeng_ip_std_china.qzdb"
-	if len(dbPath) > 0 {
-		path = dbPath[0]
-	}
-	s, e := NewSearcher(path, 0, true)
-	instance = s
-	instanceErr = e
-	return s, e
 }
 
 // ---------- 文件 / 字节加载 ----------

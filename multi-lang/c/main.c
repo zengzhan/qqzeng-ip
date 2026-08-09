@@ -25,16 +25,20 @@ int main() {
         return 1;
     }
 
-    /* --- Load database via singleton --- */
-    qzdb_reader_t *searcher = qzdb_instance(db_path);
-    if (!searcher) {
+    /* --- Load database --- */
+    qzdb_reader_t reader;
+    qzdb_reader_t *searcher = &reader;
+    if (qzdb_init(searcher, db_path) != QZDB_OK) {
         fprintf(stderr, "Failed to load database\n");
         return 1;
     }
 
-    printf("Version code: %d, pools: %d\n", searcher->version_code, searcher->pool_count);
-    printf("Fields (%d):", searcher->pool_count);
-    for (int i = 0; i < (int)searcher->pool_count && searcher->field_names[i]; i++)
+    printf("Edition: %s (source=%s, version_mask=%u), pools: %d\n",
+           qzdb_get_edition(searcher), qzdb_get_edition_source(searcher),
+           (unsigned)qzdb_get_version_mask(searcher), searcher->pool_count);
+    printf("Fields (%d, source=%s):", searcher->field_count,
+           qzdb_get_field_names_source(searcher));
+    for (int i = 0; i < searcher->field_count && searcher->field_names[i]; i++)
         printf(" %s", searcher->field_names[i]);
     printf("\n\n");
 
@@ -54,12 +58,13 @@ int main() {
     printf("\n--- Structured fields for 114.114.114.114 ---\n");
     qzdb_geo_info_t loc;
     if (qzdb_find(searcher, "114.114.114.114", &loc) == 0) {
-        for (int i = 0; i < (int)searcher->pool_count && searcher->field_names[i]; i++)
+        for (int i = 0; i < searcher->field_count && searcher->field_names[i]; i++)
             printf("  %s: %s\n", searcher->field_names[i],
                    loc.values[i] ? loc.values[i] : "");
+        qzdb_free_geo_info(&loc);
     }
 
-    /* Singleton is managed internally; no manual free needed */
+    qzdb_free(searcher);
     printf("TEST_PASS\n");
     return 0;
 }

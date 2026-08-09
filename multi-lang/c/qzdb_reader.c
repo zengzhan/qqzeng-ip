@@ -32,7 +32,6 @@ const char* qzdb_strerror(int error_code) {
  * ======================================================================== */
 static uint32_t crc32_table[256];
 static int crc32_ready = 0;
-static pthread_mutex_t g_instance_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void crc32_init(void) {
     for (uint32_t i = 0; i < 256; i++) {
@@ -164,6 +163,55 @@ static void norm_map_free(qzdb_reader_t* ctx) {
     ctx->norm_map.cap = 0;
 }
 
+/* 把 group g 的字段名视图绑定到 ctx->field_names / 归一化索引 / float 标志。
+ * field_names 只是借用 group_field_names[g]（不深拷贝），因此 qzdb_free 只
+ * 释放 group_field_names。切换 group_index 时重新调用即可保持一致。 */
+static int apply_group_meta(qzdb_reader_t* ctx, int g) {
+    if (!ctx || g < 0 || g >= ctx->actual_groups || !ctx->group_field_names) {
+        return QZDB_ERR_INVALID_PARAM;
+    }
+    int nf = ctx->group_field_counts[g];
+
+    if (ctx->norm_field_names) {
+        for (int i = 0; i < ctx->field_count; i++) free(ctx->norm_field_names[i]);
+        free(ctx->norm_field_names);
+        ctx->norm_field_names = NULL;
+    }
+    norm_map_free(ctx);
+    free(ctx->float_field_flags); ctx->float_field_flags = NULL;
+    free(ctx->edition);           ctx->edition = NULL;
+
+    ctx->field_names        = ctx->group_field_names[g];
+    ctx->field_count        = nf;
+    ctx->edition            = strdup(ctx->group_editions[g] ? ctx->group_editions[g] : "");
+    ctx->edition_source     = ctx->group_edition_sources[g];
+    ctx->field_names_source = ctx->group_name_sources[g];
+    if (!ctx->edition) return QZDB_ERR_OUT_OF_MEMORY;
+
+    ctx->float_field_flags = calloc((size_t)(nf > 0 ? nf : 1), sizeof(int));
+    ctx->norm_field_names  = calloc((size_t)(nf > 0 ? nf : 1), sizeof(char*));
+    if (!ctx->float_field_flags || !ctx->norm_field_names) return QZDB_ERR_OUT_OF_MEMORY;
+
+    for (int i = 0; i < nf; i++) {
+        const char* fn = ctx->field_names[i] ? ctx->field_names[i] : "";
+        if (strcmp(fn, "longitude") == 0 || strcmp(fn, "latitude") == 0)
+            ctx->float_field_flags[i] = 1;
+        char* n = malloc(strlen(fn) + 1);
+        if (!n) return QZDB_ERR_OUT_OF_MEMORY;
+        size_t j = 0;
+        for (size_t k = 0; fn[k]; k++) {
+            char c = fn[k];
+            if (c == '_' || c == '-') continue;
+            if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a');
+            n[j++] = c;
+        }
+        n[j] = '\0';
+        ctx->norm_field_names[i] = n;
+    }
+    norm_map_build(ctx);   /* O(1) 归一化索引，加载期一次性构建（spec §6.1） */
+    return QZDB_OK;
+}
+
 /* O(1) lookup — returns -1 if not found */
 static int field_index_normalized(qzdb_reader_t* ctx, const char* name) {
     if (!ctx || !name || !ctx->norm_map.buckets) return -1;
@@ -276,32 +324,101 @@ static int  resolve_row_id_cached(qzdb_reader_t* ctx, uint32_t row_id, int group
 static void free_geo_info(qzdb_geo_info_t* info);
 
 /* ========================================================================
- * Edition inference from field count / names
+ * 版本档次判定契约（FORMAT §10.3 —— 8 种 SDK 逐字一致）
+ *
+ * 档次的权威来源是 Header.VersionMask（offset 6，u16 LE）与
+ * GROUP_SCHEMA.groupId，二者都是 one-hot 位掩码：
+ *   bit0=std(1) bit1=asn(2) bit2=pro(4) bit3=max(8) bit4=ult(16)
+ * 字段个数只是最后兜底。
  * ======================================================================== */
-static const char* infer_edition(int field_count, char** norm_names) {
-    switch (field_count) {
-        case 6:  return "std";
-        case 8:  return "asn";
-        case 11: return "pro";
-        case 15: return "max";
-        case 25: return "ult";
-        default: break;
+static const char* const EDITION_BY_BIT[5] = { "std", "asn", "pro", "max", "ult" };
+
+#define QZDB_EDITION_SOURCE_VERSION_MASK  "version_mask"
+#define QZDB_EDITION_SOURCE_METADATA      "metadata"
+#define QZDB_EDITION_SOURCE_INFERRED      "inferred"
+#define QZDB_EDITION_SOURCE_UNKNOWN       "unknown"
+#define QZDB_FIELD_NAMES_SOURCE_METADATA  "metadata"
+#define QZDB_FIELD_NAMES_SOURCE_EDITION   "edition"
+#define QZDB_FIELD_NAMES_SOURCE_SYNTHETIC "synthetic"
+
+static const char* const EDITION_NAMES_STD[6] = {
+    "continent", "country_code", "country", "province", "city", "isp"
+};
+static const char* const EDITION_NAMES_ASN[8] = {
+    "continent", "country_code", "country", "isp", "asn", "as_name", "as_domain",
+    "usage_type"
+};
+static const char* const EDITION_NAMES_PRO[11] = {
+    "continent", "country_code", "country", "province", "city", "district", "geo_id",
+    "longitude", "latitude", "timezone", "isp"
+};
+static const char* const EDITION_NAMES_MAX[15] = {
+    "continent", "country_code", "country", "province", "city", "district", "geo_id",
+    "longitude", "latitude", "timezone", "isp", "asn", "as_name", "as_domain",
+    "usage_type"
+};
+static const char* const EDITION_NAMES_ULT[25] = {
+    "continent", "continent_en", "country_code", "country_alpha3", "country",
+    "country_en", "province", "province_en", "city", "city_en", "district",
+    "district_en", "geo_id", "longitude", "latitude", "timezone", "languages",
+    "currency_code", "phone_prefix", "emoji_flag", "isp", "asn", "as_name",
+    "as_domain", "usage_type"
+};
+
+/* 各档次的规范字段表（仅在文件未自带 Metadata field_names 时使用）。 */
+static const char* const* edition_field_names(const char* edition, int* out_count) {
+    if (!edition || !edition[0]) { *out_count = 0; return NULL; }
+    if (strcmp(edition, "std") == 0) { *out_count = 6;  return EDITION_NAMES_STD; }
+    if (strcmp(edition, "asn") == 0) { *out_count = 8;  return EDITION_NAMES_ASN; }
+    if (strcmp(edition, "pro") == 0) { *out_count = 11; return EDITION_NAMES_PRO; }
+    if (strcmp(edition, "max") == 0) { *out_count = 15; return EDITION_NAMES_MAX; }
+    if (strcmp(edition, "ult") == 0) { *out_count = 25; return EDITION_NAMES_ULT; }
+    *out_count = 0; return NULL;
+}
+
+const char* qzdb_edition_from_mask(uint16_t mask) {
+    if (mask == 0 || (mask & (uint16_t)(mask - 1)) != 0) return "";
+    int bit = 0;
+    while (bit < 16 && ((mask >> bit) & 1u) == 0) bit++;
+    return bit < 5 ? EDITION_BY_BIT[bit] : "";
+}
+
+/* 字段数 → 档次名（仅当该基数在规范表中唯一时才成立）。 */
+static const char* edition_by_field_count(int count) {
+    const char* hit = "";
+    for (int i = 0; i < 5; i++) {
+        int n = 0;
+        if (edition_field_names(EDITION_BY_BIT[i], &n) && n == count) {
+            if (hit[0]) return "";  /* 基数不唯一，不猜 */
+            hit = EDITION_BY_BIT[i];
+        }
     }
-    if (!norm_names) return "std";
-    int has_cc = 0, has_asn = 0, has_district = 0, has_asname = 0;
-    for (int i = 0; i < field_count; i++) {
-        const char* n = norm_names[i];
-        if (!n) continue;
-        if (strcmp(n, "currencycode") == 0) has_cc = 1;
-        else if (strcmp(n, "asn") == 0) has_asn = 1;
-        else if (strcmp(n, "district") == 0) has_district = 1;
-        else if (strcmp(n, "asname") == 0) has_asname = 1;
+    return hit;
+}
+
+/* 把 "a, b" 形式的 version_list 解析成单一档次名；为空或多于一项时返回 0。 */
+static int single_version_token(const char* list, char* out, size_t out_size) {
+    if (!list || out_size == 0) return 0;
+    int found = 0;
+    const char* p = list;
+    for (;;) {
+        const char* q = p;
+        while (*q && *q != ',') q++;
+        const char* a = p;
+        const char* b = q;
+        while (a < b && (*a == ' ' || *a == '\t')) a++;
+        while (b > a && (b[-1] == ' ' || b[-1] == '\t')) b--;
+        if (b > a) {
+            if (found) return 0;   /* 多于一项：无法确定唯一档次 */
+            size_t n = (size_t)(b - a);
+            if (n > out_size - 1) n = out_size - 1;
+            memcpy(out, a, n); out[n] = '\0';
+            found = 1;
+        }
+        if (*q != ',') break;
+        p = q + 1;
     }
-    if (has_cc) return "ult";
-    if (has_asname) return "max";
-    if (has_district) return "pro";
-    if (has_asn) return "asn";
-    return "std";
+    return found;
 }
 
 /* ========================================================================
@@ -701,6 +818,13 @@ void qzdb_free_geo_info(qzdb_geo_info_t* info) { free_geo_info(info); }
 const char* qzdb_get_version(qzdb_reader_t* ctx) { return ctx && ctx->version_name ? ctx->version_name : ""; }
 const char* qzdb_get_data_month(qzdb_reader_t* ctx) { return ctx && ctx->data_month ? ctx->data_month : ""; }
 const char* qzdb_get_edition(qzdb_reader_t* ctx) { return ctx && ctx->edition ? ctx->edition : ""; }
+uint16_t    qzdb_get_version_mask(qzdb_reader_t* ctx) { return ctx ? ctx->version_mask : 0; }
+const char* qzdb_get_edition_source(qzdb_reader_t* ctx) {
+    return ctx && ctx->edition_source ? ctx->edition_source : QZDB_EDITION_SOURCE_UNKNOWN;
+}
+const char* qzdb_get_field_names_source(qzdb_reader_t* ctx) {
+    return ctx && ctx->field_names_source ? ctx->field_names_source : QZDB_FIELD_NAMES_SOURCE_SYNTHETIC;
+}
 const char* qzdb_get_scope(qzdb_reader_t* ctx) { (void)ctx; return ""; }
 const char* qzdb_get_build_time(qzdb_reader_t* ctx) { return ctx && ctx->build_time_str ? ctx->build_time_str : ""; }
 const char* qzdb_get_description(qzdb_reader_t* ctx) { return ctx && ctx->description ? ctx->description : ""; }
@@ -885,7 +1009,9 @@ static int lookup_v6_prefix_len(const qzdb_reader_t* ctx, const uint8_t* ip) {
 }
 
 static void format_v4_cidr(uint32_t ip, int n, char* out, size_t sz) {
-    uint32_t net = (n == 0) ? 0 : (ip & (0xFFFFFFFFu << (32 - n)));
+    // 注意：C 中 `x << 32` 属未定义行为，故用 `n>=32` 短路避免移位量达到类型宽度。
+    uint32_t mask = (n <= 0 || n >= 32) ? 0u : (0xFFFFFFFFu << (32 - n));
+    uint32_t net = ip & mask;
     snprintf(out, sz, "%u.%u.%u.%u/%d", (net >> 24) & 0xFF, (net >> 16) & 0xFF, (net >> 8) & 0xFF, net & 0xFF, n);
 }
 
@@ -1207,7 +1333,7 @@ static void ensure_pools_loaded(qzdb_reader_t* ctx) {
     uint64_t pool_end = ctx->off_meta > 0 ? ctx->off_meta : ctx->data_size;
     uint8_t* d = ctx->data;
 
-    typedef struct { uint32_t count; uint32_t* offsets; uint64_t data_base; } pool_scan_t;
+    typedef struct { uint32_t count; uint32_t* offsets; uint64_t data_base; uint32_t tail; } pool_scan_t;
     pool_scan_t** scans = calloc(ctx->actual_groups, sizeof(pool_scan_t*));
     if (!scans) return;
 
@@ -1233,17 +1359,30 @@ static void ensure_pools_loaded(qzdb_reader_t* ctx) {
                 if (safe_read_u32(d, ctx->data_size, pool_cursor, &offsets[o]) != QZDB_OK) { offsets_ok = 0; break; }
                 pool_cursor += 4;
             }
-            if (!offsets_ok) { free(offsets); continue; }
+            if (!offsets_ok) { free(offsets); ctx->group_pool_counts[g][f] = 0; continue; }
+            /* 偏移表是累积结构：offsets[i+1] >= offsets[i]，末项 tail 为字符串区总字节数。
+             * 单调性必须强制校验 —— 仅判断 data_base+end <= data_size 时，伪造表可让每一项
+             * 都横跨整个 section，arena_need 会累加成 count × section 长度（GB 级 malloc；
+             * 且在 32 位 size_t 上会回绕，导致后续 memcpy 堆溢出）。
+             * 有 start >= prev_end && end <= tail 后各段互不重叠且落在 [0, tail]，
+             * arena_need <= tail + count 必定有界。两趟循环使用完全相同的判定以保持一致。 */
+            uint64_t limit = pool_end < ctx->data_size ? pool_end : ctx->data_size;
+            uint64_t avail = pool_cursor < limit ? limit - pool_cursor : 0;
+            uint32_t tail = offsets[count];
+            if ((uint64_t)tail > avail) { free(offsets); ctx->group_pool_counts[g][f] = 0; continue; }
             scans[g][f].count = count;
             scans[g][f].offsets = offsets;
             scans[g][f].data_base = pool_cursor;
+            scans[g][f].tail = tail;
             ctx->group_pools[g][f] = calloc(count, sizeof(char*));
+            uint32_t prev_end = 0;
             for (uint32_t s = 0; s < count; s++) {
                 uint32_t start = offsets[s]; uint32_t end = offsets[s+1];
-                if (end < start || pool_cursor + end > ctx->data_size) continue;
+                if (start < prev_end || end < start || end > tail) continue;
+                prev_end = end;
                 arena_need += (size_t)(end - start) + 1;
             }
-            pool_cursor += offsets[count];
+            pool_cursor += tail;
         }
     }
 
@@ -1266,9 +1405,12 @@ static void ensure_pools_loaded(qzdb_reader_t* ctx) {
         for (int f = 0; f < field_count; f++) {
             pool_scan_t* sc = &scans[g][f];
             if (!sc->offsets || !ctx->group_pools[g][f]) { free(sc->offsets); continue; }
+            uint32_t prev_end2 = 0;
             for (uint32_t s = 0; s < sc->count; s++) {
                 uint32_t start = sc->offsets[s]; uint32_t end = sc->offsets[s+1];
-                if (end < start || sc->data_base + end > ctx->data_size) { ctx->group_pools[g][f][s] = NULL; continue; }
+                /* 判定必须与上方 arena_need 预算循环逐字一致，否则 arena 会写越界 */
+                if (start < prev_end2 || end < start || end > sc->tail) { ctx->group_pools[g][f][s] = NULL; continue; }
+                prev_end2 = end;
                 uint32_t length = end - start;
                 char* dst = arena + arena_off;
                 if (length > 0) memcpy(dst, d + sc->data_base + start, length);
@@ -1311,6 +1453,8 @@ int qzdb_init_ex(qzdb_reader_t* ctx, const char* db_path, int verify_crc) {
     int fmt_ver = d[4];
     if (fmt_ver != 1) { munmap(ctx->data, ctx->data_size); ctx->data = NULL; return QZDB_ERR_UNSUPPORTED; }
 
+    /* VersionMask（offset 6）是档次判定的权威来源，必须在 flags 之前读出。 */
+    ctx->version_mask = READ_LE16(d + 6);
     ctx->flags = READ_LE16(d + 8);
     ctx->has_v4 = (ctx->flags & 1) != 0;
     ctx->has_v6 = (ctx->flags & 2) != 0;
@@ -1409,37 +1553,50 @@ int qzdb_init_ex(qzdb_reader_t* ctx, const char* db_path, int verify_crc) {
     ctx->group_field_offsets = calloc(ctx->actual_groups, sizeof(int*));
     ctx->group_field_native = calloc(ctx->actual_groups, sizeof(int*));
     ctx->group_field_native_type = calloc(ctx->actual_groups, sizeof(int*));
-    ctx->group_field_ids = calloc(ctx->actual_groups, sizeof(uint16_t*));
+    ctx->group_ids = calloc(ctx->actual_groups, sizeof(uint16_t));
     ctx->group_pool_section_ids = calloc(ctx->actual_groups, sizeof(uint32_t*));
     if (!ctx->group_strides || !ctx->group_field_widths || !ctx->group_field_offsets || !ctx->group_field_native ||
-        !ctx->group_field_native_type || !ctx->group_field_ids || !ctx->group_pool_section_ids) {
+        !ctx->group_field_native_type || !ctx->group_ids || !ctx->group_pool_section_ids) {
         free(ctx->group_strides); free(ctx->group_field_widths); free(ctx->group_field_offsets);
-        free(ctx->group_field_native); free(ctx->group_field_native_type); free(ctx->group_field_ids);
+        free(ctx->group_field_native); free(ctx->group_field_native_type); free(ctx->group_ids);
         free(ctx->group_pool_section_ids); free(ctx->group_field_counts); free(ctx->group_entry_counts);
         free(ctx->group_dim_masks); free(ctx->group_entry_offsets);
         munmap(ctx->data, ctx->data_size); ctx->data = NULL; return QZDB_ERR_OUT_OF_MEMORY;
     }
 
-    if (ctx->off_group_schema > 0) {
+    /* 记录 GROUP_SCHEMA 声明的字段数，供下方与 GEO_ENTRIES 的 group_field_counts
+     * 做一致性校验；-1 表示该组未由 schema 填充。 */
+    int schema_fld_count[4];
+    for (int i = 0; i < 4; i++) schema_fld_count[i] = -1;
+
+    if (ctx->off_group_schema > 0 && ctx->off_group_schema + 2 <= ctx->data_size) {
         uint64_t sp = ctx->off_group_schema;
         int gs_group_count = READ_LE16(d + sp); sp += 2;
         int max_gs_groups = gs_group_count < ctx->actual_groups ? gs_group_count : ctx->actual_groups;
         for (int gi = 0; gi < max_gs_groups; gi++) {
+            /* 组头固定 16 字节（groupId2 + fldCount2 + entryCount4 + stride4 + flags4），
+             * 越界即停止解析，避免 READ_LE* 直接读出缓冲区（堆越界）。 */
+            if (sp + 16 > ctx->data_size) break;
+            /* groupId = 该组自己的 one-hot 版本位掩码（FORMAT §10.2） */
+            if (gi < ctx->actual_groups) ctx->group_ids[gi] = READ_LE16(d + sp);
             sp += 2;
             int fld_count = READ_LE16(d + sp); sp += 2;
             sp += 4;
             int stride = READ_LE32(d + sp); sp += 4;
             sp += 4;
+            /* 每字段 12 字节，先整体验边界再进入内层循环 */
+            if (fld_count < 0 || (uint64_t)fld_count * 12 > ctx->data_size - sp) break;
             if (gi < ctx->actual_groups) {
+                schema_fld_count[gi] = fld_count;
                 ctx->group_strides[gi] = stride;
                 ctx->group_field_widths[gi] = malloc(fld_count * sizeof(int));
                 ctx->group_field_offsets[gi] = malloc(fld_count * sizeof(int));
                 ctx->group_field_native[gi] = malloc(fld_count * sizeof(int));
                 ctx->group_field_native_type[gi] = malloc(fld_count * sizeof(int));
-                ctx->group_field_ids[gi] = malloc(fld_count * sizeof(uint16_t));
                 ctx->group_pool_section_ids[gi] = malloc(fld_count * sizeof(uint32_t));
                 for (int fi = 0; fi < fld_count; fi++) {
-                    ctx->group_field_ids[gi][fi] = READ_LE16(d + sp); sp += 2;
+                    /* fieldId 只是槽位序号 0..N-1，不带跨档语义，读过即弃。 */
+                    sp += 2;
                     ctx->group_field_widths[gi][fi] = d[sp]; sp++;
                     int field_flags = d[sp]; sp++;
                     ctx->group_field_native[gi][fi] = (field_flags & 0x01) != 0;
@@ -1451,69 +1608,171 @@ int qzdb_init_ex(qzdb_reader_t* ctx, const char* db_path, int verify_crc) {
         }
     }
 
+    /* 关键不变量：字段数有两个来源——GEO_ENTRIES 表的 group_field_counts[g]
+     * 与 GROUP_SCHEMA 的 fld_count。畸形文件可让二者不一致，而所有消费方
+     * （ensure_pools_loaded / build_geo 等）都按 group_field_counts[g] 遍历并
+     * 直接下标访问这几个数组 —— 长度不足即堆越界读（ASAN 可复现）。
+     * 这里一次性对齐：不一致就丢弃 schema 版本、回退到 pool_idx_size 默认布局，
+     * 使 sizeof(array) == group_field_counts[g] 恒成立。 */
     for (int g = 0; g < ctx->actual_groups; g++) {
-        if (ctx->group_strides[g] == 0) ctx->group_strides[g] = ctx->group_field_counts[g] * ctx->pool_idx_size;
-        if (!ctx->group_field_widths[g]) { ctx->group_field_widths[g] = malloc(ctx->group_field_counts[g] * sizeof(int));
-            for (int i = 0; i < ctx->group_field_counts[g]; i++) ctx->group_field_widths[g][i] = ctx->pool_idx_size; }
-        if (!ctx->group_field_offsets[g]) { ctx->group_field_offsets[g] = malloc(ctx->group_field_counts[g] * sizeof(int));
-            for (int i = 0; i < ctx->group_field_counts[g]; i++) ctx->group_field_offsets[g][i] = i * ctx->pool_idx_size; }
-        if (!ctx->group_field_native[g]) ctx->group_field_native[g] = calloc(ctx->group_field_counts[g], sizeof(int));
-        if (!ctx->group_field_native_type[g]) ctx->group_field_native_type[g] = calloc(ctx->group_field_counts[g], sizeof(int));
+        int fc = ctx->group_field_counts[g];
+        if (schema_fld_count[g] >= 0 && schema_fld_count[g] != fc) {
+            free(ctx->group_field_widths[g]);       ctx->group_field_widths[g] = NULL;
+            free(ctx->group_field_offsets[g]);      ctx->group_field_offsets[g] = NULL;
+            free(ctx->group_field_native[g]);       ctx->group_field_native[g] = NULL;
+            free(ctx->group_field_native_type[g]);  ctx->group_field_native_type[g] = NULL;
+            free(ctx->group_pool_section_ids[g]);   ctx->group_pool_section_ids[g] = NULL;
+            ctx->group_strides[g] = 0;  /* 触发下方按默认布局重算 */
+        }
+        if (ctx->group_strides[g] == 0) ctx->group_strides[g] = fc * ctx->pool_idx_size;
+        if (!ctx->group_field_widths[g]) { ctx->group_field_widths[g] = malloc((fc ? fc : 1) * sizeof(int));
+            for (int i = 0; i < fc; i++) ctx->group_field_widths[g][i] = ctx->pool_idx_size; }
+        if (!ctx->group_field_offsets[g]) { ctx->group_field_offsets[g] = malloc((fc ? fc : 1) * sizeof(int));
+            for (int i = 0; i < fc; i++) ctx->group_field_offsets[g][i] = i * ctx->pool_idx_size; }
+        if (!ctx->group_field_native[g]) ctx->group_field_native[g] = calloc(fc ? fc : 1, sizeof(int));
+        if (!ctx->group_field_native_type[g]) ctx->group_field_native_type[g] = calloc(fc ? fc : 1, sizeof(int));
+        if (!ctx->group_pool_section_ids[g]) ctx->group_pool_section_ids[g] = calloc(fc ? fc : 1, sizeof(uint32_t));
     }
 
-    /* Parse meta TLV */
-    ctx->field_names = NULL; ctx->float_field_flags = NULL; ctx->version_name = NULL; ctx->description = NULL;
-    char* meta_primary = NULL;
+    /* ---- Metadata TLV（FORMAT §8.1） ---- */
+    char*  meta_primary    = NULL;   /* type 4: primary_version */
+    char** meta_names      = NULL;   /* type 2: field_names 切分结果 */
+    int    meta_name_count = 0;
     if (ctx->flags & 4 && ctx->off_meta > 0 && ctx->off_meta + 4 <= ctx->data_size) {
         uint64_t pos = ctx->off_meta;
         while (pos + 4 <= ctx->data_size) {
             int t = d[pos]; int length = READ_LE16(d + pos + 2);
             if (t == 0 || length == 0) break;
-            if (pos + 4 + length > ctx->data_size) break;
-            char* val = malloc(length + 1); memcpy(val, d + pos + 4, length); val[length] = '\0';
+            /* 伪造的 TLV 可以声明一个越过 EOF 的长度；直接停止遍历。 */
+            if (pos + 4 + (uint64_t)length > ctx->data_size) break;
+            char* val = malloc((size_t)length + 1);
+            if (!val) break;
+            memcpy(val, d + pos + 4, (size_t)length); val[length] = '\0';
             if (t == 1) { free(ctx->version_name); ctx->version_name = val; }
             else if (t == 2) {
-                ctx->field_names = calloc(ctx->group_field_counts[0], sizeof(char*));
-                ctx->float_field_flags = calloc(ctx->group_field_counts[0], sizeof(int));
-                ctx->field_count = ctx->group_field_counts[0]; int idx = 0; const char* p = val;
-                while (idx < ctx->group_field_counts[0]) {
-                    const char* start = p; while (*p && *p != '|') p++;
-                    size_t tok_len = (size_t)(p - start); char* token = malloc(tok_len + 1);
-                    if (!token) break; memcpy(token, start, tok_len); token[tok_len] = '\0';
-                    ctx->field_names[idx] = token;
-                    if (strcmp(token, "longitude") == 0 || strcmp(token, "latitude") == 0) ctx->float_field_flags[idx] = 1;
-                    idx++; if (*p == '|') p++; else break;
+                /* 重复 type 2 时丢弃前一份，避免泄漏 */
+                for (int i = 0; i < meta_name_count; i++) free(meta_names[i]);
+                free(meta_names); meta_names = NULL; meta_name_count = 0;
+                int cnt = 1;
+                for (const char* q = val; *q; q++) if (*q == '|') cnt++;
+                meta_names = calloc((size_t)cnt, sizeof(char*));
+                if (meta_names) {
+                    const char* seg = val; int idx = 0;
+                    while (idx < cnt) {
+                        const char* q = seg; while (*q && *q != '|') q++;
+                        size_t tok_len = (size_t)(q - seg);
+                        char* token = malloc(tok_len + 1);
+                        if (!token) break;
+                        memcpy(token, seg, tok_len); token[tok_len] = '\0';
+                        meta_names[idx++] = token;
+                        if (*q == '|') seg = q + 1; else break;
+                    }
+                    meta_name_count = idx;
                 }
                 free(val);
-            } else if (t == 3) { free(ctx->description); ctx->description = val; }
+            }
+            else if (t == 3) { free(ctx->description); ctx->description = val; }
             else if (t == 4) { free(meta_primary); meta_primary = val; }
-            else free(val);
-            pos += 4 + length;
+            else free(val);   /* 未知 type 按设计跳过 */
+            pos += 4 + (uint64_t)length;
         }
     }
 
-    if (!ctx->field_names) {
-        ctx->field_names = calloc(ctx->group_field_counts[0], sizeof(char*));
-        ctx->float_field_flags = calloc(ctx->group_field_counts[0], sizeof(int));
-        ctx->field_count = ctx->group_field_counts[0];
-        for (int i = 0; i < ctx->group_field_counts[0]; i++) { char buf[32]; snprintf(buf, sizeof(buf), "field_%d", i); ctx->field_names[i] = strdup(buf); }
+    /* Metadata 里的档次名：type 4 优先，其次只有一项的 type 1 列表。 */
+    char meta_edition[64]; meta_edition[0] = '\0';
+    if (meta_primary && meta_primary[0]) {
+        if (!single_version_token(meta_primary, meta_edition, sizeof(meta_edition)))
+            meta_edition[0] = '\0';
+    } else if (ctx->version_name && ctx->version_name[0]) {
+        if (!single_version_token(ctx->version_name, meta_edition, sizeof(meta_edition)))
+            meta_edition[0] = '\0';
     }
 
-    /* Build normalized field name index once (spec §6.1 O(1) mandate) */
-    ctx->norm_field_names = calloc(ctx->field_count ? ctx->field_count : 1, sizeof(char*));
-    for (int i = 0; i < ctx->field_count; i++) {
-        const char* fn = ctx->field_names[i] ? ctx->field_names[i] : "";
-        size_t need = strlen(fn) + 1; char* n = malloc(need); size_t j = 0;
-        for (size_t k = 0; fn[k]; k++) { char c = fn[k]; if (c == '_' || c == '-') continue; if (c >= 'A' && c <= 'Z') c = (char)(c - 'A' + 'a'); n[j++] = c; }
-        n[j] = '\0'; ctx->norm_field_names[i] = n;
+    /* ---- 逐组解析 edition + 字段名（FORMAT §10.3 统一契约） ----
+     *
+     *   edition      1. GROUP_SCHEMA.groupId / Header.VersionMask 的 one-hot 位
+     *                2. Metadata primary_version，或只有一项的 version_list
+     *                3. 字段数唯一匹配（兜底）
+     *                4. ""（unknown）—— 判定不出就不臆造
+     *   field_names  1. Metadata field_names（基数与该组一致时）
+     *                2. 已知档次且基数一致时用规范表
+     *                3. field_0..field_N-1 占位符
+     */
+    ctx->group_field_names     = calloc((size_t)ctx->actual_groups, sizeof(char**));
+    ctx->group_editions        = calloc((size_t)ctx->actual_groups, sizeof(const char*));
+    ctx->group_edition_sources = calloc((size_t)ctx->actual_groups, sizeof(const char*));
+    ctx->group_name_sources    = calloc((size_t)ctx->actual_groups, sizeof(const char*));
+    if (!ctx->group_field_names || !ctx->group_editions ||
+        !ctx->group_edition_sources || !ctx->group_name_sources) {
+        for (int i = 0; i < meta_name_count; i++) free(meta_names[i]);
+        free(meta_names); free(meta_primary);
+        munmap(ctx->data, ctx->data_size); ctx->data = NULL;
+        return QZDB_ERR_OUT_OF_MEMORY;
     }
-    norm_map_build(ctx);  /* O(1) hash table */
 
-    /* Edition */
-    if (meta_primary && meta_primary[0]) { ctx->edition = meta_primary; meta_primary = NULL; }
-    else if (ctx->version_name && ctx->version_name[0]) ctx->edition = strdup(ctx->version_name);
-    else { const char* inf = infer_edition(ctx->field_count, ctx->norm_field_names); ctx->edition = strdup(inf ? inf : "std"); }
+    for (int g = 0; g < ctx->actual_groups; g++) {
+        int nf = ctx->group_field_counts[g];
+
+        /* edition：先用本组自己的掩码，再回落到文件级掩码 */
+        uint16_t mask = ctx->group_ids[g] ? ctx->group_ids[g] : ctx->version_mask;
+        const char* edition = qzdb_edition_from_mask(mask);
+        const char* source  = QZDB_EDITION_SOURCE_VERSION_MASK;
+        if (!edition[0] && meta_edition[0]) {
+            /* 只接受规范表里已知的档次名，避免把任意字符串当档次外传 */
+            for (int i = 0; i < 5; i++) {
+                if (strcmp(meta_edition, EDITION_BY_BIT[i]) == 0) {
+                    edition = EDITION_BY_BIT[i];
+                    source  = QZDB_EDITION_SOURCE_METADATA;
+                    break;
+                }
+            }
+        }
+        if (!edition[0]) {
+            edition = edition_by_field_count(nf);
+            source  = edition[0] ? QZDB_EDITION_SOURCE_INFERRED : QZDB_EDITION_SOURCE_UNKNOWN;
+        }
+
+        /* 字段名：分配 nf+1 并在末尾保留 calloc 的 0 作为 NULL 终止符，
+         * 使 qzdb_get_field_names() 返回 NULL 终止数组（常见 C 契约）。
+         * 仅借用、不深拷贝，释放仍由 qzdb_free 负责。 */
+        char** names = calloc((size_t)(nf + 1), sizeof(char*));
+        if (!names) {
+            for (int i = 0; i < meta_name_count; i++) free(meta_names[i]);
+            free(meta_names); free(meta_primary);
+            munmap(ctx->data, ctx->data_size); ctx->data = NULL;
+            return QZDB_ERR_OUT_OF_MEMORY;
+        }
+        int canon_n = 0;
+        const char* const* canon = edition_field_names(edition, &canon_n);
+        const char* name_source;
+        if (meta_names && meta_name_count == nf && nf > 0) {
+            for (int i = 0; i < nf; i++) names[i] = strdup(meta_names[i]);
+            name_source = QZDB_FIELD_NAMES_SOURCE_METADATA;
+        } else if (canon && canon_n == nf) {
+            for (int i = 0; i < nf; i++) names[i] = strdup(canon[i]);
+            name_source = QZDB_FIELD_NAMES_SOURCE_EDITION;
+        } else {
+            for (int i = 0; i < nf; i++) {
+                char b[32]; snprintf(b, sizeof(b), "field_%d", i);
+                names[i] = strdup(b);
+            }
+            name_source = QZDB_FIELD_NAMES_SOURCE_SYNTHETIC;
+        }
+
+        ctx->group_field_names[g]     = names;
+        ctx->group_editions[g]        = edition;
+        ctx->group_edition_sources[g] = source;
+        ctx->group_name_sources[g]    = name_source;
+    }
+    for (int i = 0; i < meta_name_count; i++) free(meta_names[i]);
+    free(meta_names);
     free(meta_primary);
+
+    /* 绑定活动组的字段名视图 + O(1) 归一化索引（spec §6.1） */
+    if (apply_group_meta(ctx, ctx->group_index) != QZDB_OK) {
+        munmap(ctx->data, ctx->data_size); ctx->data = NULL;
+        return QZDB_ERR_OUT_OF_MEMORY;
+    }
 
     /* Build date */
     if (ctx->build_date > 0) {
@@ -1523,12 +1782,17 @@ int qzdb_init_ex(qzdb_reader_t* ctx, const char* db_path, int verify_crc) {
         ctx->data_month = strdup(b1); ctx->build_time_str = strdup(b2);
     } else { ctx->data_month = strdup(""); ctx->build_time_str = strdup(""); }
 
-    /* Dimension mask repair */
+    /* Dimension mask repair —— 只看该组解析出来的字段名里有没有 asn。
+     * fieldId 只是槽位序号（0..N-1），不带任何跨档语义，绝不可用来判定维度。 */
     for (int g = 0; g < ctx->actual_groups; g++) {
         if (ctx->group_dim_masks[g] != 0) continue;
         int has_asn = 0;
-        if (ctx->group_field_ids[g]) { for (int fi = 0; fi < ctx->group_field_counts[g]; fi++) if (ctx->group_field_ids[g][fi] == 1) { has_asn = 1; break; } }
-        else if (g == 0 && ctx->field_names) { for (int fi = 0; fi < ctx->field_count; fi++) if (ctx->field_names[fi] && strcmp(ctx->field_names[fi], "asn") == 0) { has_asn = 1; break; } }
+        char** gn = ctx->group_field_names[g];
+        for (int fi = 0; gn && fi < ctx->group_field_counts[g]; fi++) {
+            char norm[64];
+            normalize_field_name(gn[fi] ? gn[fi] : "", norm, sizeof(norm));
+            if (strcmp(norm, "asn") == 0) { has_asn = 1; break; }
+        }
         ctx->group_dim_masks[g] = has_asn ? 0x02 : 0x01;
     }
 
@@ -1561,16 +1825,23 @@ void qzdb_free(qzdb_reader_t* ctx) {
         free(ctx->group_pools); free(ctx->group_pool_counts);
     }
     free(ctx->group_entry_offsets);
-    int gfc0 = ctx->group_field_counts ? ctx->group_field_counts[0] : 0;
-    free(ctx->group_field_counts); free(ctx->group_entry_counts); free(ctx->group_dim_masks); free(ctx->group_strides);
     for (int g = 0; g < ctx->actual_groups; g++) {
         free(ctx->group_field_widths[g]); free(ctx->group_field_offsets[g]);
         free(ctx->group_field_native[g]); free(ctx->group_field_native_type[g]);
-        free(ctx->group_field_ids[g]); free(ctx->group_pool_section_ids[g]);
+        free(ctx->group_pool_section_ids[g]);
+        /* 每组字段名表（field_names 只是其中一行的借用，不重复释放） */
+        if (ctx->group_field_names && ctx->group_field_names[g]) {
+            for (int i = 0; i < ctx->group_field_counts[g]; i++) free(ctx->group_field_names[g][i]);
+            free(ctx->group_field_names[g]);
+        }
     }
+    free(ctx->group_field_counts); free(ctx->group_entry_counts); free(ctx->group_dim_masks); free(ctx->group_strides);
     free(ctx->group_field_widths); free(ctx->group_field_offsets); free(ctx->group_field_native);
-    free(ctx->group_field_native_type); free(ctx->group_field_ids); free(ctx->group_pool_section_ids);
-    if (ctx->field_names) { for (int i = 0; i < gfc0; i++) free(ctx->field_names[i]); free(ctx->field_names); }
+    free(ctx->group_field_native_type); free(ctx->group_ids); free(ctx->group_pool_section_ids);
+    free(ctx->group_field_names);
+    /* group_editions / *_sources 指向静态字符串，只释放外层指针数组 */
+    free(ctx->group_editions); free(ctx->group_edition_sources); free(ctx->group_name_sources);
+    ctx->field_names = NULL;
     free(ctx->float_field_flags); free(ctx->version_name); free(ctx->description);
     free(ctx->edition); free(ctx->data_month); free(ctx->build_time_str);
     if (ctx->norm_field_names) { for (int i = 0; i < ctx->field_count; i++) free(ctx->norm_field_names[i]); free(ctx->norm_field_names); }
@@ -1641,41 +1912,17 @@ int qzdb_reload(qzdb_reader_t* ctx, const char* db_path) {
 /* ========================================================================
  * Singleton instance
  * ======================================================================== */
-static qzdb_reader_t g_instance;
-static int g_instance_inited = 0;
-
-qzdb_reader_t* qzdb_instance(const char* db_path) {
-    if (!db_path) return NULL;
-    pthread_mutex_lock(&g_instance_mutex);
-    if (!g_instance_inited) {
-        int result = qzdb_init(&g_instance, db_path);
-        if (result != QZDB_OK) { pthread_mutex_unlock(&g_instance_mutex); return NULL; }
-        g_instance_inited = 1;
-    }
-    pthread_mutex_unlock(&g_instance_mutex);
-    return &g_instance;
-}
-
-int qzdb_instance_load(const char* db_path) {
-    if (!db_path) return QZDB_ERR_INVALID_PARAM;
-    qzdb_reader_t tmp;
-    memset(&tmp, 0, sizeof(tmp));
-    int result = qzdb_init(&tmp, db_path);
-    if (result != QZDB_OK) return result;
-    pthread_mutex_lock(&g_instance_mutex);
-    if (g_instance_inited) qzdb_free(&g_instance);
-    memcpy(&g_instance, &tmp, sizeof(g_instance));
-    g_instance_inited = 1;
-    pthread_mutex_unlock(&g_instance_mutex);
-    return QZDB_OK;
-}
-
 /* ========================================================================
  * Group index setter
  * ======================================================================== */
 int qzdb_set_group_index(qzdb_reader_t* ctx, int group_index) {
     if (!ctx) return QZDB_ERR_INVALID_PARAM;
     if (group_index < 0 || group_index >= ctx->actual_groups) return QZDB_ERR_INVALID_PARAM;
+    if (group_index == ctx->group_index) return QZDB_OK;
+    /* 字段名/归一化索引/edition 都是按组解析的，切组必须同步重绑，
+     * 否则 get_field_names() 与实际读取的组会错位。 */
+    int rc = apply_group_meta(ctx, group_index);
+    if (rc != QZDB_OK) return rc;
     ctx->group_index = group_index;
     return QZDB_OK;
 }

@@ -13,7 +13,7 @@ func main() {
 		return
 	}
 	dbPath := os.Args[1]
-	searcher, err := qzdb.Instance(dbPath)
+	searcher, err := qzdb.Open(dbPath, 0, true)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Load error: %v\n", err)
 		return

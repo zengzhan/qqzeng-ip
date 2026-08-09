@@ -96,7 +96,7 @@ Header 位于文件起始 0 字节处，固定占用 192 字节。
 | 0 | 4 | ASCII | **Magic** | `QZDB` |
 | 4 | 1 | uint8 | **HeaderVersion** | **最新统一写入值固定为 `1`**。统一了所有的老旧格式，去除了冗余的历史兼容分支。 |
 | 5 | 1 | uint8 | Reserved | 填 0 |
-| 6 | 2 | uint16 LE | **VersionMask** | 文件中包含的版本位掩码 |
+| 6 | 2 | uint16 LE | **VersionMask** | 版本档位 one-hot 位掩码（bit0=std=1 / bit1=asn=2 / bit2=pro=4 / bit3=max=8 / bit4=ult=16），与 `GROUP_SCHEMA.groupId` 恒等；见 §3.1 |
 | 8 | 2 | uint16 LE | **Flags** | 功能标志位（见 §3.2） |
 | 10 | 1 | uint8 | **V4JumpBits** | V4 跳表位宽，固定 `16` |
 | 11 | 1 | uint8 | **V6JumpBits** | V6 跳表位宽，动态估算选择 `8 ~ 20`（常见 16：保证高频 GUA 查询跳过 16 层以上二叉树检索，极速寻址；有效范围见 §4.2） |
@@ -130,15 +130,24 @@ Header 位于文件起始 0 字节处，固定占用 192 字节。
 | 168 | 24 | uint48×4 | **GeoEntryOffsets[4]** | 每组 GeoEntry 相对 OffsetGeoEntries 的偏移（uint48 LE × 4） |
 | 192 | — | — | 结束 | Header 固定 192 字节 |
 
-### 3.1 VersionMask 定义
+### 3.1 VersionMask 定义（★ one-hot 版本档位掩码）
+
+`VersionMask` **不是**「hasStd/hasUlt 标志集合」，而是**单比特 one-hot 版本档位掩码**——恰好有且只有 1 个比特置位，指示该文件的「版本档位（edition tier）」：
 
 ```
-bit0: hasStd  — 文件中包含 std 版本
-bit1: hasUlt  — 文件中包含 ult 版本
-bit2: hasAsn  — 文件中包含 asn 版本
-bit3: hasMax  — 文件中包含 max 版本
-bit4~15: reserved
+bit0 (0x01): std   — std 档（6 字段）
+bit1 (0x02): asn   — asn 档（8 字段）
+bit2 (0x04): pro   — pro 档（11 字段）
+bit3 (0x08): max   — max 档（15 字段）
+bit4 (0x10): ult   — ult 档（25 字段）
+bit5~15:    reserved
 ```
+
+**权威不变量**：`Header.VersionMask` ≡ `GROUP_SCHEMA.groupId`（每段头 2 字节）。两者恒等，是文件版本档位的最强信号。
+
+- 一个文件在实践上为**单档位**（所有真实库均为干净 one-hot）；多组文件中每组 `groupId` 均等于该组档位 one-hot，且与 `VersionMask` 一致。
+- 版本解析以 `groupId` 为准（回退到 `VersionMask`）；**严禁**将 `VersionMask` 当作「多个版本同时存在的位集合」去 OR 解析。
+- 档位 → 字段数映射（与 §6.3 一致）：`std=6 / asn=8 / pro=11 / max=15 / ult=25`。
 
 ### 3.2 Flags 定义
 
@@ -388,13 +397,13 @@ PoolIdxSize 全局统一（所有版本组、所有维度使用相同宽度）�
 ```
 ushort LE:  groupSchemaCount   ← 版本组数（与 GroupMetadataTable.groupCount 一致）
 For each group:
-  ushort LE:  groupId
+  ushort LE:  groupId          ← 该版本组的 one-hot 版本档位掩码（见 §3.1），与 Header.VersionMask 恒等
   ushort LE:  fieldCount
   uint32 LE:  entryCount
   uint32 LE:  stride            ← 该行字节宽 = Σ(width)
   uint32 LE:  flags             ← 保留（当前 0）
   For each field:
-    ushort LE:  fieldId
+    ushort LE:  fieldId         ← 字段槽位序号（0..fieldCount-1），**无跨档语义**；SDK 解析时直接跳过（sp += 2），不得据此推断版本/维度
     byte:       width           ← 该字段槽位字节宽（池索引宽 或 原生值宽）
     byte:       fieldFlags      ★ P1-B 扩展位（见 §11.1）
     uint32 LE:  offset          ← 字段在 GeoEntry 行内的字节偏移
@@ -402,6 +411,8 @@ For each group:
 ```
 
 SDK 应依据 `offset` + `width` 切片每个字段槽位；是否为原生标量由 `fieldFlags.bit0` 决定。
+
+> **`fieldId` 纪律（★ 重要）**：`fieldId` 仅是「该组内的第几个槽位」，**完全不等于**版本含义、不等于 `asn` 维度标识、也不等价于 `groupIndex`。任何「`fieldId==1` ⇒ asn」或「`fieldId` 决定维度」的推断都是错误的。维度/版本判定只能依据 `groupId` / `VersionMask` / Metadata（见 §10.3），字段语义只能依据该组 `field_names` 归一化后是否含 `asn` 等关键字（见 §10.1.c）。
 
 ### 6.6 原生类型标量字段（★ HeaderVersion 6，P1-B）
 
@@ -683,10 +694,14 @@ QZDB 的查询复杂度**不是**记录数 N 的对数 `O(log N)`，而是**由 
 7. 读取 GroupMetadataTable（**§6.2 固定布局，无版本分支**）：
    a. 定位到 OffsetGeoEntries
    b. 每组按固定宽度顺序读取：`1B fieldCount` → `4B uint32 LE entryCount` → `2B uint16 LE dimensionMask`
-   c. 若某组 `dimensionMask == 0`（异常/旧文件），依据 GROUP_SCHEMA 字段 ID 或 Metadata `field_names` 是否含 `asn`（fieldId=1）修复为 `0x02`（asn 维度），否则 `0x01`（geo 维度）；**严禁硬编码 `(groupIndex != 2) ? 0x01 : 0x02`**
-   d. 读取 GeoEntryOffsets[i]（每组起始偏移）
+   c. 读取 GeoEntryOffsets[i]（每组起始偏移）
 8. [惰性加载] 读取 String Pools（按版本组 + 维度）
-9. [推荐] 从 Metadata 读取 field_names 确定字段映射
+9. 读取 GROUP_SCHEMA（§6.5，固定布局，无版本分支）：每组捕获 `groupId`（one-hot 档位掩码）、`fieldCount`、`stride`，逐字段按 `offset`+`width` 跳过 `fieldId` 读取布局。
+10. 读取 Metadata（§8，TLV）：解析 `version_list` / `field_names` / `primary_version`（见 §10.3 来源优先级），确定每组的 `edition` 与 `field_names`，并标注 `edition_source` / `field_names_source`。
+11. **dimensionMask 修复**（仅当某组 `dimensionMask == 0`，异常/旧文件）：**依据该组 §10 步骤 10 已解析出的 `field_names`（归一化小写后）是否含关键字 `asn`**：
+      - 含 `asn` → `0x02`（asn 维度，使用 `IPRow.asn_id`）
+      - 不含 `asn` → `0x01`（geo 维度，使用 `IPRow.geo_id`）
+      **判定只看该组字段名，绝不看 `fieldId`、绝不硬编码 `groupIndex`、绝不写 `(groupIndex != 2) ? 0x01 : 0x02`**。
 ```
 
 ### 10.2 GeoEntry 版本组索引约定
@@ -702,12 +717,28 @@ QZDB 的查询复杂度**不是**记录数 N 的对数 `O(log N)`，而是**由 
 
 **SDK 不应硬编码 groupIndex → 版本关系**，应通过 Metadata 读取。
 
-### 10.3 字段名来源优先级
+### 10.3 版本档位（edition）与字段名来源优先级（★ 统一契约）
 
-| 优先级 | 来源 | 说明 |
-|--------|------|------|
-| 1（最高） | Metadata type=2 | `field_names.split('|')` |
-| 2 | 硬编码版本→字段映射 | 仅当 Metadata 不存在时回退 |
+SDK 必须按以下统一契约解析每个版本组的 `edition`（档位名）与 `field_names`，并在对外暴露的 `edition_source` / `field_names_source` 中标注来源标记（8 语言字符串常量完全一致）：
+
+**A. edition 解析优先级**（从高到低，命中即停）：
+
+| 优先级 | 来源标记 | 判定逻辑 |
+|--------|----------|----------|
+| 1（最高） | `EDITION_SOURCE_VERSION_MASK` | `groupId`（回退 `VersionMask`）为干净 one-hot → 直接映射档位名（std/ult/asn/max/pro） |
+| 2 | `EDITION_SOURCE_METADATA` | Metadata `primary_version` 非空，或 `version_list` 为单一档位 → 取其档位名 |
+| 3 | `EDITION_SOURCE_INFERRED` | 该组 `fieldCount` 能唯一匹配某档位字段数（见 §6.3：std=6/ult=15/asn=8/max=25/pro=11）→ 推断档位名 |
+| 4（兜底） | `EDITION_SOURCE_UNKNOWN` | 以上均无法判定 → 返回 `""`（**不臆造**档位名） |
+
+**B. field_names 解析优先级**（从高到低，命中即停）：
+
+| 优先级 | 来源标记 | 判定逻辑 |
+|--------|----------|----------|
+| 1（最高） | `FIELD_NAMES_SOURCE_METADATA` | Metadata `type=2`（field_names）存在且其**基数 = 该组 fieldCount** → 直接采用 |
+| 2 | `FIELD_NAMES_SOURCE_EDITION` | 已由 A 判定出档位 → 采用该档位的规范字段表（§6.3，以 `QZDBBuilder.VersionFieldNames` 为唯一真源） |
+| 3（兜底） | `FIELD_NAMES_SOURCE_SYNTHETIC` | 以上均无 → 生成占位符 `field_0, field_1, … field_{N-1}`（N = fieldCount） |
+
+> **统一契约铁律**：8 种语言的解析顺序、来源标记字符串、兜底行为必须逐项一致；禁止任何语言用 `fieldId`、`groupIndex` 推断档位/维度；禁止臆造未知档位名（未知即 `""`）。真实库实测：`edition_source = EDITION_SOURCE_VERSION_MASK`、`field_names_source = FIELD_NAMES_SOURCE_METADATA`（mask 与 Metadata 一致）。
 
 ### 10.4 PoolIdxSize 选择逻辑
 

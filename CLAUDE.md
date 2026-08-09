@@ -1,4 +1,4 @@
-# qzdb-searcher — Claude Code Instructions
+# qzdb — Claude Code Instructions
 
 ## Project Overview
 
@@ -23,7 +23,7 @@ Cross-platform IP geolocation SDK supporting 8 languages: C, C#, Go, Java, Node.
 - C: `multi-lang/c/qzdb_reader.c` + `qzdb_reader.h`
 - C#: `multi-lang/netcore/QzdbReader.cs`
 - Go: `multi-lang/go/qzdb/`
-- Java: `multi-lang/java/src/`
+- Java: `multi-lang/java/src/main/java/com/qqzeng/qzdb/`
 - Node.js: `multi-lang/nodejs/qzdb.js`
 - PHP: `multi-lang/php/QzdbReader.php`
 - Python: `multi-lang/python/qzdb.py`

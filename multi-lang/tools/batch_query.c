@@ -34,7 +34,8 @@ static void geo_to_pipe(const qzdb_reader_t* ctx, const qzdb_geo_info_t* r, char
     buf[pos] = '\0';
 }
 
-static int process_v4(const qzdb_reader_t* ctx, const char* test_path, const char* out_path) {
+/* ctx 不可声明为 const：qzdb_find_* 经 resolve_row_id_cached 写入内部行缓存 */
+static int process_v4(qzdb_reader_t* ctx, const char* test_path, const char* out_path) {
     FILE* f = fopen(test_path, "r");
     if (!f) { fprintf(stderr, "  C: Cannot open %s\n", test_path); return 0; }
     
@@ -66,7 +67,7 @@ static int process_v4(const qzdb_reader_t* ctx, const char* test_path, const cha
     return count;
 }
 
-static int process_v6(const qzdb_reader_t* ctx, const char* test_path, const char* out_path) {
+static int process_v6(qzdb_reader_t* ctx, const char* test_path, const char* out_path) {
     FILE* f = fopen(test_path, "r");
     if (!f) return 0;
     
@@ -80,8 +81,13 @@ static int process_v6(const qzdb_reader_t* ctx, const char* test_path, const cha
         if (nl) *nl = '\0';
         if (line[0] == '\0') continue;
         
-        uint64_t high, low;
-        sscanf(line, "%llu:%llu", &high, &low);
+        /* 未检查 sscanf 返回值会让 high/low 保持未初始化（UB），必须显式判定 */
+        unsigned long long high = 0, low = 0;
+        if (sscanf(line, "%llu:%llu", &high, &low) != 2) {
+            fprintf(out, "%s|\n", line);
+            count++;
+            continue;
+        }
 
         /* SDK expects a 16-byte big-endian IPv6 address (high:low, 8 bytes each) */
         uint8_t ip_bin[16];

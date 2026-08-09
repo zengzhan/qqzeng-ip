@@ -27,14 +27,14 @@ For each language implementation under `multi-lang/`, verify and update:
 
 | Language | Key File(s) | What to Check |
 |----------|-------------|---------------|
-| C | `multi-lang/c/qzdb_searcher.c` | mmap layout, field offsets, buffer parsing |
-| C# | `multi-lang/netcore/QzdbSearcher.cs` | BinaryReader offsets, field names |
+| C | `multi-lang/c/qzdb_reader.c` | mmap layout, field offsets, buffer parsing |
+| C# | `multi-lang/netcore/QzdbReader.cs` | BinaryReader offsets, field names |
 | Go | `multi-lang/go/qzdb/` | mmap mapping, struct field alignment |
-| Java | `multi-lang/java/src/` | ByteBuffer layout, field indices |
+| Java | `multi-lang/java/src/main/java/com/qqzeng/qzdb/QzdbReader.java` | ByteBuffer layout, field indices |
 | Node.js | `multi-lang/nodejs/qzdb.js` | Buffer slicing, offset arithmetic |
-| PHP | `multi-lang/php/QzdbSearcher.php` | Unpack format strings, offset calculations |
+| PHP | `multi-lang/php/QzdbReader.php` | Unpack format strings, offset calculations |
 | Python | `multi-lang/python/qzdb.py` | struct.unpack patterns, mmap offsets |
-| Rust | `multi-lang/rust/src/` | repr(C) structs, memmap2 mapping |
+| Rust | `multi-lang/rust/src/lib.rs` | repr(C) structs, memmap2 mapping |
 
 ### Step 3: Update Verification Suite
 - Add new test vectors to `multi-lang/tools/golden_vectors.json` if needed

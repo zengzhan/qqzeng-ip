@@ -187,7 +187,7 @@ func buildSyntheticDBWith(t *testing.T, asName string) []byte {
 	// header
 	copy(blob[0:4], "QZDB")
 	blob[4] = 1
-	binary.LittleEndian.PutUint16(blob[6:], 4)  // version mask
+	binary.LittleEndian.PutUint16(blob[6:], 2)  // version mask: asn=0x02 (NEW one-hot §3.1)
 	binary.LittleEndian.PutUint16(blob[8:], 0x37) // flags V4|V6|meta|v4node24|v6node24
 	blob[10] = 16
 	blob[11] = 16
@@ -242,7 +242,7 @@ func rowSchemaGo() []byte {
 func buildGroupSchemaGo(fields, entryCount int) []byte {
 	out := make([]byte, 0)
 	out = binary.LittleEndian.AppendUint16(out, 1) // groupSchemaCount
-	out = binary.LittleEndian.AppendUint16(out, 4) // groupId
+	out = binary.LittleEndian.AppendUint16(out, 2) // groupId: asn=0x02 (NEW one-hot §3.1)
 	out = binary.LittleEndian.AppendUint16(out, uint16(fields))
 	out = binary.LittleEndian.AppendUint32(out, uint32(entryCount))
 	out = binary.LittleEndian.AppendUint32(out, uint32(fields*2)) // stride

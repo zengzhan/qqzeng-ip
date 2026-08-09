@@ -54,6 +54,68 @@ public class QzdbReader implements AutoCloseable {
         }
     }
 
+    // ------------------------------------------------------------------
+    // 版本档次注册表（FORMAT §3.1 / §10.3）
+    //
+    // 文件是自描述的：Header.VersionMask（偏移 6）与每个 GROUP_SCHEMA.groupId
+    // 都携带 one-hot 档次位掩码。这个位掩码——而不是字段数——才是权威的档次信号。
+    // EDITION_BY_BIT 是规范的「位 -> 名字」注册表；将来新增档次只需在这里追加一位、
+    // 在 EDITION_FIELD_NAMES 追加一行，任何解析代码都不用改。
+    // ------------------------------------------------------------------
+    static final String[] EDITION_BY_BIT = {"std", "asn", "pro", "max", "ult"}; // bit0..bit4
+
+    /** 各档次的规范字段顺序（FORMAT 附录一）。仅在文件没带 Metadata field_names 时使用，绝不覆盖文件自己的名字。 */
+    static final Map<String, String[]> EDITION_FIELD_NAMES = Map.of(
+            "std", new String[]{"continent", "country_code", "country", "province", "city", "isp"},
+            "asn", new String[]{"continent", "country_code", "country", "isp", "asn", "as_name",
+                    "as_domain", "usage_type"},
+            "pro", new String[]{"continent", "country_code", "country", "province", "city", "district",
+                    "geo_id", "longitude", "latitude", "timezone", "isp"},
+            "max", new String[]{"continent", "country_code", "country", "province", "city", "district",
+                    "geo_id", "longitude", "latitude", "timezone", "isp", "asn", "as_name",
+                    "as_domain", "usage_type"},
+            "ult", new String[]{"continent", "continent_en", "country_code", "country_alpha3", "country",
+                    "country_en", "province", "province_en", "city", "city_en", "district",
+                    "district_en", "geo_id", "longitude", "latitude", "timezone", "languages",
+                    "currency_code", "phone_prefix", "emoji_flag", "isp", "asn", "as_name",
+                    "as_domain", "usage_type"});
+
+    // 来源标记。8 种 SDK 里字符串值完全一致，跨语言校验可直接比对。
+    /** 来自 VersionMask / groupId（权威）。 */
+    public static final String EDITION_SOURCE_VERSION_MASK = "version_mask";
+    /** 来自 Metadata primary_version / version_list。 */
+    public static final String EDITION_SOURCE_METADATA = "metadata";
+    /** 兜底：字段数唯一匹配。 */
+    public static final String EDITION_SOURCE_INFERRED = "inferred";
+    /** 确实判定不出来。 */
+    public static final String EDITION_SOURCE_UNKNOWN = "unknown";
+
+    /** 字段名来自文件自己的 Metadata。 */
+    public static final String FIELD_NAMES_SOURCE_METADATA = "metadata";
+    /** 字段名来自已知档次的规范表。 */
+    public static final String FIELD_NAMES_SOURCE_EDITION = "edition";
+    /** 字段名是 field_0..field_N-1 占位符。 */
+    public static final String FIELD_NAMES_SOURCE_SYNTHETIC = "synthetic";
+
+    /** 反向索引：字段数 -> 档次，只在该字段数唯一对应一个档次时才建立。 */
+    private static final Map<Integer, String> EDITION_BY_FIELD_COUNT = buildEditionByFieldCount();
+
+    private static Map<Integer, String> buildEditionByFieldCount() {
+        Map<Integer, String> m = new HashMap<>();
+        for (Map.Entry<String, String[]> e : EDITION_FIELD_NAMES.entrySet()) {
+            int n = e.getValue().length;
+            m.put(n, m.containsKey(n) ? null : e.getKey()); // 基数撞车 -> null（不唯一即弃用）
+        }
+        return m;
+    }
+
+    /** 把 one-hot 档次位掩码解析成档次名；不是 one-hot 就返回 ""。 */
+    static String editionFromMask(int mask) {
+        if (mask <= 0 || (mask & (mask - 1)) != 0) return ""; // 0 或多于一位 -> 不是单一档次
+        int bit = Integer.numberOfTrailingZeros(mask);
+        return bit < EDITION_BY_BIT.length ? EDITION_BY_BIT[bit] : "";
+    }
+
     /**
      * 不可变只读数据快照（构造完成后经 AtomicReference 安全发布，此后只读）。
      */
@@ -105,7 +167,10 @@ public class QzdbReader implements AutoCloseable {
         int[][] groupFieldOffsets;
         boolean[][] groupFieldNative;
         int[][] groupFieldNativeType;
-        int[][] groupFieldIds;
+        /** 每组的 one-hot 档次位掩码（GROUP_SCHEMA.groupId；0 = 未声明）。 */
+        int[] groupIds;
+        /** 逐组解析出的字段名。dimensionMask 修复与跨组查询都要用到非当前组的名字。 */
+        String[][] groupFieldNames;
 
         String[][][] pools;
 
@@ -119,7 +184,10 @@ public class QzdbReader implements AutoCloseable {
         String description;  // Metadata type=3 description（无则 ""）
         String dataMonth;    // Header BuildDate -> "yyyy-MM"（无则 ""）
         String buildTimeStr; // Header BuildDate -> "yyyy-MM-dd"（无则 ""）
-        String edition;      // Metadata type=4 primary_version 优先
+        String edition;      // 按 §10.3 优先级判定：groupId/VersionMask -> Metadata -> 字段数 -> ""
+        String editionSource;    // edition 命中了哪条规则
+        String fieldNamesSource; // fieldNames 是读出来的还是补出来的
+        int versionMask;         // Header 偏移 6：文件级 one-hot 档次位掩码
         String scope;        // 当前格式 Header 尚无 scope 字段，按规范 §13.1 返回 ""
 
         // CRC32（canonical：CRC 字段填 0 计算）。open 校验时顺带得出，否则首次 getFileHash 惰性计算。
@@ -163,6 +231,9 @@ public class QzdbReader implements AutoCloseable {
                 throw new QzdbException(ErrorCode.UNSUPPORTED,
                         "Unsupported HeaderVersion: " + fmtVer + " (QZDB requires version 1, see FORMAT.md §10.1)");
             }
+
+            // VersionMask（偏移 6）：文件级 one-hot 档次位掩码，权威档次信号（FORMAT §3.1）。
+            versionMask = readU16(data, 6);
 
             flags = readU16(data, 8);
             hasV4 = (flags & 1) != 0;
@@ -226,14 +297,21 @@ public class QzdbReader implements AutoCloseable {
             checkSection("v6_jump", offV6Jump, (1L << v6JumpBits) * 4);
             checkSection("v6_nodes", offV6Nodes, (long) v6NodeCount * v6NodeSize);
             checkSection("ip_row", offIPRow, (long) rowCount * ipRowSize);
-            if (offGeoEntries > 0 && offGeoEntries >= dataLen) {
+            // 变长区段仅能校验起点（内容长度在各自解析处再逐步校验）；负值一律拒绝，避免后续 (int) 强转成任意下标
+            if (offGeoEntries < 0 || offGeoEntries >= dataLen) {
                 throw new QzdbException(ErrorCode.CORRUPTED, "Section geo_entries out of bounds: " + offGeoEntries);
             }
-            if (offPools > 0 && offPools >= dataLen) {
+            if (offPools < 0 || offPools >= dataLen) {
                 throw new QzdbException(ErrorCode.CORRUPTED, "Section pools out of bounds: " + offPools);
             }
-            if (offMeta > 0 && offMeta > dataLen) {
+            if (offMeta < 0 || offMeta > dataLen) {
                 throw new QzdbException(ErrorCode.CORRUPTED, "Section meta out of bounds: " + offMeta);
+            }
+            if (offRowSchema < 0 || offRowSchema > dataLen) {
+                throw new QzdbException(ErrorCode.CORRUPTED, "Section row_schema out of bounds: " + offRowSchema);
+            }
+            if (offGroupSchema < 0 || offGroupSchema > dataLen) {
+                throw new QzdbException(ErrorCode.CORRUPTED, "Section group_schema out of bounds: " + offGroupSchema);
             }
             if (hasV4 && offV4Jump <= 0) {
                 throw new QzdbException(ErrorCode.CORRUPTED, "Flags indicate V4 data but V4 jump offset is zero");
@@ -322,7 +400,7 @@ public class QzdbReader implements AutoCloseable {
             groupFieldOffsets = new int[groups][];
             groupFieldNative = new boolean[groups][];
             groupFieldNativeType = new int[groups][];
-            groupFieldIds = new int[groups][];
+            groupIds = new int[groups];
 
             for (int gi = 0; gi < groups; gi++) {
                 groupFieldCounts[gi] = data.get(gmOff) & 0xFF;
@@ -334,14 +412,22 @@ public class QzdbReader implements AutoCloseable {
                 groupEntryOffsets[gi] = offGeoEntries + headerGeoOffsets[gi];
             }
 
+            // GROUP_SCHEMA 自带的 fldCount 与 GEO_ENTRIES 表里的 groupFieldCounts 是两个独立来源，
+            // 伪造文件可让二者不一致；此处记录 schema 侧取值，解析完统一做不变量对齐（见下方 reconcile 块）。
+            int[] schemaFldCounts = new int[groups];
+            java.util.Arrays.fill(schemaFldCounts, -1);
+
             if (offGroupSchema > 0 && offGroupSchema + 2 <= dataLen) {
                 int sp = (int) offGroupSchema;
                 int gsGroupCount = readU16(data, sp);
                 sp += 2;
                 int maxGsGroups = Math.min(gsGroupCount, groups);
                 for (int gi = 0; gi < maxGsGroups; gi++) {
-                    if (sp + 14 > dataLen) break;
-                    sp += 2; // groupId
+                    if (sp + 16 > dataLen) break;
+                    // groupId 是本组的 one-hot 档次位掩码（FORMAT §3.1），是该组权威的档次信号，
+                    // 不能跳过——parseMetadata() 依赖它。
+                    groupIds[gi] = readU16(data, sp);
+                    sp += 2;
                     int fldCount = readU16(data, sp);
                     sp += 2;
                     sp += 4; // entryCount
@@ -350,14 +436,14 @@ public class QzdbReader implements AutoCloseable {
                     sp += 4; // flags
                     if (fldCount < 0 || fldCount > 255 || sp + (long) fldCount * 12 > dataLen) break;
 
+                    schemaFldCounts[gi] = fldCount;
                     groupStrides[gi] = stride;
                     int[] widths = new int[fldCount];
                     int[] offsets = new int[fldCount];
                     boolean[] natives = new boolean[fldCount];
                     int[] natTypes = new int[fldCount];
-                    int[] fids = new int[fldCount];
                     for (int fi = 0; fi < fldCount; fi++) {
-                        fids[fi] = readU16(data, sp);
+                        // fieldId 只是槽位序号（0..N-1），不带跨档语义，读过即丢。
                         sp += 2;
                         int w = data.get(sp) & 0xFF;
                         sp += 1;
@@ -374,9 +460,21 @@ public class QzdbReader implements AutoCloseable {
                     groupFieldOffsets[gi] = offsets;
                     groupFieldNative[gi] = natives;
                     groupFieldNativeType[gi] = natTypes;
-                    groupFieldIds[gi] = fids;
                 }
             }
+            // 不变量对齐：schema 的 fldCount 必须与 GEO_ENTRIES 的 groupFieldCounts 一致。
+            // 不一致说明文件被篡改或损坏——丢弃该组的 schema 布局，退回 §9.4 默认布局，
+            // 避免下游按 groupFieldCounts 索引 widths/offsets/native 数组时越界或读到错位字段。
+            for (int g = 0; g < groups; g++) {
+                if (schemaFldCounts[g] >= 0 && schemaFldCounts[g] != groupFieldCounts[g]) {
+                    groupFieldWidths[g] = null;
+                    groupFieldOffsets[g] = null;
+                    groupFieldNative[g] = null;
+                    groupFieldNativeType[g] = null;
+                    groupStrides[g] = 0;
+                }
+            }
+
             // 兜底（stride = fieldCount × poolIdxSize，§9.4）
             for (int g = 0; g < groups; g++) {
                 int fc = groupFieldCounts[g];
@@ -394,6 +492,22 @@ public class QzdbReader implements AutoCloseable {
             }
         }
 
+        /**
+         * 从文件的自描述信息解析出版本档次与字段名。
+         * <p>
+         * 两个答案都只来自文件自己声明的内容，优先级在 8 种 SDK 中完全一致（FORMAT §10.3）：
+         * <pre>
+         *   edition      1. GROUP_SCHEMA.groupId / Header.VersionMask 的 one-hot 位
+         *                2. Metadata primary_version，或只有一项的 version_list
+         *                3. 字段数唯一匹配（兜底）
+         *                4. ""（unknown）—— 判定不出就不臆造
+         *   fieldNames   1. Metadata field_names（基数与该组一致时）
+         *                2. 已知档次且基数一致时用规范表
+         *                3. field_0..field_N-1 占位符
+         * </pre>
+         * {@link QzdbReader#getEditionSource()} / {@link QzdbReader#getFieldNamesSource()}
+         * 报告命中了哪条规则，调用方可据此区分「文件里读出来的」与「SDK 补出来的」。
+         */
         private void parseMetadata() throws QzdbException {
             String metaVersion = "";
             String metaDesc = "";
@@ -412,6 +526,7 @@ public class QzdbReader implements AutoCloseable {
                         case 2 -> metaFields = splitFieldNames(val);
                         case 3 -> metaDesc = val;
                         case 4 -> metaPrimary = val;
+                        default -> { /* 未知 type 按设计跳过（FORMAT §8.1） */ }
                     }
                     cursor += 4 + length;
                 }
@@ -419,39 +534,69 @@ public class QzdbReader implements AutoCloseable {
             this.version = metaVersion;
             this.description = metaDesc;
 
-            int numFields = groupFieldCounts[groupIndex];
-            if (metaFields != null && metaFields.length == numFields) {
-                this.fieldNames = metaFields;
-            } else {
-                this.fieldNames = fallbackFieldNames(numFields);
+            // --- 逐组解析 edition + 字段名 ---------------------------------------
+            groupFieldNames = new String[actualGroups][];
+            String[] groupEditions = new String[actualGroups];
+            String[] groupEditionSources = new String[actualGroups];
+            String[] groupNameSources = new String[actualGroups];
+
+            for (int g = 0; g < actualGroups; g++) {
+                int nFields = groupFieldCounts[g];
+
+                // edition：先用本组自己的掩码，再回落到文件级掩码
+                int mask = groupIds[g] != 0 ? groupIds[g] : versionMask;
+                String edition = editionFromMask(mask);
+                String source = EDITION_SOURCE_VERSION_MASK;
+                if (edition.isEmpty()) {
+                    edition = metaPrimary.trim();
+                    if (edition.isEmpty()) {
+                        String single = singleVersionToken(metaVersion);
+                        if (single != null) edition = single;
+                    }
+                    if (!edition.isEmpty()) source = EDITION_SOURCE_METADATA;
+                }
+                if (edition.isEmpty()) {
+                    String byCount = EDITION_BY_FIELD_COUNT.get(nFields);
+                    edition = byCount == null ? "" : byCount;
+                    source = edition.isEmpty() ? EDITION_SOURCE_UNKNOWN : EDITION_SOURCE_INFERRED;
+                }
+
+                // 字段名
+                String[] names;
+                String namesSource;
+                if (metaFields != null && metaFields.length == nFields) {
+                    names = metaFields.clone();
+                    namesSource = FIELD_NAMES_SOURCE_METADATA;
+                } else {
+                    String[] canonical = EDITION_FIELD_NAMES.get(edition);
+                    if (canonical != null && canonical.length == nFields) {
+                        names = canonical.clone();
+                        namesSource = FIELD_NAMES_SOURCE_EDITION;
+                    } else {
+                        names = new String[nFields];
+                        for (int i = 0; i < nFields; i++) names[i] = "field_" + i;
+                        namesSource = FIELD_NAMES_SOURCE_SYNTHETIC;
+                    }
+                }
+
+                groupFieldNames[g] = names;
+                groupEditions[g] = edition;
+                groupEditionSources[g] = source;
+                groupNameSources[g] = namesSource;
             }
+
+            int gi = (groupIndex >= 0 && groupIndex < actualGroups) ? groupIndex : 0;
+            this.fieldNames = groupFieldNames[gi];
+            this.edition = groupEditions[gi];
+            this.editionSource = groupEditionSources[gi];
+            this.fieldNamesSource = groupNameSources[gi];
             this.normalizedFieldMap = GeoInfo.buildNormalizedMap(this.fieldNames);
             this.numericFieldFlags = new boolean[fieldNames.length];
             for (int i = 0; i < fieldNames.length; i++) {
                 numericFieldFlags[i] = GeoInfo.isNumericFieldName(fieldNames[i]);
             }
 
-            for (int g = 0; g < actualGroups; g++) {
-                if (groupDimMasks[g] != 0) continue;
-                boolean hasAsn = false;
-                int[] fids = groupFieldIds[g];
-                if (fids != null) {
-                    for (int fid : fids) {
-                        if (fid == 1) {
-                            hasAsn = true;
-                            break;
-                        }
-                    }
-                } else if (g == 0) {
-                    for (String fn : fieldNames) {
-                        if ("asn".equals(fn)) {
-                            hasAsn = true;
-                            break;
-                        }
-                    }
-                }
-                groupDimMasks[g] = hasAsn ? 0x02 : 0x01;
-            }
+            repairDimMasks();
 
             if (buildDate > 0) {
                 int y = buildDate / 10000;
@@ -464,15 +609,57 @@ public class QzdbReader implements AutoCloseable {
                 this.buildTimeStr = "";
             }
 
-            String ed = !metaPrimary.isEmpty() ? metaPrimary : (!metaVersion.isEmpty() ? metaVersion : "");
-            this.edition = ed.isEmpty() ? inferEdition(numFields, normalizedFieldMap) : ed;
             this.scope = "";
+        }
+
+        /**
+         * dimensionMask 缺失时的重建（§5.4 / §6.2）。
+         * <p>
+         * 现行格式的合法文件在 GroupMetadataTable 里一定存了非 0 的 dimensionMask，所以这里通常什么都不做。
+         * 某组的 mask 为 0（畸形/历史文件）时，只从该组<em>解析出来的字段名</em>推导——
+         * 绝不看 fieldId（那只是槽位序号 0..N-1，不带跨档语义），也绝不看组下标
+         * （真实的 asn 库把 asn 组放在 GroupMetadataTable 下标 0 且存了 0x02，按下标判定必错）。
+         */
+        private void repairDimMasks() {
+            final String asnKey = GeoInfo.normalizeKey("asn");
+            for (int g = 0; g < actualGroups; g++) {
+                if (groupDimMasks[g] != 0) continue;
+                boolean hasAsn = false;
+                String[] names = groupFieldNames[g];
+                if (names != null) {
+                    for (String fn : names) {
+                        if (asnKey.equals(GeoInfo.normalizeKey(fn))) {
+                            hasAsn = true;
+                            break;
+                        }
+                    }
+                }
+                groupDimMasks[g] = hasAsn ? 0x02 : 0x01;
+            }
+        }
+
+        /** version_list 只有一项时返回该项，否则返回 null（多项无法定位单一档次）。 */
+        private static String singleVersionToken(String versionList) {
+            if (versionList == null || versionList.isEmpty()) return null;
+            String only = null;
+            for (String part : versionList.split(",")) {
+                String t = part.trim();
+                if (t.isEmpty()) continue;
+                if (only != null) return null; // 超过一项
+                only = t;
+            }
+            return only;
         }
 
 
 
+        /**
+         * 区段边界校验（Fail-Closed）。
+         * off 源自 Header 的 u64，攻击者可控：负值（u64 高位置 1 后转 long）与 off+size 溢出都必须先行拒绝，
+         * 因此这里使用溢出安全形式 {@code size > dataLen - off} 而非 {@code off + size > dataLen}。
+         */
         private void checkSection(String name, long off, long size) throws QzdbException {
-            if (off > 0 && off + size > dataLen) {
+            if (off < 0 || size < 0 || (off > 0 && (off > dataLen || size > dataLen - off))) {
                 throw new QzdbException(ErrorCode.CORRUPTED,
                         "Section " + name + " out of bounds: off=" + off + " size=" + size + " fileLen=" + dataLen);
             }
@@ -484,39 +671,6 @@ public class QzdbReader implements AutoCloseable {
             String[] parts = (s.indexOf('|') >= 0 ? s.split("\\|") : s.split(","));
             for (int i = 0; i < parts.length; i++) parts[i] = parts[i].trim();
             return parts;
-        }
-
-        /** 各版本兜底字段表（与 FORMAT.md §6.3 / product-specification §3 的 Pool 顺序一致）。 */
-        private static String[] fallbackFieldNames(int count) {
-            return switch (count) {
-                case 6 -> new String[]{"continent", "country_code", "country", "province", "city", "isp"};
-                case 8 -> new String[]{"continent", "country_code", "country", "isp", "asn", "as_name", "as_domain", "usage_type"};
-                case 11 -> new String[]{"continent", "country_code", "country", "province", "city", "district", "geo_id", "longitude", "latitude", "timezone", "isp"};
-                case 15 -> new String[]{"continent", "country_code", "country", "province", "city", "district", "geo_id", "longitude", "latitude", "timezone", "isp", "asn", "as_name", "as_domain", "usage_type"};
-                case 25 -> new String[]{"continent", "continent_en", "country_code", "country_alpha3", "country", "country_en", "province", "province_en", "city", "city_en", "district", "district_en", "geo_id", "longitude", "latitude", "timezone", "languages", "currency_code", "phone_prefix", "emoji_flag", "isp", "asn", "as_name", "as_domain", "usage_type"};
-                default -> {
-                    String[] res = new String[count];
-                    for (int i = 0; i < count; i++) res[i] = "field_" + i;
-                    yield res;
-                }
-            };
-        }
-
-        private static String inferEdition(int count, Map<String, Integer> normMap) {
-            return switch (count) {
-                case 6 -> "std";
-                case 8 -> "asn";
-                case 11 -> "pro";
-                case 15 -> "max";
-                case 25 -> "ult";
-                default -> {
-                    if (normMap.containsKey("currencycode")) yield "ult";
-                    if (normMap.containsKey("asname")) yield "max";
-                    if (normMap.containsKey("district")) yield "pro";
-                    if (normMap.containsKey("asn")) yield "asn";
-                    yield "std";
-                }
-            };
         }
 
         private String[][][] parsePools() {
@@ -562,19 +716,32 @@ public class QzdbReader implements AutoCloseable {
                         continue;
                     }
 
+                    // 偏移表是"累积"结构：offsets[i+1] >= offsets[i]，末项 tail 即字符串区总字节数。
+                    // 必须显式强制单调不减 —— 否则伪造文件可让每个 offset 段都横跨整个区域，
+                    // count 个 × 区域长度的解码量会放大成 GB 级分配（实测 13.9 万项 × 11 MB ≈ 7.2 GB → OOM）。
+                    // 有了 start >= prevEnd && end <= tail，各段互不重叠且落在 [0, tail]，总解码量必 <= tail <= avail。
+                    long avail = dataLen - stringDataStart;
+                    long tail = readU32(data, (int) (offsetsStart + count * 4)) & 0xFFFFFFFFL;
+                    if (tail > avail) {
+                        groupPoolList[f] = new String[0];
+                        poolCursor = stringDataStart;
+                        continue;
+                    }
+
                     String[] strings = new String[cnt];
+                    long prevEnd = 0;
                     for (int i = 0; i < cnt; i++) {
-                        int strOff = readU32(data, (int) (offsetsStart + (long) i * 4));
-                        int nextOff = readU32(data, (int) (offsetsStart + (long) (i + 1) * 4));
-                        int len = nextOff - strOff;
-                        if (len > 0 && stringDataStart + strOff + len <= dataLen) {
-                            strings[i] = readUtf8(data, (int) (stringDataStart + strOff), len);
-                        } else {
+                        long start = readU32(data, (int) (offsetsStart + (long) i * 4)) & 0xFFFFFFFFL;
+                        long end = readU32(data, (int) (offsetsStart + (long) (i + 1) * 4)) & 0xFFFFFFFFL;
+                        if (start < prevEnd || end < start || end > tail) {
                             strings[i] = "";
+                            continue;
                         }
+                        prevEnd = end;
+                        strings[i] = (end == start) ? "" : readUtf8(data, (int) (stringDataStart + start), (int) (end - start));
                     }
                     groupPoolList[f] = strings;
-                    poolCursor = stringDataStart + (readU32(data, (int) (offsetsStart + count * 4)) & 0xFFFFFFFFL);
+                    poolCursor = stringDataStart + tail;
                 }
                 result[g] = groupPoolList;
             }
@@ -630,7 +797,14 @@ public class QzdbReader implements AutoCloseable {
                 int nt = fi < natTypes.length ? natTypes[fi] : 0;
                 return readNativeValue(entryOff + fo, w, nt);
             }
-            long valIdx = readUintWidthUnsigned(data, (int) (entryOff + fo), w);
+            // fo 源自 GROUP_SCHEMA 的 u32，可能超出 stride/文件尾；查询期以空串降级，
+            // 不让损坏文件把异常抛出 find() 之外（与 readNativeValue 的 fail-safe 语义保持一致）。
+            long valPos = entryOff + fo;
+            int need = w <= 1 ? 1 : (w == 2 ? 2 : (w == 3 ? 3 : 4));
+            if (valPos < 0 || valPos > dataLen - need) {
+                return "";
+            }
+            long valIdx = readUintWidthUnsigned(data, (int) valPos, w);
             if (fi < groupPoolList.length) {
                 String[] pool = groupPoolList[fi];
                 if (pool != null && valIdx < pool.length) {
@@ -1203,8 +1377,30 @@ public class QzdbReader implements AutoCloseable {
     /** @return 数据期号 "yyyy-MM"（由 Header BuildDate 推算）；无则 "" */
     public String getDataMonth() { return requireSnapshot().dataMonth; }
 
-    /** @return 版本档次 "std"|"pro"|"asn"|"max"|"ult"（Metadata 优先，兜底按字段数推断） */
+    /**
+     * @return 版本档次 "std"|"pro"|"asn"|"max"|"ult"；判定不出时返回 ""（不臆造）。
+     *         判定优先级见 FORMAT §10.3：groupId/VersionMask → Metadata → 字段数唯一匹配。
+     *         用 {@link #getEditionSource()} 可以知道命中了哪条规则。
+     */
     public String getEdition() { return requireSnapshot().edition; }
+
+    /**
+     * @return 文件级 one-hot 档次位掩码（Header 偏移 6）。
+     *         bit0=std(1) bit1=asn(2) bit2=pro(4) bit3=max(8) bit4=ult(16)。
+     */
+    public int getVersionMask() { return requireSnapshot().versionMask; }
+
+    /**
+     * @return {@link #getEdition()} 的判定依据：
+     *         {@code version_mask} | {@code metadata} | {@code inferred} | {@code unknown}
+     */
+    public String getEditionSource() { return requireSnapshot().editionSource; }
+
+    /**
+     * @return {@link #getFieldNames()} 的来源：
+     *         {@code metadata}（文件自带） | {@code edition}（规范表补全） | {@code synthetic}（占位符）
+     */
+    public String getFieldNamesSource() { return requireSnapshot().fieldNamesSource; }
 
     /** @return 地域覆盖（当前格式 Header 尚无该字段，始终返回 ""） */
     public String getScope() { return requireSnapshot().scope; }
@@ -1677,24 +1873,29 @@ public class QzdbReader implements AutoCloseable {
     // =========================================================================
 
     private static String readUtf8(ByteBuffer d, int off, int len) {
+        assertReadable(d, off, len);
         byte[] bytes = new byte[len];
         d.get(off, bytes, 0, len);
         return new String(bytes, StandardCharsets.UTF_8);
     }
 
     private static int readU16(ByteBuffer d, int off) {
+        assertReadable(d, off, 2);
         return d.getShort(off) & 0xFFFF;
     }
 
     private static int readU32(ByteBuffer d, int off) {
+        assertReadable(d, off, 4);
         return d.getInt(off);
     }
 
     private static long readU64(ByteBuffer d, int off) {
+        assertReadable(d, off, 8);
         return d.getLong(off);
     }
 
     private static long readU48(ByteBuffer d, int off) {
+        assertReadable(d, off, 6);
         // 逐字节读取（header 内偏移 186+6=192 恰为边界，getLong 会越界）
         return (d.get(off) & 0xFFL)
                 | ((d.get(off + 1) & 0xFFL) << 8)
@@ -1705,10 +1906,13 @@ public class QzdbReader implements AutoCloseable {
     }
 
     private static int readU24(ByteBuffer d, int off) {
+        assertReadable(d, off, 3);
         return (d.get(off) & 0xFF) | ((d.getShort(off + 1) & 0xFFFF) << 8);
     }
 
     private static int readUintWidth(ByteBuffer d, int off, int width) {
+        int need = width <= 1 ? 1 : (width == 2 ? 2 : (width == 3 ? 3 : 4));
+        assertReadable(d, off, need);
         if (width <= 1) return d.get(off) & 0xFF;
         if (width == 2) return readU16(d, off);
         if (width == 3) return readU24(d, off);
@@ -1716,9 +1920,19 @@ public class QzdbReader implements AutoCloseable {
     }
 
     private static long readUintWidthUnsigned(ByteBuffer d, int off, int width) {
+        int need = width <= 1 ? 1 : (width == 2 ? 2 : (width == 3 ? 3 : 4));
+        assertReadable(d, off, need);
         if (width <= 1) return d.get(off) & 0xFFL;
         if (width == 2) return d.getShort(off) & 0xFFFFL;
         if (width == 3) return (d.get(off) & 0xFFL) | ((d.getShort(off + 1) & 0xFFFFL) << 8);
         return d.getInt(off) & 0xFFFFFFFFL;
+    }
+
+    /** Fail-Closed：读取前校验偏移/长度不越界，越界抛 QzdbException 而非原始 IndexOutOfBoundsException。 */
+    private static void assertReadable(ByteBuffer d, int off, int need) {
+        if (off < 0 || need < 0 || off + (long) need > d.limit()) {
+            throw new QzdbException(ErrorCode.CORRUPTED,
+                    String.format("Read out of bounds: off=%d need=%d limit=%d", off, need, d.limit()));
+        }
     }
 }

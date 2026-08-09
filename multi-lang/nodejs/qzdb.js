@@ -25,6 +25,56 @@ const MAX_TRIE_WALK_STEPS = 1000;
 const MAX_POOL_COUNT = 1 << 26;
 const GEO_CACHE_CAP = 1 << 16;      // per-snapshot 有界 GeoInfo 缓存容量
 
+// ---------------------------------------------------------------------------
+// 版本档次与字段名的自描述契约（FORMAT §10.3）
+//
+// 文件自己就说明了它是什么：Header.VersionMask（偏移 6）与每个
+// GROUP_SCHEMA 组头的 groupId 都是同一套 one-hot 版本位掩码，这才是权威信号，
+// 字段个数只是最后兜底。EDITION_BY_BIT 按 bit0..bit4 顺序给出档次名。
+// ---------------------------------------------------------------------------
+const EDITION_BY_BIT = ['std', 'asn', 'pro', 'max', 'ult']; // bit0..bit4
+
+// 各档次的规范字段顺序（FORMAT 附录 1）。仅在文件没有 Metadata field_names
+// 时使用；永远不覆盖文件自带的字段名。
+const EDITION_FIELD_NAMES = {
+  std: ['continent', 'country_code', 'country', 'province', 'city', 'isp'],
+  asn: ['continent', 'country_code', 'country', 'isp', 'asn', 'as_name',
+    'as_domain', 'usage_type'],
+  pro: ['continent', 'country_code', 'country', 'province', 'city', 'district',
+    'geo_id', 'longitude', 'latitude', 'timezone', 'isp'],
+  max: ['continent', 'country_code', 'country', 'province', 'city', 'district',
+    'geo_id', 'longitude', 'latitude', 'timezone', 'isp', 'asn', 'as_name',
+    'as_domain', 'usage_type'],
+  ult: ['continent', 'continent_en', 'country_code', 'country_alpha3', 'country',
+    'country_en', 'province', 'province_en', 'city', 'city_en', 'district',
+    'district_en', 'geo_id', 'longitude', 'latitude', 'timezone', 'languages',
+    'currency_code', 'phone_prefix', 'emoji_flag', 'isp', 'asn', 'as_name',
+    'as_domain', 'usage_type'],
+};
+
+// 来源标记。8 种语言使用完全相同的字符串值，跨语言对拍可直接比较。
+const EDITION_SOURCE_VERSION_MASK = 'version_mask'; // 来自 VersionMask/groupId（权威）
+const EDITION_SOURCE_METADATA = 'metadata';         // 来自 Metadata primary_version/version_list
+const EDITION_SOURCE_INFERRED = 'inferred';         // 兜底：字段数唯一匹配
+const EDITION_SOURCE_UNKNOWN = 'unknown';           // 确实判定不出，不臆造
+
+const FIELD_NAMES_SOURCE_METADATA = 'metadata';     // 文件自带 Metadata field_names
+const FIELD_NAMES_SOURCE_EDITION = 'edition';       // 已知档次的规范表
+const FIELD_NAMES_SOURCE_SYNTHETIC = 'synthetic';   // field_0..field_N-1 占位符
+
+// 反向索引：字段数 -> 档次，仅在该字段数唯一时有效。
+const EDITION_BY_FIELD_COUNT = Object.create(null);
+for (const [_ed, _names] of Object.entries(EDITION_FIELD_NAMES)) {
+  EDITION_BY_FIELD_COUNT[_names.length] = (_names.length in EDITION_BY_FIELD_COUNT) ? null : _ed;
+}
+
+/** one-hot 版本位掩码 -> 档次名；非 one-hot 返回 ''。 */
+function editionFromMask(mask) {
+  if (!(mask > 0) || (mask & (mask - 1)) !== 0) return ''; // 0 或多于一位 -> 不是单一档次
+  const bit = 31 - Math.clz32(mask);
+  return bit < EDITION_BY_BIT.length ? EDITION_BY_BIT[bit] : '';
+}
+
 // ===========================================================================
 // 错误类型
 // ===========================================================================
@@ -130,6 +180,10 @@ class GeoInfo {
         this[name] = this._vals[i] !== undefined ? this._vals[i] : '';
       }
     }
+    // 不可变：冻结自身与底层数组，防止调用方误写污染共享缓存（P0-2）
+    Object.freeze(this._vals);
+    Object.freeze(this._fieldNames);
+    Object.freeze(this);
   }
 
   static normalizeKey(key) {
@@ -382,7 +436,10 @@ class BatchResult {
   constructor(input, result, error) {
     this.input = input;
     this.result = result; // GeoInfo | null
-    this.error = error;   // QzdbError | null（Node 不抛非法 IP，故通常 null）
+    // 规范 §5 批量三态：命中 → result 非空且 error 为 null；
+    // 未命中 → result/error 皆为 null；非法输入 → error 填 QzdbError。
+    // 非法 IP 属于第三态（hasError），不要与"未命中"混为一谈。
+    this.error = error;   // QzdbError | null
   }
   get info() { return this.result; }
   isSuccess() { return this.error === null && this.result !== null; }
@@ -444,6 +501,7 @@ class QzdbReader {
     this._groupFieldIds = [];
     this._groupEntryOffsets = [];
     this._groupFieldNames = [];
+    this._groupIds = [];
     this._groupPools = null;
     this._poolsLoaded = false;
 
@@ -458,6 +516,9 @@ class QzdbReader {
     this._description = '';
     this._primaryVersion = '';
     this._edition = '';
+    this._versionMask = 0;
+    this._editionSource = EDITION_SOURCE_UNKNOWN;
+    this._fieldNamesSource = FIELD_NAMES_SOURCE_SYNTHETIC;
     this._dataMonth = '';
     this._buildTimeStr = '';
 
@@ -531,15 +592,38 @@ class QzdbReader {
   // -------------------------------------------------------------------------
   // 头部解析
   // -------------------------------------------------------------------------
-  safeReadU16(off) { return this._data.readUInt16LE(off); }
-  safeReadU32(off) { return this._data.readUInt32LE(off); }
-  safeReadU64(off) { return Number(this._data.readBigUInt64LE(off)); }
+  // Fail-Closed 原语：Buffer.readXxxLE 越界会抛 RangeError/TypeError，
+  // 那是宿主异常而不是 QZDB 的契约异常。统一翻译成 QzdbError，保证任何
+  // 畸形/恶意 .qzdb 都只会得到结构化错误，绝不把宿主异常泄漏给调用方。
+  // V8 的 try/catch 在无异常路径上不影响 TurboFan 优化，热路径零开销。
+  _oob(off, need) {
+    throw new QzdbError(
+      `Read out of bounds: offset=${off}, need=${need}, size=${this._data.length}`,
+      QzdbError.OUT_OF_BOUNDS,
+    );
+  }
+  safeReadU16(off) {
+    try { return this._data.readUInt16LE(off); } catch (e) { return this._oob(off, 2); }
+  }
+  safeReadU32(off) {
+    try { return this._data.readUInt32LE(off); } catch (e) { return this._oob(off, 4); }
+  }
+  safeReadU64(off) {
+    try { return Number(this._data.readBigUInt64LE(off)); } catch (e) { return this._oob(off, 8); }
+  }
+  safeReadU8(off) {
+    const v = this._data[off];
+    if (v === undefined) return this._oob(off, 1);
+    return v;
+  }
   safeReadU24(off) {
     const d = this._data;
+    if (off < 0 || off + 3 > d.length) return this._oob(off, 3);
     return d[off] | (d[off + 1] << 8) | (d[off + 2] << 16);
   }
   safeReadU48(off) {
     const d = this._data;
+    if (off < 0 || off + 6 > d.length) return this._oob(off, 6);
     return d[off]
       + d[off + 1] * 0x100
       + d[off + 2] * 0x10000
@@ -548,7 +632,7 @@ class QzdbReader {
       + d[off + 5] * 0x10000000000;
   }
   safeReadUintWidth(off, width) {
-    if (width <= 1) return this._data[off];
+    if (width <= 1) return this.safeReadU8(off);
     if (width === 2) return this.safeReadU16(off);
     if (width === 3) return this.safeReadU24(off);
     return this.safeReadU32(off);
@@ -567,6 +651,9 @@ class QzdbReader {
     if (fmtVer !== 1) {
       throw new QzdbError(`Unsupported HeaderVersion: ${fmtVer} (QZDB requires version 1)`, QzdbError.UNSUPPORTED);
     }
+
+    // VersionMask（偏移 6）：one-hot 版本位掩码，判定档次的权威信号。
+    this._versionMask = this.safeReadU16(6);
 
     this._flags = this.safeReadU16(8);
     this._hasV4 = !!(this._flags & 1);
@@ -616,35 +703,40 @@ class QzdbReader {
       throw new QzdbError(`geoEntryGroupCount out of range [1,255]: ${this._geoEntryGroupCount}`, QzdbError.INVALID_PARAM);
     }
 
-    this._parseRowSchema();
-
     // 边界校验
+    //
+    // 192 字节头里的每个 section 偏移都由文件（可能是攻击者）控制，必须在
+    // 解析期一次性对齐真实 buffer 长度校验完毕，绝不留到查询热路径。
+    // 判据写成 `required > dlen - offset`，加法永不溢出（对齐 Go checkOffset /
+    // Rust check_offset）。
     const dlen = d.length;
     const v4NodeSize = this._v4Node24 ? 6 : 8;
     const v6NodeSize = this._v6Node24 ? 6 : 8;
     const v6JumpSize = (1 << this._v6JumpBits) * 4;
-    if (this._offV4Jump > 0 && this._offV4Jump + 65536 * 4 > dlen) {
-      throw new QzdbError('V4 jump table offset out of bounds', QzdbError.OUT_OF_BOUNDS);
-    }
-    if (this._offV4Nodes > 0 && this._offV4Nodes + this._v4NodeCount * v4NodeSize > dlen) {
-      throw new QzdbError('V4 nodes table offset out of bounds', QzdbError.OUT_OF_BOUNDS);
-    }
-    if (this._offV6Jump > 0 && this._offV6Jump + v6JumpSize > dlen) {
-      throw new QzdbError('V6 jump table offset out of bounds', QzdbError.OUT_OF_BOUNDS);
-    }
-    if (this._offV6Nodes > 0 && this._offV6Nodes + this._v6NodeCount * v6NodeSize > dlen) {
-      throw new QzdbError('V6 nodes table offset out of bounds', QzdbError.OUT_OF_BOUNDS);
-    }
-    if (this._offIPRow > 0 && this._offIPRow + this._rowCount * this._ipRowSize > dlen) {
-      throw new QzdbError('IP row table offset out of bounds', QzdbError.OUT_OF_BOUNDS);
-    }
-    // offPools / offMeta 越界校验（对齐 Java parseSectionBounds）
-    if (this._offPools > 0 && this._offPools >= dlen) {
-      throw new QzdbError('Pools section offset out of bounds', QzdbError.OUT_OF_BOUNDS);
-    }
-    if (this._offMeta > 0 && this._offMeta > dlen) {
-      throw new QzdbError('Meta section offset out of bounds', QzdbError.OUT_OF_BOUNDS);
-    }
+    const chk = (offset, required, field) => {
+      if (offset === 0) return;
+      if (!Number.isFinite(offset) || offset < 0 || offset > dlen || required > dlen - offset) {
+        throw new QzdbError(
+          `Section ${field} out of bounds (offset=${offset}, need=${required}, size=${dlen})`,
+          QzdbError.OUT_OF_BOUNDS,
+        );
+      }
+    };
+    chk(this._offV4Jump, 65536 * 4, 'v4_jump');
+    chk(this._offV4Nodes, this._v4NodeCount * v4NodeSize, 'v4_nodes');
+    chk(this._offV6Jump, v6JumpSize, 'v6_jump');
+    chk(this._offV6Nodes, this._v6NodeCount * v6NodeSize, 'v6_nodes');
+    chk(this._offIPRow, this._rowCount * this._ipRowSize, 'ip_row');
+    // 变长 section 只校验固定头部；后续遍历每一步都会再次自检。
+    chk(this._offGeoEntries, 1, 'geo_entries');
+    chk(this._offPools, 4, 'pools');
+    chk(this._offMeta, 4, 'meta');
+    chk(this._offRowSchema, 4, 'row_schema');
+    chk(this._offGroupSchema, 2, 'group_schema');
+
+    // ROW_SCHEMA 必须在 section 边界校验之后再解析，否则 offRowSchema
+    // 可以指到文件外并让宽度推断读到越界数据。
+    this._parseRowSchema();
 
     // GeoEntryOffsets[4]
     this._groupEntryOffsets = [];
@@ -654,16 +746,25 @@ class QzdbReader {
 
     // GroupMetadataTable
     let gmOff = this._offGeoEntries;
-    const tableGroups = d[gmOff];
+    const tableGroups = this.safeReadU8(gmOff);
     gmOff += 1;
     let actualGroups = Math.min(tableGroups, Math.max(1, this._geoEntryGroupCount));
     if (actualGroups > 4) actualGroups = 4;
+    // 组数为 0 的文件没有任何可查询维度，直接拒绝，避免构造出一个
+    // 空 reader 后在取字段名时抛宿主 TypeError（与 Rust/Go/Python 契约一致）。
+    if (!(actualGroups >= 1)) {
+      throw new QzdbError('GroupMetadataTable groupCount is 0', QzdbError.CORRUPTED);
+    }
+    // 每组 = fieldCount(1) + entryCount(4) + dimensionMask(2)。
+    if (actualGroups * 7 > dlen - gmOff) {
+      throw new QzdbError('GroupMetadataTable truncated', QzdbError.CORRUPTED);
+    }
     this._actualGroups = actualGroups;
     this._groupFieldCounts = new Array(actualGroups).fill(0);
     this._groupEntryCounts = new Array(actualGroups).fill(0);
     this._groupDimMasks = new Array(actualGroups).fill(0);
     for (let gi = 0; gi < actualGroups; gi++) {
-      this._groupFieldCounts[gi] = d[gmOff];
+      this._groupFieldCounts[gi] = this.safeReadU8(gmOff);
       gmOff += 1;
       this._groupEntryCounts[gi] = this.safeReadU32(gmOff);
       gmOff += 4;
@@ -680,12 +781,20 @@ class QzdbReader {
     this._groupPools = null;
     this._poolsLoaded = false;
 
+    // GROUP_SCHEMA 里各组自报的 fieldCount 是第二个"真相来源"，与
+    // GroupMetadataTable 的 fieldCount 可能被伪造成不一致；下方不变式块统一收口。
+    const schemaFldCounts = new Array(actualGroups).fill(-1);
+    this._groupIds = new Array(actualGroups).fill(0);
     if (this._offGroupSchema > 0) {
       let sp = this._offGroupSchema;
       const gsGroupCount = this.safeReadU16(sp);
       sp += 2;
       const maxGsGroups = Math.min(gsGroupCount, actualGroups);
       for (let gi = 0; gi < maxGsGroups; gi++) {
+        // 每组头 16 字节：groupId(2) fldCount(2) entryCount(4) stride(4) flags(4)
+        // groupId 就是该组的 one-hot 版本位掩码，与 Header.VersionMask 同一套编码。
+        if (16 > dlen - sp) break;
+        this._groupIds[gi] = this.safeReadU16(sp);
         sp += 2;
         const fldCount = this.safeReadU16(sp);
         sp += 2;
@@ -693,6 +802,8 @@ class QzdbReader {
         const stride = this.safeReadU32(sp);
         sp += 4;
         sp += 4;
+        if (fldCount * 12 > dlen - sp) break;
+        schemaFldCounts[gi] = fldCount;
         if (gi < actualGroups) {
           this._groupStrides[gi] = stride;
           const widths = new Array(fldCount).fill(0);
@@ -724,6 +835,23 @@ class QzdbReader {
       }
     }
 
+    // 不变式：widths/offsets/native/nativeType[g] 的长度必须等于
+    // groupFieldCounts[g]。GroupMetadataTable 与 GROUP_SCHEMA 各报一个字段数，
+    // 真实文件必然一致；伪造文件可以把 GROUP_SCHEMA 的字段数改小，而所有下游
+    // 消费者（池加载、字段抽取）都按 groupFieldCounts[g] 迭代，于是越界。
+    // 一旦发现不一致就整组丢弃 schema，交给下面的默认布局重建
+    // （与 Rust/Go/C/Python 同一套收口逻辑）。
+    for (let g = 0; g < actualGroups; g++) {
+      if (schemaFldCounts[g] >= 0 && schemaFldCounts[g] !== this._groupFieldCounts[g]) {
+        this._groupStrides[g] = 0;
+        this._groupFieldWidths[g] = null;
+        this._groupFieldOffsets[g] = null;
+        this._groupFieldNative[g] = null;
+        this._groupFieldNativeType[g] = null;
+        this._groupFieldIds[g] = null;
+      }
+    }
+
     for (let g = 0; g < actualGroups; g++) {
       if (this._groupStrides[g] === 0) this._groupStrides[g] = this._groupFieldCounts[g] * this._poolIdxSize;
       if (this._groupFieldWidths[g] === null) {
@@ -744,24 +872,43 @@ class QzdbReader {
     this._repairDimMasks();
   }
 
+  // dimensionMask 缺失时的重建：只看该组解析出来的字段名里有没有 asn。
+  // fieldId 只是槽位序号（0..N-1），不带任何跨档语义，绝不可用来判定维度。
   _repairDimMasks() {
+    const asnKey = GeoInfo.normalizeKey('asn');
     for (let g = 0; g < this._groupDimMasks.length; g++) {
       if (this._groupDimMasks[g] !== 0) continue;
+      const names = this._groupFieldNames[g] || [];
       let hasAsn = false;
-      const fids = this._groupFieldIds[g];
-      if (fids) {
-        hasAsn = fids.includes(1);
-      } else if (g === 0 && this._fieldNames.length) {
-        hasAsn = this._normFieldMap[GeoInfo.normalizeKey('asn')] !== undefined;
+      for (let i = 0; i < names.length; i++) {
+        if (GeoInfo.normalizeKey(names[i]) === asnKey) { hasAsn = true; break; }
       }
       this._groupDimMasks[g] = hasAsn ? 0x02 : 0x01;
     }
   }
 
-  // 元数据 TLV（type 1=版本, 2=字段名, 3=描述, 4=主版本）+ 构建日期
+  /**
+   * 从文件的自描述信息解析出版本档次与字段名。
+   *
+   * 两个答案都只来自文件自己声明的内容，优先级在 8 种 SDK 中完全一致
+   * （FORMAT §10.3）：
+   *
+   *   edition      1. GROUP_SCHEMA.groupId / Header.VersionMask 的 one-hot 位
+   *                2. Metadata primary_version，或只有一项的 version_list
+   *                3. 字段数唯一匹配（兜底）
+   *                4. ''（unknown）—— 判定不出就不臆造
+   *   field_names  1. Metadata field_names（基数与该组一致时）
+   *                2. 已知档次且基数一致时用规范表
+   *                3. field_0..field_N-1 占位符
+   *
+   * getEditionSource() / getFieldNamesSource() 报告命中了哪条规则，
+   * 调用方可据此区分"文件里读出来的"与"SDK 补出来的"。
+   */
   _parseMeta() {
     const d = this._data;
     const offMeta = this._offMeta;
+
+    // --- Metadata TLV 遍历 ---------------------------------------------------
     let metaNames = null;
     if ((this._flags & 4) && offMeta > 0 && offMeta + 4 <= d.length) {
       let pos = offMeta;
@@ -769,27 +916,74 @@ class QzdbReader {
         const t = d[pos];
         const length = this.safeReadU16(pos + 2);
         if (t === 0 || length === 0) break;
-        if (pos + 4 + length > d.length) break;
+        // 伪造的 TLV 可以声明一个越过 EOF 的长度；直接停止遍历，
+        // 不去解码被截断的尾巴。
+        if (length > d.length - (pos + 4)) break;
         const val = d.toString('utf8', pos + 4, pos + 4 + length);
         if (t === 1) this._versionName = val;
         else if (t === 2) metaNames = val.split('|');
         else if (t === 3) this._description = val;
         else if (t === 4) this._primaryVersion = val;
+        // 未知 type 按设计跳过（FORMAT §8.1）
         pos += 4 + length;
       }
     }
 
-    // 逐版本组字段名（元数据只给 group 0；其余用占位名）
+    // --- 逐组解析 edition + 字段名 -------------------------------------------
     this._groupFieldNames = new Array(this._actualGroups);
-    for (let gi = 0; gi < this._actualGroups; gi++) {
-      if (gi === 0 && metaNames && metaNames.length === this._groupFieldCounts[0]) {
-        this._groupFieldNames[gi] = metaNames;
-      } else {
-        this._groupFieldNames[gi] = Array.from({ length: this._groupFieldCounts[gi] }, (_, i) => `field_${i}`);
+    const groupEditions = new Array(this._actualGroups);
+    const groupEditionSources = new Array(this._actualGroups);
+    const groupNameSources = new Array(this._actualGroups);
+
+    for (let g = 0; g < this._actualGroups; g++) {
+      const numFields = this._groupFieldCounts[g];
+
+      // edition：先用本组自己的掩码，再回落到文件级掩码
+      const mask = (this._groupIds[g] || this._versionMask) >>> 0;
+      let edition = editionFromMask(mask);
+      let source = EDITION_SOURCE_VERSION_MASK;
+      if (!edition) {
+        edition = (this._primaryVersion || '').trim();
+        if (!edition) {
+          const tokens = (this._versionName || '').split(',')
+            .map((s) => s.trim()).filter((s) => s.length > 0);
+          if (tokens.length === 1) edition = tokens[0];
+        }
+        if (edition) source = EDITION_SOURCE_METADATA;
       }
+      if (!edition) {
+        edition = EDITION_BY_FIELD_COUNT[numFields] || '';
+        source = edition ? EDITION_SOURCE_INFERRED : EDITION_SOURCE_UNKNOWN;
+      }
+
+      // 字段名
+      let names;
+      let namesSource;
+      if (metaNames && metaNames.length === numFields) {
+        names = metaNames;
+        namesSource = FIELD_NAMES_SOURCE_METADATA;
+      } else {
+        const canonical = EDITION_FIELD_NAMES[edition];
+        if (canonical && canonical.length === numFields) {
+          names = canonical.slice();
+          namesSource = FIELD_NAMES_SOURCE_EDITION;
+        } else {
+          names = Array.from({ length: numFields }, (_, i) => `field_${i}`);
+          namesSource = FIELD_NAMES_SOURCE_SYNTHETIC;
+        }
+      }
+
+      this._groupFieldNames[g] = names;
+      groupEditions[g] = edition;
+      groupEditionSources[g] = source;
+      groupNameSources[g] = namesSource;
     }
-    const gi = Math.min(this._groupIndex, this._actualGroups - 1);
-    this._fieldNames = this._groupFieldNames[gi] || this._groupFieldNames[0];
+
+    const gi = this._groupIndex < this._actualGroups ? this._groupIndex : 0;
+    this._fieldNames = this._groupFieldNames[gi] || [];
+    this._edition = groupEditions[gi] || '';
+    this._editionSource = groupEditionSources[gi] || EDITION_SOURCE_UNKNOWN;
+    this._fieldNamesSource = groupNameSources[gi] || FIELD_NAMES_SOURCE_SYNTHETIC;
 
     this._fieldNameToIdx = Object.create(null);
     this._normFieldMap = Object.create(null);
@@ -813,28 +1007,6 @@ class QzdbReader {
       this._dataMonth = '';
       this._buildTimeStr = '';
     }
-
-    // 版本档次
-    let ed = this._primaryVersion || this._versionName || '';
-    if (!ed) ed = this._inferEdition();
-    this._edition = ed || 'std';
-  }
-
-  _inferEdition() {
-    const c = this._groupFieldCounts[0];
-    switch (c) {
-      case 6: return 'std';
-      case 8: return 'asn';
-      case 11: return 'pro';
-      case 15: return 'max';
-      case 25: return 'ult';
-      default: break;
-    }
-    if ('currencycode' in this._normFieldMap) return 'ult';
-    if ('asname' in this._normFieldMap) return 'max';
-    if ('district' in this._normFieldMap) return 'pro';
-    if ('asn' in this._normFieldMap) return 'asn';
-    return 'std';
   }
 
   _parseRowSchema() {
@@ -897,21 +1069,37 @@ class QzdbReader {
         if (this._offRowSchema > 0) poolCursor += 4;
         if (count === 0 || count > MAX_POOL_COUNT) { groupPoolList.push([]); continue; }
 
+        // (count + 1) 个偏移必须整体落在 POOLS section 内。count 直接来自磁盘，
+        // 这里是阻止伪造池头把游标推出文件末尾的关键边界。
+        if (poolCursor > poolEnd || (count + 1) * 4 > poolEnd - poolCursor) {
+          groupPoolList.push([]);
+          continue;
+        }
+
         const offsets = [];
         for (let o = 0; o <= count; o++) {
           offsets.push(this.safeReadU32(poolCursor));
           poolCursor += 4;
         }
-        const strings = new Array(count);
+        const strBase = poolCursor;
+        const avail = poolEnd - strBase;
+        // 偏移表是累积结构：offsets[i+1] >= offsets[i]，末项即字符串区总字节数。
+        // 单调性必须强制校验而非默认成立 —— 否则伪造表可让每一项都横跨整个 section，
+        // count 段 × section 长度会放大成 GB 级 Buffer#toString 分配，
+        // 直接把 Node 进程 OOM 打死（FATAL heap limit），属可远程触发的 DoS。
+        // 有 start >= prevEnd && end <= tail 后各段互不重叠且落在 [0, tail]，总量必 <= tail。
+        const tail = offsets[count];
+        if (tail > avail) { groupPoolList.push([]); continue; }
+        const strings = new Array(count).fill('');
+        let prevEnd = 0;
         for (let s = 0; s < count; s++) {
           const start = offsets[s];
           const end = offsets[s + 1];
-          const length = end - start;
-          strings[s] = length > 0
-            ? d.toString('utf8', poolCursor + start, poolCursor + end)
-            : '';
+          if (start < prevEnd || end < start || end > tail) continue;
+          prevEnd = end;
+          if (end > start) strings[s] = d.toString('utf8', strBase + start, strBase + end);
         }
-        poolCursor += offsets[count];
+        poolCursor += tail;
         groupPoolList.push(strings);
       }
       this._groupPools[g] = groupPoolList;
@@ -1225,6 +1413,9 @@ class QzdbReader {
     const out = [];
     for (const ip of ips) {
       try {
+        if (fastParseIp(ip) == null) {
+          throw new QzdbError('Invalid IP: ' + ip, QzdbError.INVALID_PARAM);
+        }
         out.push(new BatchResult(ip, this.find(ip), null));
       } catch (e) {
         out.push(new BatchResult(ip, null, e instanceof QzdbError ? e : new QzdbError(String(e), QzdbError.CORRUPTED)));
@@ -1238,6 +1429,9 @@ class QzdbReader {
     const out = [];
     for (const ip of ips) {
       try {
+        if (fastParseIp(ip) == null) {
+          throw new QzdbError('Invalid IP: ' + ip, QzdbError.INVALID_PARAM);
+        }
         out.push(new BatchResult(ip, this.findFields(ip, fields), null));
       } catch (e) {
         out.push(new BatchResult(ip, null, e instanceof QzdbError ? e : new QzdbError(String(e), QzdbError.CORRUPTED)));
@@ -1250,6 +1444,9 @@ class QzdbReader {
     if (ips == null) return;
     for (const ip of ips) {
       try {
+        if (fastParseIp(ip) == null) {
+          throw new QzdbError('Invalid IP: ' + ip, QzdbError.INVALID_PARAM);
+        }
         yield new BatchResult(ip, this.find(ip), null);
       } catch (e) {
         yield new BatchResult(ip, null, e instanceof QzdbError ? e : new QzdbError(String(e), QzdbError.CORRUPTED));
@@ -1504,6 +1701,12 @@ class QzdbReader {
   getVersion() { return this._versionName; }
   getDataMonth() { return this._dataMonth; }
   getEdition() { return this._edition; }
+  /** Header.VersionMask（偏移 6）原值：one-hot 版本位掩码。 */
+  getVersionMask() { return this._versionMask; }
+  /** 档次判定命中的规则：version_mask / metadata / inferred / unknown。 */
+  getEditionSource() { return this._editionSource; }
+  /** 字段名来源：metadata / edition / synthetic。 */
+  getFieldNamesSource() { return this._fieldNamesSource; }
   getScope() { return ''; }
   getBuildTime() { return this._buildTimeStr; }
   getDescription() { return this._description; }
@@ -1838,3 +2041,14 @@ QzdbReader.Error = QzdbError;
 QzdbReader.parseIp = fastParseIp;
 
 module.exports = QzdbReader;
+// 自描述契约常量（跨语言取值一致，见 FORMAT §10.3）
+module.exports.EDITION_BY_BIT = EDITION_BY_BIT;
+module.exports.EDITION_FIELD_NAMES = EDITION_FIELD_NAMES;
+module.exports.editionFromMask = editionFromMask;
+module.exports.EDITION_SOURCE_VERSION_MASK = EDITION_SOURCE_VERSION_MASK;
+module.exports.EDITION_SOURCE_METADATA = EDITION_SOURCE_METADATA;
+module.exports.EDITION_SOURCE_INFERRED = EDITION_SOURCE_INFERRED;
+module.exports.EDITION_SOURCE_UNKNOWN = EDITION_SOURCE_UNKNOWN;
+module.exports.FIELD_NAMES_SOURCE_METADATA = FIELD_NAMES_SOURCE_METADATA;
+module.exports.FIELD_NAMES_SOURCE_EDITION = FIELD_NAMES_SOURCE_EDITION;
+module.exports.FIELD_NAMES_SOURCE_SYNTHETIC = FIELD_NAMES_SOURCE_SYNTHETIC;

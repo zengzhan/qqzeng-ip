@@ -308,6 +308,25 @@ class GeoInfo implements \ArrayAccess
         return $this->get($name);
     }
 
+    /**
+     * GeoInfo 是不可变对象，禁止写入动态属性。
+     * 缺少本方法时，PHP < 9 会静默创建动态属性（污染共享缓存），PHP 9 直接 Fatal。
+     * @throws \RuntimeException 始终抛出
+     */
+    public function __set($name, $value): void
+    {
+        throw new \RuntimeException('GeoInfo is immutable; cannot set field "' . $name . '"');
+    }
+
+    /**
+     * GeoInfo 是不可变对象，禁止删除动态属性。
+     * @throws \RuntimeException 始终抛出
+     */
+    public function __unset($name): void
+    {
+        throw new \RuntimeException('GeoInfo is immutable; cannot unset field "' . $name . '"');
+    }
+
     public function offsetExists($offset): bool
     {
         if (is_int($offset)) {
@@ -358,8 +377,15 @@ class GeoInfo implements \ArrayAccess
         if (!is_finite($val)) {
             return '';
         }
-        if ($val == (int)$val) {
-            return (string)(int)$val;
+        if ($val == floor($val)) {
+            // PHP 8.1+ 对超出 int64 表示范围的浮点做 (int) 转换会抛
+            // "The float ... is not representable as an int" 告警（在
+            // 严格错误处理下会升级为异常）。畸形文件里的 native float 字段
+            // 完全可能是 1e140 这种值，所以先判范围：能装进 int64 就走整数
+            // 字面量，否则用 %.0F 输出同样的整数位（与 Python int(fv) 一致）。
+            return (abs($val) <= 9.2233720368547758e18)
+                ? (string)(int)$val
+                : sprintf('%.0F', $val);
         }
         return sprintf('%.6F', $val);
     }
@@ -543,6 +569,70 @@ class QzdbReader
     const SENTINEL_MASK_24 = 0x7FFFFF;
     const SENTINEL_MASK_31 = 0x7FFFFFFF;
     const FLOAT_FIELDS = ['longitude' => true, 'latitude' => true];
+
+    // -----------------------------------------------------------------------
+    // 版本档次与字段名的自描述契约（FORMAT §10.3）
+    //
+    // Header.VersionMask（偏移 6）与每个 GROUP_SCHEMA 组头的 groupId 是同一套
+    // one-hot 版本位掩码，这才是判定档次的权威信号；字段个数只能作为最后兜底。
+    // -----------------------------------------------------------------------
+    /** bit0..bit4 -> 档次名 */
+    const EDITION_BY_BIT = ['std', 'asn', 'pro', 'max', 'ult'];
+
+    /** 各档次规范字段顺序（FORMAT 附录 1）；仅在文件没有 Metadata field_names 时使用 */
+    const EDITION_FIELD_NAMES = [
+        'std' => ['continent', 'country_code', 'country', 'province', 'city', 'isp'],
+        'asn' => ['continent', 'country_code', 'country', 'isp', 'asn', 'as_name',
+                  'as_domain', 'usage_type'],
+        'pro' => ['continent', 'country_code', 'country', 'province', 'city', 'district',
+                  'geo_id', 'longitude', 'latitude', 'timezone', 'isp'],
+        'max' => ['continent', 'country_code', 'country', 'province', 'city', 'district',
+                  'geo_id', 'longitude', 'latitude', 'timezone', 'isp', 'asn', 'as_name',
+                  'as_domain', 'usage_type'],
+        'ult' => ['continent', 'continent_en', 'country_code', 'country_alpha3', 'country',
+                  'country_en', 'province', 'province_en', 'city', 'city_en', 'district',
+                  'district_en', 'geo_id', 'longitude', 'latitude', 'timezone', 'languages',
+                  'currency_code', 'phone_prefix', 'emoji_flag', 'isp', 'asn', 'as_name',
+                  'as_domain', 'usage_type'],
+    ];
+
+    // 来源标记：8 种语言取值完全一致，跨语言对拍可直接比较
+    const EDITION_SOURCE_VERSION_MASK = 'version_mask';
+    const EDITION_SOURCE_METADATA     = 'metadata';
+    const EDITION_SOURCE_INFERRED     = 'inferred';
+    const EDITION_SOURCE_UNKNOWN      = 'unknown';
+
+    const FIELD_NAMES_SOURCE_METADATA  = 'metadata';
+    const FIELD_NAMES_SOURCE_EDITION   = 'edition';
+    const FIELD_NAMES_SOURCE_SYNTHETIC = 'synthetic';
+
+    /** one-hot 版本位掩码 -> 档次名；非 one-hot 返回 '' */
+    public static function editionFromMask(int $mask): string
+    {
+        if ($mask <= 0 || ($mask & ($mask - 1)) !== 0) {
+            return ''; // 0 或多于一位 -> 不是单一档次
+        }
+        $bit = 0;
+        while (($mask >> ($bit + 1)) !== 0) {
+            $bit++;
+        }
+        return $bit < count(self::EDITION_BY_BIT) ? self::EDITION_BY_BIT[$bit] : '';
+    }
+
+    /** 字段数 -> 档次，仅当该字段数在规范表中唯一时才返回 */
+    private static function editionByFieldCount(int $n): string
+    {
+        $hit = '';
+        foreach (self::EDITION_FIELD_NAMES as $ed => $names) {
+            if (count($names) === $n) {
+                if ($hit !== '') {
+                    return ''; // 有歧义 -> 不猜
+                }
+                $hit = $ed;
+            }
+        }
+        return $hit;
+    }
     const MAX_TRIE_WALK_STEPS = 1000;
     const MAX_POOL_COUNT = 1 << 26;
     const GEO_CACHE_LIMIT = 1 << 16; // 有界缓存上限（开放寻址 / 碰撞只重算）
@@ -617,14 +707,19 @@ class QzdbReader
     private $versionName = '';
     private $description = '';
     private $edition = '';
+    private $primaryVersion = '';
+    private $versionMask = 0;
+    private $editionSource = self::EDITION_SOURCE_UNKNOWN;
+    private $fieldNamesSource = self::FIELD_NAMES_SOURCE_SYNTHETIC;
+    private $groupIds = [];
     private $groupCount = 0;
 
     // per-snapshot 有界无锁 GeoInfo 缓存
     private $geoCache = [];
     private $geoCacheSize = 0;
 
-    // 兼容旧用法的全局单例
-    private static $instance = null;
+    // 无单例。v2.4 起全语言删除 getInstance()：进程级共享一个可变实例在并发下
+    // 无法回答「现在查的是哪个库」。需要按路径复用请用 QzdbRegistry。
 
     private static $HEX = null;
     private static $crc32bTable = null;
@@ -754,14 +849,18 @@ class QzdbReader
     /** 把另一实例的快照状态整体搬过来（reload 成功后调用）。 */
     private function assign(QzdbReader $src): void
     {
+        // 1. 先回收本实例旧句柄，避免 fd 泄漏
+        if ($this->stream !== null && is_resource($this->stream)) {
+            @fclose($this->stream);
+        }
+        // 2. 拷贝快照状态（跳过静态单例与共享表）
         foreach (get_object_vars($src) as $k => $v) {
             if ($k === 'instance' || $k === 'HEX' || $k === 'crc32bTable' || $k === 'usageInit') continue;
             $this->$k = $v;
         }
-        // 关闭被替换实例持有的流，避免句柄泄漏
-        if ($src->stream !== null && is_resource($src->stream)) {
-            // src 仍持有流用于自身快照；不关闭，交由 src 析构/GC 处理
-        }
+        // 3. 所有权转移：断开 $src 对流句柄的持有，使其析构不再误关本实例正在使用的句柄
+        $src->stream = null;
+        $src->closed = true;
     }
 
     // ------------------------------------------------------------------
@@ -895,16 +994,20 @@ class QzdbReader
     // 批量 / 流式 API（契约 §5）
     // ------------------------------------------------------------------
 
-    /** 批量字符串查询，逐条容错，保留三态。 */
+    /** 批量字符串查询，逐条容错，保留三态（契约 §4）。 */
     public function findBatch(array $ips): array
     {
         $out = [];
         foreach ($ips as $ip) {
+            $s = (string)$ip;
             try {
-                $info = $this->find($ip);
-                $out[] = new BatchResult((string)$ip, $info, null);
+                if (self::fastParseIp($s) === null) {
+                    throw new QzdbException('Invalid IP: ' . $s, self::ERROR_INVALID_PARAM);
+                }
+                $info = $this->find($s);
+                $out[] = new BatchResult($s, $info, null); // info===null ⇒ 合法 IP 但未命中
             } catch (QzdbException $e) {
-                $out[] = new BatchResult((string)$ip, null, $e);
+                $out[] = new BatchResult($s, null, $e); // 非法 IP / 底层故障 ⇒ error 态
             }
         }
         return $out;
@@ -914,11 +1017,15 @@ class QzdbReader
     {
         $out = [];
         foreach ($ips as $ip) {
+            $s = (string)$ip;
             try {
-                $info = $this->findFields($ip, $fields);
-                $out[] = new BatchResult((string)$ip, $info, null);
+                if (self::fastParseIp($s) === null) {
+                    throw new QzdbException('Invalid IP: ' . $s, self::ERROR_INVALID_PARAM);
+                }
+                $info = $this->findFields($s, $fields);
+                $out[] = new BatchResult($s, $info, null);
             } catch (QzdbException $e) {
-                $out[] = new BatchResult((string)$ip, null, $e);
+                $out[] = new BatchResult($s, null, $e);
             }
         }
         return $out;
@@ -928,11 +1035,15 @@ class QzdbReader
     public function findStream(iterable $ips): \Generator
     {
         foreach ($ips as $ip) {
+            $s = (string)$ip;
             try {
-                $info = $this->find($ip);
-                yield new BatchResult((string)$ip, $info, null);
+                if (self::fastParseIp($s) === null) {
+                    throw new QzdbException('Invalid IP: ' . $s, self::ERROR_INVALID_PARAM);
+                }
+                $info = $this->find($s);
+                yield new BatchResult($s, $info, null);
             } catch (QzdbException $e) {
-                yield new BatchResult((string)$ip, null, $e);
+                yield new BatchResult($s, null, $e);
             }
         }
     }
@@ -1011,6 +1122,12 @@ class QzdbReader
         return sprintf('%04d-%02d', $y, $m);
     }
     public function getEdition(): string { return $this->edition; }
+    /** Header.VersionMask（偏移 6）原值：one-hot 版本位掩码 */
+    public function getVersionMask(): int { return $this->versionMask; }
+    /** 档次判定命中的规则：version_mask|metadata|inferred|unknown */
+    public function getEditionSource(): string { return $this->editionSource; }
+    /** 字段名来源：metadata|edition|synthetic */
+    public function getFieldNamesSource(): string { return $this->fieldNamesSource; }
     public function getScope(): string { return ''; } // 当前格式无 scope 字段（契约 §5）
     public function getBuildTime(): string
     {
@@ -1068,6 +1185,9 @@ class QzdbReader
             throw new QzdbException("Unsupported format version: {$fmtVer} (only version 1 is supported)", self::ERROR_UNSUPPORTED);
         }
 
+        // VersionMask（偏移 6）：one-hot 版本位掩码，判定档次的权威信号
+        $this->versionMask = $this->safeReadU16(6);
+
         $this->flags = $this->safeReadU16(8);
         $this->hasV4 = (bool)($this->flags & 1);
         $this->hasV6 = (bool)($this->flags & 2);
@@ -1121,28 +1241,41 @@ class QzdbReader
             throw new QzdbException("geoEntryGroupCount out of range [1,255]: {$this->geoEntryGroupCount}", self::ERROR_CORRUPTED);
         }
 
-        $this->parseRowSchema();
-
+        // Section 边界校验
+        //
+        // 192 字节头里的每个 section 偏移都由文件（可能是攻击者）控制，必须
+        // 在解析期全部对齐真实长度校验完毕，绝不留到查询热路径。判据写成
+        // `$required > $len - $offset`，加法永不溢出（对齐 Go checkOffset /
+        // Rust check_offset / Node chk）。
         $len = $this->fileSize;
         $v4NodeSize = $this->v4Node24 ? 6 : 8;
         $v6NodeSize = $this->v6Node24 ? 6 : 8;
         $v6JumpSize = (1 << $this->v6JumpBits) * 4;
 
-        if ($this->offV4Jump > 0 && $this->offV4Jump + 65536 * 4 > $len) {
-            throw new QzdbException('V4 jump table out of bounds', self::ERROR_OUT_OF_BOUNDS);
-        }
-        if ($this->offV4Nodes > 0 && $this->offV4Nodes + $this->v4NodeCount * $v4NodeSize > $len) {
-            throw new QzdbException('V4 nodes table out of bounds', self::ERROR_OUT_OF_BOUNDS);
-        }
-        if ($this->offV6Jump > 0 && $this->offV6Jump + $v6JumpSize > $len) {
-            throw new QzdbException('V6 jump table out of bounds', self::ERROR_OUT_OF_BOUNDS);
-        }
-        if ($this->offV6Nodes > 0 && $this->offV6Nodes + $this->v6NodeCount * $v6NodeSize > $len) {
-            throw new QzdbException('V6 nodes table out of bounds', self::ERROR_OUT_OF_BOUNDS);
-        }
-        if ($this->offIPRow > 0 && $this->offIPRow + $this->rowCount * $this->ipRowSize > $len) {
-            throw new QzdbException('IP row table out of bounds', self::ERROR_OUT_OF_BOUNDS);
-        }
+        $chk = function ($offset, $required, string $field) use ($len): void {
+            if ($offset === 0) return;
+            if ($offset < 0 || $offset > $len || $required > $len - $offset) {
+                throw new QzdbException(
+                    "Section {$field} out of bounds (offset={$offset}, need={$required}, size={$len})",
+                    self::ERROR_OUT_OF_BOUNDS
+                );
+            }
+        };
+        $chk($this->offV4Jump, 65536 * 4, 'v4_jump');
+        $chk($this->offV4Nodes, $this->v4NodeCount * $v4NodeSize, 'v4_nodes');
+        $chk($this->offV6Jump, $v6JumpSize, 'v6_jump');
+        $chk($this->offV6Nodes, $this->v6NodeCount * $v6NodeSize, 'v6_nodes');
+        $chk($this->offIPRow, $this->rowCount * $this->ipRowSize, 'ip_row');
+        // 变长 section 只校验固定头部；后续遍历每一步都会再次自检。
+        $chk($this->offGeoEntries, 1, 'geo_entries');
+        $chk($this->offPools, 4, 'pools');
+        $chk($this->offMeta, 4, 'meta');
+        $chk($this->offRowSchema, 4, 'row_schema');
+        $chk($this->offGroupSchema, 2, 'group_schema');
+
+        // ROW_SCHEMA 必须在 section 边界校验之后再解析，否则 offRowSchema
+        // 可以指到文件外并让宽度推断读到越界数据。
+        $this->parseRowSchema();
 
         $this->groupEntryOffsets = [];
         for ($i = 0; $i < 4; $i++) {
@@ -1155,6 +1288,16 @@ class QzdbReader
 
         $actualGroups = min($groupCount, max(1, $this->geoEntryGroupCount));
         if ($actualGroups > 4) $actualGroups = 4;
+        // 组数为 0 的文件没有任何可查询维度，直接拒绝，避免构造出空 reader
+        // 后在取字段名/字段数时踩到 "Undefined array key 0"
+        //（与 Rust/Go/Node/Python 契约一致）。
+        if ($actualGroups < 1) {
+            throw new QzdbException('GroupMetadataTable groupCount is 0', self::ERROR_CORRUPTED);
+        }
+        // 每组 = fieldCount(1) + entryCount(4) + dimensionMask(2)
+        if ($actualGroups * 7 > $len - $gmOff) {
+            throw new QzdbException('GroupMetadataTable truncated', self::ERROR_CORRUPTED);
+        }
         $this->groupCount = $actualGroups;
         $this->groupFieldCounts = array_fill(0, $actualGroups, 0);
         $this->groupEntryCounts = array_fill(0, $actualGroups, 0);
@@ -1177,12 +1320,20 @@ class QzdbReader
         $this->groupFieldIds = array_fill(0, $actualGroups, null);
         $this->groupPoolSectionIds = array_fill(0, $actualGroups, null);
 
+        // GROUP_SCHEMA 里各组自报的 fieldCount 是第二个"真相来源"，与
+        // GroupMetadataTable 的 fieldCount 可能被伪造成不一致；下方不变式块统一收口。
+        $schemaFldCounts = array_fill(0, $actualGroups, -1);
+        $this->groupIds = array_fill(0, $actualGroups, 0);
         if ($this->offGroupSchema > 0) {
             $sp = $this->offGroupSchema;
             $gsGroupCount = $this->safeReadU16($sp);
             $sp += 2;
             $maxGsGroups = min($gsGroupCount, $actualGroups);
             for ($gi = 0; $gi < $maxGsGroups; $gi++) {
+                // 每组头 16 字节：groupId(2) fldCount(2) entryCount(4) stride(4) flags(4)
+                // groupId 就是该组的 one-hot 版本位掩码，与 Header.VersionMask 同一套编码
+                if (16 > $len - $sp) break;
+                $this->groupIds[$gi] = $this->safeReadU16($sp);
                 $sp += 2;
                 $fldCount = $this->safeReadU16($sp);
                 $sp += 2;
@@ -1190,6 +1341,8 @@ class QzdbReader
                 $stride = $this->safeReadU32($sp);
                 $sp += 4;
                 $sp += 4;
+                if ($fldCount * 12 > $len - $sp) break;
+                $schemaFldCounts[$gi] = $fldCount;
 
                 if ($gi < $actualGroups) {
                     $this->groupStrides[$gi] = $stride;
@@ -1222,6 +1375,24 @@ class QzdbReader
                 } else {
                     $sp += $fldCount * 12;
                 }
+            }
+        }
+
+        // 不变式：widths/offsets/native/nativeType/... [g] 的长度必须等于
+        // groupFieldCounts[g]。GroupMetadataTable 与 GROUP_SCHEMA 各报一个字段数，
+        // 真实文件必然一致；伪造文件可以把 GROUP_SCHEMA 的字段数改小，而所有
+        // 下游消费者（池加载、字段抽取）都按 groupFieldCounts[g] 迭代，于是踩到
+        // "Undefined array key N"。一旦发现不一致就整组丢弃 schema，交给下面的
+        // 默认布局重建（与 Rust/Go/C/Node/Python 同一套收口逻辑）。
+        for ($g = 0; $g < $actualGroups; $g++) {
+            if ($schemaFldCounts[$g] >= 0 && $schemaFldCounts[$g] !== $this->groupFieldCounts[$g]) {
+                $this->groupStrides[$g] = 0;
+                $this->groupFieldWidths[$g] = null;
+                $this->groupFieldOffsets[$g] = null;
+                $this->groupFieldNative[$g] = null;
+                $this->groupFieldNativeType[$g] = null;
+                $this->groupFieldIds[$g] = null;
+                $this->groupPoolSectionIds[$g] = null;
             }
         }
 
@@ -1259,14 +1430,34 @@ class QzdbReader
         $this->groupPoolDescs = null;
     }
 
+    /**
+     * 从文件的自描述信息解析出版本档次与字段名。
+     *
+     * 优先级在 8 种 SDK 中完全一致（FORMAT §10.3）：
+     *   edition      1. GROUP_SCHEMA.groupId / Header.VersionMask 的 one-hot 位
+     *                2. Metadata primary_version，或只有一项的 version_list
+     *                3. 字段数唯一匹配（兜底）
+     *                4. ''（unknown）—— 判定不出就不臆造
+     *   field_names  1. Metadata field_names（基数与该组一致时）
+     *                2. 已知档次且基数一致时用规范表
+     *                3. field_0..field_N-1 占位符
+     *
+     * getEditionSource() / getFieldNamesSource() 报告命中了哪条规则。
+     */
     private function resolveFieldNames(): void
     {
         $offMeta = $this->offMeta;
         $this->versionName = '';
         $this->description = '';
-        $this->edition = '';
+        $this->primaryVersion = '';
+
+        $gi = ($this->groupIndex >= 0 && $this->groupIndex < count($this->groupFieldCounts))
+            ? $this->groupIndex : 0;
+        $numFields = $this->groupFieldCounts[$gi];
+
+        // --- Metadata TLV 遍历 -------------------------------------------------
+        $metaNames = null;
         if (($this->flags & 4) && $offMeta > 0 && $offMeta + 4 <= $this->fileSize) {
-            $fieldNames = null;
             $pos = $offMeta;
             while ($pos + 4 <= $this->fileSize) {
                 $t = $this->readByte($pos);
@@ -1274,86 +1465,96 @@ class QzdbReader
                 if ($t === 0 || $length === 0) {
                     break;
                 }
-                if ($pos + 4 + $length > $this->fileSize) {
+                // 伪造的 TLV 可以声明一个越过 EOF 的长度；直接停止遍历
+                if ($length > $this->fileSize - ($pos + 4)) {
                     break;
                 }
                 $val = $this->readBytes($pos + 4, $length);
                 if ($t === 1) {
                     $this->versionName = $val;
                 } elseif ($t === 2) {
-                    $fieldNames = explode('|', $val);
+                    $metaNames = explode('|', $val);
                 } elseif ($t === 3) {
                     $this->description = $val;
                 } elseif ($t === 4) {
-                    $this->edition = $val;
+                    $this->primaryVersion = $val;
                 }
+                // 未知 type 按设计跳过（FORMAT §8.1）
                 $pos += 4 + $length;
             }
+        }
 
-            if ($fieldNames && count($fieldNames) === $this->groupFieldCounts[0]) {
-                $this->fieldNames = $fieldNames;
-                $this->floatFieldIndices = [];
-                foreach ($fieldNames as $i => $n) {
-                    if (isset(self::FLOAT_FIELDS[$n])) {
-                        $this->floatFieldIndices[] = $n;
-                    }
+        // --- edition：先用本组自己的掩码，再回落到文件级掩码 ----------------------
+        $mask = (isset($this->groupIds[$gi]) && $this->groupIds[$gi]) ? $this->groupIds[$gi] : $this->versionMask;
+        $edition = self::editionFromMask($mask);
+        $source = self::EDITION_SOURCE_VERSION_MASK;
+        if ($edition === '') {
+            $edition = trim($this->primaryVersion);
+            if ($edition === '') {
+                $tokens = array_values(array_filter(array_map('trim', explode(',', $this->versionName)),
+                    static function ($s) { return $s !== ''; }));
+                if (count($tokens) === 1) {
+                    $edition = $tokens[0];
                 }
-                $this->normalizedFieldMap = GeoInfo::buildNormalizedMap($fieldNames);
-                return;
+            }
+            if ($edition !== '') {
+                $source = self::EDITION_SOURCE_METADATA;
             }
         }
-
-        $this->fieldNames = [];
-        for ($i = 0; $i < $this->groupFieldCounts[0]; $i++) {
-            $this->fieldNames[] = "field_{$i}";
+        if ($edition === '') {
+            $edition = self::editionByFieldCount($numFields);
+            $source = $edition !== '' ? self::EDITION_SOURCE_INFERRED : self::EDITION_SOURCE_UNKNOWN;
         }
+        $this->edition = $edition;
+        $this->editionSource = $source;
+
+        // --- 字段名 -------------------------------------------------------------
+        if ($metaNames !== null && count($metaNames) === $numFields) {
+            $names = $metaNames;
+            $namesSource = self::FIELD_NAMES_SOURCE_METADATA;
+        } elseif (isset(self::EDITION_FIELD_NAMES[$edition])
+            && count(self::EDITION_FIELD_NAMES[$edition]) === $numFields) {
+            $names = self::EDITION_FIELD_NAMES[$edition];
+            $namesSource = self::FIELD_NAMES_SOURCE_EDITION;
+        } else {
+            $names = [];
+            for ($i = 0; $i < $numFields; $i++) {
+                $names[] = "field_{$i}";
+            }
+            $namesSource = self::FIELD_NAMES_SOURCE_SYNTHETIC;
+        }
+
+        $this->fieldNames = $names;
+        $this->fieldNamesSource = $namesSource;
         $this->floatFieldIndices = [];
-        $this->normalizedFieldMap = GeoInfo::buildNormalizedMap($this->fieldNames);
-
-        // 兜底 edition
-        if ($this->edition === '' && $this->versionName !== '') {
-            $this->edition = $this->versionName;
+        foreach ($names as $n) {
+            if (isset(self::FLOAT_FIELDS[$n])) {
+                $this->floatFieldIndices[] = $n;
+            }
         }
+        $this->normalizedFieldMap = GeoInfo::buildNormalizedMap($names);
     }
 
+    /**
+     * dimensionMask 缺失时的重建：只看解析出来的字段名里有没有 asn。
+     * fieldId 只是槽位序号（0..N-1），不带任何跨档语义，绝不可用来判定维度。
+     */
     private function repairDimMasks(): void
     {
+        $hasAsn = false;
+        foreach ($this->fieldNames as $n) {
+            if (GeoInfo::normalizeKey($n) === 'asn') {
+                $hasAsn = true;
+                break;
+            }
+        }
         $n = count($this->groupDimMasks);
         for ($g = 0; $g < $n; $g++) {
             if ($this->groupDimMasks[$g] !== 0) {
                 continue;
             }
-            $hasAsn = false;
-            if (isset($this->groupFieldIds[$g]) && is_array($this->groupFieldIds[$g])) {
-                foreach ($this->groupFieldIds[$g] as $fid) {
-                    if ($fid == 1) {
-                        $hasAsn = true;
-                        break;
-                    }
-                }
-            }
-            if (!$hasAsn && is_array($this->fieldNames)) {
-                foreach ($this->fieldNames as $n2) {
-                    if ($n2 === 'asn') {
-                        $hasAsn = true;
-                        break;
-                    }
-                }
-            }
             $this->groupDimMasks[$g] = $hasAsn ? 0x02 : 0x01;
         }
-        // 兜底 edition：字段数推断
-        if ($this->edition === '') {
-            $this->edition = $this->inferEdition(count($this->fieldNames));
-        }
-    }
-
-    private function inferEdition(int $numFields): string
-    {
-        if ($numFields >= 20) return 'ult';
-        if ($numFields >= 12) return 'max';
-        if ($numFields >= 8) return 'pro';
-        return 'std';
     }
 
     private function parseRowSchema(): void
@@ -1428,12 +1629,25 @@ class QzdbReader
                     $groupDescs[] = null;
                     continue;
                 }
+                // (count + 1) 项偏移表必须整体落在 POOLS section 内：count 直接来自磁盘，
+                // 不校验则伪造池头会把游标推出文件末尾。
+                if ($poolCursor > $poolEnd || ($count + 1) * 4 > $poolEnd - $poolCursor) {
+                    $groupDescs[] = null;
+                    continue;
+                }
                 $offsetTableBase = $poolCursor;
                 $poolCursor += ($count + 1) * 4;
                 $dataBase = $poolCursor;
+                // 末项 = 字符串区总字节数，必须落在剩余空间内（否则该池整体降级）。
                 $totalLen = $this->safeReadU32($offsetTableBase + $count * 4);
+                $avail = $poolEnd - $dataBase;
+                if ($totalLen > $avail) {
+                    $poolCursor = $dataBase;
+                    $groupDescs[] = null;
+                    continue;
+                }
                 $poolCursor = $dataBase + $totalLen;
-                $groupDescs[] = ['ot' => $offsetTableBase, 'db' => $dataBase, 'count' => $count];
+                $groupDescs[] = ['ot' => $offsetTableBase, 'db' => $dataBase, 'count' => $count, 'total' => $totalLen];
             }
             $this->groupPoolDescs[$g] = $groupDescs;
         }
@@ -1448,6 +1662,8 @@ class QzdbReader
         if ($idx < 0 || $idx >= $desc['count']) return '';
         $start = $this->safeReadU32($desc['ot'] + $idx * 4);
         $end = $this->safeReadU32($desc['ot'] + ($idx + 1) * 4);
+        // 偏移表是累积结构，末项为总长度；越界/逆序项一律降级为空串（§Fail-Closed）
+        if ($end < $start || $end > $desc['total']) return '';
         $length = $end - $start;
         if ($length <= 0) return '';
         return $this->readBytes($desc['db'] + $start, $length);
@@ -1919,13 +2135,22 @@ class QzdbReader
             if ($off < 0 || $off + 8 > strlen($this->data)) {
                 throw new QzdbException('Out of bounds reading U64 at offset ' . $off, self::ERROR_OUT_OF_BOUNDS);
             }
-            return unpack('P', $this->data, $off)[1];
+            $v = unpack('P', $this->data, $off)[1];
+        } else {
+            $b = $this->readBytes($off, 8);
+            if (strlen($b) < 8) {
+                throw new QzdbException('Out of bounds reading U64 at offset ' . $off, self::ERROR_OUT_OF_BOUNDS);
+            }
+            $v = unpack('P', $b)[1];
         }
-        $b = $this->readBytes($off, 8);
-        if (strlen($b) < 8) {
-            throw new QzdbException('Out of bounds reading U64 at offset ' . $off, self::ERROR_OUT_OF_BOUNDS);
+        // 无符号 64 位高位符号位置位（值 ≥ 2^63）时，unpack('P') 会返回负数，
+        // 使后续 'off > 0' 判据为 false 而跳过整段边界校验（Fail-Closed 失效）。
+        // 对任意真实 .qzdb 文件（偏移远小于 2^63）这必为损坏，归一为超大正数，
+        // 使边界校验能正常触发拒绝。
+        if ($v < 0) {
+            return PHP_INT_MAX;
         }
-        return unpack('P', $b)[1];
+        return $v;
     }
 
     private function safeReadU24($off)

@@ -27,7 +27,7 @@ function main() {
         return;
     }
 
-    const searcher = QzdbReader.getInstance(dbPath);
+    const searcher = QzdbReader.open(dbPath);
 
     console.log(`Fields (${searcher._fieldNames.length}): ${searcher._fieldNames.join(', ')}\n`);
 

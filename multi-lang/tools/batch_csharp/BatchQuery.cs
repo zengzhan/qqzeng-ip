@@ -12,6 +12,23 @@ class BatchQueryCsharp
         return info.ToPipe();
     }
 
+    // "high:low"（十进制，各 64 位无符号）→ 16 字节大端 IPv6 地址
+    static byte[]? ParseV6Key(string line)
+    {
+        var parts = line.Split(':');
+        if (parts.Length != 2) return null;
+        if (!ulong.TryParse(parts[0].Trim(), out var high)) return null;
+        if (!ulong.TryParse(parts[1].Trim(), out var low)) return null;
+
+        var addr = new byte[16];
+        for (var i = 0; i < 8; i++)
+        {
+            addr[i] = (byte)(high >> (8 * (7 - i)));
+            addr[8 + i] = (byte)(low >> (8 * (7 - i)));
+        }
+        return addr;
+    }
+
     static int ProcessFile(QzdbReader searcher, string testPath, string outPath, bool isV6)
     {
         if (!File.Exists(testPath)) return 0;
@@ -24,7 +41,10 @@ class BatchQueryCsharp
                 string pipeStr;
                 if (isV6)
                 {
-                    pipeStr = GeoToPipe(searcher.Find(line));
+                    // cross_verify.py 输出格式是十进制 "high:low"（各 64 位）。
+                    // 必须还原成 16 字节大端地址；直接把该串交给 Find() 会全部落空。
+                    var v6 = ParseV6Key(line);
+                    pipeStr = v6 is null ? "" : GeoToPipe(searcher.FindBytes(v6));
                 }
                 else
                 {

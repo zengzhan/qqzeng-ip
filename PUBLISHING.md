@@ -100,13 +100,13 @@ implementation 'com.qqzeng:qzdb:1.0.0'
 
 ## 3. 一致性约定
 
-- **版本**：.NET = `1.0.0`（net10.0 单目标），Java = `1.0.0`；升级时分别同步 `csproj` 的 `<Version>` 与 `pom.xml` 的 `<version>`。
-- **命名空间/包标识**：.NET 包、程序集和命名空间均为 `Qzdb`；Java 使用 `com.qqzeng.qzdb`；作者/公司品牌统一为 `QQZeng`。
+- **版本**：.NET = `1.0.2`（net8.0;net9.0;net10.0 多目标），Java = `1.0.0`；升级时分别同步 `csproj` 的 `<Version>` 与 `pom.xml` 的 `<version>`。
+- **命名空间/包标识**：.NET 包 ID = `QQZeng.Qzdb`、程序集与命名空间均为 `QQZeng.Qzdb`；Java 使用 `com.qqzeng.qzdb`；作者/公司品牌统一为 `QQZeng`。
 - **NEVER push 自动执行**：以上发布步骤涉及远端写操作（NuGet push / Maven Central deploy / 打 tag），
   均需在确认凭据与仓库存在后由人工触发，CI 仅在你主动打 tag 时运行。
 
 ## 4. 当前状态（2026-08-07）
 
-- .NET：`Qzdb` `1.0.0` 首发包尚未发布，当前为 net10.0 单目标；发布前需完成 NuGet 包名可用性、包内容和安装验证。
+- .NET：`QQZeng.Qzdb` `1.0.2` 首发包尚未发布，当前为 net8.0;net9.0;net10.0 多目标；发布前需完成 NuGet 包名可用性、包内容和安装验证。
 - Java：发布配置已就绪（`pom.xml` + workflow 已提交），待用户提供 Central token + GPG 私钥并打 `v1.0.0` tag 触发首次发布。
 - 本机无 JDK / Maven，Java 包的首次真实 `mvn` 校验留待 CI 执行。

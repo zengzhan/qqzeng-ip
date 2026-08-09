@@ -1,11 +1,10 @@
 const fs = require('fs');
 const QzdbReader = require('./qzdb');
 
-function bench(name, dbPath, count, v6count, first) {
+function bench(name, dbPath, count, v6count) {
   if (!fs.existsSync(dbPath)) { console.log(`  ${name}: not found`); return; }
   let s;
-  if (first) s = QzdbReader.getInstance(dbPath);
-  else { s = QzdbReader.getInstance(); s.load(dbPath); }
+  s = QzdbReader.open(dbPath);
 
   const ips = new Uint32Array(count);
   let seed = 123;
@@ -33,6 +32,6 @@ function bench(name, dbPath, count, v6count, first) {
 
 const count = 3000000, v6count = 1000000;
 console.log('Node.js QPS Benchmarks (M4 Pro)');
-bench('std_china', '../data/qqzeng_ip_std_china.qzdb', count, v6count, true);
-bench('max_china', '../data/qqzeng_ip_max_china.qzdb', count, v6count, false);
-bench('max_global', '../data/qqzeng_ip_max_global.qzdb', count, v6count, false);
+bench('std_china', '../data/qqzeng_ip_std_china.qzdb', count, v6count);
+bench('max_china', '../data/qqzeng_ip_max_china.qzdb', count, v6count);
+bench('max_global', '../data/qqzeng_ip_max_global.qzdb', count, v6count);

@@ -118,7 +118,7 @@ Tier 3  →  高并发无锁 + 性能基准（可扩展性与延迟，双栈均�
 
 - 大端/小端机器加载同一 `.qzdb` 文件结果完全一致
 - 显式 `close()` / `Drop` / `dispose` / `free` 后再次查询必须安全失败（不 UAF、不 double-free）
-- 多次 `getInstance` / 单例行为符合各语言规范
+- 同一文件被多个 `QzdbReader` 实例并发打开互不干扰（v2.4 已移除 `getInstance()` 单例，共享复用改由 Registry 层承担）
 - 文件句柄与 mmap 正确释放
 
 ### 9. 双栈一致性交叉断言（新增强制）
