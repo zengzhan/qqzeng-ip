@@ -42,24 +42,25 @@
 > 更完整的 API 文档与多语言用例，请参见 **[QZDB 多语言 SDK 指南](./qzdb/README_zh.md)**。
 
 ```go
-// 🐹 Go 示例 (mmap 零拷贝, Goroutine 安全)
-searcher, err := qzdb.NewSearcher("qqzeng_ip_max_china.qzdb")
-region, err := searcher.Find("114.114.114.114")
-fmt.Println(region.Country, region.Province, region.City, region.Isp) // 中国 江苏 南京 中国电信
+// 🐹 Go 示例 (mmap 零拷贝, 实例持有用法)
+searcher, err := qzdb.Open("qqzeng_ip_ult_china.qzdb", 0, true)
+info := searcher.Find("114.114.114.114")
+fmt.Println(info.Get("country"), info.Get("province"), info.Get("city"), info.Get("isp"))
 ```
 
 ```python
-# 🐍 Python 示例 (单例模式开箱即用)
-from qzdb import QzdbSearcher
-searcher = QzdbSearcher.get_instance("qqzeng_ip_max_china.qzdb")
+# 🐍 Python 示例 (按需实例化)
+from qzdb import QzdbReader
+searcher = QzdbReader("qqzeng_ip_ult_china.qzdb")
 print(searcher.find_str("114.114.114.114")) # 亚洲|CN|中国|江苏|南京|中国电信
 ```
 
 ```rust
 // 🦀 Rust 示例 (零分配 Zero-Copy 检索)
-let searcher = QzdbSearcher::new("qqzeng_ip_max_china.qzdb")?;
+use qzdb::{from_file, QzdbReader};
+let searcher = from_file("qqzeng_ip_ult_china.qzdb");
 if let Some(info) = searcher.find("114.114.114.114") {
-    println!("{} {} {}", info.country, info.province, info.city);
+    println!("{} {} {}", info.country(), info.province(), info.city());
 }
 ```
 
