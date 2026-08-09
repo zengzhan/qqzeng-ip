@@ -493,3 +493,4 @@ cargo update -p qzdb_reader
 [MIT](https://opensource.org/licenses/MIT)
 
 <!-- commit: rust: Rust 极速解析引擎 (mmap 安全, 6900 万+ QPS) -->
+<!-- sync-tag: rust 1786303088 -->
