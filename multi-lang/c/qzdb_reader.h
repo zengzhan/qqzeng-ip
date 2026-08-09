@@ -41,6 +41,7 @@ typedef struct {
     uint8_t* data;
     size_t   data_size;
     int      data_is_heap;   /* 1 if data was malloc'd (qzdb_init_buffer), else mmap'd */
+    int      data_is_borrowed; /* 1 if data points into caller-owned buffer (qzdb_init_buffer_borrowed): skip free/munmap in qzdb_free */
     int      group_index;
 
     // Header fields

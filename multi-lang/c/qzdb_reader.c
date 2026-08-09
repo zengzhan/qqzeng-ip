@@ -1442,6 +1442,7 @@ int qzdb_init(qzdb_reader_t* ctx, const char* db_path) {
  * ctx->data and ctx->data_size must be set by the caller.
  * is_heap indicates whether ctx->data needs free() (heap) vs munmap() (mmap). */
 static int init_from_buffer(qzdb_reader_t* ctx, int is_heap, int verify_crc) {
+    (void)is_heap; /* retained for call-site symmetry; data_is_heap is set explicitly by callers */
     setlocale(LC_NUMERIC, "C");
 
     uint8_t* d = ctx->data;
@@ -1791,20 +1792,19 @@ int qzdb_init_ex(qzdb_reader_t* ctx, const char* db_path, int verify_crc) {
     return rc;
 }
 
-/* Buffer-based loading — default copy semantics via temp file + mmap.
- * The buffer is written to a secure temp file which is then mmapped;
- * the original buffer can be freed immediately after return. */
+/* Buffer-based loading — copy semantics: the caller's buffer is copied into a
+ * heap allocation so the caller may free it immediately. Cross-platform, no /tmp
+ * I/O. The copy is freed by qzdb_free() (data_is_heap = 1). */
 int qzdb_init_buffer(qzdb_reader_t* ctx, const uint8_t* buf, size_t len, int verify_crc) {
     if (!ctx || !buf || len == 0) return QZDB_ERR_INVALID_PARAM;
     memset(ctx, 0, sizeof(*ctx));
-    char tmpl[] = "/tmp/qzdb_buf_XXXXXX";
-    int fd = mkstemp(tmpl);
-    if (fd < 0) return QZDB_ERR_OUT_OF_MEMORY;
-    ssize_t w = write(fd, buf, len);
-    if (w != (ssize_t)len) { close(fd); unlink(tmpl); return QZDB_ERR_CORRUPTED; }
-    close(fd);
-    int rc = qzdb_init_ex(ctx, tmpl, verify_crc);
-    unlink(tmpl);
+    ctx->data = (uint8_t*)malloc(len);
+    if (!ctx->data) return QZDB_ERR_OUT_OF_MEMORY;
+    memcpy(ctx->data, buf, len);
+    ctx->data_size = len;
+    ctx->data_is_heap = 1;
+    int rc = init_from_buffer(ctx, 1, verify_crc);
+    if (rc != QZDB_OK) { free(ctx->data); ctx->data = NULL; }
     return rc;
 }
 
@@ -1817,6 +1817,7 @@ int qzdb_init_buffer_borrowed(qzdb_reader_t* ctx, const uint8_t* buf, size_t len
     ctx->data = (uint8_t*)buf;
     ctx->data_size = len;
     ctx->data_is_heap = 0;
+    ctx->data_is_borrowed = 1;
     return init_from_buffer(ctx, 0, verify_crc);
 }
 void qzdb_free(qzdb_reader_t* ctx) {
@@ -1853,8 +1854,9 @@ void qzdb_free(qzdb_reader_t* ctx) {
     if (ctx->norm_field_names) { for (int i = 0; i < ctx->field_count; i++) free(ctx->norm_field_names[i]); free(ctx->norm_field_names); }
     norm_map_free(ctx);
     geo_cache_free(ctx);
-    if (ctx->data_is_heap) free(ctx->data);
-    else if (ctx->data) munmap(ctx->data, ctx->data_size);
+    if (ctx->data_is_borrowed) { /* caller owns data; do not free/munmap */ }
+    else if (ctx->data_is_heap == 1) free(ctx->data);
+    else if (ctx->data_is_heap == 0 && ctx->data) munmap(ctx->data, ctx->data_size);
     memset(ctx, 0, sizeof(*ctx));
 }
 
