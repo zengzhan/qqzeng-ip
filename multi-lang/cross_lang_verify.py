@@ -4,7 +4,7 @@ Cross-language result verification.
 Queries the same IPs across all 8 language SDKs and diffs the pipe output.
 Any difference = parsing bug.
 """
-import os, sys, subprocess, json, tempfile
+import os, sys, subprocess, json, ipaddress
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -80,6 +80,75 @@ if not os.path.exists(DB_PATH):
     DB_PATH = os.path.join(SCRIPT_DIR, "data", "qqzeng_ip_std_china.qzdb")
 
 
+def _batch_key(ip):
+    """Convert a test IP string to the batch-runner key convention.
+
+    The batch binaries (batch_go / batch_rust / batch_csharp) expect:
+      - v4 lines: decimal u32 (e.g. "192.168.1.1" -> "3232235777")
+      - v6 lines: "high:low" decimal, each 64-bit (e.g. "2408:...::1" -> "3634569227428790272:15032385537")
+    Returns None for unparseable input.
+    """
+    try:
+        if ":" in ip:
+            packed = ipaddress.IPv6Address(ip).packed
+            high = int.from_bytes(packed[:8], "big")
+            low = int.from_bytes(packed[8:], "big")
+            return f"{high}:{low}"
+        return str(int(ipaddress.IPv4Address(ip)))
+    except (ValueError, ipaddress.AddressValueError):
+        return None
+
+
+def _run_batch_runner(runner, ip_list):
+    """Run a file-based batch runner and return {original_ip: pipe_str}.
+
+    runner is a list: [binary, DB_PATH, v4_test, v4_out, v6_test, v6_out].
+    The harness writes keys (decimal u32 / high:low) into the test files and
+    reads back both out files, mapping keys back to the original IP strings.
+    """
+    v4_lines, v6_lines, key_to_ip = [], [], {}
+    for ip in ip_list:
+        key = _batch_key(ip)
+        if key is None:
+            continue
+        key_to_ip[key] = ip
+        if ":" in ip:
+            v6_lines.append(key)
+        else:
+            v4_lines.append(key)
+
+    v4_test = os.path.join(SCRIPT_DIR, ".cross_v4_tmp")
+    v4_out = os.path.join(SCRIPT_DIR, ".cross_v4_out")
+    v6_test = os.path.join(SCRIPT_DIR, ".cross_v6_tmp")
+    v6_out = os.path.join(SCRIPT_DIR, ".cross_v6_out")
+    with open(v4_test, "w") as f:
+        f.write("\n".join(v4_lines) + "\n")
+    with open(v6_test, "w") as f:
+        f.write("\n".join(v6_lines) + "\n")
+
+    try:
+        cmd = runner + [DB_PATH, v4_test, v4_out, v6_test, v6_out]
+        subprocess.check_output(cmd, cwd=SCRIPT_DIR, timeout=60, stderr=subprocess.DEVNULL)
+        results = {}
+        for out_path in (v4_out, v6_out):
+            if not os.path.exists(out_path):
+                continue
+            with open(out_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if "|" not in line:
+                        continue
+                    key, pipe = line.split("|", 1)
+                    if key in key_to_ip:
+                        results[key_to_ip[key]] = pipe
+        return results
+    finally:
+        for f in [v4_test, v4_out, v6_test, v6_out]:
+            if os.path.exists(f):
+                os.unlink(f)
+
+
+
 def run_python(ip_list):
     sys.path.insert(0, os.path.join(SCRIPT_DIR, "python"))
     from qzdb import QzdbReader
@@ -141,53 +210,6 @@ echo json_encode($results);
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
-
-
-def run_go(ip_list):
-    ips_json = json.dumps(ip_list)
-    go_code = f"""package main
-
-import (
-    "encoding/json"
-    "fmt"
-    "os"
-    "qzdb"
-)
-
-func main() {{
-    ips := []string{{{", ".join(f'"{ip}"' for ip in ip_list)}}}
-    s, err := qzdb.NewQzdbReader("{DB_PATH}")
-    if err != nil {{
-        fmt.Fprintln(os.Stderr, err)
-        os.Exit(1)
-    }}
-    results := make(map[string]string)
-    for _, ip := range ips {{
-        r := s.Find(ip)
-        if r != nil {{
-            results[ip] = r.ToPipe()
-        }} else {{
-            results[ip] = ""
-        }}
-    }}
-    data, _ := json.Marshal(results)
-    fmt.Print(string(data))
-}}
-"""
-    tmp = os.path.join(SCRIPT_DIR, "go", "_cross_verify", "main.go")
-    os.makedirs(os.path.dirname(tmp), exist_ok=True)
-    with open(tmp, "w") as f:
-        f.write(go_code)
-    try:
-        out = subprocess.check_output(
-            ["go", "run", "main.go"],
-            cwd=os.path.join(SCRIPT_DIR, "go"),
-            timeout=60
-        ).decode()
-        return json.loads(out.strip())
-    finally:
-        os.unlink(tmp)
-        os.rmdir(os.path.dirname(tmp))
 
 
 def run_java(ip_list):
@@ -272,14 +294,7 @@ def run_rust(ip_list):
         print(f"  [SKIP Rust: binary not found at {rust_bin}]")
         return None
     try:
-        cmd = [rust_bin, DB_PATH]
-        out = subprocess.check_output(cmd, input="\n".join(ip_list).encode(), cwd=SCRIPT_DIR, timeout=30).decode()
-        results = {}
-        lines = out.strip().split("\n")
-        for i, line in enumerate(lines):
-            if i < len(ip_list):
-                results[ip_list[i]] = line.strip()
-        return results
+        return _run_batch_runner([rust_bin], ip_list)
     except Exception as e:
         print(f"  [SKIP Rust: {e}]")
         return None
@@ -340,28 +355,7 @@ def run_go(ip_list):
         print(f"  [SKIP Go: binary not found at {go_bin}]")
         return None
     try:
-        # batch_go uses file-based I/O: db_path v4_test v4_out v6_test v6_out
-        v4_test = os.path.join(SCRIPT_DIR, ".cross_v4_tmp")
-        v4_out = os.path.join(SCRIPT_DIR, ".cross_v4_out")
-        v6_test = os.path.join(SCRIPT_DIR, ".cross_v6_tmp")
-        v6_out = os.path.join(SCRIPT_DIR, ".cross_v6_out")
-        with open(v4_test, "w") as f:
-            f.write("\n".join(ip_list) + "\n")
-        with open(v6_test, "w") as f:
-            f.write("\n".join(ip_list) + "\n")
-        cmd = [go_bin, DB_PATH, v4_test, v4_out, v6_test, v6_out]
-        subprocess.check_output(cmd, cwd=SCRIPT_DIR, timeout=30, stderr=subprocess.DEVNULL)
-        results = {}
-        with open(v4_out) as f:
-            for line in f:
-                line = line.strip()
-                if "|" in line:
-                    ip, pipe = line.split("|", 1)
-                    results[ip] = pipe
-        for f in [v4_test, v4_out, v6_test, v6_out]:
-            if os.path.exists(f):
-                os.unlink(f)
-        return results
+        return _run_batch_runner([go_bin], ip_list)
     except Exception as e:
         print(f"  [SKIP Go: {e}]")
         return None
@@ -373,27 +367,7 @@ def run_csharp(ip_list):
         print(f"  [SKIP C#: binary not found at {cs_exe}]")
         return None
     try:
-        v4_test = os.path.join(SCRIPT_DIR, ".cross_v4_tmp")
-        v4_out = os.path.join(SCRIPT_DIR, ".cross_v4_out")
-        v6_test = os.path.join(SCRIPT_DIR, ".cross_v6_tmp")
-        v6_out = os.path.join(SCRIPT_DIR, ".cross_v6_out")
-        with open(v4_test, "w") as f:
-            f.write("\n".join(ip_list) + "\n")
-        with open(v6_test, "w") as f:
-            f.write("\n".join(ip_list) + "\n")
-        cmd = [cs_exe, DB_PATH, v4_test, v4_out, v6_test, v6_out]
-        subprocess.check_output(cmd, cwd=SCRIPT_DIR, timeout=30, stderr=subprocess.DEVNULL)
-        results = {}
-        with open(v4_out) as f:
-            for line in f:
-                line = line.strip()
-                if "|" in line:
-                    ip, pipe = line.split("|", 1)
-                    results[ip] = pipe
-        for f in [v4_test, v4_out, v6_test, v6_out]:
-            if os.path.exists(f):
-                os.unlink(f)
-        return results
+        return _run_batch_runner([cs_exe], ip_list)
     except Exception as e:
         print(f"  [SKIP C#: {e}]")
         return None

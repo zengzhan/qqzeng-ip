@@ -1149,8 +1149,8 @@ public sealed class QzdbReader : IDisposable
                 {
                      ref var r = ref Unsafe.Add(ref MemoryMarshal.GetReference(span), fo);
                      values[fi] = w == 4
-                         ? Unsafe.ReadUnaligned<float>(ref r).ToString("F6", System.Globalization.CultureInfo.InvariantCulture)
-                         : Unsafe.ReadUnaligned<double>(ref r).ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
+                         ? FormatFloat6(Unsafe.ReadUnaligned<float>(ref r))
+                         : FormatFloat6(Unsafe.ReadUnaligned<double>(ref r));
                 }
                 else
                 {
@@ -1210,8 +1210,8 @@ public sealed class QzdbReader : IDisposable
                 {
                     ref var r = ref Unsafe.Add(ref MemoryMarshal.GetReference(span), fo);
                     val = w == 4
-                        ? Unsafe.ReadUnaligned<float>(ref r).ToString("F6", System.Globalization.CultureInfo.InvariantCulture)
-                        : Unsafe.ReadUnaligned<double>(ref r).ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
+                        ? FormatFloat6(Unsafe.ReadUnaligned<float>(ref r))
+                        : FormatFloat6(Unsafe.ReadUnaligned<double>(ref r));
                 }
                 else
                 {
@@ -1229,6 +1229,22 @@ public sealed class QzdbReader : IDisposable
         }
         if (names.Count == 0) return null;
         return new GeoInfo(names.ToArray(), values.ToArray(), GeoInfo.BuildNormalizedMap(names.ToArray()), null);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static string FormatFloat6(float v)
+    {
+        if (float.IsNaN(v) || float.IsInfinity(v)) return "";
+        if (v == MathF.Truncate(v)) return ((long)v).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return v.ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static string FormatFloat6(double v)
+    {
+        if (double.IsNaN(v) || double.IsInfinity(v)) return "";
+        if (v == Math.Truncate(v)) return ((long)v).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return v.ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

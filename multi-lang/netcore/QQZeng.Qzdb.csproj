@@ -16,7 +16,8 @@
     <PackageId>QQZeng.Qzdb</PackageId>
     <RootNamespace>QQZeng.Qzdb</RootNamespace>
     <AssemblyName>QQZeng.Qzdb</AssemblyName>
-    <Version>1.0.3</Version>
+    <Version>1.0.4</Version>
+    <PackageReleaseNotes>1.0.4: Align native float formatting with the canonical cross-language contract — whole-number floats render as integer form (e.g. 116) and non-whole as 6 decimals (F6); NaN/Infinity render as empty string. Verified byte-exact against all 8 language SDKs over 4102 golden vectors.</PackageReleaseNotes>
 
     <!-- 作者 / 公司 / 描述 -->
     <Authors>QQZeng</Authors>
