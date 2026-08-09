@@ -229,6 +229,9 @@ public sealed class GeoInfo
     public string PhonePrefix => GetPhonePrefix();
     public string EmojiFlag => GetEmojiFlag();
     public string Languages => GetLanguages();
+    public string Continent => GetContinent();
+    public string ContinentEn => GetContinentEn();
+    public string CountryCode => GetCountryCode();
 
     public string GetCidr() => Get("cidr");
     public string GetCountry() => Get("country");
@@ -276,8 +279,13 @@ public sealed class GeoInfo
 
     public UsageType GetUsageType() => UsageType.FromString(Get("usage_type"));
 
-    public string GetCountryAlpha2() => Get("country_alpha2");
+    // 数据集以 country_code 存储 ISO 3166-1 alpha-2（如 "CN"），并不存在 country_alpha2 字段；
+    // GetCountryAlpha2 重定向到 country_code 以返回真实二字码（历史返回 "" 为字段名笔误 bug）。
+    public string GetCountryAlpha2() => Get("country_code");
     public string GetCountryAlpha3() => Get("country_alpha3");
+    public string GetContinent() => Get("continent");
+    public string GetContinentEn() => Get("continent_en");
+    public string GetCountryCode() => Get("country_code");
     public string GetCurrencyCode() => Get("currency_code");
     public string GetCurrencyName() => Get("currency_name");
     public string GetPhonePrefix() => Get("phone_prefix");

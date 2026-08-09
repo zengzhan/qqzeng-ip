@@ -542,8 +542,11 @@ class GeoInfo implements \ArrayAccess
         return UsageType::fromString($this->get('usage_type'));
     }
 
-    public function getCountryAlpha2(): string { return $this->get('country_alpha2'); }
+    public function getCountryAlpha2(): string { return $this->get('country_code'); } // 数据集以 country_code 存 alpha-2；历史返回 "" 为字段名笔误 bug
     public function getCountryAlpha3(): string { return $this->get('country_alpha3'); }
+    public function getContinent(): string { return $this->get('continent'); }
+    public function getContinentEn(): string { return $this->get('continent_en'); }
+    public function getCountryCode(): string { return $this->get('country_code'); }
     public function getCurrencyCode(): string { return $this->get('currency_code'); }
     public function getCurrencyName(): string { return $this->get('currency_name'); }
     public function getPhonePrefix(): string { return $this->get('phone_prefix'); }

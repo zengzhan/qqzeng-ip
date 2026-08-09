@@ -309,13 +309,22 @@ public final class GeoInfo {
         return UsageType.fromString(get("usage_type"));
     }
 
-    public String getCountryAlpha2() { return get("country_alpha2"); }
+    // 数据集以 country_code 存储 ISO 3166-1 alpha-2（如 "CN"），并不存在 country_alpha2 字段；
+    // getCountryAlpha2 重定向到 country_code 以返回真实二字码（历史返回 "" 为字段名笔误 bug）。
+    public String getCountryAlpha2() { return get("country_code"); }
     public String getCountryAlpha3() { return get("country_alpha3"); }
     public String getCurrencyCode() { return get("currency_code"); }
     public String getCurrencyName() { return get("currency_name"); }
     public String getPhonePrefix() { return get("phone_prefix"); }
     public String getEmojiFlag() { return get("emoji_flag"); }
     public String getLanguages() { return get("languages"); }
+
+    /** 大洲（本地化，如 "亚洲"）；数据首字段，所有版本档均存在。 */
+    public String getContinent() { return get("continent"); }
+    /** 大洲（英文，如 "Asia"）；仅 ult 版含 continent_en 字段，其它版本返回 ""。 */
+    public String getContinentEn() { return get("continent_en"); }
+    /** ISO 3166-1 alpha-2 国家码（如 "CN"）；数据集以 country_code 存储。 */
+    public String getCountryCode() { return get("country_code"); }
 
     @Override
     public String toString() {

@@ -420,11 +420,25 @@ class GeoInfo:
 
     @property
     def country_alpha2(self):
-        return self.get('country_alpha2')
+        # 数据集以 country_code 存储 ISO 3166-1 alpha-2（如 "CN"），并不存在 country_alpha2 字段；
+        # 重定向到 country_code 以返回真实二字码（历史返回 "" 为字段名笔误 bug）。
+        return self.get('country_code')
 
     @property
     def country_alpha3(self):
         return self.get('country_alpha3')
+
+    @property
+    def continent(self):
+        return self.get('continent')
+
+    @property
+    def continent_en(self):
+        return self.get('continent_en')
+
+    @property
+    def country_code(self):
+        return self.get('country_code')
 
     @property
     def currency_code(self):

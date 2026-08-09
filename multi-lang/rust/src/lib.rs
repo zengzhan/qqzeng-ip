@@ -581,13 +581,18 @@ impl GeoInfo {
         UsageType::from_raw(self.get("usage_type"))
     }
 
-    pub fn country_alpha2(&self) -> &str { self.get("country_alpha2") }
+    // 数据集以 country_code 存储 ISO 3166-1 alpha-2（如 "CN"），并不存在 country_alpha2 字段；
+    // country_alpha2 重定向到 country_code 以返回真实二字码（历史返回 "" 为字段名笔误 bug）。
+    pub fn country_alpha2(&self) -> &str { self.get("country_code") }
     pub fn country_alpha3(&self) -> &str { self.get("country_alpha3") }
     pub fn currency_code(&self) -> &str { self.get("currency_code") }
     pub fn currency_name(&self) -> &str { self.get("currency_name") }
     pub fn phone_prefix(&self) -> &str { self.get("phone_prefix") }
     pub fn emoji_flag(&self) -> &str { self.get("emoji_flag") }
     pub fn languages(&self) -> &str { self.get("languages") }
+    pub fn continent(&self) -> &str { self.get("continent") }
+    pub fn continent_en(&self) -> &str { self.get("continent_en") }
+    pub fn country_code(&self) -> &str { self.get("country_code") }
 
     /// `getCidr()` 恒返回 ""（CIDR 非数据库字段）。真实网段用 `reader.lookup_cidr(ip)`。
     pub fn get_cidr(&self) -> &str { self.get("cidr") }

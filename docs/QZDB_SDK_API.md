@@ -290,7 +290,9 @@ reader.verifyCRC()       // 完整性校验
 | | `asn` | `asn()` | `null`/`None`/`nil` |
 | | `as_name` / `as_domain` | `asName()` / `asDomain()` | `""` |
 | **网络场景** | `usage_type` | `usageType()` | `UsageType.Unknown`（见 6.4，全语言必须是类型化值，不是裸字符串） |
-| **跨境/合规** | `country_alpha2` / `country_alpha3` | `countryAlpha2()` / `countryAlpha3()` | `""` |
+| **地理大区** | `continent` / `continent_en` | `continent()` / `continentEn()` | `""` |
+| | `country_code` | `countryCode()` | `""` |
+| **跨境/合规** | `country_code`（二字码；`countryAlpha2()` 已重定向读取此字段，修复历史误读 `country_alpha2` 死字段恒 `""`） / `country_alpha3` | `countryAlpha2()` / `countryAlpha3()` | `""` |
 | | `currency_code` / `currency_name` | `currencyCode()` / `currencyName()` | `""` |
 | | `phone_prefix` | `phonePrefix()` | `""` |
 | | `emoji_flag` | `emojiFlag()` | `""` |
@@ -867,7 +869,10 @@ impl GeoInfo {
     pub fn as_name(&self) -> &str;
     pub fn as_domain(&self) -> &str;
     pub fn usage_type(&self) -> UsageType;
-    pub fn country_alpha2(&self) -> &str;
+    pub fn continent(&self) -> &str;
+    pub fn continent_en(&self) -> &str;
+    pub fn country_code(&self) -> &str;
+    pub fn country_alpha2(&self) -> &str;  // 重定向到 country_code
     pub fn country_alpha3(&self) -> &str;
     pub fn currency_code(&self) -> &str;
     pub fn currency_name(&self) -> &str;
@@ -981,7 +986,10 @@ public class GeoInfo {
     public String getAsName();
     public String getAsDomain();
     public UsageType getUsageType();
-    public String getCountryAlpha2();
+    public String getContinent();
+    public String getContinentEn();
+    public String getCountryCode();
+    public String getCountryAlpha2();  // 重定向到 country_code
     public String getCountryAlpha3();
     public String getCurrencyCode();
     public String getCurrencyName();
@@ -1097,7 +1105,10 @@ namespace Qzdb
         public string AsName => Get("as_name");
         public string AsDomain => Get("as_domain");
         public UsageType UsageType { get; }
-        public string CountryAlpha2 => Get("country_alpha2");
+        public string Continent => Get("continent");
+        public string ContinentEn => Get("continent_en");
+        public string CountryCode => Get("country_code");
+        public string CountryAlpha2 => Get("country_code"); // 重定向：数据集以 country_code 存 alpha-2，修复历史误读 country_alpha2 死字段
         public string CountryAlpha3 => Get("country_alpha3");
         public string CurrencyCode => Get("currency_code");
         public string CurrencyName => Get("currency_name");
@@ -1257,7 +1268,13 @@ class GeoInfo:
     @property
     def usage_type(self) -> "UsageType | str": ...  # v2.4 修正：不再是裸 str
     @property
-    def country_alpha2(self) -> str: ...
+    def continent(self) -> str: ...
+    @property
+    def continent_en(self) -> str: ...
+    @property
+    def country_code(self) -> str: ...
+    @property
+    def country_alpha2(self) -> str: ...  # 重定向到 country_code
     @property
     def country_alpha3(self) -> str: ...
     @property
@@ -1368,7 +1385,10 @@ class GeoInfo {
     get asName() {}
     get asDomain() {}
     get usageType() {}    // 返回原始字符串；UsageType 常量表仅供比较用
-    get countryAlpha2() {}
+    get continent() {}
+    get continentEn() {}
+    get countryCode() {}
+    get countryAlpha2() {}  // 重定向到 country_code
     get countryAlpha3() {}
     get currencyCode() {}
     get currencyName() {}
@@ -1495,7 +1515,10 @@ class GeoInfo implements \ArrayAccess, \JsonSerializable {
     public function getAsName(): string;
     public function getAsDomain(): string;
     public function getUsageType(): UsageType;  // v2.4 修正：不再是裸 string
-    public function getCountryAlpha2(): string;
+    public function getContinent(): string;
+    public function getContinentEn(): string;
+    public function getCountryCode(): string;
+    public function getCountryAlpha2(): string;  // 重定向到 country_code
     public function getCountryAlpha3(): string;
     public function getCurrencyCode(): string;
     public function getCurrencyName(): string;

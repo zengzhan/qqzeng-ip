@@ -153,7 +153,7 @@ const GEOINFO_RESERVED = new Set([
   'getCidr', 'getCountry', 'getCountryEn', 'getCountryAlpha2', 'getCountryAlpha3',
   'getProvince', 'getProvinceEn', 'getCity', 'getCityEn', 'getDistrict',
   'getGeoId', 'getLongitude', 'getLatitude', 'getTimezone', 'getIsp', 'getIspEn',
-  'getAsn', 'getAsName', 'getAsDomain', 'getUsageType', 'getCurrencyCode',
+  'getAsn', 'getAsName', 'getAsDomain', 'getUsageType',   'getCurrencyCode', 'getContinent', 'getContinentEn', 'getCountryCode',
   'getCurrencyName', 'getPhonePrefix', 'getEmojiFlag', 'getLanguages',
 ]);
 
@@ -272,8 +272,11 @@ class GeoInfo {
   getCidr() { return this.get('cidr'); } // CIDR 不是数据库字段（§6：恒返回 ''）；统一走 get() 路径
   getCountry() { return this.get('country'); }
   getCountryEn() { return this.get('country_en'); }
-  getCountryAlpha2() { return this.get('country_alpha2'); }
+  getCountryAlpha2() { return this.get('country_code'); } // 数据集以 country_code 存 alpha-2；历史返回 "" 为字段名笔误 bug
   getCountryAlpha3() { return this.get('country_alpha3'); }
+  getContinent() { return this.get('continent'); }
+  getContinentEn() { return this.get('continent_en'); }
+  getCountryCode() { return this.get('country_code'); }
   getProvince() { return this.get('province'); }
   getProvinceEn() { return this.get('province_en'); }
   getCity() { return this.get('city'); }

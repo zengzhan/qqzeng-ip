@@ -183,10 +183,15 @@ func (g *GeoInfo) GetUsageType() UsageType {
 	return ParseUsageType(g.Get("usage_type"))
 }
 
-func (g *GeoInfo) GetCountryAlpha2() string { return g.Get("country_alpha2") }
+// 数据集以 country_code 存储 ISO 3166-1 alpha-2（如 "CN"），并不存在 country_alpha2 字段；
+// GetCountryAlpha2 重定向到 country_code 以返回真实二字码（历史返回 "" 为字段名笔误 bug）。
+func (g *GeoInfo) GetCountryAlpha2() string { return g.Get("country_code") }
 func (g *GeoInfo) GetCountryAlpha3() string { return g.Get("country_alpha3") }
 func (g *GeoInfo) GetCurrencyCode() string  { return g.Get("currency_code") }
 func (g *GeoInfo) GetCurrencyName() string  { return g.Get("currency_name") }
 func (g *GeoInfo) GetPhonePrefix() string   { return g.Get("phone_prefix") }
 func (g *GeoInfo) GetEmojiFlag() string     { return g.Get("emoji_flag") }
 func (g *GeoInfo) GetLanguages() string     { return g.Get("languages") }
+func (g *GeoInfo) GetContinent() string    { return g.Get("continent") }
+func (g *GeoInfo) GetContinentEn() string  { return g.Get("continent_en") }
+func (g *GeoInfo) GetCountryCode() string  { return g.Get("country_code") }
