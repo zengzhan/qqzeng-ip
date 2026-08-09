@@ -91,7 +91,8 @@ func (b *Builder) Build() (*QzdbReader, error) {
 	if err != nil {
 		return nil, err
 	}
-	r := &QzdbReader{}
-	r.snap.Store(s)
-	return r, nil
+    r := &QzdbReader{}
+    s.refCount.Add(1)
+    r.snap.Store(s)
+    return r, nil
 }

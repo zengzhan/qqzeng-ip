@@ -197,8 +197,8 @@ func (c *geoCache) get(rowID uint32) *GeoInfo {
 
 func (c *geoCache) put(rowID uint32, g *GeoInfo) {
 	s := &c.slots[rowID&c.mask]
-	s.key.Store(rowID)
 	s.val.Store(g)
+	s.key.Store(rowID)
 }
 
 // ---------- 字段投影 ----------
