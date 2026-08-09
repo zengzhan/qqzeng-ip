@@ -1,10 +1,11 @@
-package qzdb;
+package com.qqzeng.qzdb;
 
 /**
- * Exception thrown when QZDB database operations fail.
- * Contains an error code for programmatic error handling.
+ * QZDB SDK 统一非受检异常
  */
 public class QzdbException extends RuntimeException {
+    private static final long serialVersionUID = 1L;
+
     private final ErrorCode errorCode;
 
     public QzdbException(ErrorCode errorCode, String message) {
@@ -19,5 +20,13 @@ public class QzdbException extends RuntimeException {
 
     public ErrorCode getErrorCode() {
         return errorCode;
+    }
+
+    @Override
+    public String toString() {
+        return "QzdbException{" +
+                "errorCode=" + errorCode +
+                ", message=" + getMessage() +
+                '}';
     }
 }
