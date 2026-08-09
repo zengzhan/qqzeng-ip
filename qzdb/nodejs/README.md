@@ -477,3 +477,4 @@ node tier3_concurrent.js        # 并发安全验证
 [MIT](https://opensource.org/licenses/MIT)
 
 <!-- commit: nodejs: Node.js 极速解析引擎 (V8 BigInt, 4700 万+ QPS) -->
+<!-- sync-tag: nodejs 1786303088 -->
