@@ -24,6 +24,8 @@ failures_*.txt
 # Test result dumps (large IP range outputs)
 multi-lang/tools/results/
 tools/results/
+multi-lang/.test_results/
+.test_results/
 
 # Test case fixtures (large generated IP range dumps)
 multi-lang/tools/test_cases/
