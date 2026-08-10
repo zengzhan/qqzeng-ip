@@ -17,6 +17,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.stream.Stream;
 import java.util.zip.CRC32;
 
@@ -122,7 +123,13 @@ public class QzdbReader implements AutoCloseable {
     private static final class Snapshot {
         ByteBuffer data;
         int dataLen;
-        int groupIndex;
+        /**
+         * final：下面的 geoCache 以 entryId 单独作键，其正确性完全依赖
+         * 「groupIndex 在单个 Snapshot 生命周期内不变」这一不变量。切换分组走的
+         * 是重建 Snapshot 的路径（见 Builder 与 reload），绝不能就地改这个字段，
+         * 否则缓存会跨组返回错误数据。加 final 让编译器替我们守住它。
+         */
+        final int groupIndex;
 
         // Header 元数据
         int flags;
@@ -194,6 +201,30 @@ public class QzdbReader implements AutoCloseable {
         long storedCrc;
         volatile Long canonicalCrc;
         private int geoEntryGroupCount;
+
+        /**
+         * Per-snapshot 有界、无锁 GeoInfo 解码缓存，direct-indexed by entryId
+         * （groupIndex 在单个 Snapshot 内固定，无需入 key，语义与 Go/C#/Node.js
+         * SDK 的等价缓存一致）。命中同一 slot 的不同 entryId 视为碰撞，直接
+         * 淘汰重算（解码是确定性、无副作用的，重算代价可接受）。
+         * <p>
+         * 用 {@link AtomicReferenceArray} 发布不可变的 {@link CacheEntry}：单个
+         * volatile 写发布 (key, value) 整体，读者要么看到旧条目、要么看到完整
+         * 的新条目，不会读到"key 已更新但 value 还没写"的撕裂状态——不需要锁。
+         * 这一处补齐的正是 QZDB C/Go/Rust/C#/Node/PHP/Python 七种 SDK 都有、
+         * 唯独 Java 缺失的解码缓存。
+         */
+        private static final int GEO_CACHE_CAP = 1 << 14; // 16384 slots
+        private final AtomicReferenceArray<CacheEntry> geoCache = new AtomicReferenceArray<>(GEO_CACHE_CAP);
+
+        private static final class CacheEntry {
+            final int entryId;
+            final GeoInfo value; // 全字段解码结果（未投影）；不可变，可安全跨线程共享
+            CacheEntry(int entryId, GeoInfo value) {
+                this.entryId = entryId;
+                this.value = value;
+            }
+        }
 
         Snapshot(ByteBuffer buffer, int groupIndex, boolean verifyCrc) throws QzdbException {
             this.data = buffer.duplicate().order(ByteOrder.LITTLE_ENDIAN);
@@ -750,11 +781,46 @@ public class QzdbReader implements AutoCloseable {
 
         /**
          * 按 entryId 解包一行 GeoEntry。fieldFilter 为 null 时返回全字段（共享快照级归一化索引，零额外哈希构建）。
+         * 全字段结果经 per-snapshot 无锁缓存复用；字段投影从缓存的全字段结果直接切片，不重新访问字符串池。
          */
         GeoInfo extractGeoInfo(int entryId, String[] fieldFilter) {
             if (entryId <= 0 || entryId >= groupEntryCounts[groupIndex]) {
                 return null;
             }
+
+            GeoInfo full = decodeFullCached(entryId);
+            if (full == null) {
+                return null;
+            }
+            if (fieldFilter == null) {
+                return full;
+            }
+
+            // 字段投影模式（§9.6：未知字段补空串，不抛异常）——从已解码的全字段结果切片
+            String[] fullValues = full.values();
+            String[] values = new String[fieldFilter.length];
+            for (int i = 0; i < fieldFilter.length; i++) {
+                Integer origIdx = normalizedFieldMap.get(GeoInfo.normalizeKey(fieldFilter[i]));
+                values[i] = (origIdx == null || origIdx >= fullValues.length) ? "" : fullValues[origIdx];
+            }
+            return new GeoInfo(fieldFilter, values);
+        }
+
+        /** 无锁读取/填充 per-snapshot 全字段 GeoInfo 缓存（direct-indexed, single-slot, 碰撞即淘汰重算）。 */
+        private GeoInfo decodeFullCached(int entryId) {
+            int slot = (entryId & 0x7FFFFFFF) & (GEO_CACHE_CAP - 1);
+            CacheEntry cached = geoCache.get(slot);
+            if (cached != null && cached.entryId == entryId) {
+                return cached.value;
+            }
+            GeoInfo decoded = decodeFull(entryId);
+            if (decoded != null) {
+                geoCache.set(slot, new CacheEntry(entryId, decoded));
+            }
+            return decoded;
+        }
+
+        private GeoInfo decodeFull(int entryId) {
             final int gi = groupIndex;
             final int fc = groupFieldCounts[gi];
             final long entryOff = groupEntryOffsets[gi] + (long) entryId * groupStrides[gi];
@@ -768,25 +834,11 @@ public class QzdbReader implements AutoCloseable {
             final int[] natTypes = groupFieldNativeType[gi];
             final String[][] groupPoolList = pools[gi];
 
-            if (fieldFilter == null) {
-                String[] values = new String[fc];
-                for (int fi = 0; fi < fc; fi++) {
-                    values[fi] = readFieldValue(entryOff, fi, widths, offsets, natives, natTypes, groupPoolList);
-                }
-                return new GeoInfo(fieldNames, values, normalizedFieldMap, numericFieldFlags);
+            String[] values = new String[fc];
+            for (int fi = 0; fi < fc; fi++) {
+                values[fi] = readFieldValue(entryOff, fi, widths, offsets, natives, natTypes, groupPoolList);
             }
-
-            // 字段投影模式（§9.6：未知字段补空串，不抛异常）
-            String[] values = new String[fieldFilter.length];
-            for (int i = 0; i < fieldFilter.length; i++) {
-                Integer origIdx = normalizedFieldMap.get(GeoInfo.normalizeKey(fieldFilter[i]));
-                if (origIdx == null || origIdx >= fc) {
-                    values[i] = "";
-                } else {
-                    values[i] = readFieldValue(entryOff, origIdx, widths, offsets, natives, natTypes, groupPoolList);
-                }
-            }
-            return new GeoInfo(fieldFilter, values);
+            return new GeoInfo(fieldNames, values, normalizedFieldMap, numericFieldFlags);
         }
 
         private String readFieldValue(long entryOff, int fi, int[] widths, int[] offsets,
