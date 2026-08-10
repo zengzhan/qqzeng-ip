@@ -648,7 +648,7 @@ static int get_geo_info(qzdb_reader_t* ctx, uint32_t entry_id, int group_index, 
     if (group_index < 0 || group_index >= ctx->actual_groups) return QZDB_ERR_INVALID_PARAM;
     if (entry_id >= ctx->group_entry_counts[group_index]) return QZDB_ERR_INVALID_PARAM;
     int field_count = ctx->group_field_counts[group_index];
-    if (field_count <= 0) return QZDB_ERR_CORRUPTED;
+    if (field_count <= 0 || field_count > QZDB_MAX_FIELDS) return QZDB_ERR_CORRUPTED;
     uint64_t group_entry_start = ctx->off_geo_entries + ctx->group_entry_offsets[group_index];
     int stride = ctx->group_strides[group_index];
     uint64_t entry_offset = group_entry_start + (uint64_t)entry_id * stride;
@@ -700,7 +700,7 @@ static int get_geo_info_buf(qzdb_reader_t* ctx, uint32_t entry_id, int group_ind
     if (group_index < 0 || group_index >= ctx->actual_groups) return QZDB_ERR_INVALID_PARAM;
     if (entry_id >= ctx->group_entry_counts[group_index]) return QZDB_ERR_INVALID_PARAM;
     int field_count = ctx->group_field_counts[group_index];
-    if (field_count <= 0) return QZDB_ERR_CORRUPTED;
+    if (field_count <= 0 || field_count > QZDB_MAX_FIELDS) return QZDB_ERR_CORRUPTED;
     uint64_t group_entry_start = ctx->off_geo_entries + ctx->group_entry_offsets[group_index];
     int stride = ctx->group_strides[group_index];
     uint64_t entry_offset = group_entry_start + (uint64_t)entry_id * stride;
