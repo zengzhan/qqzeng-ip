@@ -1,5 +1,8 @@
 edition = "2021"
-line_length = 100
+max_width = 100
 tab_spaces = 4
 use_small_heuristics = "Default"
-indent_style = "Spaces"
+# 注意：indent_style 的合法取值只有 "Block" / "Visual"，没有 "Spaces"。
+# 此前误写为 "Spaces" 导致整个配置文件解析失败，`cargo fmt` 长期静默不生效
+# （只报一行解析错误、退出码仍为 0，极易被 CI 与人眼同时忽略）。
+indent_style = "Block"

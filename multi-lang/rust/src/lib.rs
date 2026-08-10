@@ -6,6 +6,10 @@
 //! - 浮点字段在解码期格式化为 6 位小数（NaN/Inf → ""）；`to_pipe` 直接拼接已解码字符串。
 //! - SENTINEL 哨兵位在 Trie 返回 row_id 时即剥离。
 
+// 本 crate 不含任何 unsafe：以下 lint 把"事实上零 unsafe"升级为编译期强制约束，
+// 任何后续改动若引入 unsafe 会直接编译失败。
+#![forbid(unsafe_code)]
+
 use std::collections::HashMap;
 use std::fs;
 use std::sync::{Arc, OnceLock};
@@ -141,6 +145,23 @@ fn compute_canonical_crc(data: &[u8]) -> u32 {
 // ---------------------------------------------------------------------------
 // 安全读取助手
 // ---------------------------------------------------------------------------
+
+/// 计算 GEO_ENTRIES 中单条条目的字节偏移。
+///
+/// 三个加数全部来自文件（`off_geo_entries` / `group_entry_offsets[g]` / `group_strides[g]`），
+/// 畸形文件可让它们在 usize 上溢出。全程 saturating：溢出即饱和到 `usize::MAX`，
+/// 后续 [`read_arr`] 的 `checked_add` 必然返回 `None`，降级为空值而非 panic。
+#[inline(always)]
+fn entry_off_of(
+    off_geo_entries: u64,
+    group_entry_offset: u64,
+    entry_id: u32,
+    stride: usize,
+) -> usize {
+    (off_geo_entries as usize)
+        .saturating_add(group_entry_offset as usize)
+        .saturating_add((entry_id as usize).saturating_mul(stride))
+}
 
 /// 定长读取的统一入口：`off + N` 用 `checked_add` 防止 usize 回绕
 /// （回绕会让 `off + N > len` 判为 false 而后续切片 panic），
@@ -1066,6 +1087,46 @@ impl SnapshotInner {
             group_field_native_type[g] = vec![0; fc];
         }
 
+        // 关键不变量：GEO_ENTRIES 条目表的实际延展必须由文件长度背书。
+        //
+        // off_geo_entries 只在头部校验了段头 16 字节可读，而定位单条条目还要用到
+        // group_entry_offsets[g]（头部 48 位）、group_strides[g]、group_entry_counts[g]，
+        // 这三者全部直接来自文件且互不对账。畸形文件可令热路径的
+        //     entry_off = off_geo_entries + group_entry_offsets[g] + entry_id * group_strides[g]
+        // 在 usize 上溢出：debug 构建直接 panic（可被恶意 .qzdb 远程打崩），
+        // release 构建靠整数回绕 + 下游 read_arr 的 checked_add 侥幸兜住——
+        // 也就是说 release 的"安全"来自未声明的巧合，一旦部署方开启
+        // `overflow-checks = true` 加固反而会崩。
+        //
+        // 这里在解析期把 entry_count 收敛到"文件里真实放得下"的条数：
+        // 需满足 (n-1) * stride + span <= data_len - base，其中 span 为组内字段
+        // 最远触达点。收敛之后 resolve_geo 的 `entry_id < group_entry_counts[gi]`
+        // 判据即可推出 entry_off 恒 <= d.len()，热路径无需逐次判边界。
+        for g in 0..actual_groups {
+            let stride = group_strides[g];
+            let span = group_field_offsets[g]
+                .iter()
+                .zip(group_field_widths[g].iter())
+                .map(|(o, w)| o.saturating_add(*w))
+                .max()
+                .unwrap_or(0)
+                .max(stride);
+            let base = (off_geo_entries as usize).saturating_add(group_entry_offsets[g] as usize);
+            let avail = d.len().saturating_sub(base);
+            let fit: u32 = if base >= d.len() || span > avail {
+                0
+            } else {
+                match (avail - span).checked_div(stride) {
+                    // stride 为 0：全部条目重叠在同一处，只要首条读得下就不限制条数。
+                    None => group_entry_counts[g],
+                    Some(n) => n.saturating_add(1).min(u32::MAX as usize) as u32,
+                }
+            };
+            if group_entry_counts[g] > fit {
+                group_entry_counts[g] = fit;
+            }
+        }
+
         // ---- Meta / 档次 / 字段名（FORMAT §10.3 统一契约） ----
         //
         //   edition      1. GROUP_SCHEMA.groupId / Header.VersionMask 的 one-hot 位
@@ -1476,8 +1537,15 @@ impl SnapshotInner {
     fn build_geo(&self, entry_id: u32) -> Arc<GeoInfo> {
         let gi = self.group_index;
         let fc = self.group_field_counts[gi];
-        let entry_off = self.off_geo_entries as usize + self.group_entry_offsets[gi] as usize
-            + entry_id as usize * self.group_strides[gi];
+        // 解析期已把 entry_count 收敛到文件放得下的范围，此处正常不会饱和；
+        // 用 saturating 是第二道防线：即便将来收口被改坏，也只会读到越界偏移
+        // 从而由 read_arr 的 checked_add 返回 None（降级为空串），绝不 panic。
+        let entry_off = entry_off_of(
+            self.off_geo_entries,
+            self.group_entry_offsets[gi],
+            entry_id,
+            self.group_strides[gi],
+        );
         let d = self.data.as_slice();
         let widths = &self.group_field_widths[gi];
         let offsets = &self.group_field_offsets[gi];
@@ -1488,7 +1556,7 @@ impl SnapshotInner {
         let mut values = Vec::with_capacity(fc);
         for i in 0..fc {
             let w = widths[i];
-            let fo = entry_off + offsets[i];
+            let fo = entry_off.saturating_add(offsets[i]);
             let val = if natives[i] {
                 let t = nat_types[i];
                 if t == 1 {
@@ -1536,8 +1604,12 @@ impl SnapshotInner {
         }
         let gi = self.group_index;
         let fc = self.group_field_counts[gi];
-        let entry_off = self.off_geo_entries as usize + self.group_entry_offsets[gi] as usize
-            + entry_id as usize * self.group_strides[gi];
+        let entry_off = entry_off_of(
+            self.off_geo_entries,
+            self.group_entry_offsets[gi],
+            entry_id,
+            self.group_strides[gi],
+        );
         let d = self.data.as_slice();
         let widths = &self.group_field_widths[gi];
         let offsets = &self.group_field_offsets[gi];
@@ -1562,7 +1634,7 @@ impl SnapshotInner {
                 continue;
             }
             let w = widths[fi];
-            let fo = entry_off + offsets[fi];
+            let fo = entry_off.saturating_add(offsets[fi]);
             let val = if natives[fi] {
                 let t = nat_types[fi];
                 if t == 1 {
