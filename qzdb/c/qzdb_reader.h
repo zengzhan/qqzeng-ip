@@ -28,14 +28,29 @@ typedef struct {
     uint32_t           count;
 } qzdb_norm_map_t;
 
-/* Per-snapshot bounded decode-cache slot (open addressing). The cached value
- * strings are owned by the snapshot and live until qzdb_free(); a GeoInfo that
- * points at them must NOT free them (no values_mask bit set). */
-typedef struct {
-    uint64_t key;   /* (group << 40) | entry_id ; 0 == empty */
-    char**   values;  /* field_count heap strings (persistent for snapshot lifetime) */
+/* Per-snapshot bounded decode cache.
+ *
+ * LIFETIME CONTRACT (load-bearing — do not weaken):
+ *   A cache entry is built to completion *before* it becomes reachable, and is
+ *   then immutable and never freed until qzdb_free(). qzdb_find() hands the
+ *   caller borrowed pointers into the entry (values_mask bit stays clear, so
+ *   qzdb_free_geo_info() will not free them). That borrow is only sound while
+ *   nothing can free the strings underneath it — hence: THE CACHE NEVER EVICTS.
+ *
+ *   Any "evict + free + re-decode" scheme (whether guarded by one global mutex
+ *   or by per-slot mutexes) turns every previously returned qzdb_geo_info_t
+ *   into a dangling pointer. That is a use-after-free, trivially reproducible
+ *   with qzdb_find_batch(), and it is why this cache is fill-only.
+ *
+ *   When the probe window is exhausted the lookup simply reports a miss and
+ *   the caller falls back to get_geo_info(), which returns caller-owned
+ *   strings with the proper values_mask bits set. Bounded memory, no eviction.
+ */
+typedef struct qzdb_cache_entry {
+    uint64_t key;     /* (group << 40) | entry_id */
+    char**   values;  /* count heap strings, alive for the snapshot's lifetime */
     int      count;
-} qzdb_cache_slot_t;
+} qzdb_cache_entry_t;
 
 typedef struct {
     uint8_t* data;
@@ -126,10 +141,15 @@ typedef struct {
     uint32_t file_crc;
     int      crc_valid;
 
-    /* Per-snapshot bounded GeoInfo decode cache (keyed by group<<40|entry_id). */
-    qzdb_cache_slot_t* geo_cache;
-    uint32_t           geo_cache_cap;
-    pthread_mutex_t    geo_cache_lock;
+    /* Per-snapshot bounded GeoInfo decode cache (keyed by group<<40|entry_id).
+     * Slot array of entry pointers; NULL == empty. Readers do a plain acquire
+     * load, writers publish with a release CAS — no mutex on the query path,
+     * which is what makes the "lock-free concurrent queries" claim true for C.
+     * Declared as a plain pointer (not _Atomic) so this header stays valid C++
+     * for the extern "C" consumers; the atomicity lives in qzdb_reader.c via
+     * the __atomic_* builtins. */
+    qzdb_cache_entry_t** geo_cache;
+    uint32_t             geo_cache_cap;
 } qzdb_reader_t;
 
 typedef struct {

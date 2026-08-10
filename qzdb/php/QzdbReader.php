@@ -638,7 +638,10 @@ class QzdbReader
     }
     const MAX_TRIE_WALK_STEPS = 1000;
     const MAX_POOL_COUNT = 1 << 26;
-    const GEO_CACHE_LIMIT = 1 << 16; // 有界缓存上限（开放寻址 / 碰撞只重算）
+    // 有界 GeoInfo 缓存容量。直接映射（direct-mapped）：碰撞覆盖单槽，**永不整表清空**。
+    // 与 Go(geoCache.slots) / Node.js(_geoCache.keys|vals) / C#(槽位数组) 语义一致。
+    const GEO_CACHE_LIMIT = 1 << 16;
+    const GEO_CACHE_MASK  = self::GEO_CACHE_LIMIT - 1;
 
     // 数据源
     private $data = null;        // 缓冲模式：完整文件字节
@@ -717,9 +720,16 @@ class QzdbReader
     private $groupIds = [];
     private $groupCount = 0;
 
-    // per-snapshot 有界无锁 GeoInfo 缓存
+    // per-snapshot 有界 GeoInfo 缓存，直接映射：slot => [groupIndex, entryId, GeoInfo]。
+    //
+    // 关键设计：数组键是**槽位下标**而不是 "group:entry" 复合键。这样条目数天然被
+    // GEO_CACHE_MASK 钉死在 GEO_CACHE_LIMIT 以内，装满后靠"碰撞覆盖单槽"自然淘汰，
+    // 不需要（也绝不能）整表清空 —— 长驻进程（Swoole / RoadRunner / FrankenPHP）下
+    // 整表清空会造成周期性的一次性全量缓存失效，表现为规律出现的延迟毛刺。
+    //
+    // 命中判定比对完整 (groupIndex, entryId)，碰撞时只是重算，绝不返回错值。
+    // 数组按需生长，不做 65536 元素预分配（短生命周期 CLI 场景零额外开销）。
     private $geoCache = [];
-    private $geoCacheSize = 0;
 
     // 无单例。v2.4 起全语言删除 getInstance()：进程级共享一个可变实例在并发下
     // 无法回答「现在查的是哪个库」。需要按路径复用请用 QzdbRegistry。
@@ -752,7 +762,6 @@ class QzdbReader
         $this->data = null;
         $this->closed = true;
         $this->geoCache = [];
-        $this->geoCacheSize = 0;
     }
 
     public function isClosed(): bool
@@ -796,7 +805,6 @@ class QzdbReader
             throw new QzdbException('CRC32 checksum mismatch — the .qzdb file is corrupted or truncated', self::ERROR_CORRUPTED);
         }
         $this->geoCache = [];
-        $this->geoCacheSize = 0;
     }
 
     /** 从内存字节加载（拷贝语义）。 */
@@ -811,7 +819,6 @@ class QzdbReader
             throw new QzdbException('CRC32 checksum mismatch — the .qzdb buffer is corrupted or truncated', self::ERROR_CORRUPTED);
         }
         $this->geoCache = [];
-        $this->geoCacheSize = 0;
     }
 
     /** 从输入流句柄加载（读取全部字节到内存）。 */
@@ -1858,10 +1865,14 @@ class QzdbReader
         if ($groupIndex < 0 || $groupIndex >= count($this->groupFieldCounts)) return null;
         if ($entryId < 0 || $entryId >= $this->groupEntryCounts[$groupIndex]) return null;
 
-        // 有界缓存命中：直接复用（近零分配）
-        $cacheKey = $groupIndex . ':' . $entryId;
-        if (isset($this->geoCache[$cacheKey])) {
-            return $this->geoCache[$cacheKey];
+        // 有界缓存命中：直接复用（近零分配）。
+        // 槽位散列对 entryId 做高位折叠再叠加组偏移；刻意不用 2654435761 这类大乘数，
+        // 以免在 32 位 PHP 上溢出成 float 再被 & 隐式转换。entryId 稠密且 < 65536 时
+        // 退化为恒等映射（零碰撞），这正是绝大多数库的实际形态。
+        $slot = (($entryId ^ ($entryId >> 16)) + ($groupIndex << 13)) & self::GEO_CACHE_MASK;
+        $hit = $this->geoCache[$slot] ?? null;
+        if ($hit !== null && $hit[0] === $groupIndex && $hit[1] === $entryId) {
+            return $hit[2];
         }
 
         $this->ensurePoolsLoaded();
@@ -1908,13 +1919,9 @@ class QzdbReader
 
         $info = new GeoInfo($values, $this->fieldNames, $this->floatFieldIndices, $this->normalizedFieldMap);
 
-        // 写入有界缓存；超界则清空重建（碰撞只重算，绝不返回错值）
-        if ($this->geoCacheSize >= self::GEO_CACHE_LIMIT) {
-            $this->geoCache = [];
-            $this->geoCacheSize = 0;
-        }
-        $this->geoCache[$cacheKey] = $info;
-        $this->geoCacheSize++;
+        // 写入有界缓存：直接映射，碰撞就覆盖这一个槽。
+        // 表容量由 slot 下标本身封顶，无需容量计数器，更不需要整表清空。
+        $this->geoCache[$slot] = [$groupIndex, $entryId, $info];
 
         return $info;
     }

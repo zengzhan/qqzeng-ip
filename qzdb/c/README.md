@@ -501,4 +501,3 @@ typedef enum { QZDB_OK=0, QZDB_ERR_NOT_FOUND=-1, QZDB_ERR_CORRUPTED=-2,
 [MIT](https://opensource.org/licenses/MIT)
 
 <!-- commit: c: C 语言极速解析引擎 (mmap 零拷贝, 2 亿+ QPS) -->
-<!-- sync-tag: c 1786303088 -->
