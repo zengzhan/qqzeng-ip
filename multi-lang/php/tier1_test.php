@@ -264,6 +264,79 @@ check(is_array($reader2->getFieldNames()), 'getFieldNames 数组');
 check($reader2->hasField('field_0'), 'hasField 命中');
 check(!$reader2->hasField('nonexistent_field'), 'hasField 未命中');
 
+/* ----------------------------------------------------------------------
+ * GeoInfo 缓存淘汰策略（直接映射 / 碰撞覆盖 / 永不整表清空）
+ *
+ * 回归守卫：旧实现在 size 达到 GEO_CACHE_LIMIT 时执行 `$this->geoCache = []`
+ * 整表清空，长驻进程（Swoole/RoadRunner）下会把常驻热点集一起丢光，造成吞吐断崖。
+ * 这里断言三件事：① 表容量被槽位下标钉死 ② 碰撞只重算绝不串值
+ * ③ 持续压入远超容量的 entry 也不会出现条目数骤降。
+ * ---------------------------------------------------------------------- */
+$cacheDb = __DIR__ . '/../data/qqzeng_ip_std_global.qzdb';
+if (file_exists($cacheDb)) {
+    $cr   = new QzdbReader($cacheDb, 0);
+    $crf  = new ReflectionClass($cr);
+    $mResolve = $crf->getMethod('resolveGeo');
+    $mResolve->setAccessible(true);
+    $pCache = $crf->getProperty('geoCache');
+    $pCache->setAccessible(true);
+    $pCounts = $crf->getProperty('groupEntryCounts');
+    $pCounts->setAccessible(true);
+    $nEntry = $pCounts->getValue($cr)[0];
+
+    $cap = QzdbReader::GEO_CACHE_LIMIT;
+    check($cap === (QzdbReader::GEO_CACHE_MASK + 1), '缓存容量与掩码自洽');
+    check(($cap & ($cap - 1)) === 0, '缓存容量是 2 的幂');
+
+    // ① 压入 2.5 倍容量的不同 entry：条目数不得越界，也不得骤降
+    $probe = min($nEntry, (int)($cap * 2.5));
+    $prevSz = 0; $sawDrop = false;
+    for ($i = 1; $i < $probe; $i++) {
+        $mResolve->invoke($cr, $i, 0);
+        if (($i & 0x3FFF) === 0) {                  // 每 16384 次采样一次
+            $sz = count($pCache->getValue($cr));
+            if ($sz < $prevSz * 0.5) { $sawDrop = true; }
+            $prevSz = $sz;
+        }
+    }
+    $finalSz = count($pCache->getValue($cr));
+    check($finalSz <= $cap, "缓存条目数不越界（{$finalSz} <= {$cap}）");
+    check($finalSz > $cap * 0.5, "缓存被有效填充（{$finalSz}）");
+    check($sawDrop === false, '压入 2.5x 容量全程无整表清空（条目数无骤降）');
+
+    // ② 碰撞正确性：找一对映射到同一槽位的 entryId，交替查询必须各自返回自己的值
+    $slotOf = static function (int $e) use ($cap): int {
+        return (($e ^ ($e >> 16)) + 0) & ($cap - 1);
+    };
+    $seen = []; $pair = null;
+    for ($e = 1; $e < $nEntry && $pair === null; $e++) {
+        $s = $slotOf($e);
+        if (isset($seen[$s])) { $pair = [$seen[$s], $e]; } else { $seen[$s] = $e; }
+    }
+    check($pair !== null, '构造出同槽位碰撞对');
+    if ($pair !== null) {
+        list($eA, $eB) = $pair;
+        $refA = $mResolve->invoke($cr, $eA, 0);
+        $refB = $mResolve->invoke($cr, $eB, 0);
+        $pipeA = $refA === null ? '<null>' : $refA->toPipe();
+        $pipeB = $refB === null ? '<null>' : $refB->toPipe();
+        $ok = true;
+        for ($k = 0; $k < 50; $k++) {               // 交替 100 次，每次都在互相踢出对方
+            $a = $mResolve->invoke($cr, $eA, 0);
+            $b = $mResolve->invoke($cr, $eB, 0);
+            if (($a === null ? '<null>' : $a->toPipe()) !== $pipeA) { $ok = false; break; }
+            if (($b === null ? '<null>' : $b->toPipe()) !== $pipeB) { $ok = false; break; }
+        }
+        check($ok, "同槽位碰撞交替查询不串值（entry {$eA} vs {$eB}）");
+    }
+
+    // ③ reload / close 后缓存必须清空（快照隔离）
+    $cr->close();
+    check(count($pCache->getValue($cr)) === 0, 'close 后缓存清空');
+} else {
+    echo "SKIP 缓存淘汰策略测试: {$cacheDb} 不存在\n";
+}
+
 echo "\nTier1: PASSED={$passed} FAILED={$failed}\n";
 if ($failed > 0) {
     exit(1);
