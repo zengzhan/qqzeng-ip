@@ -1,4 +1,11 @@
+/* Feature-test macros: _DARWIN_C_SOURCE unlocks strdup()/madvise() on macOS.
+ * On glibc, -std=c11 (strict ISO C) hides those same declarations, which makes
+ * strdup() fall back to an implicit int-returning declaration -> pointer
+ * truncation on LP64, and leaves MADV_RANDOM undefined. _DEFAULT_SOURCE is the
+ * glibc equivalent; defining both keeps this file clean on macOS and Linux
+ * without depending on a compiler's default GNU dialect. */
 #define _DARWIN_C_SOURCE
+#define _DEFAULT_SOURCE
 #include "qzdb_reader.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,8 +29,13 @@ static const char* error_messages[] = {
 };
 
 const char* qzdb_strerror(int error_code) {
-    if (error_code >= 0 && error_code < (int)(sizeof(error_messages)/sizeof(error_messages[0])))
-        return error_messages[error_code];
+    /* qzdb_error_t is 0 (QZDB_OK) or negative (QZDB_ERR_* = -1..-8); the table
+     * above is indexed by the *negated* code. The previous `error_code >= 0`
+     * guard meant every real error fell through to "Unknown error" and only
+     * QZDB_OK ever rendered correctly. */
+    int idx = error_code <= 0 ? -error_code : -1;
+    if (idx >= 0 && idx < (int)(sizeof(error_messages)/sizeof(error_messages[0])))
+        return error_messages[idx];
     return "Unknown error";
 }
 
@@ -514,79 +526,118 @@ static uint32_t trie_walk_v6(const qzdb_reader_t* ctx, const uint8_t* ip_bin) {
 /* ========================================================================
  * GeoInfo decode cache (per-snapshot bounded)
  * ======================================================================== */
+/* Bounded probe window. Keeping it small caps the worst-case read cost at a
+ * handful of acquire loads; keys that don't land within it are simply reported
+ * as a miss and served by the caller-owned decode path. */
+#define QZDB_CACHE_PROBE 4
+
 static void geo_cache_init(qzdb_reader_t* ctx) {
-    ctx->geo_cache_cap = 16384;
-    ctx->geo_cache = calloc(ctx->geo_cache_cap, sizeof(qzdb_cache_slot_t));
-    pthread_mutex_init(&ctx->geo_cache_lock, NULL);
+    ctx->geo_cache_cap = 16384;   /* power of two */
+    ctx->geo_cache = calloc(ctx->geo_cache_cap, sizeof(qzdb_cache_entry_t*));
+    if (!ctx->geo_cache) ctx->geo_cache_cap = 0;   /* degrade to no-cache, never NULL-deref */
 }
 
-static void geo_cache_free(qzdb_reader_t* ctx) {
-    if (ctx->geo_cache) {
-        for (uint32_t i = 0; i < ctx->geo_cache_cap; i++) {
-            qzdb_cache_slot_t* s = &ctx->geo_cache[i];
-            if (s->key != 0 && s->values) { for (int k = 0; k < s->count; k++) free(s->values[k]); free(s->values); }
-        }
-        free(ctx->geo_cache);
-        ctx->geo_cache = NULL;
+static void geo_cache_entry_destroy(qzdb_cache_entry_t* e) {
+    if (!e) return;
+    if (e->values) {
+        for (int k = 0; k < e->count; k++) free(e->values[k]);
+        free(e->values);
     }
-    pthread_mutex_destroy(&ctx->geo_cache_lock);
+    free(e);
 }
 
-static char** geo_cache_store(qzdb_reader_t* ctx, qzdb_cache_slot_t* slot,
-                              int group, uint32_t entry_id, int* out_count) {
+/* Only called from qzdb_free(), i.e. after all queries have quiesced. */
+static void geo_cache_free(qzdb_reader_t* ctx) {
+    if (!ctx->geo_cache) return;
+    for (uint32_t i = 0; i < ctx->geo_cache_cap; i++)
+        geo_cache_entry_destroy(ctx->geo_cache[i]);
+    free(ctx->geo_cache);
+    ctx->geo_cache = NULL;
+    ctx->geo_cache_cap = 0;
+}
+
+/* Decode (group, entry_id) into a fresh heap array. No cache interaction. */
+static char** geo_cache_decode(qzdb_reader_t* ctx, int group, uint32_t entry_id, int* out_count) {
     char bufs[QZDB_MAX_FIELDS][64];
     char* vals[QZDB_MAX_FIELDS];
     int cnt = 0;
-    if (get_geo_info_buf(ctx, entry_id, group, vals, bufs, 64, &cnt) != QZDB_OK) { *out_count = 0; return NULL; }
-    char** pv = malloc((size_t)cnt * sizeof(char*));
-    if (!pv) { *out_count = 0; return NULL; }
-    for (int i = 0; i < cnt; i++) pv[i] = strdup(vals[i] ? vals[i] : "");
-    slot->key = ((uint64_t)group << 40) | (uint64_t)entry_id;
-    slot->values = pv;
-    slot->count = cnt;
+    *out_count = 0;
+    if (get_geo_info_buf(ctx, entry_id, group, vals, bufs, 64, &cnt) != QZDB_OK) return NULL;
+    if (cnt <= 0) return NULL;
+    char** pv = calloc((size_t)cnt, sizeof(char*));
+    if (!pv) return NULL;
+    for (int i = 0; i < cnt; i++) {
+        pv[i] = strdup(vals[i] ? vals[i] : "");
+        if (!pv[i]) {   /* OOM mid-way: unwind, report miss */
+            for (int k = 0; k < i; k++) free(pv[k]);
+            free(pv);
+            return NULL;
+        }
+    }
     *out_count = cnt;
     return pv;
 }
 
+/*
+ * Lock-free, fill-only decode cache.
+ *
+ * Read path  : one __ATOMIC_ACQUIRE load per probed slot, no mutex at all.
+ *              Multiple threads scale linearly; this is what the README's
+ *              "lock-free concurrent queries" line for C is supposed to mean.
+ * Write path : build the entry to completion, then publish it with a single
+ *              release CAS. A reader therefore never observes a half-built
+ *              entry — it sees either NULL or a fully populated, immutable one.
+ * Eviction   : none, ever. See the LIFETIME CONTRACT note in qzdb_reader.h.
+ *              Losing a publish race or exhausting the probe window returns
+ *              NULL, and resolve_row_id_cached() falls back to get_geo_info(),
+ *              which produces caller-owned strings with values_mask set.
+ *
+ * Returns borrowed pointers (valid until qzdb_free) on hit, NULL on miss.
+ */
 static char** geo_cache_lookup(qzdb_reader_t* ctx, int group, uint32_t entry_id, int* out_count) {
     *out_count = 0;
-    if (!ctx->geo_cache) {
-        /* Cache disabled — decode into heap (caller frees) */
-        char bufs[QZDB_MAX_FIELDS][64];
-        char* vals[QZDB_MAX_FIELDS];
-        int cnt = 0;
-        if (get_geo_info_buf(ctx, entry_id, group, vals, bufs, 64, &cnt) == QZDB_OK) {
-            char** pv = malloc((size_t)cnt * sizeof(char*));
-            if (pv) { for (int i = 0; i < cnt; i++) pv[i] = strdup(vals[i] ? vals[i] : ""); *out_count = cnt; return pv; }
-        }
-        return NULL;
-    }
+    if (!ctx->geo_cache || ctx->geo_cache_cap == 0) return NULL;
+
     uint64_t key = ((uint64_t)group << 40) | (uint64_t)entry_id;
     uint32_t mask = ctx->geo_cache_cap - 1;
-    uint32_t h = (uint32_t)key * 2654435761u;
-    pthread_mutex_lock(&ctx->geo_cache_lock);
-    for (uint32_t i = 0; i < ctx->geo_cache_cap; i++) {
+    /* Fold the high bits in: entry_id alone occupies the low 40 bits, so a
+     * plain (uint32_t)key cast would discard the group entirely. */
+    uint32_t h = (uint32_t)(key ^ (key >> 32)) * 2654435761u;
+
+    uint32_t free_idx = UINT32_MAX;
+    for (uint32_t i = 0; i < QZDB_CACHE_PROBE; i++) {
         uint32_t idx = (h + i) & mask;
-        qzdb_cache_slot_t* s = &ctx->geo_cache[idx];
-        if (s->key == 0) {
-            char** pv = geo_cache_store(ctx, s, group, entry_id, out_count);
-            pthread_mutex_unlock(&ctx->geo_cache_lock);
-            return pv;
+        qzdb_cache_entry_t* e = __atomic_load_n(&ctx->geo_cache[idx], __ATOMIC_ACQUIRE);
+        if (!e) {
+            if (free_idx == UINT32_MAX) free_idx = idx;
+            continue;
         }
-        if (s->key == key) { *out_count = s->count; pthread_mutex_unlock(&ctx->geo_cache_lock); return s->values; }
+        if (e->key == key) { *out_count = e->count; return e->values; }
     }
-    /* Table full: overwrite home slot (old slot may be shared across threads, but we just replace it) */
-    qzdb_cache_slot_t* s = &ctx->geo_cache[h & mask];
-    if (s->values) {
-        for (int k = 0; k < s->count; k++) free(s->values[k]);
-        free(s->values);
-        s->values = NULL;
-        s->count = 0;
-        s->key = 0;
+    if (free_idx == UINT32_MAX) return NULL;   /* window full — never evict */
+
+    int cnt = 0;
+    char** pv = geo_cache_decode(ctx, group, entry_id, &cnt);
+    if (!pv) return NULL;
+    qzdb_cache_entry_t* e = malloc(sizeof(*e));
+    if (!e) {
+        for (int k = 0; k < cnt; k++) free(pv[k]);
+        free(pv);
+        return NULL;
     }
-    char** pv = geo_cache_store(ctx, s, group, entry_id, out_count);
-    pthread_mutex_unlock(&ctx->geo_cache_lock);
-    return pv;
+    e->key = key; e->values = pv; e->count = cnt;
+
+    qzdb_cache_entry_t* expected = NULL;
+    if (__atomic_compare_exchange_n(&ctx->geo_cache[free_idx], &expected, e,
+                                    0 /* strong */, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
+        *out_count = cnt;
+        return e->values;
+    }
+    /* Lost the race: `expected` is now the winner's entry. Ours was never
+     * reachable by any other thread, so destroying it here is safe. */
+    geo_cache_entry_destroy(e);
+    if (expected && expected->key == key) { *out_count = expected->count; return expected->values; }
+    return NULL;
 }
 
 /* ========================================================================
