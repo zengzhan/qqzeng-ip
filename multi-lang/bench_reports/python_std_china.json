@@ -1,0 +1,745 @@
+{
+  "contract": "QZDB_BENCH_CONTRACT v1.0",
+  "language": "python",
+  "sdk_version": "multi-lang/python (reference)",
+  "timestamp": "2026-08-10T18:37:46+0800",
+  "seed": 20260807,
+  "db": {
+    "path": "/Users/zengxiangzhan/ZengData/IP数据库/qzdb/multi-lang/python/../test_data_202608/std/china/qqzeng_ip_std_china.qzdb",
+    "edition": "std_china",
+    "bytes": 8607523,
+    "hash": "crc32:n/a"
+  },
+  "environment": {
+    "cpu": "arm",
+    "cores": 14,
+    "ram_gb": null,
+    "os": "Darwin 25.5.0 arm64",
+    "runtime": "Python 3.13.12",
+    "compiler": "CPython",
+    "bench_contract": "v1.0",
+    "note": "Python is GIL-bound; multi-thread QPS is best-effort, concurrency_safety is the meaningful thread assertion."
+  },
+  "distributions": {
+    "random": {
+      "v4": {
+        "cold": {
+          "ops": 200000,
+          "qps": 1353082.3,
+          "avg_ns": 739.1,
+          "p50_ns": 249,
+          "p95_ns": 1374,
+          "p99_ns": 5041,
+          "errors": 0,
+          "hits": 19232,
+          "hit_rate": 0.09616,
+          "warm": "cold"
+        },
+        "hot": {
+          "ops": 200000,
+          "qps": 1480798.7,
+          "avg_ns": 675.3,
+          "p50_ns": 209,
+          "p95_ns": 1291,
+          "p99_ns": 2040,
+          "errors": 0,
+          "hits": 19232,
+          "hit_rate": 0.09616,
+          "warm": "hot"
+        },
+        "threads": {
+          "1": {
+            "ops": 200000,
+            "qps": 1413413.8,
+            "avg_ns": 707.5,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          },
+          "8": {
+            "ops": 200000,
+            "qps": 4065230.0,
+            "avg_ns": 246.0,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          },
+          "16": {
+            "ops": 200000,
+            "qps": 2021101.1,
+            "avg_ns": 494.8,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          }
+        }
+      },
+      "v6": {
+        "cold": {
+          "ops": 200000,
+          "qps": 735966.7,
+          "avg_ns": 1358.8,
+          "p50_ns": 374,
+          "p95_ns": 790,
+          "p99_ns": 2000,
+          "errors": 0,
+          "hits": 3878,
+          "hit_rate": 0.01939,
+          "warm": "cold"
+        },
+        "hot": {
+          "ops": 200000,
+          "qps": 741189.3,
+          "avg_ns": 1349.2,
+          "p50_ns": 374,
+          "p95_ns": 750,
+          "p99_ns": 2000,
+          "errors": 0,
+          "hits": 3878,
+          "hit_rate": 0.01939,
+          "warm": "hot"
+        },
+        "threads": {
+          "1": {
+            "ops": 200000,
+            "qps": 731616.4,
+            "avg_ns": 1366.8,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          },
+          "8": {
+            "ops": 200000,
+            "qps": 760392.3,
+            "avg_ns": 1315.1,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          },
+          "16": {
+            "ops": 200000,
+            "qps": 903515.1,
+            "avg_ns": 1106.8,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          }
+        }
+      },
+      "mixed": {
+        "cold": {
+          "ops": 200000,
+          "qps": 1064269.7,
+          "avg_ns": 939.6,
+          "p50_ns": 249,
+          "p95_ns": 1374,
+          "p99_ns": 2290,
+          "errors": 0,
+          "hits": 11452,
+          "hit_rate": 0.05726,
+          "warm": "cold"
+        },
+        "hot": {
+          "ops": 200000,
+          "qps": 1094669.8,
+          "avg_ns": 913.5,
+          "p50_ns": 249,
+          "p95_ns": 1334,
+          "p99_ns": 2124,
+          "errors": 0,
+          "hits": 11452,
+          "hit_rate": 0.05726,
+          "warm": "hot"
+        },
+        "threads": {
+          "1": {
+            "ops": 200000,
+            "qps": 1101094.5,
+            "avg_ns": 908.2,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          },
+          "8": {
+            "ops": 200000,
+            "qps": 1663888.3,
+            "avg_ns": 601.0,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          },
+          "16": {
+            "ops": 200000,
+            "qps": 2066508.0,
+            "avg_ns": 483.9,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          }
+        }
+      }
+    },
+    "hot": {
+      "v4": {
+        "cold": {
+          "ops": 200000,
+          "qps": 1452841.2,
+          "avg_ns": 688.3,
+          "p50_ns": 209,
+          "p95_ns": 1165,
+          "p99_ns": 1917,
+          "errors": 0,
+          "hits": 17128,
+          "hit_rate": 0.08564,
+          "warm": "cold"
+        },
+        "hot": {
+          "ops": 200000,
+          "qps": 1463156.3,
+          "avg_ns": 683.5,
+          "p50_ns": 209,
+          "p95_ns": 1125,
+          "p99_ns": 1917,
+          "errors": 0,
+          "hits": 17128,
+          "hit_rate": 0.08564,
+          "warm": "hot"
+        },
+        "threads": {
+          "1": {
+            "ops": 200000,
+            "qps": 1401210.7,
+            "avg_ns": 713.7,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          },
+          "8": {
+            "ops": 200000,
+            "qps": 2088148.6,
+            "avg_ns": 478.9,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          },
+          "16": {
+            "ops": 200000,
+            "qps": 2431453.3,
+            "avg_ns": 411.3,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          }
+        }
+      },
+      "v6": {
+        "cold": {
+          "ops": 200000,
+          "qps": 883120.0,
+          "avg_ns": 1132.3,
+          "p50_ns": 292,
+          "p95_ns": 749,
+          "p99_ns": 1917,
+          "errors": 0,
+          "hits": 3479,
+          "hit_rate": 0.017395,
+          "warm": "cold"
+        },
+        "hot": {
+          "ops": 200000,
+          "qps": 903561.4,
+          "avg_ns": 1106.7,
+          "p50_ns": 292,
+          "p95_ns": 708,
+          "p99_ns": 1667,
+          "errors": 0,
+          "hits": 3479,
+          "hit_rate": 0.017395,
+          "warm": "hot"
+        },
+        "threads": {
+          "1": {
+            "ops": 200000,
+            "qps": 894220.4,
+            "avg_ns": 1118.3,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          },
+          "8": {
+            "ops": 200000,
+            "qps": 1106856.6,
+            "avg_ns": 903.5,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          },
+          "16": {
+            "ops": 200000,
+            "qps": 1253972.2,
+            "avg_ns": 797.5,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          }
+        }
+      },
+      "mixed": {
+        "cold": {
+          "ops": 200000,
+          "qps": 1260740.9,
+          "avg_ns": 793.2,
+          "p50_ns": 249,
+          "p95_ns": 1208,
+          "p99_ns": 2082,
+          "errors": 0,
+          "hits": 10469,
+          "hit_rate": 0.052345,
+          "warm": "cold"
+        },
+        "hot": {
+          "ops": 200000,
+          "qps": 1251725.0,
+          "avg_ns": 798.9,
+          "p50_ns": 249,
+          "p95_ns": 1208,
+          "p99_ns": 2124,
+          "errors": 0,
+          "hits": 10469,
+          "hit_rate": 0.052345,
+          "warm": "hot"
+        },
+        "threads": {
+          "1": {
+            "ops": 200000,
+            "qps": 1280004.4,
+            "avg_ns": 781.2,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          },
+          "8": {
+            "ops": 200000,
+            "qps": 1403780.1,
+            "avg_ns": 712.4,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          },
+          "16": {
+            "ops": 200000,
+            "qps": 11785648.2,
+            "avg_ns": 84.8,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          }
+        }
+      }
+    },
+    "sequential": {
+      "v4": {
+        "cold": {
+          "ops": 200000,
+          "qps": 3210423.2,
+          "avg_ns": 311.5,
+          "p50_ns": 208,
+          "p95_ns": 250,
+          "p99_ns": 291,
+          "errors": 0,
+          "hits": 0,
+          "hit_rate": 0.0,
+          "warm": "cold"
+        },
+        "hot": {
+          "ops": 200000,
+          "qps": 3232667.2,
+          "avg_ns": 309.3,
+          "p50_ns": 208,
+          "p95_ns": 250,
+          "p99_ns": 291,
+          "errors": 0,
+          "hits": 0,
+          "hit_rate": 0.0,
+          "warm": "hot"
+        },
+        "threads": {
+          "1": {
+            "ops": 200000,
+            "qps": 3405721.5,
+            "avg_ns": 293.6,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          },
+          "8": {
+            "ops": 200000,
+            "qps": 7892997.2,
+            "avg_ns": 126.7,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          },
+          "16": {
+            "ops": 200000,
+            "qps": 3674621.5,
+            "avg_ns": 272.1,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          }
+        }
+      },
+      "v6": {
+        "cold": {
+          "ops": 200000,
+          "qps": 1167367.1,
+          "avg_ns": 856.6,
+          "p50_ns": 292,
+          "p95_ns": 667,
+          "p99_ns": 749,
+          "errors": 0,
+          "hits": 0,
+          "hit_rate": 0.0,
+          "warm": "cold"
+        },
+        "hot": {
+          "ops": 200000,
+          "qps": 1160265.5,
+          "avg_ns": 861.9,
+          "p50_ns": 292,
+          "p95_ns": 667,
+          "p99_ns": 791,
+          "errors": 0,
+          "hits": 0,
+          "hit_rate": 0.0,
+          "warm": "hot"
+        },
+        "threads": {
+          "1": {
+            "ops": 200000,
+            "qps": 1189060.9,
+            "avg_ns": 841.0,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          },
+          "8": {
+            "ops": 200000,
+            "qps": 1240798.4,
+            "avg_ns": 805.9,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          },
+          "16": {
+            "ops": 200000,
+            "qps": 2514730.8,
+            "avg_ns": 397.7,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          }
+        }
+      },
+      "mixed": {
+        "cold": {
+          "ops": 200000,
+          "qps": 2044047.5,
+          "avg_ns": 489.2,
+          "p50_ns": 209,
+          "p95_ns": 291,
+          "p99_ns": 332,
+          "errors": 0,
+          "hits": 0,
+          "hit_rate": 0.0,
+          "warm": "cold"
+        },
+        "hot": {
+          "ops": 200000,
+          "qps": 2011259.7,
+          "avg_ns": 497.2,
+          "p50_ns": 209,
+          "p95_ns": 291,
+          "p99_ns": 333,
+          "errors": 0,
+          "hits": 0,
+          "hit_rate": 0.0,
+          "warm": "hot"
+        },
+        "threads": {
+          "1": {
+            "ops": 200000,
+            "qps": 2136557.2,
+            "avg_ns": 468.0,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          },
+          "8": {
+            "ops": 200000,
+            "qps": 4031374.2,
+            "avg_ns": 248.1,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          },
+          "16": {
+            "ops": 200000,
+            "qps": 3509965.0,
+            "avg_ns": 284.9,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          }
+        }
+      }
+    },
+    "real_world": {
+      "v4": {
+        "cold": {
+          "ops": 200000,
+          "qps": 1047664.6,
+          "avg_ns": 954.5,
+          "p50_ns": 209,
+          "p95_ns": 1207,
+          "p99_ns": 2125,
+          "errors": 0,
+          "hits": 16189,
+          "hit_rate": 0.080945,
+          "warm": "cold"
+        },
+        "hot": {
+          "ops": 200000,
+          "qps": 1056059.4,
+          "avg_ns": 946.9,
+          "p50_ns": 249,
+          "p95_ns": 1125,
+          "p99_ns": 1999,
+          "errors": 0,
+          "hits": 16189,
+          "hit_rate": 0.080945,
+          "warm": "hot"
+        },
+        "threads": {
+          "1": {
+            "ops": 200000,
+            "qps": 1063621.4,
+            "avg_ns": 940.2,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          },
+          "8": {
+            "ops": 200000,
+            "qps": 1470591.8,
+            "avg_ns": 680.0,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          },
+          "16": {
+            "ops": 200000,
+            "qps": 1112391.1,
+            "avg_ns": 899.0,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          }
+        }
+      },
+      "v6": {
+        "cold": {
+          "ops": 200000,
+          "qps": 676138.7,
+          "avg_ns": 1479.0,
+          "p50_ns": 333,
+          "p95_ns": 749,
+          "p99_ns": 1833,
+          "errors": 0,
+          "hits": 3232,
+          "hit_rate": 0.01616,
+          "warm": "cold"
+        },
+        "hot": {
+          "ops": 200000,
+          "qps": 671800.2,
+          "avg_ns": 1488.5,
+          "p50_ns": 333,
+          "p95_ns": 790,
+          "p99_ns": 2291,
+          "errors": 0,
+          "hits": 3232,
+          "hit_rate": 0.01616,
+          "warm": "hot"
+        },
+        "threads": {
+          "1": {
+            "ops": 200000,
+            "qps": 668706.3,
+            "avg_ns": 1495.4,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          },
+          "8": {
+            "ops": 200000,
+            "qps": 713779.8,
+            "avg_ns": 1401.0,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          },
+          "16": {
+            "ops": 200000,
+            "qps": 901890.5,
+            "avg_ns": 1108.8,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          }
+        }
+      },
+      "mixed": {
+        "cold": {
+          "ops": 200000,
+          "qps": 858983.1,
+          "avg_ns": 1164.2,
+          "p50_ns": 249,
+          "p95_ns": 1459,
+          "p99_ns": 2332,
+          "errors": 0,
+          "hits": 11179,
+          "hit_rate": 0.055895,
+          "warm": "cold"
+        },
+        "hot": {
+          "ops": 200000,
+          "qps": 879939.6,
+          "avg_ns": 1136.4,
+          "p50_ns": 249,
+          "p95_ns": 1415,
+          "p99_ns": 2166,
+          "errors": 0,
+          "hits": 11179,
+          "hit_rate": 0.055895,
+          "warm": "hot"
+        },
+        "threads": {
+          "1": {
+            "ops": 200000,
+            "qps": 800181.2,
+            "avg_ns": 1249.7,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          },
+          "8": {
+            "ops": 200000,
+            "qps": 973957.8,
+            "avg_ns": 1026.7,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          },
+          "16": {
+            "ops": 200000,
+            "qps": 1494407.2,
+            "avg_ns": 669.2,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "warm": "hot"
+          }
+        }
+      }
+    }
+  },
+  "string_roundtrip": {
+    "hot": {
+      "mixed": {
+        "api": "string",
+        "ops": 200000,
+        "qps": 285419.4,
+        "avg_ns": 3503.6,
+        "p50_ns": 1124,
+        "p95_ns": 2291,
+        "p99_ns": 3291,
+        "errors": 0,
+        "warm": "hot"
+      }
+    }
+  },
+  "concurrency_safe": true
+}

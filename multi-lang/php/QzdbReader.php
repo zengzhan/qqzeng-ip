@@ -911,6 +911,12 @@ class QzdbReader
             return $this->findUint($ipInt);
         }
         if ($len === 16) {
+            // IPv4-mapped (::ffff:w.x.y.z) MUST downgrade to the v4 trie, just
+            // like findStr()/lookupCidrBytes(). A pure-v6 walk would miss every
+            // mapped query (contract §3: findBytes is the mapped-aware entry).
+            if ($this->isV4MappedBytes($bytes)) {
+                return $this->findUint($this->v4FromMappedBytes($bytes));
+            }
             return $this->findV6Bin($bytes);
         }
         return null;
@@ -1776,14 +1782,21 @@ class QzdbReader
         $ptr = $this->safeReadU32($this->offV6Jump + $idx_jump * 4);
         if ($ptr === 0) return 0;
         if ($ptr & self::SENTINEL) {
-            return $ptr & self::SENTINEL_MASK_31;
+            // SENTINEL in the jump table means this /jump_bits prefix has no
+            // dedicated subtree: restart the walk from the trie root (node 0)
+            // for the first `jump_bits` levels. Mirrors the Rust reference
+            // (trie_walk_v6 -> walk_v6_depth(bytes, 0, 0, jump_bits)).
+            $idx = 0;
+            $depth = 0;
+            $maxDepth = $v6_jump_bits;
+        } else {
+            $idx = $ptr;
+            $depth = $v6_jump_bits;
+            $maxDepth = 128;
         }
 
-        $idx = $ptr;
-        $depth = $v6_jump_bits;
         $steps = 0;
-
-        while ($depth < 128) {
+        while ($depth < $maxDepth) {
             if (++$steps >= self::MAX_TRIE_WALK_STEPS) return 0;
             $byteIdx = (int)($depth / 8);
             $bitIdx = 7 - ($depth % 8);

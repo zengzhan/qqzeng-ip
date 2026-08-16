@@ -1,0 +1,1192 @@
+{
+  "contract": "QZDB_BENCH_CONTRACT v1.0",
+  "language": "csharp",
+  "sdk_version": "multi-lang/netcore (QQZeng.Qzdb)",
+  "timestamp": "2026-08-10T22:29:31\u002B08:00",
+  "seed": 20260807,
+  "db": {
+    "path": "/Users/zengxiangzhan/ZengData/IP\u6570\u636E\u5E93/qzdb/multi-lang/test_data_202608/max/global/qqzeng_ip_max_global.qzdb",
+    "edition": "max_global",
+    "bytes": 117127664,
+    "hash": "crc32:n/a"
+  },
+  "environment": {
+    "cpu": "Apple M4 Max",
+    "cores": 14,
+    "os": "darwin arm64",
+    "runtime": ".NET 10.0.10",
+    "compiler": "roslyn",
+    "bench_contract": "v1.0",
+    "note": "single QzdbReader shared across System.Threading.Thread workers; immutable Snapshot \u002B per-snapshot geo cache. Pure-v6 queries go through FindBytes (which runs an IsV4Mapped prefix check first) because the .NET SDK exposes no pure-v6 binary entry, unlike the other 7 SDKs."
+  },
+  "distributions": {
+    "random": {
+      "v4": {
+        "cold": {
+          "ops": 200000,
+          "qps": 2799539,
+          "avg_ns": 357.2,
+          "p50_ns": 125,
+          "p95_ns": 1125,
+          "p99_ns": 2041,
+          "errors": 0,
+          "hits": 200000,
+          "hit_rate": 1,
+          "warm": "cold",
+          "api": "uint"
+        },
+        "hot": {
+          "ops": 200000,
+          "qps": 3788037,
+          "avg_ns": 264,
+          "p50_ns": 84,
+          "p95_ns": 1000,
+          "p99_ns": 1333,
+          "errors": 0,
+          "hits": 200000,
+          "hit_rate": 1,
+          "warm": "hot",
+          "api": "uint"
+        },
+        "threads": {
+          "1": {
+            "ops": 200000,
+            "qps": 3708138,
+            "avg_ns": 269.7,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "2": {
+            "ops": 200000,
+            "qps": 7744496,
+            "avg_ns": 129.1,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "4": {
+            "ops": 200000,
+            "qps": 15958878,
+            "avg_ns": 62.7,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "8": {
+            "ops": 200000,
+            "qps": 25030374,
+            "avg_ns": 40,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "16": {
+            "ops": 200000,
+            "qps": 22723399,
+            "avg_ns": 44,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          }
+        }
+      },
+      "v6": {
+        "cold": {
+          "ops": 200000,
+          "qps": 6229712,
+          "avg_ns": 160.5,
+          "p50_ns": 84,
+          "p95_ns": 417,
+          "p99_ns": 1292,
+          "errors": 0,
+          "hits": 200000,
+          "hit_rate": 1,
+          "warm": "cold",
+          "api": "uint"
+        },
+        "hot": {
+          "ops": 200000,
+          "qps": 7186467,
+          "avg_ns": 139.2,
+          "p50_ns": 83,
+          "p95_ns": 375,
+          "p99_ns": 1125,
+          "errors": 0,
+          "hits": 200000,
+          "hit_rate": 1,
+          "warm": "hot",
+          "api": "uint"
+        },
+        "threads": {
+          "1": {
+            "ops": 200000,
+            "qps": 6791085,
+            "avg_ns": 147.3,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "2": {
+            "ops": 200000,
+            "qps": 7247908,
+            "avg_ns": 138,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "4": {
+            "ops": 200000,
+            "qps": 6078280,
+            "avg_ns": 164.5,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "8": {
+            "ops": 200000,
+            "qps": 27994051,
+            "avg_ns": 35.7,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "16": {
+            "ops": 200000,
+            "qps": 38927864,
+            "avg_ns": 25.7,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          }
+        }
+      },
+      "mixed": {
+        "cold": {
+          "ops": 200000,
+          "qps": 2898447,
+          "avg_ns": 345,
+          "p50_ns": 125,
+          "p95_ns": 1875,
+          "p99_ns": 2208,
+          "errors": 0,
+          "hits": 200000,
+          "hit_rate": 1,
+          "warm": "cold",
+          "api": "uint"
+        },
+        "hot": {
+          "ops": 200000,
+          "qps": 4226899,
+          "avg_ns": 236.6,
+          "p50_ns": 84,
+          "p95_ns": 1500,
+          "p99_ns": 1875,
+          "errors": 0,
+          "hits": 200000,
+          "hit_rate": 1,
+          "warm": "hot",
+          "api": "uint"
+        },
+        "threads": {
+          "1": {
+            "ops": 200000,
+            "qps": 6184427,
+            "avg_ns": 161.7,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "2": {
+            "ops": 200000,
+            "qps": 11788572,
+            "avg_ns": 84.8,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "4": {
+            "ops": 200000,
+            "qps": 25734643,
+            "avg_ns": 38.9,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "8": {
+            "ops": 200000,
+            "qps": 39781203,
+            "avg_ns": 25.1,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "16": {
+            "ops": 200000,
+            "qps": 75502554,
+            "avg_ns": 13.2,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          }
+        }
+      }
+    },
+    "hot": {
+      "v4": {
+        "cold": {
+          "ops": 200000,
+          "qps": 12279732,
+          "avg_ns": 81.4,
+          "p50_ns": 42,
+          "p95_ns": 334,
+          "p99_ns": 791,
+          "errors": 0,
+          "hits": 200000,
+          "hit_rate": 1,
+          "warm": "cold",
+          "api": "uint"
+        },
+        "hot": {
+          "ops": 200000,
+          "qps": 17582868,
+          "avg_ns": 56.9,
+          "p50_ns": 42,
+          "p95_ns": 125,
+          "p99_ns": 584,
+          "errors": 0,
+          "hits": 200000,
+          "hit_rate": 1,
+          "warm": "hot",
+          "api": "uint"
+        },
+        "threads": {
+          "1": {
+            "ops": 200000,
+            "qps": 16891475,
+            "avg_ns": 59.2,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "2": {
+            "ops": 200000,
+            "qps": 35857022,
+            "avg_ns": 27.9,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "4": {
+            "ops": 200000,
+            "qps": 64284580,
+            "avg_ns": 15.6,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "8": {
+            "ops": 200000,
+            "qps": 77514362,
+            "avg_ns": 12.9,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "16": {
+            "ops": 200000,
+            "qps": 89860742,
+            "avg_ns": 11.1,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          }
+        }
+      },
+      "v6": {
+        "cold": {
+          "ops": 200000,
+          "qps": 33730134,
+          "avg_ns": 29.6,
+          "p50_ns": 41,
+          "p95_ns": 83,
+          "p99_ns": 167,
+          "errors": 0,
+          "hits": 200000,
+          "hit_rate": 1,
+          "warm": "cold",
+          "api": "uint"
+        },
+        "hot": {
+          "ops": 200000,
+          "qps": 33682792,
+          "avg_ns": 29.7,
+          "p50_ns": 41,
+          "p95_ns": 83,
+          "p99_ns": 125,
+          "errors": 0,
+          "hits": 200000,
+          "hit_rate": 1,
+          "warm": "hot",
+          "api": "uint"
+        },
+        "threads": {
+          "1": {
+            "ops": 200000,
+            "qps": 29325156,
+            "avg_ns": 34.1,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "2": {
+            "ops": 200000,
+            "qps": 54572120,
+            "avg_ns": 18.3,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "4": {
+            "ops": 200000,
+            "qps": 113373350,
+            "avg_ns": 8.8,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "8": {
+            "ops": 200000,
+            "qps": 117247589,
+            "avg_ns": 8.5,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "16": {
+            "ops": 200000,
+            "qps": 126642393,
+            "avg_ns": 7.9,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          }
+        }
+      },
+      "mixed": {
+        "cold": {
+          "ops": 200000,
+          "qps": 21486027,
+          "avg_ns": 46.5,
+          "p50_ns": 42,
+          "p95_ns": 125,
+          "p99_ns": 625,
+          "errors": 0,
+          "hits": 200000,
+          "hit_rate": 1,
+          "warm": "cold",
+          "api": "uint"
+        },
+        "hot": {
+          "ops": 200000,
+          "qps": 22328176,
+          "avg_ns": 44.8,
+          "p50_ns": 42,
+          "p95_ns": 125,
+          "p99_ns": 625,
+          "errors": 0,
+          "hits": 200000,
+          "hit_rate": 1,
+          "warm": "hot",
+          "api": "uint"
+        },
+        "threads": {
+          "1": {
+            "ops": 200000,
+            "qps": 23055310,
+            "avg_ns": 43.4,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "2": {
+            "ops": 200000,
+            "qps": 38588621,
+            "avg_ns": 25.9,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "4": {
+            "ops": 200000,
+            "qps": 75078597,
+            "avg_ns": 13.3,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "8": {
+            "ops": 200000,
+            "qps": 26596628,
+            "avg_ns": 37.6,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "16": {
+            "ops": 200000,
+            "qps": 48306751,
+            "avg_ns": 20.7,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          }
+        }
+      }
+    },
+    "sequential": {
+      "v4": {
+        "cold": {
+          "ops": 200000,
+          "qps": 115453976,
+          "avg_ns": 8.7,
+          "p50_ns": 0,
+          "p95_ns": 42,
+          "p99_ns": 42,
+          "errors": 0,
+          "hits": 200000,
+          "hit_rate": 1,
+          "warm": "cold",
+          "api": "uint"
+        },
+        "hot": {
+          "ops": 200000,
+          "qps": 114596762,
+          "avg_ns": 8.7,
+          "p50_ns": 0,
+          "p95_ns": 42,
+          "p99_ns": 42,
+          "errors": 0,
+          "hits": 200000,
+          "hit_rate": 1,
+          "warm": "hot",
+          "api": "uint"
+        },
+        "threads": {
+          "1": {
+            "ops": 200000,
+            "qps": 140330295,
+            "avg_ns": 7.1,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "2": {
+            "ops": 200000,
+            "qps": 247780506,
+            "avg_ns": 4,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "4": {
+            "ops": 200000,
+            "qps": 224719101,
+            "avg_ns": 4.4,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "8": {
+            "ops": 200000,
+            "qps": 107459459,
+            "avg_ns": 9.3,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "16": {
+            "ops": 200000,
+            "qps": 85095809,
+            "avg_ns": 11.8,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          }
+        }
+      },
+      "v6": {
+        "cold": {
+          "ops": 200000,
+          "qps": 48007197,
+          "avg_ns": 20.8,
+          "p50_ns": 0,
+          "p95_ns": 42,
+          "p99_ns": 42,
+          "errors": 0,
+          "hits": 200000,
+          "hit_rate": 1,
+          "warm": "cold",
+          "api": "uint"
+        },
+        "hot": {
+          "ops": 200000,
+          "qps": 46844803,
+          "avg_ns": 21.3,
+          "p50_ns": 0,
+          "p95_ns": 42,
+          "p99_ns": 42,
+          "errors": 0,
+          "hits": 200000,
+          "hit_rate": 1,
+          "warm": "hot",
+          "api": "uint"
+        },
+        "threads": {
+          "1": {
+            "ops": 200000,
+            "qps": 49774459,
+            "avg_ns": 20.1,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "2": {
+            "ops": 200000,
+            "qps": 74730289,
+            "avg_ns": 13.4,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "4": {
+            "ops": 200000,
+            "qps": 96707917,
+            "avg_ns": 10.3,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "8": {
+            "ops": 200000,
+            "qps": 87418968,
+            "avg_ns": 11.4,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "16": {
+            "ops": 200000,
+            "qps": 83115466,
+            "avg_ns": 12,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          }
+        }
+      },
+      "mixed": {
+        "cold": {
+          "ops": 200000,
+          "qps": 70623563,
+          "avg_ns": 14.2,
+          "p50_ns": 0,
+          "p95_ns": 42,
+          "p99_ns": 42,
+          "errors": 0,
+          "hits": 200000,
+          "hit_rate": 1,
+          "warm": "cold",
+          "api": "uint"
+        },
+        "hot": {
+          "ops": 200000,
+          "qps": 71665322,
+          "avg_ns": 14,
+          "p50_ns": 0,
+          "p95_ns": 42,
+          "p99_ns": 42,
+          "errors": 0,
+          "hits": 200000,
+          "hit_rate": 1,
+          "warm": "hot",
+          "api": "uint"
+        },
+        "threads": {
+          "1": {
+            "ops": 200000,
+            "qps": 61462814,
+            "avg_ns": 16.3,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "2": {
+            "ops": 200000,
+            "qps": 56174520,
+            "avg_ns": 17.8,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "4": {
+            "ops": 200000,
+            "qps": 60902879,
+            "avg_ns": 16.4,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "8": {
+            "ops": 200000,
+            "qps": 26442057,
+            "avg_ns": 37.8,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "16": {
+            "ops": 200000,
+            "qps": 16351224,
+            "avg_ns": 61.2,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          }
+        }
+      }
+    },
+    "real_world": {
+      "v4": {
+        "cold": {
+          "ops": 200000,
+          "qps": 10371314,
+          "avg_ns": 96.4,
+          "p50_ns": 42,
+          "p95_ns": 500,
+          "p99_ns": 834,
+          "errors": 0,
+          "hits": 200000,
+          "hit_rate": 1,
+          "warm": "cold",
+          "api": "uint"
+        },
+        "hot": {
+          "ops": 200000,
+          "qps": 11381095,
+          "avg_ns": 87.9,
+          "p50_ns": 42,
+          "p95_ns": 417,
+          "p99_ns": 792,
+          "errors": 0,
+          "hits": 200000,
+          "hit_rate": 1,
+          "warm": "hot",
+          "api": "uint"
+        },
+        "threads": {
+          "1": {
+            "ops": 200000,
+            "qps": 11882718,
+            "avg_ns": 84.2,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "2": {
+            "ops": 200000,
+            "qps": 24751709,
+            "avg_ns": 40.4,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "4": {
+            "ops": 200000,
+            "qps": 54546684,
+            "avg_ns": 18.3,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "8": {
+            "ops": 200000,
+            "qps": 81713265,
+            "avg_ns": 12.2,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "16": {
+            "ops": 200000,
+            "qps": 105214703,
+            "avg_ns": 9.5,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          }
+        }
+      },
+      "v6": {
+        "cold": {
+          "ops": 200000,
+          "qps": 18710460,
+          "avg_ns": 53.4,
+          "p50_ns": 41,
+          "p95_ns": 125,
+          "p99_ns": 625,
+          "errors": 0,
+          "hits": 200000,
+          "hit_rate": 1,
+          "warm": "cold",
+          "api": "uint"
+        },
+        "hot": {
+          "ops": 200000,
+          "qps": 22265516,
+          "avg_ns": 44.9,
+          "p50_ns": 41,
+          "p95_ns": 125,
+          "p99_ns": 375,
+          "errors": 0,
+          "hits": 200000,
+          "hit_rate": 1,
+          "warm": "hot",
+          "api": "uint"
+        },
+        "threads": {
+          "1": {
+            "ops": 200000,
+            "qps": 19266894,
+            "avg_ns": 51.9,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "2": {
+            "ops": 200000,
+            "qps": 42263935,
+            "avg_ns": 23.7,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "4": {
+            "ops": 200000,
+            "qps": 82103221,
+            "avg_ns": 12.2,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "8": {
+            "ops": 200000,
+            "qps": 107768317,
+            "avg_ns": 9.3,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "16": {
+            "ops": 200000,
+            "qps": 141680687,
+            "avg_ns": 7.1,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          }
+        }
+      },
+      "mixed": {
+        "cold": {
+          "ops": 200000,
+          "qps": 12757000,
+          "avg_ns": 78.4,
+          "p50_ns": 42,
+          "p95_ns": 583,
+          "p99_ns": 1000,
+          "errors": 0,
+          "hits": 200000,
+          "hit_rate": 1,
+          "warm": "cold",
+          "api": "uint"
+        },
+        "hot": {
+          "ops": 200000,
+          "qps": 14725778,
+          "avg_ns": 67.9,
+          "p50_ns": 42,
+          "p95_ns": 417,
+          "p99_ns": 792,
+          "errors": 0,
+          "hits": 200000,
+          "hit_rate": 1,
+          "warm": "hot",
+          "api": "uint"
+        },
+        "threads": {
+          "1": {
+            "ops": 200000,
+            "qps": 15349390,
+            "avg_ns": 65.1,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "2": {
+            "ops": 200000,
+            "qps": 34690603,
+            "avg_ns": 28.8,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "4": {
+            "ops": 200000,
+            "qps": 67142257,
+            "avg_ns": 14.9,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "8": {
+            "ops": 200000,
+            "qps": 90271364,
+            "avg_ns": 11.1,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          },
+          "16": {
+            "ops": 200000,
+            "qps": 121010437,
+            "avg_ns": 8.3,
+            "p50_ns": 0,
+            "p95_ns": 0,
+            "p99_ns": 0,
+            "errors": 0,
+            "hits": 200000,
+            "hit_rate": 1,
+            "warm": "hot",
+            "api": "uint"
+          }
+        }
+      }
+    }
+  },
+  "string_roundtrip": {
+    "hot": {
+      "mixed": {
+        "ops": 200000,
+        "qps": 1661446,
+        "avg_ns": 601.9,
+        "p50_ns": 250,
+        "p95_ns": 625,
+        "p99_ns": 1000,
+        "errors": 0,
+        "hits": 0,
+        "hit_rate": 0,
+        "warm": "hot",
+        "api": "string"
+      }
+    }
+  },
+  "concurrency_safe": true,
+  "concurrency_done": 1600000,
+  "concurrency_spec": "16 threads x 100000 ops shared reader"
+}
