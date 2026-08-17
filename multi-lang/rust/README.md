@@ -173,7 +173,7 @@ let reader = Builder::from_bytes(&bytes).build()?;
 
 - **`find(&str)`**：接受点分十进制（`1.2.3.4`）与完整 / 压缩 IPv6（`2001:db8::1`）、IPv4 映射地址（`::ffff:1.2.3.4`）；非法格式直接返回 `None`。解析严格拒绝前导零、段数错误、CIDR 形式、zone-id、空白等。
 - **`find_uint(u32)`**：`ip` 应为 IPv4 地址的 **主机序 `u32`**（即 `(a<<24)|(b<<16)|(c<<8)|d`）。若你手上是网络序字节，请先转换或改用 `find_bytes`。
-- **`find_v6(u128)`**：`ip` 为 IPv4 映射地址的**主机序 `u128`**；内部会自动降级到 V4 Trie 查询（与字符串 `::ffff:a.b.c.d` 一致）。
+- **`find_v6(u128)`**：`ip` 为 IPv6 地址的**主机序 `u128`**；纯 V6 Trie 遍历，**不会**自动降级到 V4 Trie。若你持有 IPv4-mapped 地址的 `u128`，请改用 `find_bytes` 或 `find(&str)`，它们会在解析阶段自动降级。
 - **`find_bytes(&[u8])`**：4 字节按网络序（高位在前）解析为 IPv4；16 字节解析为 IPv6。
 
 ### 5.2 行号与 `RowIds`

@@ -295,6 +295,7 @@ const char* qzdb_geo_usage_type(qzdb_reader_t* ctx, const qzdb_geo_info_t* info)
 int         qzdb_usage_type_is_known(const char* raw);
 const char* qzdb_usage_type_display_zh(const char* raw);
 const char* qzdb_usage_type_display_en(const char* raw);
+const char* qzdb_usage_type_description(const char* raw);
 
 /* ---- ChainedReader (spec §9) ---- */
 qzdb_chain_t* qzdb_chain_new(qzdb_reader_t** ctxs, int count, int mode);

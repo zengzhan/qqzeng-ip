@@ -419,6 +419,84 @@ impl KnownUsage {
             KnownUsage::Vpn => "VPN",
         }
     }
+
+    pub fn display_zh(self) -> &'static str {
+        match self {
+            KnownUsage::AiCrawler => "AI 爬虫",
+            KnownUsage::Backbone => "骨干网",
+            KnownUsage::Broadband => "宽带",
+            KnownUsage::Business => "企业",
+            KnownUsage::Cdn => "CDN",
+            KnownUsage::Cloud => "云服务",
+            KnownUsage::Dns => "DNS",
+            KnownUsage::DataCenter => "数据中心",
+            KnownUsage::Education => "教育网",
+            KnownUsage::Finance => "金融",
+            KnownUsage::Government => "政府",
+            KnownUsage::Isp => "互联网提供商",
+            KnownUsage::Ixp => "交换中心",
+            KnownUsage::Iot => "物联网",
+            KnownUsage::Mobile => "移动网络",
+            KnownUsage::Reserved => "保留地址",
+            KnownUsage::Satellite => "卫星互联网",
+            KnownUsage::Spider => "爬虫",
+            KnownUsage::Streaming => "流媒体",
+            KnownUsage::Unknown => "未知",
+            KnownUsage::Vpn => "VPN/代理",
+        }
+    }
+
+    pub fn display_en(self) -> &'static str {
+        match self {
+            KnownUsage::AiCrawler => "AICrawler",
+            KnownUsage::Backbone => "Backbone",
+            KnownUsage::Broadband => "Broadband",
+            KnownUsage::Business => "Business",
+            KnownUsage::Cdn => "CDN",
+            KnownUsage::Cloud => "Cloud",
+            KnownUsage::Dns => "DNS",
+            KnownUsage::DataCenter => "DataCenter",
+            KnownUsage::Education => "Education",
+            KnownUsage::Finance => "Finance",
+            KnownUsage::Government => "Government",
+            KnownUsage::Isp => "ISP",
+            KnownUsage::Ixp => "IXP",
+            KnownUsage::Iot => "IoT",
+            KnownUsage::Mobile => "Mobile",
+            KnownUsage::Reserved => "Reserved",
+            KnownUsage::Satellite => "Satellite",
+            KnownUsage::Spider => "Spider",
+            KnownUsage::Streaming => "Streaming",
+            KnownUsage::Unknown => "Unknown",
+            KnownUsage::Vpn => "VPN",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            KnownUsage::AiCrawler => "AI 训练 / AI 搜索爬虫（GPTBot、ClaudeBot 等）",
+            KnownUsage::Backbone => "运营商骨干传输网 / 国际出口",
+            KnownUsage::Broadband => "家庭/企业宽带接入（xDSL、光纤、Cable、拨号等）",
+            KnownUsage::Business => "企业专线 / 企业组网",
+            KnownUsage::Cdn => "内容分发网络",
+            KnownUsage::Cloud => "公有云 / 托管云（AWS、阿里云、Azure 等）",
+            KnownUsage::Dns => "DNS 基础设施 / Anycast DNS",
+            KnownUsage::DataCenter => "IDC / 机房托管",
+            KnownUsage::Education => "高校 / 科研网（CERNET 等）",
+            KnownUsage::Finance => "银行 / 证券 / 保险等金融机构",
+            KnownUsage::Government => "政务 / 公共机构网络",
+            KnownUsage::Isp => "未细分类型的通用 ISP 接入",
+            KnownUsage::Ixp => "互联网交换中心",
+            KnownUsage::Iot => "物联网设备接入网络",
+            KnownUsage::Mobile => "蜂窝移动网络（2G/3G/4G/5G）",
+            KnownUsage::Reserved => "保留 / 未分配地址",
+            KnownUsage::Satellite => "卫星 / 低轨星座接入（Starlink 等）",
+            KnownUsage::Spider => "通用搜索引擎 / 通用网络爬虫",
+            KnownUsage::Streaming => "音视频 / 直播流媒体平台",
+            KnownUsage::Unknown => "无法判定用途",
+            KnownUsage::Vpn => "VPN / 代理 / 隐私网络出口",
+        }
+    }
 }
 
 impl UsageType {
@@ -465,6 +543,27 @@ impl UsageType {
 
     pub fn is_known(&self) -> bool {
         matches!(self, UsageType::Known(_))
+    }
+
+    pub fn display_zh(&self) -> &str {
+        match self {
+            UsageType::Known(k) => k.display_zh(),
+            UsageType::Unknown(_) => "未知",
+        }
+    }
+
+    pub fn display_en(&self) -> &str {
+        match self {
+            UsageType::Known(k) => k.display_en(),
+            UsageType::Unknown(_) => "Unknown",
+        }
+    }
+
+    pub fn description(&self) -> &str {
+        match self {
+            UsageType::Known(k) => k.description(),
+            UsageType::Unknown(_) => "",
+        }
     }
 }
 

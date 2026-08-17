@@ -161,7 +161,7 @@ $reader = QzdbBuilder::stream($fh)->build();
 | 字符串查询 | `?GeoInfo find($ipStr)` | `GeoInfo\|null` | 按字符串查（IPv4 / IPv6 / IPv4 映射地址均可）；未命中 / 非法返回 `null` |
 | 整数查询 | `?GeoInfo findUint(int $ipInt)` | `GeoInfo\|null` | 按 IPv4 的 `uint32` 整型查（主机序，即 `(a<<24)\|(b<<16)\|(c<<8)\|d`） |
 | 字节查询 | `?GeoInfo findBytes(string $bytes)` | `GeoInfo\|null` | 按 4 字节（IPv4，网络序）或 16 字节（IPv6）原始字节查 |
-| IPv6 二进制 | `?GeoInfo findV6Bin(string $ipBin)` | `GeoInfo\|null` | 按 16 字节二进制 IPv6 查（等价于 `findBytes($bin16)`） |
+| IPv6 二进制 | `?GeoInfo findV6Bin(string $ipBin)` | `GeoInfo\|null` | 按 16 字节二进制 IPv6 查（纯 V6 Trie 遍历，**不会**自动降级到 V4；若持有 IPv4-mapped 地址请用 `findBytes`） |
 | 字段子集 | `?GeoInfo findFields($ipStr, $fieldNames = null)` | `GeoInfo\|null` | 只解析指定字段，减少不必要的字符串分配 |
 | 管道字符串 | `string findStr($ipStr)` | `string` | 直接返回 `toPipe()` 结果；未命中返回 `""` |
 | 行号查询 | `int lookupRowId($ipStr)` | `int` | 仅返回内部行号（不含字段，最轻）；非法 / 未命中返回 `0` |

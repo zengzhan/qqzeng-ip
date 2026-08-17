@@ -246,29 +246,29 @@ static int field_index_normalized(qzdb_reader_t* ctx, const char* name) {
 /* ========================================================================
  * UsageType (spec §6.4) — 21 official scenarios
  * ======================================================================== */
-static const struct { const char* raw; const char* zh; const char* en; } usage_types[] = {
-    {"AICrawler",  "AI 爬虫",     "AICrawler"},
-    {"Backbone",   "骨干网",      "Backbone"},
-    {"Broadband",  "宽带",        "Broadband"},
-    {"Business",   "企业",        "Business"},
-    {"CDN",        "CDN",         "CDN"},
-    {"Cloud",      "云服务",      "Cloud"},
-    {"DNS",        "DNS",         "DNS"},
-    {"DataCenter", "数据中心",    "DataCenter"},
-    {"Education",  "教育网",      "Education"},
-    {"Finance",    "金融",        "Finance"},
-    {"Government", "政府",        "Government"},
-    {"ISP",        "互联网提供商", "ISP"},
-    {"IXP",        "交换中心",    "IXP"},
-    {"IoT",        "物联网",      "IoT"},
-    {"Mobile",     "移动网络",    "Mobile"},
-    {"Reserved",   "保留地址",    "Reserved"},
-    {"Satellite",  "卫星互联网",  "Satellite"},
-    {"Spider",     "爬虫",        "Spider"},
-    {"Streaming",  "流媒体",      "Streaming"},
-    {"Unknown",    "未知",        "Unknown"},
-    {"VPN",        "VPN/代理",    "VPN"},
-    {NULL, NULL, NULL}
+static const struct { const char* raw; const char* zh; const char* en; const char* desc; } usage_types[] = {
+    {"AICrawler",  "AI 爬虫",     "AICrawler",  "AI 训练 / AI 搜索爬虫（GPTBot、ClaudeBot 等）"},
+    {"Backbone",   "骨干网",      "Backbone",   "运营商骨干传输网 / 国际出口"},
+    {"Broadband",  "宽带",        "Broadband",  "家庭/企业宽带接入（xDSL、光纤、Cable、拨号等）"},
+    {"Business",   "企业",        "Business",   "企业专线 / 企业组网"},
+    {"CDN",        "CDN",         "CDN",        "内容分发网络"},
+    {"Cloud",      "云服务",      "Cloud",      "公有云 / 托管云（AWS、阿里云、Azure 等）"},
+    {"DNS",        "DNS",         "DNS",        "DNS 基础设施 / Anycast DNS"},
+    {"DataCenter", "数据中心",    "DataCenter", "IDC / 机房托管"},
+    {"Education",  "教育网",      "Education",  "高校 / 科研网（CERNET 等）"},
+    {"Finance",    "金融",        "Finance",    "银行 / 证券 / 保险等金融机构"},
+    {"Government", "政府",        "Government", "政务 / 公共机构网络"},
+    {"ISP",        "互联网提供商", "ISP",        "未细分类型的通用 ISP 接入"},
+    {"IXP",        "交换中心",    "IXP",        "互联网交换中心"},
+    {"IoT",        "物联网",      "IoT",        "物联网设备接入网络"},
+    {"Mobile",     "移动网络",    "Mobile",     "蜂窝移动网络（2G/3G/4G/5G）"},
+    {"Reserved",   "保留地址",    "Reserved",   "保留 / 未分配地址"},
+    {"Satellite",  "卫星互联网",  "Satellite",  "卫星 / 低轨星座接入（Starlink 等）"},
+    {"Spider",     "爬虫",        "Spider",     "通用搜索引擎 / 通用网络爬虫"},
+    {"Streaming",  "流媒体",      "Streaming",  "音视频 / 直播流媒体平台"},
+    {"Unknown",    "未知",        "Unknown",    "无法判定用途"},
+    {"VPN",        "VPN/代理",    "VPN",        "VPN / 代理 / 隐私网络出口"},
+    {NULL, NULL, NULL, NULL}
 };
 
 const char* qzdb_geo_usage_type(qzdb_reader_t* ctx, const qzdb_geo_info_t* info) {
@@ -301,6 +301,13 @@ const char* qzdb_usage_type_display_en(const char* raw) {
     for (int i = 0; usage_types[i].raw; i++)
         if (strcmp(raw, usage_types[i].raw) == 0) return usage_types[i].en;
     return "Unknown";
+}
+
+const char* qzdb_usage_type_description(const char* raw) {
+    if (!raw) return "";
+    for (int i = 0; usage_types[i].raw; i++)
+        if (strcmp(raw, usage_types[i].raw) == 0) return usage_types[i].desc;
+    return "";
 }
 
 /* ========================================================================
