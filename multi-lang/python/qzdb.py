@@ -17,6 +17,51 @@ FLOAT_FIELDS = frozenset(['longitude', 'latitude'])
 # toJson numeric fields (API contract §6): output as JSON numbers, not strings.
 NUMERIC_FIELDS = frozenset(['longitude', 'latitude', 'asn', 'geo_id'])
 
+
+def _is_json_number(val):
+    """Strict JSON-number lexeme check, aligned verbatim with C#
+    ``GeoInfo.IsJsonNumber``: rejects "1." / ".5" / "01" / "+1" etc.
+    (a float() round-trip would also accept NaN/Infinity, which are not
+    valid JSON, and re-format "116.400000" to "116.4" breaking the
+    cross-language byte-parity of to_json())."""
+    n = len(val)
+    if n == 0:
+        return False
+    i = 0
+    if val[0] == '-':
+        if n == 1:
+            return False
+        i = 1
+    if i >= n:
+        return False
+    if val[i] == '0':
+        i += 1
+        if i < n and '0' <= val[i] <= '9':
+            return False
+    else:
+        if not ('1' <= val[i] <= '9'):
+            return False
+        i += 1
+        while i < n and '0' <= val[i] <= '9':
+            i += 1
+    if i < n and val[i] == '.':
+        i += 1
+        frac_start = i
+        while i < n and '0' <= val[i] <= '9':
+            i += 1
+        if i == frac_start:
+            return False
+    if i < n and val[i] in 'eE':
+        i += 1
+        if i < n and val[i] in '+-':
+            i += 1
+        exp_start = i
+        while i < n and '0' <= val[i] <= '9':
+            i += 1
+        if i == exp_start:
+            return False
+    return i == n
+
 # ---------------------------------------------------------------------------
 # Edition registry (FORMAT §3.1 / §10.3).
 #
@@ -81,12 +126,9 @@ def _norm_key(name):
     """
     if not isinstance(name, str):
         return ''
-    out = []
-    for ch in name:
-        if ch == '_' or ch == '-':
-            continue
-        out.append(ch.lower())
-    return ''.join(out)
+    # replace+lower 全部在 C 层执行，短串实测显著快于逐字符 append 循环；
+    # 语义等价：先删 '_'/'-' 再小写 == 逐字符跳过分隔符并小写。
+    return name.replace('_', '').replace('-', '').lower()
 
 
 # ── strict IP parsing (SEC-05 / CODE-03) ───────────────────────────
@@ -254,12 +296,13 @@ class QzdbError(Exception):
 
 
 class GeoInfo:
-    __slots__ = ('_values', '_field_names', '_float_indices', '_name_idx', '_norm_idx')
+    __slots__ = ('_values', '_field_names', '_float_indices', '_name_idx', '_norm_idx', '_pipe')
 
     def __init__(self, values=None, field_names=None, float_indices=None, name_idx=None):
         self._values = values or []
         self._field_names = field_names or []
         self._float_indices = set()
+        self._pipe = None
         if name_idx is not None:
             self._name_idx = name_idx
         elif field_names:
@@ -471,11 +514,18 @@ class GeoInfo:
     def to_pipe(self):
         # Values already carry their canonical string form (native floats are
         # decoded to 6-decimal strings in the reader), so just join verbatim.
+        # 结果 memoize（实例不可变，find_str 高频场景 O(n) join 只做一次，
+        # 对齐 C# GeoInfo 的 _pipe 缓存）。
+        cached = self._pipe
+        if cached is not None:
+            return cached
         parts = []
         for i, fname in enumerate(self._field_names):
             val = self._values[i] if i < len(self._values) else ''
             parts.append(str(val))
-        return '|'.join(parts)
+        out = '|'.join(parts)
+        self._pipe = out
+        return out
 
     def to_pipe_string(self):
         """Alias of to_pipe() (API contract §6)."""
@@ -485,8 +535,11 @@ class GeoInfo:
         """Hand-written JSON serialization (API contract §6).
 
         Preserves the original snake_case keys. ``longitude`` / ``latitude`` /
-        ``asn`` / ``geo_id`` are emitted as JSON numbers (``null`` if empty or
-        unparsable); all other fields are emitted as JSON strings.
+        ``asn`` / ``geo_id`` are emitted as JSON numbers — validated by the
+        strict JSON-number lexeme (aligned verbatim with C# ``IsJsonNumber``)
+        and passed through **as-is** (keeps the 6-decimal pipe form like
+        ``116.400000``, no ``float()`` re-serialization); ``null`` when empty
+        or not a valid JSON number. All other fields are JSON strings.
         """
         import json as _json
         out = []
@@ -494,15 +547,10 @@ class GeoInfo:
             val = self._values[i] if i < len(self._values) else ''
             key = _json.dumps(fname, ensure_ascii=False)
             if fname in NUMERIC_FIELDS:
-                if val == '':
-                    out.append(f'{key}:null')
+                if val != '' and _is_json_number(val):
+                    out.append(f'{key}:{val}')
                 else:
-                    try:
-                        num = float(val)
-                        num_out = int(num) if num.is_integer() else num
-                        out.append(f'{key}:{_json.dumps(num_out)}')
-                    except (ValueError, TypeError):
-                        out.append(f'{key}:null')
+                    out.append(f'{key}:null')
             else:
                 out.append(f'{key}:{_json.dumps(val, ensure_ascii=False)}')
         return '{' + ','.join(out) + '}'
@@ -1493,6 +1541,8 @@ class QzdbReader:
     # PERF-03: Inlined child reads. Called in hot path, so manual inlining avoids
     # method-call + attribute-lookup overhead per bit.
     def _trie_walk_v4(self, ip_int):
+        if not self._has_v4 or self._off_v4_jump <= 0:
+            return 0
         d = self._data
         off_jump = self._off_v4_jump
         off_nodes = self._off_v4_nodes
@@ -1537,6 +1587,8 @@ class QzdbReader:
                 if steps >= MAX_TRIE_WALK_STEPS:
                     return 0
                 bit = (suffix >> 31) & 1
+                if idx >= v4_node_count:
+                    return 0
                 child_off = off_nodes + idx * 8 + bit * 4
                 child = unpack_u32(d, child_off)[0]
                 if child & SENTINEL:
@@ -1547,6 +1599,8 @@ class QzdbReader:
                 suffix <<= 1
 
     def _trie_walk_v6(self, ip_int):
+        if not self._has_v6 or self._off_v6_jump <= 0:
+            return 0
         d = self._data
         off_jump = self._off_v6_jump
         off_nodes = self._off_v6_nodes
@@ -1583,6 +1637,8 @@ class QzdbReader:
             unpack_u32 = struct.Struct('<I').unpack_from
             while depth < 128:
                 bit = (ip_int >> (127 - depth)) & 1
+                if idx >= v6_node_count:
+                    return 0
                 child_off = off_nodes + idx * 8 + bit * 4
                 child = unpack_u32(d, child_off)[0]
                 if child & SENTINEL:
@@ -1702,6 +1758,8 @@ class QzdbReader:
     # ── bytes-based IPv6 helpers ──────────────────────────────────────
 
     def _trie_walk_v6_bytes(self, ip_bytes):
+        if not self._has_v6 or self._off_v6_jump <= 0:
+            return 0
         d = self._data
         off_jump = self._off_v6_jump
         off_nodes = self._off_v6_nodes
@@ -1743,6 +1801,8 @@ class QzdbReader:
             unpack_u32 = struct.Struct('<I').unpack_from
             while depth < 128:
                 bit = (ip_bytes[depth >> 3] >> (7 - (depth & 7))) & 1
+                if idx >= v6_node_count:
+                    return 0
                 child_off = off_nodes + idx * 8 + bit * 4
                 child = unpack_u32(d, child_off)[0]
                 if child & SENTINEL:
@@ -1881,42 +1941,28 @@ class QzdbReader:
         return values, resolved_names
 
     def find_fields(self, ip_str, field_names=None):
-        """Field-projection query (API contract §9.6).
+        """Field-projection query (API contract §9.6, aligned to Java golden).
 
-        Returns a GeoInfo with *only* the requested fields, in the requested
-        order. Unknown fields yield ``""`` (preserving input/output length
-        parity). Returns ``None`` only when the IP itself is not found.
+        Slices the requested fields (in the requested order, duplicates kept)
+        from the cached full-field result; unknown fields yield ``''`` at their
+        position (input/output length parity); all-unknown still returns a
+        GeoInfo. Invalid IP raises ``QzdbError`` (same as ``find``)， so
+        ``find_batch_fields`` can keep the invalid/miss tri-state (§4).
+        Returns ``None`` only when the IP itself is not found.
         """
-        if self._closed:
-            return None
         if field_names is None:
             return self.find(ip_str)
-        if not ip_str:
+        full = self.find(ip_str)  # 非法 IP 抛 QzdbError；未命中返回 None
+        if full is None:
             return None
-        parsed = _fast_parse_ip(ip_str)
-        if parsed is None:
-            return None
-        v4, v6 = parsed
-        if v4 is not None:
-            row_id = self._trie_walk_v4(v4)
-        else:
-            row_id = self._trie_walk_v6_bytes(v6)
-        if row_id == 0:
-            return None
-        row_id &= SENTINEL_MASK_31
-        geo_id, asn_id, usage_type_id = self._read_ip_row(row_id)
-        mask = self._group_dim_masks[self._group_index] if self._group_index < len(self._group_dim_masks) else 0
-        entry_id = asn_id if (mask & 0x02) else (usage_type_id if (mask & 0x04) else geo_id)
-        if entry_id == 0:
-            return None
-        # Use the same pre-built normalized index as get()/hasField() so that
-        # field-name matching is case/underscore/hyphen-insensitive (§6.1).
-        indices = []
-        for n in field_names:
-            idx = self._norm_idx.get(_norm_key(n))
-            indices.append(idx if idx is not None else -1)
-        values, resolved_names = self._resolve_geo_fields(entry_id, self._group_index, indices)
-        return GeoInfo(values=values, field_names=resolved_names,
+        norm_idx = self._norm_idx
+        n = len(field_names)
+        values = [''] * n
+        for i in range(n):
+            idx = norm_idx.get(_norm_key(field_names[i]))
+            if idx is not None:
+                values[i] = full._values[idx]
+        return GeoInfo(values=values, field_names=list(field_names),
                        float_indices=self._float_field_indices)
 
     # ── lookup row id / ids ──────────────────────────────────────────
@@ -1981,6 +2027,8 @@ class QzdbReader:
     # the jump bits already consumed from the root (never a wrong network).
 
     def _cidr_walk_v4(self, ip_int):
+        if not self._has_v4 or self._off_v4_jump <= 0:
+            return 0, 0
         d = self._data
         off_jump = self._off_v4_jump
         off_nodes = self._off_v4_nodes
@@ -2017,6 +2065,8 @@ class QzdbReader:
                 if steps > 16:
                     return 0, 0
                 bit = (suffix >> 31) & 1
+                if idx >= self._v4_node_count:
+                    return 0, 0
                 child = struct.unpack_from('<I', d, off_nodes + idx * 8 + bit * 4)[0]
                 if child & SENTINEL:
                     return child & SENTINEL_MASK_31, 16 + steps
@@ -2026,6 +2076,8 @@ class QzdbReader:
                 suffix <<= 1
 
     def _cidr_walk_v6(self, ip_int):
+        if not self._has_v6 or self._off_v6_jump <= 0:
+            return 0, 0
         d = self._data
         off_jump = self._off_v6_jump
         off_nodes = self._off_v6_nodes
@@ -2057,6 +2109,8 @@ class QzdbReader:
         else:
             while depth < 128:
                 bit = (ip_int >> (127 - depth)) & 1
+                if idx >= self._v6_node_count:
+                    return 0, 0
                 child = struct.unpack_from('<I', d, off_nodes + idx * 8 + bit * 4)[0]
                 if child & SENTINEL:
                     return child & SENTINEL_MASK_31, depth + 1
@@ -2284,10 +2338,12 @@ class QzdbReader:
         # Segmented CRC using zlib.crc32 naive chaining.
         # zlib.crc32 already XORs the result with 0xFFFFFFFF (final XOR),
         # so we chain directly: zlib.crc32(part2, zlib.crc32(part1)) == zlib.crc32(part1+part2)
-        crc = zlib.crc32(d[:16])
+        # mmap 切片会整段拷贝（122MB 库即 122MB 瞬时分配）；memoryview 零拷贝。
+        mv = memoryview(d)
+        crc = zlib.crc32(mv[:16])
         crc = zlib.crc32(b'\x00' * 4, crc)
         if len(d) > 20:
-            crc = zlib.crc32(d[20:], crc)
+            crc = zlib.crc32(mv[20:], crc)
         return stored == (crc & 0xFFFFFFFF)
 
 

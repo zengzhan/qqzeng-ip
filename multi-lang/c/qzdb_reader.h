@@ -86,6 +86,11 @@ typedef struct {
     uint64_t off_v4_nodes;
     uint64_t off_v6_jump;
     uint64_t off_v6_nodes;
+    /* 段基址指针（data + off_*）：init 已验证节点段整体在界内且
+     * get_*_child 入口已挡 node_idx >= node_count，热路径子节点读取
+     * 因此可直读基址、免去 safe_read_* 的每次全量边界检查。 */
+    const uint8_t* v4_nodes_base;
+    const uint8_t* v6_nodes_base;
     uint64_t off_ip_row;
     uint64_t off_geo_entries;
     uint64_t off_pools;

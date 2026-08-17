@@ -154,10 +154,15 @@ func formatV6Cidr(ip [16]byte, n int) string {
 // LookupCidr 返回包含该 IP 的最具体网段标准 CIDR（如 "1.0.1.0/24"、"2001:218::/32"）。
 // 未覆盖或非法 IP 返回 ""（契约 §5：Go 返回空值）。IPv4-mapped 自动降级走 V4 Trie。
 func (r *QzdbReader) LookupCidr(ipStr string) string {
-	s := r.snapshot()
-	if s == nil || ipStr == "" {
+	if ipStr == "" {
 		return ""
 	}
+	s := r.snapshot()
+	if s == nil {
+		return ""
+	}
+	// 回归修复：三个 CIDR 入口此前漏了 release，每次查询净增 1 个引用计数，
+	// mmap 永不释放（频繁 Reload 的服务持续泄漏虚拟内存）。
 	res, ok := fastParseIp(ipStr)
 	if !ok {
 		return ""

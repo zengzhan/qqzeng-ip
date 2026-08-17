@@ -1,5 +1,6 @@
 namespace QQZeng.Qzdb;
 
+using System.Buffers;
 using System.Buffers.Binary;
 using System.Numerics;
 using System.Runtime.CompilerServices;
@@ -7,6 +8,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.MemoryMappedFiles;
 using System.Threading;
 
 /// <summary>
@@ -192,6 +194,12 @@ public sealed class QzdbReader : IDisposable
         internal ReadOnlyMemory<byte> _data;
         internal int _dataLen;
         internal int _groupIndex;
+        /// <summary>mmap 路径的稳定指针（byte[] 路径为 null，走 fixed）。
+        /// 生命周期由 _dataOwner（MemoryManager→Memory→Span 引用链）保活：
+        /// 读者持 Span/Memory 即保持映射可达，释放由 SafeHandle 终结器兜底。</summary>
+        internal unsafe byte* _dataPtr;
+        /// <summary>mmap 属主（MemoryManager，持有 view/mmf 句柄）；byte[] 路径为 null。</summary>
+        internal MemoryManager<byte>? _dataOwner;
 
         internal int _flags;
         internal bool _hasV4, _hasV6, _v4Node24, _v6Node24;
@@ -248,15 +256,68 @@ public sealed class QzdbReader : IDisposable
             }
         }
 
-        public static Snapshot FromPath(string path, int groupIndex, bool verifyCrc)
+        public static unsafe Snapshot FromPath(string path, int groupIndex, bool verifyCrc)
         {
-            using var fs = File.OpenRead(path);
+            // mmap 加载：122MB 库不再整块进 LOH（GC.AllocateUninitializedArray + ReadExactly
+            // 的整文件读取与拷贝一并消除），且多进程可共享物理页。
+            // FromBuffer 保留 byte[] 拷贝语义（契约要求）。
+            var fs = File.OpenRead(path);
             if (fs.Length > int.MaxValue)
+            {
+                fs.Dispose();
                 throw new QzdbException(ErrorCode.Corrupted, "QZDB file is too large");
+            }
             var len = (int)fs.Length;
-            byte[] buf = GC.AllocateUninitializedArray<byte>(len);
-            fs.ReadExactly(buf);
-            return new Snapshot(buf, groupIndex, verifyCrc, true);
+            var mmf = MemoryMappedFile.CreateFromFile(fs, null, 0, MemoryMappedFileAccess.Read,
+                HandleInheritability.None, leaveOpen: false);
+            var view = mmf.CreateViewAccessor(0, len, MemoryMappedFileAccess.Read);
+            byte* ptr = null;
+            try
+            {
+                view.SafeMemoryMappedViewHandle.AcquirePointer(ref ptr);
+                var manager = new MmapManager(mmf, view, ptr, len);
+                return new Snapshot(manager.Memory, manager.Pointer, manager, groupIndex, verifyCrc);
+            }
+            catch
+            {
+                if (ptr != null) { try { view.SafeMemoryMappedViewHandle.ReleasePointer(); } catch { /* best effort */ } }
+                view.Dispose();
+                mmf.Dispose();
+                throw;
+            }
+        }
+
+        /// <summary>mmap 视图的 MemoryManager：内存由 OS 映射保持稳定（天然 pinned），
+        /// 句柄释放走 SafeHandle 终结器（读者不再持 Span 后由 GC 兜底，与 Go 侧
+        /// finalizer 模型同语义）。</summary>
+        private sealed unsafe class MmapManager : MemoryManager<byte>
+        {
+            private readonly MemoryMappedFile _mmf;
+            private readonly MemoryMappedViewAccessor _view;
+            private readonly byte* _ptr;
+            private readonly int _length;
+            private bool _disposed;
+
+            internal MmapManager(MemoryMappedFile mmf, MemoryMappedViewAccessor view, byte* ptr, int length)
+            {
+                _mmf = mmf; _view = view; _ptr = ptr; _length = length;
+            }
+
+            internal Memory<byte> Memory => CreateMemory(_length);
+            internal byte* Pointer => _ptr;
+
+            public override Span<byte> GetSpan() => new(_ptr, _length);
+            public override MemoryHandle Pin(int elementIndex = 0) => new(_ptr + elementIndex, default, this);
+            public override void Unpin() { }
+
+            protected override void Dispose(bool disposing)
+            {
+                if (_disposed) return;
+                _disposed = true;
+                try { _view.SafeMemoryMappedViewHandle.ReleasePointer(); } catch { /* best effort */ }
+                _view.Dispose();
+                _mmf.Dispose();
+            }
         }
 
         public static Snapshot FromBuffer(byte[] buffer, int groupIndex, bool verifyCrc)
@@ -266,10 +327,18 @@ public sealed class QzdbReader : IDisposable
             return new Snapshot(copy, groupIndex, verifyCrc, true);
         }
 
-        internal Snapshot(byte[] buffer, int groupIndex, bool verifyCrc, bool _)
+        internal unsafe Snapshot(byte[] buffer, int groupIndex, bool verifyCrc, bool _)
+            : this(buffer, null, null, groupIndex, verifyCrc)
         {
-            _data = buffer;
-            _dataLen = buffer.Length;
+        }
+
+        internal unsafe Snapshot(ReadOnlyMemory<byte> data, byte* dataPtr, MemoryManager<byte>? owner,
+            int groupIndex, bool verifyCrc)
+        {
+            _data = data;
+            _dataPtr = dataPtr;
+            _dataOwner = owner;
+            _dataLen = data.Length;
             _groupIndex = groupIndex;
 
             ValidateHeader();
@@ -925,8 +994,21 @@ public sealed class QzdbReader : IDisposable
         uint rowId = isV4 ? TrieWalkV4(snap, v4) : TrieWalkV6(snap, v6High, v6Low);
         if (rowId == 0) return null;
 
-        if (fields == null || fields.Length == 0) return ResolveRowId(snap, rowId);
-        return ResolveFields(snap, rowId, fields);
+        var full = ResolveRowId(snap, rowId); // rides decode cache
+        if (full == null) return null;
+        if (fields == null || fields.Length == 0) return full;
+
+        // 字段投影：按请求顺序从全字段结果切片（对齐 Java golden）。
+        // 未知字段在该位置补 ""（不跳过）、保留重复字段、全部未知仍返回 GeoInfo。
+        var normMap = snap._normMap;
+        var values = new string[fields.Length];
+        for (int i = 0; i < fields.Length; i++)
+        {
+            values[i] = normMap.TryGetValue(GeoInfo.NormalizeKey(fields[i]), out var fi)
+                ? full.Get(fields[i])
+                : "";
+        }
+        return new GeoInfo(fields, values, GeoInfo.BuildNormalizedMap(fields), null);
     }
 
     public BatchResult[] FindBatch(string[] ipStrs)
@@ -982,8 +1064,12 @@ public sealed class QzdbReader : IDisposable
     private static unsafe uint TrieWalkV4(Snapshot snap, uint ipInt)
     {
         if (!snap._hasV4 || snap._offV4Jump <= 0) return 0;
+        if (snap._dataPtr != null) return TrieWalkV4Core(snap, snap._dataPtr, ipInt);
+        fixed (byte* bp = snap._data.Span) return TrieWalkV4Core(snap, bp, ipInt);
+    }
 
-        fixed (byte* bp = snap._data.Span)
+    private static unsafe uint TrieWalkV4Core(Snapshot snap, byte* bp, uint ipInt)
+    {
         {
             uint* jump = (uint*)(bp + snap._offV4Jump);
             uint hi16 = (ipInt >> 16) & 0xFFFF;
@@ -1034,8 +1120,12 @@ public sealed class QzdbReader : IDisposable
     private static unsafe uint TrieWalkV6(Snapshot snap, ulong ipHigh, ulong ipLow)
     {
         if (!snap._hasV6 || snap._offV6Jump <= 0) return 0;
+        if (snap._dataPtr != null) return TrieWalkV6Core(snap, snap._dataPtr, ipHigh, ipLow);
+        fixed (byte* bp = snap._data.Span) return TrieWalkV6Core(snap, bp, ipHigh, ipLow);
+    }
 
-        fixed (byte* bp = snap._data.Span)
+    private static unsafe uint TrieWalkV6Core(Snapshot snap, byte* bp, ulong ipHigh, ulong ipLow)
+    {
         {
             int jumpBits = snap._v6JumpBits;
             uint idxJump = (uint)(ipHigh >> (64 - jumpBits));
@@ -1168,68 +1258,6 @@ public sealed class QzdbReader : IDisposable
         return new GeoInfo(snap._fieldNames, values, snap._normMap, snap._numericFlags, takeOwnership: true);
     }
 
-    private static GeoInfo? ResolveFields(Snapshot snap, uint rowId, string[] fields)
-    {
-        if (rowId >= snap._rowCount) return null;
-
-        var span = snap._data.Span;
-        long rOff = snap._offIPRow + (long)rowId * snap._ipRowSize;
-
-        uint geoId = ReadUintWidth(span, (int)rOff, snap._rowGeoWidth);
-        uint asnId = snap._rowAsnWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowGeoWidth), snap._rowAsnWidth) : 0;
-        uint usageId = snap._rowUsageWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowGeoWidth + snap._rowAsnWidth), snap._rowUsageWidth) : 0;
-
-        int mask = snap._groupDimMasks[snap._groupIndex];
-        uint entryId = (mask & 0x02) != 0 ? asnId : (mask & 0x04) != 0 ? usageId : geoId;
-
-        if (entryId == 0) return null;
-
-        int gi = snap._groupIndex;
-        int fc = snap._groupFieldCounts[gi];
-        long entryOff = snap._groupEntryOffsets[gi] + (long)entryId * snap._groupStrides[gi];
-
-        var widths = snap._groupFieldWidths[gi];
-        var offsets = snap._groupFieldOffsets[gi];
-        var natives = snap._groupFieldNative[gi];
-        var natTypes = snap._groupFieldNativeType[gi];
-        var groupPools = snap._pools[gi];
-        var normMap = snap._normMap;
-
-        var names = new List<string>(fields.Length);
-        var values = new List<string>(fields.Length);
-        foreach (var f in fields)
-        {
-            if (string.IsNullOrEmpty(f) || !normMap.TryGetValue(GeoInfo.NormalizeKey(f), out var fi) || fi >= fc) continue;
-            int w = widths[fi];
-            int fo = (int)(entryOff + offsets[fi]);
-            string val;
-            if (natives[fi])
-            {
-                int nt = natTypes[fi];
-                if (nt == 1)
-                {
-                    ref var r = ref Unsafe.Add(ref MemoryMarshal.GetReference(span), fo);
-                    val = w == 4
-                        ? FormatFloat6(Unsafe.ReadUnaligned<float>(ref r))
-                        : FormatFloat6(Unsafe.ReadUnaligned<double>(ref r));
-                }
-                else
-                {
-                    val = ReadUintWidth(span, fo, w).ToString();
-                }
-            }
-            else
-            {
-                uint idx = ReadUintWidth(span, fo, w);
-                var pool = groupPools[fi];
-                val = idx < (uint)pool.Length ? pool[(int)idx] : "";
-            }
-            names.Add(snap._fieldNames[fi]);
-            values.Add(val);
-        }
-        if (names.Count == 0) return null;
-        return new GeoInfo(names.ToArray(), values.ToArray(), GeoInfo.BuildNormalizedMap(names.ToArray()), null);
-    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static string FormatFloat6(float v)
@@ -1313,18 +1341,10 @@ public sealed class QzdbReader : IDisposable
     }
 
     private static readonly byte[] HexLUT = new byte[128];
-    private static readonly uint[] CrcTable = new uint[256];
     static QzdbReader()
     {
         for (int i = 0; i < 10; i++) HexLUT[48 + i] = (byte)i;
         for (int i = 0; i < 6; i++) { HexLUT[97 + i] = (byte)(10 + i); HexLUT[65 + i] = (byte)(10 + i); }
-        for (uint i = 0; i < 256; i++)
-        {
-            uint entry = i;
-            for (int j = 0; j < 8; j++)
-                entry = (entry & 1) == 1 ? (entry >> 1) ^ 0xEDB88320 : entry >> 1;
-            CrcTable[i] = entry;
-        }
     }
 
     private static bool TryParseV4(ReadOnlySpan<char> s, out uint v4, out bool hasColon)
@@ -1499,16 +1519,13 @@ public sealed class QzdbReader : IDisposable
     internal static long ComputeCanonicalCrc(Snapshot snap)
     {
         var span = snap._data.Span;
-        int len = span.Length;
-        uint crc = 0xFFFFFFFF;
-        for (int i = 0; i < 16; i++) crc = CrcUpdate(crc, span[i]);
-        crc = CrcUpdate(crc, 0); crc = CrcUpdate(crc, 0); crc = CrcUpdate(crc, 0); crc = CrcUpdate(crc, 0);
-        for (int i = 20; i < len; i++) crc = CrcUpdate(crc, span[i]);
-        return (crc ^ 0xFFFFFFFF);
+        var crc = new System.IO.Hashing.Crc32();
+        crc.Append(span.Slice(0, 16));
+        Span<byte> zeros = stackalloc byte[4];
+        crc.Append(zeros);
+        crc.Append(span.Slice(20));
+        return crc.GetCurrentHashAsUInt32();
     }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static uint CrcUpdate(uint crc, byte val) => CrcTable[(crc ^ val) & 0xFF] ^ (crc >> 8);
 
     #endregion
 

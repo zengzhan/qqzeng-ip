@@ -21,7 +21,13 @@ if [ ${#DB_FILES[@]} -eq 0 ]; then
     exit 1
 fi
 
-DB_PATH="${DB_FILES[0]}"
+# Prefer std_global (full IPv4+IPv6, standard edition) for comprehensive verification.
+# Fall back to first available DB if std_global not present.
+DB_PATH=""
+for f in "$DATA_DIR"/*_std_global.qzdb "$DATA_DIR"/*_max_global.qzdb "$DATA_DIR"/*_ult_global.qzdb; do
+    if [ -f "$f" ]; then DB_PATH="$f"; break; fi
+done
+if [ -z "$DB_PATH" ]; then DB_PATH="${DB_FILES[0]}"; fi
 echo "Using DB: $DB_PATH"
 echo ""
 

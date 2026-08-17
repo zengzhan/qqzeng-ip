@@ -13,8 +13,9 @@
 use std::collections::HashMap;
 use std::fs;
 use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicU32, Ordering};
 
-use arc_swap::ArcSwap;
+use arc_swap::{ArcSwap, ArcSwapOption};
 
 // ---------------------------------------------------------------------------
 // 常量
@@ -693,9 +694,23 @@ pub struct BatchResult {
 // 不可变快照（加载期构建一次，查询期只读）
 // ---------------------------------------------------------------------------
 
+/// 解码缓存槽：key=entry_id（u32::MAX 表示空槽），val=Arc<GeoInfo>。
+/// 读路径完全无锁（一次原子 u32 load + arc-swap debt 槽 load_full），
+/// 替代此前的 Mutex<CacheSlot>——16 线程下锁前缀指令与缓存行独占争用
+/// 是当时多核扩展性（0.2×）的主要来源之一。
 struct CacheSlot {
-    key: u32,
-    val: Option<Arc<GeoInfo>>,
+    key: AtomicU32,
+    val: ArcSwapOption<GeoInfo>,
+}
+
+impl CacheSlot {
+    fn empty() -> Self {
+        CacheSlot { key: AtomicU32::new(u32::MAX), val: ArcSwapOption::new(None) }
+    }
+}
+
+fn new_geo_cache() -> Vec<CacheSlot> {
+    (0..GEO_CACHE_SIZE).map(|_| CacheSlot::empty()).collect()
 }
 
 pub struct SnapshotInner {
@@ -756,10 +771,10 @@ pub struct SnapshotInner {
     version_mask: u16,
     edition_source: &'static str,
     field_names_source: &'static str,
-    canonical_crc: u32,
+    canonical_crc: OnceLock<u32>,
 
-    // per-snapshot 有界无锁 GeoInfo 缓存
-    geo_cache: Vec<std::sync::Mutex<CacheSlot>>,
+    // per-snapshot 有界 GeoInfo 解码缓存（无锁：AtomicU32 + ArcSwapOption）
+    geo_cache: Vec<CacheSlot>,
 }
 
 impl SnapshotInner {
@@ -1262,10 +1277,14 @@ impl SnapshotInner {
             (String::new(), String::new())
         };
 
-        let canonical_crc = compute_canonical_crc(d);
+        // CRC 惰性化：仅 verify_crc 时同步计算（扫全文件）；关闭校验的加载/
+        // 热更新不再无条件付 122MB≈120-250ms 的表驱动扫描。verify_crc()/
+        // get_file_hash() 首次调用时经 OnceLock 惰性补算并缓存。
+        let canonical_crc = OnceLock::new();
         if verify_crc {
+            let canonical_crc = canonical_crc.get_or_init(|| compute_canonical_crc(d));
             let stored = safe_read_u32(d, 16).unwrap_or(0);
-            if stored != canonical_crc {
+            if stored != *canonical_crc {
                 return Err(err(
                     ErrorCode::Corrupted,
                     format!(
@@ -1276,9 +1295,7 @@ impl SnapshotInner {
             }
         }
 
-        let geo_cache = (0..GEO_CACHE_SIZE)
-            .map(|_| std::sync::Mutex::new(CacheSlot { key: u32::MAX, val: None }))
-            .collect();
+        let geo_cache = new_geo_cache();
 
         Ok(SnapshotInner {
             data,
@@ -1430,6 +1447,73 @@ impl SnapshotInner {
         self.walk_v6_depth(bytes, ptr, self.v6_jump_bits as u8, 128)
     }
 
+    /// V4 行号快查（find / lookup_row_id 路径）。跳表条目带 SENTINEL 即终止叶子，
+    /// 低 31 位就是 row_id，直接返回（QZDB_FORMAT.md §4 SearchV4；与 C/Java/C#/Node/PHP 一致）。
+    /// CIDR 反查需要前缀长度，走 trie_walk_v4。
+    fn trie_row_v4(&self, ip: u32) -> Option<u32> {
+        if !self.has_v4 || self.off_v4_jump == 0 {
+            return None;
+        }
+        let hi16 = ((ip >> 16) & 0xFFFF) as usize;
+        let ptr = safe_read_u32(self.data.as_slice(), self.off_v4_jump as usize + hi16 * 4)?;
+        if ptr == 0 {
+            return None;
+        }
+        if ptr & SENTINEL != 0 {
+            return Some(ptr & SENTINEL_MASK_31);
+        }
+        let mut idx = ptr;
+        let mut suffix = (ip & 0xFFFF) << 16;
+        for _ in 0..16 {
+            let bit = (suffix >> 31) & 1;
+            let child = self.get_v4_child(idx, bit);
+            if child == 0 {
+                return None;
+            }
+            if child & SENTINEL != 0 {
+                return Some(child & SENTINEL_MASK_31);
+            }
+            idx = child;
+            suffix <<= 1;
+        }
+        None
+    }
+
+    /// V6 行号快查（find / lookup_row_id 路径）。跳表条目带 SENTINEL 即终止叶子，
+    /// 低 31 位就是 row_id，直接返回（QZDB_FORMAT.md §4 SearchV6；与 C/Java/C#/Node/PHP 一致）。
+    fn trie_row_v6(&self, bytes: &[u8; 16]) -> Option<u32> {
+        if !self.has_v6 || self.off_v6_jump == 0 {
+            return None;
+        }
+        let shift = 128 - self.v6_jump_bits;
+        let idx_jump = ((u128::from_be_bytes(*bytes) >> shift) & ((1u128 << self.v6_jump_bits) - 1)) as usize;
+        let ptr = safe_read_u32(self.data.as_slice(), self.off_v6_jump as usize + idx_jump * 4)?;
+        if ptr == 0 {
+            return None;
+        }
+        if ptr & SENTINEL != 0 {
+            return Some(ptr & SENTINEL_MASK_31);
+        }
+        let mut idx = ptr;
+        let mut depth = self.v6_jump_bits as u8;
+        while depth < 128 {
+            if idx >= self.v6_node_count {
+                return None;
+            }
+            let bit = ((bytes[(depth >> 3) as usize] as u32) >> (7 - (depth & 7))) & 1;
+            let child = self.get_v6_child(idx, bit);
+            if child == 0 {
+                return None;
+            }
+            if child & SENTINEL != 0 {
+                return Some(child & SENTINEL_MASK_31);
+            }
+            idx = child;
+            depth += 1;
+        }
+        None
+    }
+
     fn walk_v6_depth(
         &self,
         bytes: &[u8; 16],
@@ -1513,24 +1597,26 @@ impl SnapshotInner {
         self.resolve_geo(entry_id)
     }
 
-    /// 有界无锁缓存解析：键为 entry_id；返回前校验 key 一致，碰撞只重算、绝不返回错值。
+    /// 有界无锁缓存解析：键为 entry_id；命中即返回共享 Arc，碰撞只重算、绝不返回错值。
     fn resolve_geo(&self, entry_id: u32) -> Option<Arc<GeoInfo>> {
         if entry_id == 0 || entry_id >= self.group_entry_counts[self.group_index] {
             return None;
         }
         let slot = &self.geo_cache[(entry_id as usize) & (GEO_CACHE_SIZE - 1)];
-        {
-            let guard = slot.lock().unwrap();
-            if guard.key == entry_id {
-                if let Some(v) = &guard.val {
-                    return Some(Arc::clone(v));
-                }
+        // 快路径：无锁读。key 用 Acquire 与写侧的 Release 配对，保证 key 命中时
+        // val 里的 Arc 一定已发布（写侧先 store val 再 store key）。
+        if slot.key.load(Ordering::Acquire) == entry_id {
+            if let Some(v) = slot.val.load_full() {
+                return Some(v);
             }
         }
         let geo = self.build_geo(entry_id);
-        let mut guard = slot.lock().unwrap();
-        guard.key = entry_id;
-        guard.val = Some(Arc::clone(&geo));
+        // 发布顺序：先 val 后 key（key 是有效性标志）。
+        // 覆写旧条目安全：旧 Arc 由仍持有它的读者保命（引用计数语义）；
+        // 与 C 侧「不可变条目永不淘汰」的铁律不同——C 返回借用指针所以禁止
+        // 淘汰，Rust 返回 Arc 无生命周期问题，覆写是安全且期望的行为。
+        slot.val.store(Some(Arc::clone(&geo)));
+        slot.key.store(entry_id, Ordering::Release);
         Some(geo)
     }
 
@@ -1761,7 +1847,7 @@ impl SnapshotInner {
 
     fn verify_crc_inner(&self) -> bool {
         let stored = safe_read_u32(self.data.as_slice(), 16).unwrap_or(0);
-        stored == self.canonical_crc
+        stored == *self.canonical_crc.get_or_init(|| compute_canonical_crc(self.data.as_slice()))
     }
 }
 
@@ -2118,8 +2204,14 @@ impl std::fmt::Debug for QzdbReader {
 impl QzdbReader {
     /// 从文件路径加载（默认 CRC 校验开启）。
     pub fn from_file(path: &str) -> Result<QzdbReader, QzdbError> {
-        let bytes = fs::read(path)?;
-        Self::from_bytes(&bytes, 0, true)
+        // 直连 Arc<Vec<u8>>：绕过 from_bytes 的防御性拷贝，
+        // 加载峰值内存从 2× 文件大小降为 1×，并省一次全文件 memcpy
+        // （与 Builder::build / reload 的加载路径行为一致）。
+        let data: Arc<Vec<u8>> = Arc::new(fs::read(path)?);
+        let inner = SnapshotInner::from_bytes(data, 0, true)?;
+        Ok(QzdbReader {
+            snap: ArcSwap::from_pointee(inner),
+        })
     }
 
     /// 从内存字节加载。
@@ -2140,6 +2232,7 @@ impl QzdbReader {
         self.snap.load_full()
     }
 
+
     // ---- 单条查询 ----
 
     pub fn find(&self, ip_str: &str) -> Option<GeoInfo> {
@@ -2148,67 +2241,104 @@ impl QzdbReader {
     }
 
     fn find_parsed(&self, parsed: &ParsedIp) -> Option<GeoInfo> {
-        let snap = self.inner();
+        let snap = self.snap.load();
         match parsed {
-            ParsedIp::V4(v4) => self.find_uint_inner(&snap, *v4),
-            ParsedIp::V6(b) => self.find_v6_bytes_inner(&snap, b),
+            ParsedIp::V4(v4) => self.find_uint_inner(&*snap, *v4),
+            ParsedIp::V6(b) => self.find_v6_bytes_inner(&*snap, b),
         }
     }
 
     fn find_uint_inner(&self, snap: &SnapshotInner, ip: u32) -> Option<GeoInfo> {
+        self.find_uint_shared_inner(snap, ip).map(|a| (*a).clone())
+    }
+
+    fn find_uint_shared_inner(&self, snap: &SnapshotInner, ip: u32) -> Option<Arc<GeoInfo>> {
         if !snap.has_v4 {
             return None;
         }
-        match snap.trie_walk_v4(ip) {
-            Some((rid, _)) if rid != 0 => snap.resolve_row_id(rid).map(|a| (*a).clone()),
+        match snap.trie_row_v4(ip) {
+            Some(rid) if rid != 0 => snap.resolve_row_id(rid),
             _ => None,
         }
     }
 
     pub fn find_uint(&self, ip: u32) -> Option<GeoInfo> {
-        let snap = self.inner();
-        self.find_uint_inner(&snap, ip)
+        let snap = self.snap.load();
+        self.find_uint_inner(&*snap, ip)
     }
 
     fn find_v6_bytes_inner(&self, snap: &SnapshotInner, bytes: &[u8; 16]) -> Option<GeoInfo> {
+        self.find_v6_bytes_shared_inner(snap, bytes).map(|a| (*a).clone())
+    }
+
+    fn find_v6_bytes_shared_inner(&self, snap: &SnapshotInner, bytes: &[u8; 16]) -> Option<Arc<GeoInfo>> {
         if !snap.has_v6 {
             return None;
         }
-        match snap.trie_walk_v6(bytes) {
-            Some((rid, _)) if rid != 0 => snap.resolve_row_id(rid).map(|a| (*a).clone()),
+        match snap.trie_row_v6(bytes) {
+            Some(rid) if rid != 0 => snap.resolve_row_id(rid),
             _ => None,
         }
     }
 
     pub fn find_v6(&self, ip: u128) -> Option<GeoInfo> {
-        let snap = self.inner();
+        let snap = self.snap.load();
         if !snap.has_v6 {
             return None;
         }
         let b = ip.to_be_bytes();
-        self.find_v6_bytes_inner(&snap, &b)
+        self.find_v6_bytes_inner(&*snap, &b)
     }
 
     /// 从 4/16 字节查询（16 字节含 IPv4-Mapped 降级）。长度非 4/16 返回 None。
     pub fn find_bytes(&self, ip_bytes: &[u8]) -> Option<GeoInfo> {
-        let snap = self.inner();
+        let snap = self.snap.load();
         match ip_bytes.len() {
             16 => {
                 let mut b = [0u8; 16];
                 b.copy_from_slice(ip_bytes);
                 if is_ipv4_mapped_v6(&b) {
                     let v4 = u32::from_be_bytes([b[12], b[13], b[14], b[15]]);
-                    self.find_uint_inner(&snap, v4)
+                    self.find_uint_inner(&*snap, v4)
                 } else {
-                    self.find_v6_bytes_inner(&snap, &b)
+                    self.find_v6_bytes_inner(&*snap, &b)
                 }
             }
             4 => {
                 let v4 = u32::from_be_bytes([ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]]);
-                self.find_uint_inner(&snap, v4)
+                self.find_uint_inner(&*snap, v4)
             }
             _ => None,
         }
+    }
+
+    /// 零拷贝共享查询：返回 `Arc<GeoInfo>`，缓存命中路径无任何堆分配
+    /// （`find()` 命中后须深拷贝整个 GeoInfo——ult 档 25 次 String 分配，
+    /// 这是热路径最大的单项分配开销）。`GeoInfo` 全部方法都是 `&self`，
+    /// 经 `Deref` 使用与 owned 形态无差别。
+    pub fn find_shared(&self, ip_str: &str) -> Option<Arc<GeoInfo>> {
+        let parsed = parse_ip(ip_str)?;
+        let snap = self.snap.load();
+        match &parsed {
+            ParsedIp::V4(v4) => self.find_uint_shared_inner(&*snap, *v4),
+            ParsedIp::V6(b) => self.find_v6_bytes_shared_inner(&*snap, b),
+        }
+    }
+
+    /// `find_shared` 的 uint32 直入版本。
+    pub fn find_uint_shared(&self, ip: u32) -> Option<Arc<GeoInfo>> {
+        let snap = self.snap.load();
+        self.find_uint_shared_inner(&*snap, ip)
+    }
+
+    /// `find_shared` 的 16 字节 IPv6 直入版本。
+    pub fn find_v6_shared(&self, ip: u128) -> Option<Arc<GeoInfo>> {
+        let snap = self.snap.load();
+        if !snap.has_v6 {
+            return None;
+        }
+        let b = ip.to_be_bytes();
+        self.find_v6_bytes_shared_inner(&*snap, &b)
     }
 
     /// 字段投影查询；fields 为空等价于 find。
@@ -2217,10 +2347,10 @@ impl QzdbReader {
             return self.find(ip_str);
         }
         let parsed = parse_ip(ip_str)?;
-        let snap = self.inner();
+        let snap = self.snap.load();
         let row_id = match &parsed {
-            ParsedIp::V4(v4) => snap.trie_walk_v4(*v4).map(|(r, _)| r).unwrap_or(0),
-            ParsedIp::V6(b) => snap.trie_walk_v6(b).map(|(r, _)| r).unwrap_or(0),
+            ParsedIp::V4(v4) => snap.trie_row_v4(*v4).unwrap_or(0),
+            ParsedIp::V6(b) => snap.trie_row_v6(b).unwrap_or(0),
         };
         if row_id == 0 {
             return None;
@@ -2240,32 +2370,32 @@ impl QzdbReader {
             Some(p) => p,
             None => return 0,
         };
-        let snap = self.inner();
+        let snap = self.snap.load();
         match parsed {
-            ParsedIp::V4(v4) => snap.trie_walk_v4(v4).map(|(r, _)| r).unwrap_or(0),
-            ParsedIp::V6(b) => snap.trie_walk_v6(&b).map(|(r, _)| r).unwrap_or(0),
+            ParsedIp::V4(v4) => snap.trie_row_v4(v4).unwrap_or(0),
+            ParsedIp::V6(b) => snap.trie_row_v6(&b).unwrap_or(0),
         }
     }
 
     pub fn lookup_row_id_uint(&self, ip: u32) -> u32 {
-        let snap = self.inner();
+        let snap = self.snap.load();
         if !snap.has_v4 {
             return 0;
         }
-        snap.trie_walk_v4(ip).map(|(r, _)| r).unwrap_or(0)
+        snap.trie_row_v4(ip).unwrap_or(0)
     }
 
     pub fn lookup_row_id_v6(&self, ip: u128) -> u32 {
-        let snap = self.inner();
+        let snap = self.snap.load();
         if !snap.has_v6 {
             return 0;
         }
         let b = ip.to_be_bytes();
-        snap.trie_walk_v6(&b).map(|(r, _)| r).unwrap_or(0)
+        snap.trie_row_v6(&b).unwrap_or(0)
     }
 
     pub fn lookup_row_id_bytes(&self, ip_bytes: &[u8]) -> u32 {
-        let snap = self.inner();
+        let snap = self.snap.load();
         match ip_bytes.len() {
             16 => {
                 let mut b = [0u8; 16];
@@ -2275,12 +2405,12 @@ impl QzdbReader {
                     if !snap.has_v4 {
                         return 0;
                     }
-                    snap.trie_walk_v4(v4).map(|(r, _)| r).unwrap_or(0)
+                    snap.trie_row_v4(v4).unwrap_or(0)
                 } else {
                     if !snap.has_v6 {
                         return 0;
                     }
-                    snap.trie_walk_v6(&b).map(|(r, _)| r).unwrap_or(0)
+                    snap.trie_row_v6(&b).unwrap_or(0)
                 }
             }
             4 => {
@@ -2288,7 +2418,7 @@ impl QzdbReader {
                 if !snap.has_v4 {
                     return 0;
                 }
-                snap.trie_walk_v4(v4).map(|(r, _)| r).unwrap_or(0)
+                snap.trie_row_v4(v4).unwrap_or(0)
             }
             _ => 0,
         }
@@ -2296,7 +2426,7 @@ impl QzdbReader {
 
     /// 返回 (geo_id, asn_id, usage_id)；越界返回 None。
     pub fn lookup_ids(&self, row_id: u32) -> Option<RowIds> {
-        let snap = self.inner();
+        let snap = self.snap.load();
         if row_id == 0 || row_id >= snap.row_count as u32 {
             return None;
         }
@@ -2308,7 +2438,7 @@ impl QzdbReader {
 
     pub fn lookup_cidr(&self, ip_str: &str) -> Option<String> {
         let parsed = parse_ip(ip_str)?;
-        let snap = self.inner();
+        let snap = self.snap.load();
         match parsed {
             ParsedIp::V4(v4) => snap.lookup_cidr_v4(v4),
             ParsedIp::V6(b) => snap.lookup_cidr_v6(&b),
@@ -2316,7 +2446,7 @@ impl QzdbReader {
     }
 
     pub fn lookup_cidr_uint(&self, ip: u32) -> Option<String> {
-        let snap = self.inner();
+        let snap = self.snap.load();
         if !snap.has_v4 {
             return None;
         }
@@ -2324,7 +2454,7 @@ impl QzdbReader {
     }
 
     pub fn lookup_cidr_bytes(&self, ip_bytes: &[u8]) -> Option<String> {
-        let snap = self.inner();
+        let snap = self.snap.load();
         match ip_bytes.len() {
             16 => {
                 let mut b = [0u8; 16];
@@ -2378,6 +2508,15 @@ impl QzdbReader {
 
     fn batch_one(&self, ip: &str) -> BatchResult {
         let ip_str = ip.to_string();
+        // 契约 §4：批量路径必须保留「命中 / 未命中 / 非法 IP」三态，
+        // 非法 IP 不得被归并到未命中（调用方据此审计输入质量）。
+        if parse_ip(ip).is_none() {
+            return BatchResult {
+                ip: ip_str,
+                geo_info: None,
+                error: Some(format!("invalid IP address: {:?}", ip)),
+            };
+        }
         match self.find(ip) {
             Some(g) => BatchResult { ip: ip_str, geo_info: Some(g), error: None },
             None => BatchResult { ip: ip_str, geo_info: None, error: None },
@@ -2420,7 +2559,7 @@ impl QzdbReader {
     }
     /// CRC32 十六进制 8 位小写。
     pub fn get_file_hash(&self) -> String {
-        format!("{:08x}", self.inner().canonical_crc)
+        format!("{:08x}", self.inner().canonical_crc.get_or_init(|| compute_canonical_crc(self.inner().data.as_slice())))
     }
     pub fn get_field_names(&self) -> Vec<String> {
         self.inner().field_names.as_slice().to_vec()
@@ -2516,10 +2655,8 @@ fn empty_snapshot() -> SnapshotInner {
         version_mask: 0,
         edition_source: EDITION_SOURCE_UNKNOWN,
         field_names_source: FIELD_NAMES_SOURCE_SYNTHETIC,
-        canonical_crc: 0,
-        geo_cache: (0..GEO_CACHE_SIZE)
-            .map(|_| std::sync::Mutex::new(CacheSlot { key: u32::MAX, val: None }))
-            .collect(),
+        canonical_crc: OnceLock::new(),
+        geo_cache: new_geo_cache(),
     }
 }
 

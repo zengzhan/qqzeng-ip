@@ -214,7 +214,10 @@ public class QzdbReader implements AutoCloseable {
          * 这一处补齐的正是 QZDB C/Go/Rust/C#/Node/PHP/Python 七种 SDK 都有、
          * 唯独 Java 缺失的解码缓存。
          */
-        private static final int GEO_CACHE_CAP = 1 << 14; // 16384 slots
+        // 64K 直接映射槽（≈512KB/快照）：max/ult 全球库 entry 达 1e5 量级，
+        // 16K 槽随机流下碰撞淘汰频繁；扩到 64K 后 miss 解码（25 字段解包 +
+        // 数组分配）显著减少，内存代价仍远小于 Go 的 256K 槽。
+        private static final int GEO_CACHE_CAP = 1 << 16;
         private final AtomicReferenceArray<CacheEntry> geoCache = new AtomicReferenceArray<>(GEO_CACHE_CAP);
 
         private static final class CacheEntry {
@@ -1774,11 +1777,14 @@ public class QzdbReader implements AutoCloseable {
         long nOff = s.offV4Nodes;
         int nodeCount = s.v4NodeCount;
 
+        // 热循环直读（rawGetInt/rawGetU24）：段边界由加载期验证背书，
+        // idx < nodeCount 循环守卫保证读取落在段内；去掉 assertReadable 的
+        // 每步重复检查（V6 最长 112 步 × 2 次比较/步）。
         if (s.v4Node24) {
             for (int depth = startDepth; depth < maxDepth; depth++) {
                 if (idx >= nodeCount) return -1;
                 int bit = (ipInt >>> (31 - depth)) & 1;
-                int child = readU24(d, (int) (nOff + (long) idx * 6 + (bit == 0 ? 0 : 3)));
+                int child = rawGetU24(d, (int) (nOff + (long) idx * 6 + (bit == 0 ? 0 : 3)));
                 if ((child & 0x800000) != 0) return depth + 1;
                 if (child == 0) return -1;
                 idx = child;
@@ -1787,7 +1793,7 @@ public class QzdbReader implements AutoCloseable {
             for (int depth = startDepth; depth < maxDepth; depth++) {
                 if (idx >= nodeCount) return -1;
                 int bit = (ipInt >>> (31 - depth)) & 1;
-                int child = readU32(d, (int) (nOff + (long) idx * 8 + (bit == 0 ? 0 : 4)));
+                int child = d.getInt((int) (nOff + (long) idx * 8 + (bit == 0 ? 0 : 4)));
                 if ((child & SENTINEL) != 0) return depth + 1;
                 if (child == 0) return -1;
                 idx = child;
@@ -1820,7 +1826,7 @@ public class QzdbReader implements AutoCloseable {
             for (int depth = startDepth; depth < maxDepth; depth++) {
                 if (idx >= nodeCount) return -1;
                 int bit = (ip16[depth >> 3] >>> (7 - (depth & 7))) & 1;
-                int child = readU24(d, (int) (nOff + (long) idx * 6 + (bit == 0 ? 0 : 3)));
+                int child = rawGetU24(d, (int) (nOff + (long) idx * 6 + (bit == 0 ? 0 : 3)));
                 if ((child & 0x800000) != 0) return depth + 1;
                 if (child == 0) return -1;
                 idx = child;
@@ -1829,7 +1835,7 @@ public class QzdbReader implements AutoCloseable {
             for (int depth = startDepth; depth < maxDepth; depth++) {
                 if (idx >= nodeCount) return -1;
                 int bit = (ip16[depth >> 3] >>> (7 - (depth & 7))) & 1;
-                int child = readU32(d, (int) (nOff + (long) idx * 8 + (bit == 0 ? 0 : 4)));
+                int child = d.getInt((int) (nOff + (long) idx * 8 + (bit == 0 ? 0 : 4)));
                 if ((child & SENTINEL) != 0) return depth + 1;
                 if (child == 0) return -1;
                 idx = child;
@@ -1959,6 +1965,11 @@ public class QzdbReader implements AutoCloseable {
 
     private static int readU24(ByteBuffer d, int off) {
         assertReadable(d, off, 3);
+        return (d.get(off) & 0xFF) | ((d.getShort(off + 1) & 0xFFFF) << 8);
+    }
+
+    /** 热路径专用：跳过 assertReadable（调用方以段边界验证 + 循环守卫背书）。 */
+    private static int rawGetU24(ByteBuffer d, int off) {
         return (d.get(off) & 0xFF) | ((d.getShort(off + 1) & 0xFFFF) << 8);
     }
 

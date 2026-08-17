@@ -20,6 +20,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -103,7 +104,10 @@ type Snapshot struct {
 	data    []byte
 	release func() // mmap 释放回调；字节加载时为 nil
 
-	refCount atomic.Int32 // 并发读取引用计数，防止 munmap 与读取竞态
+	// 生命周期由 runtime.SetFinalizer 托管（installSnapshot 时注册）：
+	// 读者持引用即保持可达 → finalizer 必不运行 → munmap 不会与读取竞态；
+	// 快照被 Close/Reload 卸载且无人引用后，GC 兜底释放 mmap。
+	// 查询路径因此只剩一次原子指针 Load，无 RWMutex/引用计数开销。
 
 	groupIndex int
 
@@ -1110,25 +1114,18 @@ func formatFloat6(f float64) string {
 // ---------- 查询入口 ----------
 
 func (r *QzdbReader) snapshot() *Snapshot {
-	for {
-		s := r.snap.Load()
-		if s == nil {
-			return nil
-		}
-		s.refCount.Add(1)
-		if r.snap.Load() == s {
-			return s
-		}
-		s.refCount.Add(-1)
-	}
+	// 最终一致性：读者只要能 Load 到非 nil 指针，该快照就因本引用保持可达，
+	// 其 finalizer（munmap）在读者放弃引用前不可能运行。
+	return r.snap.Load()
 }
 
-func (s *Snapshot) releaseSnapshot() {
-	if s.refCount.Add(-1) == 0 {
-		if s.release != nil {
-			s.release()
-		}
+// installSnapshot 注册 finalizer 并原子替换快照；被卸载的旧快照在最后一个
+// 引用消失后由 GC 释放 mmap（无引用计数、无锁）。
+func (r *QzdbReader) installSnapshot(s *Snapshot) {
+	if s != nil && s.release != nil {
+		runtime.SetFinalizer(s, func(s *Snapshot) { s.release() })
 	}
+	r.snap.Swap(s)
 }
 
 // Find 查询 IP 字符串；未命中或非法 IP 返回 (nil, nil)（契约 §4）。
@@ -1137,7 +1134,6 @@ func (r *QzdbReader) Find(ipStr string) (*GeoInfo, error) {
 	if s == nil {
 		return nil, ErrClosed
 	}
-	defer s.releaseSnapshot()
 	if ipStr == "" {
 		return nil, nil
 	}
@@ -1157,7 +1153,6 @@ func (r *QzdbReader) FindUint(ipInt uint32) (*GeoInfo, error) {
 	if s == nil {
 		return nil, ErrClosed
 	}
-	defer s.releaseSnapshot()
 	return r.findUint(s, ipInt)
 }
 
@@ -1167,7 +1162,6 @@ func (r *QzdbReader) FindV6Uint(ip16 [16]byte) (*GeoInfo, error) {
 	if s == nil {
 		return nil, ErrClosed
 	}
-	defer s.releaseSnapshot()
 	return r.findV6(s, ip16)
 }
 
@@ -1177,7 +1171,6 @@ func (r *QzdbReader) FindBytes(ip16 [16]byte) (*GeoInfo, error) {
 	if s == nil {
 		return nil, ErrClosed
 	}
-	defer s.releaseSnapshot()
 	if isV4Mapped(ip16) {
 		return r.findUint(s, v4FromMapped(ip16))
 	}
@@ -1254,7 +1247,6 @@ func (r *QzdbReader) FindFields(ipStr string, fields []string) (*GeoInfo, error)
 	if s == nil {
 		return nil, ErrClosed
 	}
-	defer s.releaseSnapshot()
 	if len(fields) == 0 {
 		return r.Find(ipStr)
 	}
@@ -1289,7 +1281,6 @@ func (r *QzdbReader) LookupRowId(ipStr string) uint32 {
 	if s == nil {
 		return 0
 	}
-	defer s.releaseSnapshot()
 	if ipStr == "" {
 		return 0
 	}
@@ -1311,7 +1302,6 @@ func (r *QzdbReader) LookupRowIdUint(ipInt uint32) uint32 {
 	if s == nil || !s.hasV4 {
 		return 0
 	}
-	defer s.releaseSnapshot()
 	rowID, _ := s.trieWalkV4(ipInt)
 	return rowID
 }
@@ -1322,7 +1312,6 @@ func (r *QzdbReader) LookupRowIdV6(ip16 [16]byte) uint32 {
 	if s == nil || !s.hasV6 {
 		return 0
 	}
-	defer s.releaseSnapshot()
 	rowID, _ := s.trieWalkV6(ip16)
 	return rowID
 }
@@ -1357,7 +1346,6 @@ func (r *QzdbReader) LookupIds(rowID uint32) *RowIds {
 	if s == nil || rowID == 0 || int(rowID) >= s.rowCount {
 		return nil
 	}
-	defer s.releaseSnapshot()
 	geoID, asnID, usageID := s.readIPRow(rowID)
 	return &RowIds{GeoID: geoID, AsnID: asnID, UsageID: usageID}
 }
@@ -1367,8 +1355,7 @@ func (r *QzdbReader) LookupIds(rowID uint32) *RowIds {
 // GetVersion 返回 Metadata 版本；无则返回 ""。
 func (r *QzdbReader) GetVersion() string {
 	if s := r.snapshot(); s != nil {
-		defer s.releaseSnapshot()
-		return s.version
+			return s.version
 	}
 	return ""
 }
@@ -1379,8 +1366,7 @@ func (r *QzdbReader) Version() string { return r.GetVersion() }
 // GetDataMonth 返回数据期号 "yyyy-MM"。
 func (r *QzdbReader) GetDataMonth() string {
 	if s := r.snapshot(); s != nil {
-		defer s.releaseSnapshot()
-		return s.dataMonth
+			return s.dataMonth
 	}
 	return ""
 }
@@ -1388,8 +1374,7 @@ func (r *QzdbReader) GetDataMonth() string {
 // GetEdition 返回版本档次（std/pro/asn/max/ult）。
 func (r *QzdbReader) GetEdition() string {
 	if s := r.snapshot(); s != nil {
-		defer s.releaseSnapshot()
-		return s.edition
+			return s.edition
 	}
 	return ""
 }
@@ -1398,8 +1383,7 @@ func (r *QzdbReader) GetEdition() string {
 // bit0=std, bit1=asn, bit2=pro, bit3=max, bit4=ult（FORMAT §3.1）。
 func (r *QzdbReader) GetVersionMask() uint16 {
 	if s := r.snapshot(); s != nil {
-		defer s.releaseSnapshot()
-		return s.versionMask
+			return s.versionMask
 	}
 	return 0
 }
@@ -1408,8 +1392,7 @@ func (r *QzdbReader) GetVersionMask() uint16 {
 // version_mask | metadata | inferred | unknown。
 func (r *QzdbReader) GetEditionSource() string {
 	if s := r.snapshot(); s != nil {
-		defer s.releaseSnapshot()
-		return s.editionSource
+			return s.editionSource
 	}
 	return EditionSourceUnknown
 }
@@ -1420,8 +1403,7 @@ func (r *QzdbReader) GetEditionSource() string {
 // 档次补上规范表；synthetic 表示两者都没有，名字只是位置占位符，按名取值无意义。
 func (r *QzdbReader) GetFieldNamesSource() string {
 	if s := r.snapshot(); s != nil {
-		defer s.releaseSnapshot()
-		return s.fieldNamesSource
+			return s.fieldNamesSource
 	}
 	return FieldNamesSourceSynthetic
 }
@@ -1432,8 +1414,7 @@ func (r *QzdbReader) GetScope() string { return "" }
 // GetBuildTime 返回构建日期 "yyyy-MM-dd"。
 func (r *QzdbReader) GetBuildTime() string {
 	if s := r.snapshot(); s != nil {
-		defer s.releaseSnapshot()
-		return s.buildTimeStr
+			return s.buildTimeStr
 	}
 	return ""
 }
@@ -1441,8 +1422,7 @@ func (r *QzdbReader) GetBuildTime() string {
 // GetDescription 返回 Metadata 描述；无则返回 ""。
 func (r *QzdbReader) GetDescription() string {
 	if s := r.snapshot(); s != nil {
-		defer s.releaseSnapshot()
-		return s.description
+			return s.description
 	}
 	return ""
 }
@@ -1450,8 +1430,7 @@ func (r *QzdbReader) GetDescription() string {
 // GetFileHash 返回文件 CRC32 十六进制字符串（8 位小写）。
 func (r *QzdbReader) GetFileHash() string {
 	if s := r.snapshot(); s != nil {
-		defer s.releaseSnapshot()
-		return s.fileHashHex()
+			return s.fileHashHex()
 	}
 	return ""
 }
@@ -1459,8 +1438,7 @@ func (r *QzdbReader) GetFileHash() string {
 // GetFieldNames 返回当前版本组字段名。
 func (r *QzdbReader) GetFieldNames() []string {
 	if s := r.snapshot(); s != nil {
-		defer s.releaseSnapshot()
-		out := make([]string, len(s.fieldNames))
+			out := make([]string, len(s.fieldNames))
 		copy(out, s.fieldNames)
 		return out
 	}
@@ -1476,7 +1454,6 @@ func (r *QzdbReader) HasField(name string) bool {
 	if s == nil {
 		return false
 	}
-	defer s.releaseSnapshot()
 	_, ok := s.normalizedMap[normalizeKey(name)]
 	return ok
 }
@@ -1487,15 +1464,13 @@ func (r *QzdbReader) VerifyCRC() bool {
 	if s == nil {
 		return false
 	}
-	defer s.releaseSnapshot()
 	return s.verifyCrcNow()
 }
 
 // GetGroupCount 返回版本组数量。
 func (r *QzdbReader) GetGroupCount() int {
 	if s := r.snapshot(); s != nil {
-		defer s.releaseSnapshot()
-		return s.actualGroups
+			return s.actualGroups
 	}
 	return 0
 }
@@ -1503,8 +1478,7 @@ func (r *QzdbReader) GetGroupCount() int {
 // GetPoolCount 返回 Header poolCount。
 func (r *QzdbReader) GetPoolCount() int {
 	if s := r.snapshot(); s != nil {
-		defer s.releaseSnapshot()
-		return s.poolCount
+			return s.poolCount
 	}
 	return 0
 }
@@ -1515,8 +1489,7 @@ func (r *QzdbReader) PoolCount() int { return r.GetPoolCount() }
 // GetGroupIndex 返回当前版本组索引。
 func (r *QzdbReader) GetGroupIndex() int {
 	if s := r.snapshot(); s != nil {
-		defer s.releaseSnapshot()
-		return s.groupIndex
+			return s.groupIndex
 	}
 	return 0
 }
@@ -1536,12 +1509,10 @@ func OpenBufferNoCopy(data []byte, groupIndex int, verifyCrc bool) (*QzdbReader,
 	return NewBuilderBytesNoCopy(data).GroupIndex(groupIndex).VerifyCRC(verifyCrc).Build()
 }
 
-// Close 释放 mmap / 内存引用；幂等；关闭后查询安全失败。
+// Close 卸载当前快照（幂等；关闭后查询安全失败）。mmap 的实际释放由
+// GC finalizer 在最后一个引用消失后执行。
 func (r *QzdbReader) Close() error {
-	s := r.snap.Swap(nil)
-	if s != nil {
-		s.releaseSnapshot()
-	}
+	r.snap.Swap(nil)
 	return nil
 }
 
@@ -1553,15 +1524,9 @@ func (r *QzdbReader) Reload(path string) error {
 	}
 	ns, err := buildSnapshotFromFile(path, cur.groupIndex, true)
 	if err != nil {
-		cur.releaseSnapshot()
-		return err
+		return err // 旧快照仍在位，继续服务
 	}
-	ns.refCount.Add(1)
-	old := r.snap.Swap(ns)
-	cur.releaseSnapshot()
-	if old != nil {
-		old.releaseSnapshot()
-	}
+	r.installSnapshot(ns)
 	return nil
 }
 
@@ -1573,15 +1538,9 @@ func (r *QzdbReader) ReloadBuffer(b []byte) error {
 	}
 	ns, err := buildSnapshotFromBytes(b, cur.groupIndex, true)
 	if err != nil {
-		cur.releaseSnapshot()
-		return err
+		return err // 旧快照仍在位，继续服务
 	}
-	ns.refCount.Add(1)
-	old := r.snap.Swap(ns)
-	cur.releaseSnapshot()
-	if old != nil {
-		old.releaseSnapshot()
-	}
+	r.installSnapshot(ns)
 	return nil
 }
 
@@ -1604,7 +1563,14 @@ func buildSnapshotFromFile(path string, groupIndex int, verifyCrc bool) (*Snapsh
 	if err != nil {
 		return nil, err
 	}
-	return buildSnapshot(data, func() { _ = syscall.Munmap(data) }, groupIndex, verifyCrc)
+	snap, err := buildSnapshot(data, func() { _ = syscall.Munmap(data) }, groupIndex, verifyCrc)
+	if err != nil {
+		// buildSnapshot 的 release 闭包只在快照成功安装后才会被调用；
+		// 解析失败（BadMagic/CRC/越界）时必须在这里归还映射，否则打开失败即泄漏。
+		_ = syscall.Munmap(data)
+		return nil, err
+	}
+	return snap, nil
 }
 
 func buildSnapshotFromBytes(b []byte, groupIndex int, verifyCrc bool) (*Snapshot, error) {

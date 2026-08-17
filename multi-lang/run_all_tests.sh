@@ -134,7 +134,7 @@ fi
 
 # .NET/C#
 if command -v dotnet &> /dev/null; then
-    run_test "C#" "dotnet run --configuration Release" "netcore"
+    run_test "C#" "dotnet run --project netcore.Tests/netcore.Tests.csproj -c Release" "."
 else
     echo "[SKIP] C# (.NET SDK not found)"
 fi

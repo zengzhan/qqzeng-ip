@@ -81,8 +81,18 @@ public final class GeoInfo {
      */
     public static String normalizeKey(String key) {
         if (key == null) return "";
-        StringBuilder sb = new StringBuilder(key.length());
-        for (int i = 0; i < key.length(); i++) {
+        // 快路径：字段名不含 '_'/'-' 且无大写时直接返回原串，零分配。
+        // 语义 getter 传常量键（"country"/"city" 等）全部命中此路径；
+        // 含分隔符或大小写混排时走原 StringBuilder 归一化。
+        int n = key.length();
+        boolean simple = true;
+        for (int i = 0; i < n; i++) {
+            char c = key.charAt(i);
+            if (c == '_' || c == '-' || (c >= 'A' && c <= 'Z')) { simple = false; break; }
+        }
+        if (simple) return key;
+        StringBuilder sb = new StringBuilder(n);
+        for (int i = 0; i < n; i++) {
             char c = key.charAt(i);
             if (c != '_' && c != '-') {
                 sb.append(Character.toLowerCase(c));

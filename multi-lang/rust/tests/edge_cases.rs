@@ -278,8 +278,20 @@ fn test_batch_all_invalid() {
     assert_eq!(results.len(), 3);
     for r in &results {
         assert!(r.geo_info.is_none());
-        assert!(r.error.is_none()); // Invalid IP is not an error, just not found
+        // 契约 §4：批量路径必须保留三态——非法 IP 经 BatchResult.error 区分，
+        // 不得归并到未命中（与 C#/Java/Node/PHP 对齐）。
+        assert!(r.error.is_some());
     }
+}
+
+#[test]
+fn test_batch_miss_has_no_error() {
+    let r = load_std();
+    // 未命中（合法 IP 但库里无覆盖）与非法 IP 必须可区分
+    let results = r.find_batch(&["127.0.0.1"]);
+    assert_eq!(results.len(), 1);
+    assert!(results[0].geo_info.is_none());
+    assert!(results[0].error.is_none(), "合法 IP 未命中不得标 error");
 }
 
 #[test]

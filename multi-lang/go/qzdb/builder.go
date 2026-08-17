@@ -92,7 +92,6 @@ func (b *Builder) Build() (*QzdbReader, error) {
 		return nil, err
 	}
     r := &QzdbReader{}
-    s.refCount.Add(1)
-    r.snap.Store(s)
+    r.installSnapshot(s)
     return r, nil
 }

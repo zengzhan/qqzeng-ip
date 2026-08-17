@@ -443,6 +443,9 @@ class GeoInfo implements \ArrayAccess
 
     private static function isJsonNumber(string $val): bool
     {
+        // 与 C# GeoInfo.IsJsonNumber 逐字对齐的 JSON 数字文法校验：
+        // 拒绝 "1." / ".5" / "01" / "+1" 等非法形态（修复前这类值会以裸 token
+        // 进入 JSON 输出，产出非法 JSON）。
         $n = strlen($val);
         if ($n === 0) return false;
         $i = 0;
@@ -450,19 +453,29 @@ class GeoInfo implements \ArrayAccess
             if ($n === 1) return false;
             $i = 1;
         }
-        $digit = false;
-        $dot = false;
-        for (; $i < $n; $i++) {
-            $c = $val[$i];
-            if ($c >= '0' && $c <= '9') {
-                $digit = true;
-            } elseif ($c === '.' && !$dot) {
-                $dot = true;
-            } else {
-                return false;
+        if ($i >= $n) return false;
+        if ($val[$i] === '0') {
+            $i++;
+            if ($i < $n && $val[$i] >= '0' && $val[$i] <= '9') return false;
+        } else {
+            if ($val[$i] < '1' || $val[$i] > '9') return false;
+            while (++$i < $n && $val[$i] >= '0' && $val[$i] <= '9') {
             }
         }
-        return $digit;
+        if ($i < $n && $val[$i] === '.') {
+            $i++;
+            $fracStart = $i;
+            while ($i < $n && $val[$i] >= '0' && $val[$i] <= '9') $i++;
+            if ($i === $fracStart) return false;
+        }
+        if ($i < $n && ($val[$i] === 'e' || $val[$i] === 'E')) {
+            $i++;
+            if ($i < $n && ($val[$i] === '+' || $val[$i] === '-')) $i++;
+            $expStart = $i;
+            while ($i < $n && $val[$i] >= '0' && $val[$i] <= '9') $i++;
+            if ($i === $expStart) return false;
+        }
+        return $i === $n;
     }
 
     private static function escapeJson(string $s): string
@@ -647,6 +660,8 @@ class QzdbReader
     private $data = null;        // 缓冲模式：完整文件字节
     private $stream = null;      // 流式模式：fopen 句柄（大文件）
     private $fileSize = 0;
+    /** $this->dataLen 的缓存：热路径原语读取免每次 strlen。 */
+    private $dataLen = 0;
     private $verifyCrc = true;
     private $closed = false;
 
@@ -760,6 +775,7 @@ class QzdbReader
         }
         $this->stream = null;
         $this->data = null;
+        $this->dataLen = 0;
         $this->closed = true;
         $this->geoCache = [];
     }
@@ -792,11 +808,13 @@ class QzdbReader
                 throw new QzdbException("Cannot open database file: " . $dbPath, self::ERROR_INVALID_PARAM);
             }
             $this->data = null;
+            $this->dataLen = 0;
         } else {
             $this->data = @file_get_contents($dbPath);
             if ($this->data === false) {
                 throw new QzdbException("Cannot read database file: " . $dbPath, self::ERROR_INVALID_PARAM);
             }
+            $this->dataLen = strlen($this->data);
             $this->stream = null;
         }
 
@@ -813,6 +831,7 @@ class QzdbReader
         $this->verifyCrc = $verifyCrc;
         $this->fileSize = strlen($bytes);
         $this->data = $bytes;
+        $this->dataLen = strlen($bytes);
         $this->stream = null;
         $this->parseHeader();
         if ($this->verifyCrc && !$this->rawVerifyCrc()) {
@@ -986,6 +1005,11 @@ class QzdbReader
             return $this->lookupRowIdUint($ipInt);
         }
         if ($len === 16) {
+            // IPv4-mapped (::ffff:w.x.y.z) 与 findBytes()/lookupCidrBytes() 同步降级走 V4 Trie，
+            // 补齐 cbd6e52 只修 findBytes 时漏掉的姊妹入口（契约 §8.4 / §5）。
+            if ($this->isV4MappedBytes($bytes)) {
+                return $this->lookupRowIdUint($this->v4FromMappedBytes($bytes));
+            }
             return $this->lookupRowIdV6($bytes);
         }
         return 0;
@@ -1663,7 +1687,14 @@ class QzdbReader
                     continue;
                 }
                 $poolCursor = $dataBase + $totalLen;
-                $groupDescs[] = ['ot' => $offsetTableBase, 'db' => $dataBase, 'count' => $count, 'total' => $totalLen];
+                // 偏移表物化：一次性 unpack 出 (count+1) 个 u32（含末项总长），
+                // 热路径 poolString 每 2 次 safeReadU32 → 2 次数组下标。
+                $offs = unpack('V*', $this->readBytes($offsetTableBase, ($count + 1) * 4));
+                if ($offs === false) {
+                    $groupDescs[] = null;
+                    continue;
+                }
+                $groupDescs[] = ['ot' => $offsetTableBase, 'db' => $dataBase, 'count' => $count, 'total' => $totalLen, 'offs' => $offs];
             }
             $this->groupPoolDescs[$g] = $groupDescs;
         }
@@ -1676,8 +1707,10 @@ class QzdbReader
         $desc = $this->groupPoolDescs[$g][$f];
         if ($desc === null) return '';
         if ($idx < 0 || $idx >= $desc['count']) return '';
-        $start = $this->safeReadU32($desc['ot'] + $idx * 4);
-        $end = $this->safeReadU32($desc['ot'] + ($idx + 1) * 4);
+        $offs = $desc['offs'];
+        // unpack('V*') 返回 1-based 数组
+        $start = $offs[$idx + 1];
+        $end = $offs[$idx + 2];
         // 偏移表是累积结构，末项为总长度；越界/逆序项一律降级为空串（§Fail-Closed）
         if ($end < $start || $end > $desc['total']) return '';
         $length = $end - $start;
@@ -1782,18 +1815,14 @@ class QzdbReader
         $ptr = $this->safeReadU32($this->offV6Jump + $idx_jump * 4);
         if ($ptr === 0) return 0;
         if ($ptr & self::SENTINEL) {
-            // SENTINEL in the jump table means this /jump_bits prefix has no
-            // dedicated subtree: restart the walk from the trie root (node 0)
-            // for the first `jump_bits` levels. Mirrors the Rust reference
-            // (trie_walk_v6 -> walk_v6_depth(bytes, 0, 0, jump_bits)).
-            $idx = 0;
-            $depth = 0;
-            $maxDepth = $v6_jump_bits;
-        } else {
-            $idx = $ptr;
-            $depth = $v6_jump_bits;
-            $maxDepth = 128;
+            // QZDB_FORMAT.md §4 SearchV6：跳表条目带 SENTINEL 即终止叶子，
+            // 低 31 位就是 row_id，直接返回（与 trieWalkV4 及 C/Java/C#/Node/Python 一致）。
+            return $ptr & self::SENTINEL_MASK_31;
         }
+
+        $idx = $ptr;
+        $depth = $v6_jump_bits;
+        $maxDepth = 128;
 
         $steps = 0;
         while ($depth < $maxDepth) {
@@ -2107,7 +2136,7 @@ class QzdbReader
             return ($b === false) ? '' : $b;
         }
         if ($this->data === null || $off < 0) return '';
-        $avail = strlen($this->data) - $off;
+        $avail = $this->dataLen - $off;
         if ($avail <= 0) return '';
         if ($len > $avail) {
             $len = $avail;
@@ -2117,6 +2146,12 @@ class QzdbReader
 
     private function readByte($off)
     {
+        // 缓冲模式直接下标取字节：readBytes → substr 每次分配一个 1 字节字符串，
+        // 24 位节点的 trie walk 每步 3 次 readByte，是明显的热路径开销。
+        if ($this->data !== null) {
+            if ($off < 0 || $off >= $this->dataLen) return 0;
+            return ord($this->data[$off]);
+        }
         $b = $this->readBytes($off, 1);
         return $b === '' ? 0 : ord($b);
     }
@@ -2125,7 +2160,7 @@ class QzdbReader
     private function safeReadU16($off)
     {
         if ($this->data !== null) {
-            if ($off < 0 || $off + 2 > strlen($this->data)) {
+            if ($off < 0 || $off + 2 > $this->dataLen) {
                 throw new QzdbException('Out of bounds reading U16 at offset ' . $off, self::ERROR_OUT_OF_BOUNDS);
             }
             return unpack('v', $this->data, $off)[1];
@@ -2140,7 +2175,7 @@ class QzdbReader
     private function safeReadU32($off)
     {
         if ($this->data !== null) {
-            if ($off < 0 || $off + 4 > strlen($this->data)) {
+            if ($off < 0 || $off + 4 > $this->dataLen) {
                 throw new QzdbException('Out of bounds reading U32 at offset ' . $off, self::ERROR_OUT_OF_BOUNDS);
             }
             return unpack('V', $this->data, $off)[1];
@@ -2155,7 +2190,7 @@ class QzdbReader
     private function safeReadU64($off)
     {
         if ($this->data !== null) {
-            if ($off < 0 || $off + 8 > strlen($this->data)) {
+            if ($off < 0 || $off + 8 > $this->dataLen) {
                 throw new QzdbException('Out of bounds reading U64 at offset ' . $off, self::ERROR_OUT_OF_BOUNDS);
             }
             $v = unpack('P', $this->data, $off)[1];
@@ -2179,7 +2214,7 @@ class QzdbReader
     private function safeReadU24($off)
     {
         if ($this->data !== null) {
-            if ($off < 0 || $off + 3 > strlen($this->data)) {
+            if ($off < 0 || $off + 3 > $this->dataLen) {
                 throw new QzdbException('Out of bounds reading U24 at offset ' . $off, self::ERROR_OUT_OF_BOUNDS);
             }
             return ord($this->data[$off]) | (ord($this->data[$off + 1]) << 8) | (ord($this->data[$off + 2]) << 16);
@@ -2194,7 +2229,7 @@ class QzdbReader
     private function safeReadU48($off)
     {
         if ($this->data !== null) {
-            if ($off < 0 || $off + 6 > strlen($this->data)) {
+            if ($off < 0 || $off + 6 > $this->dataLen) {
                 throw new QzdbException('Out of bounds reading U48 at offset ' . $off, self::ERROR_OUT_OF_BOUNDS);
             }
             $low = unpack('V', $this->data, $off)[1];
@@ -2213,7 +2248,7 @@ class QzdbReader
     private function safeReadF32($off): float
     {
         if ($this->data !== null) {
-            if ($off < 0 || $off + 4 > strlen($this->data)) {
+            if ($off < 0 || $off + 4 > $this->dataLen) {
                 throw new QzdbException('Out of bounds reading float32 at offset ' . $off, self::ERROR_OUT_OF_BOUNDS);
             }
             return unpack('f', $this->data, $off)[1];
@@ -2228,7 +2263,7 @@ class QzdbReader
     private function safeReadF64($off): float
     {
         if ($this->data !== null) {
-            if ($off < 0 || $off + 8 > strlen($this->data)) {
+            if ($off < 0 || $off + 8 > $this->dataLen) {
                 throw new QzdbException('Out of bounds reading float64 at offset ' . $off, self::ERROR_OUT_OF_BOUNDS);
             }
             return unpack('d', $this->data, $off)[1];
@@ -2257,61 +2292,35 @@ class QzdbReader
     // CRC32-B
     // ------------------------------------------------------------------
 
-    private static function crc32bInitTable(): void
-    {
-        if (self::$crc32bTable !== null) return;
-        $table = [];
-        for ($i = 0; $i < 256; $i++) {
-            $crc = $i;
-            for ($j = 0; $j < 8; $j++) {
-                $crc = ($crc & 1) ? (0xEDB88320 ^ ($crc >> 1)) : ($crc >> 1);
-            }
-            $table[$i] = $crc;
-        }
-        self::$crc32bTable = $table;
-    }
-
     private static function crc32bComputeFile(string $data, $stream = null, int $size = 0): int
     {
-        self::crc32bInitTable();
-        $table = self::$crc32bTable;
-        $crc = 0xFFFFFFFF;
-
+        // hash 扩展的原生 crc32b 与被替换的表驱动实现是同一种校验
+        // （CRC-32/ISO-HDLC，反射多项式 0xEDB88320，含首尾 XOR），
+        // 但由 C 循环执行——60MB 库的加载校验约快 10-20×。
+        // CRC 字段（偏移 16-19）按规范计为零：前 16 字节 → 4 个 NUL → 其余。
         if ($stream !== null) {
             fseek($stream, 0, SEEK_SET);
-            $head = fread($stream, 16);
-            for ($i = 0; $i < 16 && $i < strlen($head); $i++) {
-                $crc = $table[($crc ^ ord($head[$i])) & 0xFF] ^ ($crc >> 8);
-            }
-            for ($i = 0; $i < 4; $i++) {
-                $crc = $table[$crc & 0xFF] ^ ($crc >> 8);
-            }
+            $h = hash_init('crc32b');
+            hash_update($h, (string)fread($stream, 16));
+            hash_update($h, "\0\0\0\0");
             fseek($stream, 20, SEEK_SET);
             $remaining = $size - 20;
             while ($remaining > 0) {
-                $chunk = fread($stream, min(65536, $remaining));
+                $chunk = fread($stream, min(1 << 20, $remaining));
                 if ($chunk === false || $chunk === '') break;
-                $clen = strlen($chunk);
-                for ($i = 0; $i < $clen; $i++) {
-                    $crc = $table[($crc ^ ord($chunk[$i])) & 0xFF] ^ ($crc >> 8);
-                }
-                $remaining -= $clen;
+                hash_update($h, $chunk);
+                $remaining -= strlen($chunk);
             }
-            return $crc ^ 0xFFFFFFFF;
+            return (int)hexdec(hash_final($h)) & 0xFFFFFFFF;
         }
 
-        $len = strlen($data);
-        for ($i = 0; $i < 16; $i++) {
-            $crc = $table[($crc ^ ord($data[$i])) & 0xFF] ^ ($crc >> 8);
+        $h = hash_init('crc32b');
+        hash_update($h, substr($data, 0, 16));
+        hash_update($h, "\0\0\0\0");
+        if (strlen($data) > 20) {
+            hash_update($h, substr($data, 20));
         }
-        $crc = $table[$crc & 0xFF] ^ ($crc >> 8);
-        $crc = $table[$crc & 0xFF] ^ ($crc >> 8);
-        $crc = $table[$crc & 0xFF] ^ ($crc >> 8);
-        $crc = $table[$crc & 0xFF] ^ ($crc >> 8);
-        for ($i = 20; $i < $len; $i++) {
-            $crc = $table[($crc ^ ord($data[$i])) & 0xFF] ^ ($crc >> 8);
-        }
-        return $crc ^ 0xFFFFFFFF;
+        return (int)hexdec(hash_final($h)) & 0xFFFFFFFF;
     }
 
     // ------------------------------------------------------------------

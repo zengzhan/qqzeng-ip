@@ -195,6 +195,9 @@ reader.version()         // 数据库版本号（例 "2.0"）
 reader.dataMonth()       // 数据期号 "YYYY-MM"
 reader.edition()         // 版本档次 "std"|"pro"|"asn"|"max"|"ult"
 reader.scope()           // 地域覆盖 "cn"|"global"
+                        // ⚠️ 当前 .qzdb 格式未含 scope 字段：8 语言 SDK 与
+                        // golden 测试现状一律返回 ""；上表取值为格式迁移完成
+                        // 后的目标契约（需走 create-migration 落地，见下方前置依赖）。
 reader.buildTime()       // 构建时间戳
 reader.fileHash()        // CRC32/MD5
 reader.fieldNames()      // 字段名列表

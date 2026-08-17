@@ -110,7 +110,19 @@ function _initCrc32Table() {
 }
 const CRC32_TABLE = _initCrc32Table();
 
+// Node >= 20.15 / 22.2 提供 zlib.crc32（C++ 实现，支持链式初值），
+// 与下方表驱动完全同构；大库加载校验快一个数量级。低版本回退表驱动。
+const _zlibCrc32 = require('zlib').crc32;
+const _CRC_ZERO4 = Buffer.alloc(4);
+
 function _crc32File(buf) {
+  if (typeof _zlibCrc32 === 'function') {
+    // CRC 字段（偏移 16-19）视为 0：前 16 字节 → 4 个零字节 → 其余。
+    let crc = _zlibCrc32(buf.subarray(0, 16), 0) >>> 0;
+    crc = _zlibCrc32(_CRC_ZERO4, crc) >>> 0;
+    if (buf.length > 20) crc = _zlibCrc32(buf.subarray(20), crc) >>> 0;
+    return crc;
+  }
   let crc = 0xFFFFFFFF;
   // 前 16 字节
   for (let i = 0; i < 16; i++) {
@@ -344,22 +356,38 @@ function _escapeJson(str) {
 }
 
 function _isJsonNumber(val) {
-  let i = 0;
+  // 与 C# GeoInfo.IsJsonNumber 逐字对齐的 JSON 数字文法校验：
+  // 拒绝 "1." / ".5" / "01" / "+1" 等非法形态（修复前这类值会以裸 token
+  // 进入 JSON 输出，产出非法 JSON）。
   const n = val.length;
   if (n === 0) return false;
+  let i = 0;
   if (val[0] === '-') {
     if (n === 1) return false;
     i = 1;
   }
-  let digit = false;
-  let dot = false;
-  for (; i < n; i++) {
-    const c = val[i];
-    if (c >= '0' && c <= '9') digit = true;
-    else if (c === '.' && !dot) dot = true;
-    else return false;
+  if (i >= n) return false;
+  if (val[i] === '0') {
+    i++;
+    if (i < n && val[i] >= '0' && val[i] <= '9') return false;
+  } else {
+    if (val[i] < '1' || val[i] > '9') return false;
+    while (++i < n && val[i] >= '0' && val[i] <= '9') { /* consume digits */ }
   }
-  return digit;
+  if (i < n && val[i] === '.') {
+    i++;
+    const fracStart = i;
+    while (i < n && val[i] >= '0' && val[i] <= '9') i++;
+    if (i === fracStart) return false;
+  }
+  if (i < n && (val[i] === 'e' || val[i] === 'E')) {
+    i++;
+    if (i < n && (val[i] === '+' || val[i] === '-')) i++;
+    const expStart = i;
+    while (i < n && val[i] >= '0' && val[i] <= '9') i++;
+    if (i === expStart) return false;
+  }
+  return i === n;
 }
 
 // ===========================================================================
@@ -532,6 +560,7 @@ class QzdbReader {
 
     // 有界缓存
     this._geoCache = null;
+    this._geoMetaCache = [];
     this._geoCacheMask = GEO_CACHE_CAP - 1;
 
     if (dbPath !== null) {
@@ -1113,6 +1142,9 @@ class QzdbReader {
   // Trie 子节点
   // -------------------------------------------------------------------------
   _getV4Child(nodeIdx, bit) {
+    // 与 PHP/_walkV4Depth 对齐：伪造 child 指针越过节点段时 fail-closed 返回 0，
+    // 而不是把文件内其它 section 当节点读（最坏返回错误 rowId 而非 miss）。
+    if (nodeIdx >= this._v4NodeCount) return 0;
     if (this._v4Node24) {
       const nodeOffset = this._offV4Nodes + nodeIdx * 6;
       const offset = bit === 0 ? nodeOffset : nodeOffset + 3;
@@ -1124,6 +1156,7 @@ class QzdbReader {
   }
 
   _getV6Child(nodeIdx, bit) {
+    if (nodeIdx >= this._v6NodeCount) return 0;
     if (this._v6Node24) {
       const nodeOffset = this._offV6Nodes + nodeIdx * 6;
       const offset = bit === 0 ? nodeOffset : nodeOffset + 3;
@@ -1258,13 +1291,21 @@ class QzdbReader {
     const natives = this._groupFieldNative[groupIndex];
     const natTypes = this._groupFieldNativeType[groupIndex];
     const gp = this._groupPools[groupIndex];
-    const names = this._groupFieldNames[groupIndex] || this._fieldNames;
-    const floatFlags = names.map((n) => GeoInfo.isNumericFieldName(n));
-    const normMap = Object.create(null);
-    for (let i = 0; i < names.length; i++) {
-      const nk = GeoInfo.normalizeKey(names[i]);
-      if (!(nk in normMap)) normMap[nk] = i;
+    // 每组的 {names, floatFlags, normMap} 只在首个 miss 构建一次并复用：
+    // 此前每次 miss 都做 ~2×fields 次 normalizeKey 字符串构建（ult 档 50 次/miss）。
+    let meta = this._geoMetaCache[groupIndex];
+    if (meta === undefined) {
+      const names = this._groupFieldNames[groupIndex] || this._fieldNames;
+      const floatFlags = names.map((n) => GeoInfo.isNumericFieldName(n));
+      const normMap = Object.create(null);
+      for (let i = 0; i < names.length; i++) {
+        const nk = GeoInfo.normalizeKey(names[i]);
+        if (!(nk in normMap)) normMap[nk] = i;
+      }
+      meta = { names, floatFlags, normMap };
+      this._geoMetaCache[groupIndex] = meta;
     }
+    const { names, floatFlags, normMap } = meta;
     const vals = new Array(gc);
     for (let i = 0; i < gc; i++) {
       const w = widths[i];
@@ -1342,65 +1383,29 @@ class QzdbReader {
     return null;
   }
 
-  // 字段投影：只解析指定字段（§3）。fields=null/空 等价于 find。
+  // 字段投影：从缓存的全字段结果按请求顺序切片（§3，对齐 Java golden 语义）。
+  // - 未知字段在该位置补 ''（不跳过）
+  // - 保留重复字段与调用方顺序
+  // - 全部未知时仍返回 GeoInfo（字段值全为 ''）
+  // - fields=null/空 等价于 find
   findFields(ipStr, fieldNames = null) {
     if (fieldNames === null || fieldNames.length === 0) return this.find(ipStr);
-    if (this._closed) return null;
-    const rowId = this.lookupRowId(ipStr);
-    if (rowId === 0) return null;
-    const ids = this.lookupIds(rowId);
-    if (ids === null) return null;
-    const mask = this._groupDimMasks[this._groupIndex] || 0;
-    const entryId = (mask & 0x02) ? ids.asnId : ((mask & 0x04) ? ids.usageId : ids.geoId);
-    if (entryId === 0) return null;
-
-    const used = Object.create(null);
-    const outNames = [];
-    const outIdx = [];
-    for (const name of fieldNames) {
-      const idx = this._normFieldMap[GeoInfo.normalizeKey(name)];
-      if (idx === undefined) continue;
-      if (used[idx]) continue;
-      used[idx] = true;
-      outNames.push(this._fieldNames[idx]);
-      outIdx.push(idx);
+    const full = this.find(ipStr); // 未命中/非法 → null（Node 语言约定）
+    if (full === null) return null;
+    const norm = this._normFieldMap;
+    const floatAll = this._floatFlags;
+    const n = fieldNames.length;
+    const outNames = new Array(n);
+    const outVals = new Array(n);
+    const floatFlags = new Array(n);
+    for (let i = 0; i < n; i++) {
+      const name = fieldNames[i];
+      const idx = norm[GeoInfo.normalizeKey(name)];
+      outNames[i] = name;
+      outVals[i] = idx === undefined ? '' : full._vals[idx];
+      floatFlags[i] = idx === undefined ? false : !!floatAll[idx];
     }
-    if (outIdx.length === 0) return null;
-
-    const vals = this._resolveGeoFields(entryId, this._groupIndex, outIdx);
-    const floatFlags = outIdx.map((i) => this._floatFlags[i]);
-    return new GeoInfo(vals, outNames, floatFlags, null);
-  }
-
-  _resolveGeoFields(entryId, groupIndex, indices) {
-    this._ensurePoolsLoaded();
-    const gc = this._groupFieldCounts[groupIndex];
-    if (gc <= 0) return [];
-    const entryOffset = this._offGeoEntries + this._groupEntryOffsets[groupIndex] + entryId * this._groupStrides[groupIndex];
-    const d = this._data;
-    const widths = this._groupFieldWidths[groupIndex];
-    const baseOffsets = this._groupFieldOffsets[groupIndex];
-    const natives = this._groupFieldNative[groupIndex];
-    const natTypes = this._groupFieldNativeType[groupIndex];
-    const gp = this._groupPools[groupIndex];
-    const out = new Array(indices.length);
-    for (let k = 0; k < indices.length; k++) {
-      const i = indices[k];
-      if (i < 0 || i >= gc) { out[k] = ''; continue; }
-      const w = widths[i];
-      const fo = entryOffset + baseOffsets[i];
-      let val = '';
-      if (natives && i < natives.length && natives[i]) {
-        const t = (natTypes && i < natTypes.length) ? natTypes[i] : 0;
-        if (t === 1) val = _formatNativeFloat(w, d, fo);
-        else val = String(this.safeReadUintWidth(fo, w) >>> 0);
-      } else {
-        const poolIdx = this.safeReadUintWidth(fo, w);
-        if (gp && i < gp.length && poolIdx >= 0 && poolIdx < gp[i].length) val = gp[i][poolIdx];
-      }
-      out[k] = val;
-    }
-    return out;
+    return new GeoInfo(outVals, outNames, floatFlags, null);
   }
 
   findStr(ipStr) {
@@ -1695,6 +1700,7 @@ class QzdbReader {
     this._normFieldMap = Object.create(null);
     this._floatFlags = [];
     this._geoCache = null;
+    this._geoMetaCache = [];
     this._closed = true;
   }
 
@@ -1713,7 +1719,12 @@ class QzdbReader {
   getScope() { return ''; }
   getBuildTime() { return this._buildTimeStr; }
   getDescription() { return this._description; }
-  getFileHash() { return _crc32Hex(this._data); }
+  getFileHash() {
+    // 空/已 close 的 reader 返回 '00000000'（与 PHP 一致），
+    // 而不是对空 Buffer 算出假 CRC（undefined & 0xFF === 0 的静默垃圾值）。
+    if (!this._data || this._data.length < 20) return '00000000';
+    return _crc32Hex(this._data);
+  }
   getFieldNames() { return this._fieldNames.slice(); }
   hasField(name) { return GeoInfo.normalizeKey(name) in this._normFieldMap; }
   verifyCrc() {

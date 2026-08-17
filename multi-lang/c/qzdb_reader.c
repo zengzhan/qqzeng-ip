@@ -334,6 +334,7 @@ static char** geo_cache_lookup(qzdb_reader_t* ctx, int group, uint32_t entry_id,
 static int  resolve_row_id_cached(qzdb_reader_t* ctx, uint32_t row_id, int group_index,
                                   qzdb_geo_info_t* result);
 static void free_geo_info(qzdb_geo_info_t* info);
+static void free_heap_state(qzdb_reader_t* ctx);
 
 /* ========================================================================
  * 版本档次判定契约（FORMAT §10.3 —— 8 种 SDK 逐字一致）
@@ -436,36 +437,39 @@ static int single_version_token(const char* list, char* out, size_t out_size) {
 /* ========================================================================
  * Trie walking
  * ======================================================================== */
+/* 热路径子节点读取：init 已验证节点段整体在界内（off + count*size <= data_size），
+ * 入口的 node_idx < node_count 检查保证本次读取落在段内，因此直读基址指针，
+ * 省去 safe_read_* 每步 2-3 条比较/分支。损坏链仍被 node_idx 检查 fail-closed。 */
 static uint32_t get_v4_child(const qzdb_reader_t* ctx, uint32_t node_idx, uint32_t bit) {
     if (node_idx >= ctx->v4_node_count) return 0;
+    uint32_t val;
     if (ctx->v4_node_24) {
-        uint64_t node_offset = ctx->off_v4_nodes + (uint64_t)node_idx * 6;
-        uint64_t offset = bit == 0 ? node_offset : node_offset + 3;
-        uint32_t val;
-        if (safe_read_u24(ctx->data, ctx->data_size, offset, &val) != QZDB_OK) return 0;
+        /* 24 位紧凑节点：left = [0,3)，right = [3,6) */
+        const uint8_t* p = ctx->v4_nodes_base + (size_t)node_idx * 6 + (bit ? 3u : 0u);
+        val = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16);
         if (val & 0x800000u) return (val & 0x7FFFFFu) | QZDB_SENTINEL;
         return val;
-    } else {
-        uint64_t child_off = ctx->off_v4_nodes + (uint64_t)node_idx * 8 + (uint64_t)bit * 4;
-        uint32_t val;
-        if (safe_read_u32(ctx->data, ctx->data_size, child_off, &val) != QZDB_OK) return 0;
+    }
+    /* 32 位节点：left = [0,4)，right = [4,8) */
+    {
+        const uint8_t* p = ctx->v4_nodes_base + (size_t)node_idx * 8 + (size_t)bit * 4;
+        val = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
         return val;
     }
 }
 
 static uint32_t get_v6_child(const qzdb_reader_t* ctx, uint32_t node_idx, uint32_t bit) {
     if (node_idx >= ctx->v6_node_count) return 0;
+    uint32_t val;
     if (ctx->v6_node_24) {
-        uint64_t node_offset = ctx->off_v6_nodes + (uint64_t)node_idx * 6;
-        uint64_t offset = bit == 0 ? node_offset : node_offset + 3;
-        uint32_t val;
-        if (safe_read_u24(ctx->data, ctx->data_size, offset, &val) != QZDB_OK) return 0;
+        const uint8_t* p = ctx->v6_nodes_base + (size_t)node_idx * 6 + (bit ? 3u : 0u);
+        val = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16);
         if (val & 0x800000u) return (val & 0x7FFFFFu) | QZDB_SENTINEL;
         return val;
-    } else {
-        uint64_t child_off = ctx->off_v6_nodes + (uint64_t)node_idx * 8 + (uint64_t)bit * 4;
-        uint32_t val;
-        if (safe_read_u32(ctx->data, ctx->data_size, child_off, &val) != QZDB_OK) return 0;
+    }
+    {
+        const uint8_t* p = ctx->v6_nodes_base + (size_t)node_idx * 8 + (size_t)bit * 4;
+        val = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
         return val;
     }
 }
@@ -669,22 +673,22 @@ static int get_geo_info(qzdb_reader_t* ctx, uint32_t entry_id, int group_index, 
             char buf[64];
             if (t == 1) {
                 if (w == 4) {
-                    uint32_t bits; if (safe_read_u32(ctx->data, ctx->data_size, fo, &bits) != QZDB_OK) return QZDB_ERR_BOUNDS;
+                    uint32_t bits; if (safe_read_u32(ctx->data, ctx->data_size, fo, &bits) != QZDB_OK) { free_geo_info(result); return QZDB_ERR_BOUNDS; }
                     union { uint32_t u; float f; } u; u.u = bits;
                     format_float32_value(u.f, buf, sizeof(buf));
                 } else {
-                    uint64_t bits; if (safe_read_u64(ctx->data, ctx->data_size, fo, &bits) != QZDB_OK) return QZDB_ERR_BOUNDS;
+                    uint64_t bits; if (safe_read_u64(ctx->data, ctx->data_size, fo, &bits) != QZDB_OK) { free_geo_info(result); return QZDB_ERR_BOUNDS; }
                     union { uint64_t u; double d; } u; u.u = bits;
                     format_float_value(u.d, buf, sizeof(buf));
                 }
             } else {
-                uint32_t val; if (safe_read_uint_width(ctx->data, ctx->data_size, fo, w, &val) != QZDB_OK) return QZDB_ERR_BOUNDS;
+                uint32_t val; if (safe_read_uint_width(ctx->data, ctx->data_size, fo, w, &val) != QZDB_OK) { free_geo_info(result); return QZDB_ERR_BOUNDS; }
                 snprintf(buf, sizeof(buf), "%lu", (unsigned long)val);
             }
             result->values[i] = strdup(buf);
             result->values_mask |= (1u << i);
         } else {
-            uint32_t idx; if (safe_read_uint_width(ctx->data, ctx->data_size, fo, w, &idx) != QZDB_OK) return QZDB_ERR_BOUNDS;
+            uint32_t idx; if (safe_read_uint_width(ctx->data, ctx->data_size, fo, w, &idx) != QZDB_OK) { free_geo_info(result); return QZDB_ERR_BOUNDS; }
             if (ctx->group_pools[group_index] && ctx->group_pools[group_index][i] && (int)idx < ctx->group_pool_counts[group_index][i])
                 result->values[i] = ctx->group_pools[group_index][i][idx];
             else
@@ -1495,6 +1499,12 @@ int qzdb_init(qzdb_reader_t* ctx, const char* db_path) {
 static int init_from_buffer(qzdb_reader_t* ctx, int is_heap, int verify_crc) {
     (void)is_heap; /* retained for call-site symmetry; data_is_heap is set explicitly by callers */
     setlocale(LC_NUMERIC, "C");
+    /* 失败路径统一经 goto fail 收尾（meta 局部变量 + ctx 堆态），
+     * 调用方只需按 data_is_heap/borrowed 归还 data 缓冲本身。 */
+    int ret = QZDB_ERR_CORRUPTED;
+    char*  meta_primary    = NULL;
+    char** meta_names      = NULL;
+    int    meta_name_count = 0;
 
     uint8_t* d = ctx->data;
     if (ctx->data_size < 192) { return QZDB_ERR_BAD_HEADER; }
@@ -1558,6 +1568,10 @@ static int init_from_buffer(qzdb_reader_t* ctx, int is_heap, int verify_crc) {
         if (ctx->off_meta > 0 && ctx->off_meta > ctx->data_size) { return QZDB_ERR_BOUNDS; }
     }
 
+    /* 热路径段基址：上方已验证 nodes 段整体在界内 */
+    ctx->v4_nodes_base = ctx->data + ctx->off_v4_nodes;
+    ctx->v6_nodes_base = ctx->data + ctx->off_v6_nodes;
+
     /* ---- 其余解析逻辑保持不变，但不再调用 munmap ---- */
     /* 错误路径改为仅释放已分配资源，由调用方决定 data 的释放方式 */
 
@@ -1591,8 +1605,7 @@ static int init_from_buffer(qzdb_reader_t* ctx, int is_heap, int verify_crc) {
     ctx->group_entry_counts = malloc(ctx->actual_groups * sizeof(uint32_t));
     ctx->group_dim_masks = malloc(ctx->actual_groups * sizeof(uint16_t));
     if (!ctx->group_field_counts || !ctx->group_entry_counts || !ctx->group_dim_masks) {
-        free(ctx->group_field_counts); free(ctx->group_entry_counts); free(ctx->group_dim_masks);
-        free(ctx->group_entry_offsets); return QZDB_ERR_OUT_OF_MEMORY;
+        ret = QZDB_ERR_OUT_OF_MEMORY; goto fail;
     }
 
     for (int gi = 0; gi < ctx->actual_groups; gi++) {
@@ -1610,11 +1623,7 @@ static int init_from_buffer(qzdb_reader_t* ctx, int is_heap, int verify_crc) {
     ctx->group_pool_section_ids = calloc(ctx->actual_groups, sizeof(uint32_t*));
     if (!ctx->group_strides || !ctx->group_field_widths || !ctx->group_field_offsets || !ctx->group_field_native ||
         !ctx->group_field_native_type || !ctx->group_ids || !ctx->group_pool_section_ids) {
-        free(ctx->group_strides); free(ctx->group_field_widths); free(ctx->group_field_offsets);
-        free(ctx->group_field_native); free(ctx->group_field_native_type); free(ctx->group_ids);
-        free(ctx->group_pool_section_ids); free(ctx->group_field_counts); free(ctx->group_entry_counts);
-        free(ctx->group_dim_masks); free(ctx->group_entry_offsets);
-        return QZDB_ERR_OUT_OF_MEMORY;
+        ret = QZDB_ERR_OUT_OF_MEMORY; goto fail;
     }
 
     int schema_fld_count[4];
@@ -1674,9 +1683,6 @@ static int init_from_buffer(qzdb_reader_t* ctx, int is_heap, int verify_crc) {
         if (!ctx->group_pool_section_ids[g]) ctx->group_pool_section_ids[g] = calloc(fc ? fc : 1, sizeof(uint32_t));
     }
 
-    char*  meta_primary    = NULL;
-    char** meta_names      = NULL;
-    int    meta_name_count = 0;
     if (ctx->flags & 4 && ctx->off_meta > 0 && ctx->off_meta + 4 <= ctx->data_size) {
         uint64_t pos = ctx->off_meta;
         while (pos + 4 <= ctx->data_size) {
@@ -1730,9 +1736,7 @@ static int init_from_buffer(qzdb_reader_t* ctx, int is_heap, int verify_crc) {
     ctx->group_name_sources    = calloc((size_t)ctx->actual_groups, sizeof(const char*));
     if (!ctx->group_field_names || !ctx->group_editions ||
         !ctx->group_edition_sources || !ctx->group_name_sources) {
-        for (int i = 0; i < meta_name_count; i++) free(meta_names[i]);
-        free(meta_names); free(meta_primary);
-        return QZDB_ERR_OUT_OF_MEMORY;
+        ret = QZDB_ERR_OUT_OF_MEMORY; goto fail;
     }
 
     for (int g = 0; g < ctx->actual_groups; g++) {
@@ -1757,9 +1761,7 @@ static int init_from_buffer(qzdb_reader_t* ctx, int is_heap, int verify_crc) {
 
         char** names = calloc((size_t)(nf + 1), sizeof(char*));
         if (!names) {
-            for (int i = 0; i < meta_name_count; i++) free(meta_names[i]);
-            free(meta_names); free(meta_primary);
-            return QZDB_ERR_OUT_OF_MEMORY;
+            ret = QZDB_ERR_OUT_OF_MEMORY; goto fail;
         }
         int canon_n = 0;
         const char* const* canon = edition_field_names(edition, &canon_n);
@@ -1786,9 +1788,10 @@ static int init_from_buffer(qzdb_reader_t* ctx, int is_heap, int verify_crc) {
     for (int i = 0; i < meta_name_count; i++) free(meta_names[i]);
     free(meta_names);
     free(meta_primary);
+    meta_names = NULL; meta_primary = NULL; meta_name_count = 0; /* 防止 fail 标签二次释放 */
 
     if (apply_group_meta(ctx, ctx->group_index) != QZDB_OK) {
-        return QZDB_ERR_OUT_OF_MEMORY;
+        ret = QZDB_ERR_OUT_OF_MEMORY; goto fail;
     }
 
     if (ctx->build_date > 0) {
@@ -1818,9 +1821,15 @@ static int init_from_buffer(qzdb_reader_t* ctx, int is_heap, int verify_crc) {
 
     if (verify_crc) {
         int rc_crc = qzdb_verify_crc(ctx);
-        if (rc_crc != QZDB_OK) { return QZDB_ERR_CORRUPTED; }
+        if (rc_crc != QZDB_OK) { ret = QZDB_ERR_CORRUPTED; goto fail; }
     }
     return QZDB_OK;
+
+fail:
+    for (int i = 0; i < meta_name_count; i++) free(meta_names[i]);
+    free(meta_names); free(meta_primary);
+    free_heap_state(ctx);
+    return ret;
 }
 
 int qzdb_init_ex(qzdb_reader_t* ctx, const char* db_path, int verify_crc) {
@@ -1871,18 +1880,20 @@ int qzdb_init_buffer_borrowed(qzdb_reader_t* ctx, const uint8_t* buf, size_t len
     ctx->data_is_borrowed = 1;
     return init_from_buffer(ctx, 0, verify_crc);
 }
-void qzdb_free(qzdb_reader_t* ctx) {
+/* 释放 ctx 的全部堆态（不含 data 缓冲本身）。每个指针释放后置 NULL，幂等。
+ * 供 qzdb_free 与 init_from_buffer 的失败路径共用：加载中途失败（CRC/OOM/
+ * apply_group_meta）时由本函数收尾，调用方只负责 data 的 free/munmap。 */
+static void free_heap_state(qzdb_reader_t* ctx) {
     if (!ctx) return;
-    if (!ctx->data) return;
     free(ctx->pool_arena); ctx->pool_arena = NULL;
     if (ctx->group_pools) {
         for (int g = 0; g < ctx->actual_groups; g++) {
             if (ctx->group_pools[g]) { for (int f = 0; f < ctx->group_field_counts[g]; f++) free(ctx->group_pools[g][f]); free(ctx->group_pools[g]); }
             free(ctx->group_pool_counts[g]);
         }
-        free(ctx->group_pools); free(ctx->group_pool_counts);
+        free(ctx->group_pools); ctx->group_pools = NULL; free(ctx->group_pool_counts); ctx->group_pool_counts = NULL;
     }
-    free(ctx->group_entry_offsets);
+    free(ctx->group_entry_offsets); ctx->group_entry_offsets = NULL;
     for (int g = 0; g < ctx->actual_groups; g++) {
         free(ctx->group_field_widths[g]); free(ctx->group_field_offsets[g]);
         free(ctx->group_field_native[g]); free(ctx->group_field_native_type[g]);
@@ -1893,18 +1904,37 @@ void qzdb_free(qzdb_reader_t* ctx) {
             free(ctx->group_field_names[g]);
         }
     }
-    free(ctx->group_field_counts); free(ctx->group_entry_counts); free(ctx->group_dim_masks); free(ctx->group_strides);
-    free(ctx->group_field_widths); free(ctx->group_field_offsets); free(ctx->group_field_native);
-    free(ctx->group_field_native_type); free(ctx->group_ids); free(ctx->group_pool_section_ids);
-    free(ctx->group_field_names);
+    free(ctx->group_field_counts); ctx->group_field_counts = NULL;
+    free(ctx->group_entry_counts); ctx->group_entry_counts = NULL;
+    free(ctx->group_dim_masks); ctx->group_dim_masks = NULL;
+    free(ctx->group_strides); ctx->group_strides = NULL;
+    free(ctx->group_field_widths); ctx->group_field_widths = NULL;
+    free(ctx->group_field_offsets); ctx->group_field_offsets = NULL;
+    free(ctx->group_field_native); ctx->group_field_native = NULL;
+    free(ctx->group_field_native_type); ctx->group_field_native_type = NULL;
+    free(ctx->group_ids); ctx->group_ids = NULL;
+    free(ctx->group_pool_section_ids); ctx->group_pool_section_ids = NULL;
+    free(ctx->group_field_names); ctx->group_field_names = NULL;
     /* group_editions / *_sources 指向静态字符串，只释放外层指针数组 */
-    free(ctx->group_editions); free(ctx->group_edition_sources); free(ctx->group_name_sources);
+    free(ctx->group_editions); ctx->group_editions = NULL;
+    free(ctx->group_edition_sources); ctx->group_edition_sources = NULL;
+    free(ctx->group_name_sources); ctx->group_name_sources = NULL;
     ctx->field_names = NULL;
-    free(ctx->float_field_flags); free(ctx->version_name); free(ctx->description);
-    free(ctx->edition); free(ctx->data_month); free(ctx->build_time_str);
-    if (ctx->norm_field_names) { for (int i = 0; i < ctx->field_count; i++) free(ctx->norm_field_names[i]); free(ctx->norm_field_names); }
+    free(ctx->float_field_flags); ctx->float_field_flags = NULL;
+    free(ctx->version_name); ctx->version_name = NULL;
+    free(ctx->description); ctx->description = NULL;
+    free(ctx->edition); ctx->edition = NULL;
+    free(ctx->data_month); ctx->data_month = NULL;
+    free(ctx->build_time_str); ctx->build_time_str = NULL;
+    if (ctx->norm_field_names) { for (int i = 0; i < ctx->field_count; i++) free(ctx->norm_field_names[i]); free(ctx->norm_field_names); ctx->norm_field_names = NULL; }
     norm_map_free(ctx);
     geo_cache_free(ctx);
+}
+
+void qzdb_free(qzdb_reader_t* ctx) {
+    if (!ctx) return;
+    if (!ctx->data) return;
+    free_heap_state(ctx);
     if (ctx->data_is_borrowed) { /* caller owns data; do not free/munmap */ }
     else if (ctx->data_is_heap == 1) free(ctx->data);
     else if (ctx->data_is_heap == 0 && ctx->data) munmap(ctx->data, ctx->data_size);

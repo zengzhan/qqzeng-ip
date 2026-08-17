@@ -7,6 +7,18 @@ type BatchResult struct {
 	Error   error
 }
 
+// batchEntry 把单条查询结果收敛为批量三态：Find/FindFields 的 (nil, nil)
+// 混合了「非法 IP」与「未命中」（契约 §4 Go 行），批量路径必须可区分——
+// 非法 IP 标记 Error，未命中保持 (nil, nil)。仅对空结果付出一次再解析。
+func batchEntry(ip string, g *GeoInfo, err error) BatchResult {
+	if err == nil && g == nil {
+		if _, ok := fastParseIp(ip); !ok {
+			err = newErr(ErrCodeInvalidParam, "invalid ip: "+ip)
+		}
+	}
+	return BatchResult{IP: ip, GeoInfo: g, Error: err}
+}
+
 // FindBatch 顺序批量查询（内部不起线程池）；逐条保留三态语义。ips 为 nil 返回空列表。
 func (r *QzdbReader) FindBatch(ips []string) []BatchResult {
 	if ips == nil {
@@ -15,7 +27,7 @@ func (r *QzdbReader) FindBatch(ips []string) []BatchResult {
 	out := make([]BatchResult, 0, len(ips))
 	for _, ip := range ips {
 		g, err := r.Find(ip)
-		out = append(out, BatchResult{IP: ip, GeoInfo: g, Error: err})
+		out = append(out, batchEntry(ip, g, err))
 	}
 	return out
 }
@@ -28,7 +40,7 @@ func (r *QzdbReader) FindBatchFields(ips []string, fields []string) []BatchResul
 	out := make([]BatchResult, 0, len(ips))
 	for _, ip := range ips {
 		g, err := r.FindFields(ip, fields)
-		out = append(out, BatchResult{IP: ip, GeoInfo: g, Error: err})
+		out = append(out, batchEntry(ip, g, err))
 	}
 	return out
 }
@@ -80,5 +92,5 @@ func (s *GeoStream) Next() (BatchResult, bool) {
 			g, err = s.r.Find(ip)
 		}
 	}
-	return BatchResult{IP: ip, GeoInfo: g, Error: err}, true
+	return batchEntry(ip, g, err), true
 }

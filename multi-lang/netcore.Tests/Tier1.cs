@@ -175,6 +175,14 @@ class Program
         var ff = r.FindFields("223.5.5.5", new[] { "country", "province" });
         T1(ff != null && ff.FieldNames.Length == 2, "NewAPI: FindFields projects 2 cols");
         T1(ff!.Get("country") == info4.Get("country"), "NewAPI: FindFields country matches");
+        // 投影语义对齐 Java golden：未知字段补 ""、保留重复、全部未知仍返回 GeoInfo
+        var ffj = r.FindFields("223.5.5.5", new[] { "country", "nope", "country" });
+        T1(ffj != null && ffj.FieldNames.Length == 3 && ffj.FieldNames[1] == "nope",
+            "NewAPI: FindFields keeps unknown field position (Java golden)");
+        T1(ffj!.Get("nope") == "" && ffj.Get("country") == info4.Get("country"),
+            "NewAPI: FindFields unknown -> empty, known -> full value");
+        var ffa = r.FindFields("223.5.5.5", new[] { "zzz", "yyy" });
+        T1(ffa != null && ffa.Values.All(v => v == ""), "NewAPI: all-unknown returns empty GeoInfo (not null)");
         var fb = r.FindBatch(new[] { "223.5.5.5", "8.8.8.8", "bad!!" });
         T1(fb.Length == 3, "NewAPI: FindBatch count");
         T1(fb[0].Info?.ToPipe() == d, "NewAPI: FindBatch[0] valid");
