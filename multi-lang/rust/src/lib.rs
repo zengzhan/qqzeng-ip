@@ -1442,7 +1442,8 @@ impl SnapshotInner {
             return None;
         }
         if ptr & SENTINEL != 0 {
-            return self.walk_v6_depth(bytes, 0, 0, self.v6_jump_bits as u8);
+            // 与 C/Java/C#/Node/Python/Go/PHP 一致：SENTINEL 直接返回（QZDB_FORMAT.md §4）
+            return Some((ptr & SENTINEL_MASK_31, 0));
         }
         self.walk_v6_depth(bytes, ptr, self.v6_jump_bits as u8, 128)
     }
