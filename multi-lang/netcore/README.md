@@ -20,14 +20,15 @@
 4. [加载数据库](#4-加载数据库)
 5. [查询 API](#5-查询-api)
 6. [结果对象 `GeoInfo`](#6-结果对象-geoinfo)
-7. [批量与流式查询](#7-批量与流式查询)
-8. [链式多库查询 `ChainedReader`](#8-链式多库查询-chainedreader)
-9. [命名注册表 `QzdbRegistry`](#9-命名注册表-qzdbregistry)
-10. [热更新与生命周期](#10-热更新与生命周期)
-11. [错误处理](#11-错误处理)
-12. [性能说明](#12-性能说明)
-13. [维护与升级](#13-维护与升级)
-14. [项目结构](#14-项目结构)
+7.1 [CIDR 反查](#71-cidr-反查)
+8. [批量与流式查询](#8-批量与流式查询)
+9. [链式多库查询 `ChainedReader`](#9-链式多库查询-chainedreader)
+10. [命名注册表 `QzdbRegistry`](#10-命名注册表-qzdbregistry)
+11. [热更新与生命周期](#11-热更新与生命周期)
+12. [错误处理](#12-错误处理)
+13. [性能说明](#13-性能说明)
+14. [维护与升级](#14-维护与升级)
+15. [项目结构](#15-项目结构)
 
 ---
 
@@ -153,6 +154,9 @@ using var reader = QzdbReader.OpenBuffer(bytes);
 | 行号查询 | `uint LookupRowId(string ipStr)` | `uint` | 仅返回内部行号（不含字段，最轻） |
 | 行号（整数） | `uint LookupRowIdUint(uint ipInt)` | `uint` | `FindUint` 的轻量版，只返回行号 |
 | 行号（字节） | `uint LookupRowIdBytes(byte[]? ipBytes)` | `uint` | `FindBytes` 的轻量版，只返回行号 |
+| CIDR 反查 | `string LookupCidr(string ipStr)` | `string` | 返回包含该 IP 的最具体网段 CIDR（如 `114.114.0.0/16`）；未命中/非法返回 `""` |
+| CIDR（整数） | `string LookupCidrUint(uint ipInt)` | `string` | `LookupCidr` 的 IPv4 uint32 入口 |
+| CIDR（字节） | `string LookupCidrBytes(byte[]? ipBytes)` | `string` | `LookupCidr` 的 4/16 字节入口（IPv4-mapped 自动降级） |
 | 反查 ID | `(uint Geo, uint Asn, uint Usage) LookupIds(uint rowId)` | tuple | 由行号反查 Geo/ASN/Usage 三类索引 ID |
 | 批量查询 | `BatchResult[] FindBatch(string[] ipStrs)` | `BatchResult[]` | 批量字符串查询，逐条保留三态 |
 | 批量字段 | `BatchResult[] FindBatchFields(string[] ipStrs, string[]? fields)` | `BatchResult[]` | 批量 + 字段子集 |
@@ -230,7 +234,23 @@ string desc = u.Description();     // 详细描述
 
 ---
 
-## 7. 批量与流式查询
+## 7.1 CIDR 反查
+
+数据库本身不存 CIDR，由 Trie 叶子深度重建网络地址（叶子深度 = 前缀长度 N；网络地址 = IP 高 N 位清零；V6 按 RFC 5952 压缩）。
+
+```csharp
+Console.WriteLine(reader.LookupCidr("114.114.114.114")); // 形如 114.114.0.0/16
+Console.WriteLine(reader.LookupCidr("2408:8000:9000::1")); // 形如 2408:8000::/32
+reader.LookupCidrUint(0x01020304);                  // IPv4 uint32 入口
+reader.LookupCidrBytes(ip16);                       // 4/16 字节入口（IPv4-mapped 自动降级）
+// 未覆盖 / 非法 IP 返回 ""
+```
+
+> **契约约定**：`LookupCidr` / `LookupCidrUint` / `LookupCidrBytes` 对「未命中」与「非法 IP」统一返回 `""`（不抛异常，区别于 `Find` 的 `InvalidIp` 异常）；IPv4-mapped 自动降级走 V4 Trie，结果与对应 IPv4 完全一致。
+
+---
+
+## 8. 批量与流式查询
 
 ```csharp
 // 批量：一次性返回数组，单条异常不影响其它条目
@@ -266,7 +286,7 @@ public readonly record struct BatchResult(GeoInfo? Info, QzdbException? Error, s
 
 ---
 
-## 8. 链式多库查询 `ChainedReader`
+## 9. 链式多库查询 `ChainedReader`
 
 当你有多个 `.qzdb`（例如"国内库 + 全球库"、"基础库 + 精细库"），可用 `ChainedReader` 把多个 `QzdbReader` 组合成一个逻辑查询器，支持三种合并模式：
 
@@ -294,7 +314,7 @@ var merged = ChainedReader.ChainMerge(china, global);
 
 ---
 
-## 9. 命名注册表 `QzdbRegistry`
+## 10. 命名注册表 `QzdbRegistry`
 
 用于按名字管理多个 reader（例如在不同模块间共享同一实例）。提供**实例级**与**进程全局级**两套 API：
 
@@ -316,7 +336,7 @@ QzdbRegistry.UnregisterGlobal("global");
 
 ---
 
-## 10. 热更新与生命周期
+## 11. 热更新与生命周期
 
 ### 10.1 原子热更新（无需重启进程）
 
@@ -340,7 +360,7 @@ reader.ReloadBuffer(newBytes);
 
 ---
 
-## 11. 错误处理
+## 12. 错误处理
 
 所有加载/解析期错误以 `QzdbException` 抛出，携带 `ErrorCode` 枚举：
 
@@ -361,7 +381,7 @@ catch (QzdbException ex)
 
 ---
 
-## 12. 性能说明
+## 13. 性能说明
 
 本 SDK 在查询热路径上做了极致优化：
 
@@ -384,7 +404,7 @@ catch (QzdbException ex)
 
 ---
 
-## 13. 维护与升级
+## 14. 维护与升级
 
 ### 13.1 更新数据（最频繁的操作）
 
@@ -419,7 +439,7 @@ dotnet add package QQZeng.Qzdb --version x.y.z
 
 ---
 
-## 14. 项目结构
+## 15. 项目结构
 
 `netcore/` 目录（本库源码）：
 

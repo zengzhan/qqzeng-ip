@@ -970,6 +970,58 @@ public sealed class QzdbReader : IDisposable
         return 0;
     }
 
+    public string LookupCidr(string ipStr)
+    {
+        if (string.IsNullOrEmpty(ipStr)) return "";
+        if (!TryParseIp(ipStr, out var v4, out var v6High, out var v6Low, out var isV4)) return "";
+
+        var snap = Volatile.Read(ref _activeSnapshot);
+        if (snap == null) return "";
+
+        if (isV4)
+        {
+            int n = TrieWalkV4PrefixLen(snap, v4);
+            return n < 0 ? "" : FormatV4Cidr(v4, n);
+        }
+        int n6 = TrieWalkV6PrefixLen(snap, v6High, v6Low);
+        return n6 < 0 ? "" : FormatV6Cidr(v6High, v6Low, n6);
+    }
+
+    public string LookupCidrUint(uint ipInt)
+    {
+        var snap = Volatile.Read(ref _activeSnapshot);
+        if (snap == null) return "";
+        int n = TrieWalkV4PrefixLen(snap, ipInt);
+        return n < 0 ? "" : FormatV4Cidr(ipInt, n);
+    }
+
+    public string LookupCidrBytes(byte[]? ipBytes)
+    {
+        if (ipBytes == null) return "";
+        var snap = Volatile.Read(ref _activeSnapshot);
+        if (snap == null) return "";
+
+        if (ipBytes.Length == 16)
+        {
+            if (IsV4Mapped(ipBytes))
+            {
+                uint v4 = V4FromMapped(ipBytes);
+                int n4 = TrieWalkV4PrefixLen(snap, v4);
+                return n4 < 0 ? "" : FormatV4Cidr(v4, n4);
+            }
+            var (hi, lo) = V6FromBytes(ipBytes);
+            int n6 = TrieWalkV6PrefixLen(snap, hi, lo);
+            return n6 < 0 ? "" : FormatV6Cidr(hi, lo, n6);
+        }
+        if (ipBytes.Length == 4)
+        {
+            uint v4 = (uint)((ipBytes[0] << 24) | (ipBytes[1] << 16) | (ipBytes[2] << 8) | ipBytes[3]);
+            int n4 = TrieWalkV4PrefixLen(snap, v4);
+            return n4 < 0 ? "" : FormatV4Cidr(v4, n4);
+        }
+        return "";
+    }
+
     public (uint Geo, uint Asn, uint Usage) LookupIds(uint rowId)
     {
         var snap = RequireSnapshot();
@@ -1169,6 +1221,192 @@ public sealed class QzdbReader : IDisposable
             }
         }
         return 0;
+    }
+
+    #endregion
+
+    #region CIDR (prefix-length reconstruction + RFC 5952 formatting)
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static unsafe int TrieWalkV4PrefixLen(Snapshot snap, uint ipInt)
+    {
+        if (!snap._hasV4 || snap._offV4Jump <= 0) return -1;
+        if (snap._dataPtr != null) return TrieWalkV4PrefixLenCore(snap, snap._dataPtr, ipInt);
+        fixed (byte* bp = snap._data.Span) return TrieWalkV4PrefixLenCore(snap, bp, ipInt);
+    }
+
+    private static unsafe int TrieWalkV4PrefixLenCore(Snapshot snap, byte* bp, uint ipInt)
+    {
+        uint* jump = (uint*)(bp + snap._offV4Jump);
+        uint hi16 = (ipInt >> 16) & 0xFFFF;
+        uint ptr = jump[hi16];
+        if (ptr == 0) return -1;
+        if ((ptr & Sentinel) != 0) return WalkV4Depth(snap, bp, ipInt, 0, 0, 16);
+        return WalkV4Depth(snap, bp, ipInt, ptr & SentinelMask31, 16, 32);
+    }
+
+    private static unsafe int WalkV4Depth(Snapshot snap, byte* bp, uint ipInt, uint startIdx, int startDepth, int maxDepth)
+    {
+        if (startDepth >= maxDepth) return -1;
+        uint idx = startIdx;
+        byte* nodes = bp + snap._offV4Nodes;
+
+        if (snap._v4Node24)
+        {
+            byte* nodesEnd = nodes + (long)snap._v4NodeCount * 6;
+            for (int depth = startDepth; depth < maxDepth; depth++)
+            {
+                if (idx >= snap._v4NodeCount) return -1;
+                uint bit = (ipInt >> (31 - depth)) & 1;
+                byte* node = nodes + idx * 6;
+                if (node >= nodesEnd) return -1;
+                int off = bit == 0 ? 0 : 3;
+                uint child = (uint)(node[off] | (node[off + 1] << 8) | (node[off + 2] << 16));
+                if ((child & 0x800000) != 0) return depth + 1;
+                if (child == 0) return -1;
+                idx = child;
+            }
+        }
+        else
+        {
+            uint* nodesEnd = (uint*)(nodes + (long)snap._v4NodeCount * 8);
+            for (int depth = startDepth; depth < maxDepth; depth++)
+            {
+                if (idx >= snap._v4NodeCount) return -1;
+                uint bit = (ipInt >> (31 - depth)) & 1;
+                uint* node = (uint*)(nodes + idx * 8);
+                if (node >= nodesEnd) return -1;
+                uint child = node[bit];
+                if ((child & Sentinel) != 0) return depth + 1;
+                if (child == 0) return -1;
+                idx = child;
+            }
+        }
+        return -1;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static unsafe int TrieWalkV6PrefixLen(Snapshot snap, ulong ipHigh, ulong ipLow)
+    {
+        if (!snap._hasV6 || snap._offV6Jump <= 0) return -1;
+        if (snap._dataPtr != null) return TrieWalkV6PrefixLenCore(snap, snap._dataPtr, ipHigh, ipLow);
+        fixed (byte* bp = snap._data.Span) return TrieWalkV6PrefixLenCore(snap, bp, ipHigh, ipLow);
+    }
+
+    private static unsafe int TrieWalkV6PrefixLenCore(Snapshot snap, byte* bp, ulong ipHigh, ulong ipLow)
+    {
+        int jumpBits = snap._v6JumpBits;
+        uint idxJump = (uint)(ipHigh >> (64 - jumpBits));
+        uint* jump = (uint*)(bp + snap._offV6Jump);
+        uint ptr = jump[idxJump];
+        if (ptr == 0) return -1;
+        if ((ptr & Sentinel) != 0) return WalkV6Depth(snap, bp, ipHigh, ipLow, 0, 0, jumpBits);
+        return WalkV6Depth(snap, bp, ipHigh, ipLow, ptr & SentinelMask31, jumpBits, 128);
+    }
+
+    private static unsafe int WalkV6Depth(Snapshot snap, byte* bp, ulong ipHigh, ulong ipLow, uint startIdx, int startDepth, int maxDepth)
+    {
+        if (startDepth >= maxDepth) return -1;
+        uint idx = startIdx;
+        byte* nodes = bp + snap._offV6Nodes;
+
+        if (snap._v6Node24)
+        {
+            byte* nodesEnd = nodes + (long)snap._v6NodeCount * 6;
+            for (int depth = startDepth; depth < maxDepth; depth++)
+            {
+                if (idx >= snap._v6NodeCount) return -1;
+                uint bit = depth <= 63 ? (uint)((ipHigh >> (63 - depth)) & 1) : (uint)((ipLow >> (127 - depth)) & 1);
+                byte* node = nodes + idx * 6;
+                if (node >= nodesEnd) return -1;
+                int off = bit == 0 ? 0 : 3;
+                uint child = (uint)(node[off] | (node[off + 1] << 8) | (node[off + 2] << 16));
+                if ((child & 0x800000) != 0) return depth + 1;
+                if (child == 0) return -1;
+                idx = child;
+            }
+        }
+        else
+        {
+            uint* nodesEnd = (uint*)(nodes + (long)snap._v6NodeCount * 8);
+            for (int depth = startDepth; depth < maxDepth; depth++)
+            {
+                if (idx >= snap._v6NodeCount) return -1;
+                uint bit = depth <= 63 ? (uint)((ipHigh >> (63 - depth)) & 1) : (uint)((ipLow >> (127 - depth)) & 1);
+                uint* node = (uint*)(nodes + idx * 8);
+                if (node >= nodesEnd) return -1;
+                uint child = node[bit];
+                if ((child & Sentinel) != 0) return depth + 1;
+                if (child == 0) return -1;
+                idx = child;
+            }
+        }
+        return -1;
+    }
+
+    private static string FormatV4Cidr(uint ip, int prefixLen)
+    {
+        uint net = prefixLen > 0 ? ip & (0xFFFFFFFFu << (32 - prefixLen)) : 0u;
+        return $"{(net >> 24) & 0xFF}.{(net >> 16) & 0xFF}.{(net >> 8) & 0xFF}.{net & 0xFF}/{prefixLen}";
+    }
+
+    private static string FormatV6Cidr(ulong ipHigh, ulong ipLow, int prefixLen)
+    {
+        byte[] net = new byte[16];
+        for (int i = 0; i < 8; i++)
+        {
+            net[i] = (byte)(ipHigh >> (56 - 8 * i));
+            net[8 + i] = (byte)(ipLow >> (56 - 8 * i));
+        }
+        for (int bit = prefixLen; bit < 128; bit++)
+            net[bit >> 3] &= (byte)~(1 << (7 - (bit & 7)));
+
+        int[] g = new int[8];
+        for (int i = 0; i < 8; i++)
+            g[i] = (net[2 * i] << 8) | net[2 * i + 1];
+
+        int bestStart = -1, bestLen = 0, curStart = -1, curLen = 0;
+        for (int i = 0; i < 8; i++)
+        {
+            if (g[i] == 0)
+            {
+                if (curStart < 0) { curStart = i; curLen = 1; }
+                else curLen++;
+            }
+            else
+            {
+                if (curLen > bestLen) { bestStart = curStart; bestLen = curLen; }
+                curStart = -1; curLen = 0;
+            }
+        }
+        if (curLen > bestLen) { bestStart = curStart; bestLen = curLen; }
+
+        var sb = new System.Text.StringBuilder();
+        if (bestLen >= 2)
+        {
+            for (int i = 0; i < bestStart; i++)
+            {
+                if (i > 0) sb.Append(':');
+                sb.Append(g[i].ToString("x"));
+            }
+            sb.Append("::");
+            for (int i = bestStart + bestLen; i < 8; i++)
+            {
+                if (i > bestStart + bestLen) sb.Append(':');
+                sb.Append(g[i].ToString("x"));
+            }
+        }
+        else
+        {
+            for (int i = 0; i < 8; i++)
+            {
+                if (i > 0) sb.Append(':');
+                sb.Append(g[i].ToString("x"));
+            }
+        }
+        sb.Append('/');
+        sb.Append(prefixLen);
+        return sb.ToString();
     }
 
     #endregion
