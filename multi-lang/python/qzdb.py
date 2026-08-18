@@ -1960,7 +1960,7 @@ class QzdbReader:
         values = [''] * n
         for i in range(n):
             idx = norm_idx.get(_norm_key(field_names[i]))
-            if idx is not None:
+            if idx is not None and idx < len(full._values):
                 values[i] = full._values[idx]
         return GeoInfo(values=values, field_names=list(field_names),
                        float_indices=self._float_field_indices)

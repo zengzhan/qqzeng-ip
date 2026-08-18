@@ -1563,15 +1563,31 @@ static int init_from_buffer(qzdb_reader_t* ctx, int is_heap, int verify_crc) {
         uint64_t v4_ns = ctx->v4_node_24 ? 6 : 8;
         uint64_t v6_ns = ctx->v6_node_24 ? 6 : 8;
         uint64_t v6_jump_size = ((uint64_t)1 << ctx->v6_jump_bits) * 4;
-        if (ctx->off_v4_jump > 0 && ctx->off_v4_jump + 65536 * 4 > ctx->data_size) { return QZDB_ERR_BOUNDS; }
-        if (ctx->off_v4_nodes > 0 && ctx->off_v4_nodes + (uint64_t)ctx->v4_node_count * v4_ns > ctx->data_size) { return QZDB_ERR_BOUNDS; }
-        if (ctx->off_v6_jump > 0 && ctx->off_v6_jump + v6_jump_size > ctx->data_size) { return QZDB_ERR_BOUNDS; }
-        if (ctx->off_v6_nodes > 0 && ctx->off_v6_nodes + (uint64_t)ctx->v6_node_count * v6_ns > ctx->data_size) { return QZDB_ERR_BOUNDS; }
-        if (ctx->off_ip_row > 0 && ctx->off_ip_row + (uint64_t)ctx->row_count * ctx->ip_row_size > ctx->data_size) { return QZDB_ERR_BOUNDS; }
-        if (ctx->off_geo_entries > 0 && ctx->off_geo_entries + 16 > ctx->data_size) { return QZDB_ERR_BOUNDS; }
-        if (ctx->off_group_schema > 0 && ctx->off_group_schema + 2 > ctx->data_size) { return QZDB_ERR_BOUNDS; }
+        /* 必选段：off==0 即畸形（合法文件这些段恒 >0）；加法改用溢出安全减法式，
+         * 防止 hostile 头把 off 设为接近 UINT64_MAX 使 off+size 回绕绕过校验。
+         * 直接 data+off 基址读取的段（v4/v6 nodes/jump、ip_row、geo_entries、pools）
+         * 必须兜底，否则越界读/崩溃，违反 fail-closed。 */
+        if (ctx->off_v4_jump == 0 || ctx->off_v4_jump > ctx->data_size ||
+            (uint64_t)65536 * 4 > ctx->data_size - ctx->off_v4_jump) { return QZDB_ERR_BOUNDS; }
+        if (ctx->off_v4_nodes == 0 || ctx->off_v4_nodes > ctx->data_size ||
+            (uint64_t)ctx->v4_node_count * v4_ns > ctx->data_size - ctx->off_v4_nodes) { return QZDB_ERR_BOUNDS; }
+        /* v6 段仅在数据库确实携带 v6 数据时必选（v4-only 文件 off_v6_*==0 合法） */
+        if (ctx->v6_node_count > 0) {
+            if (ctx->off_v6_jump == 0 || ctx->off_v6_jump > ctx->data_size ||
+                v6_jump_size > ctx->data_size - ctx->off_v6_jump) { return QZDB_ERR_BOUNDS; }
+            if (ctx->off_v6_nodes == 0 || ctx->off_v6_nodes > ctx->data_size ||
+                (uint64_t)ctx->v6_node_count * v6_ns > ctx->data_size - ctx->off_v6_nodes) { return QZDB_ERR_BOUNDS; }
+        }
+        if (ctx->off_ip_row == 0 || ctx->off_ip_row > ctx->data_size ||
+            (uint64_t)ctx->row_count * ctx->ip_row_size > ctx->data_size - ctx->off_ip_row) { return QZDB_ERR_BOUNDS; }
+        if (ctx->off_geo_entries == 0 || ctx->off_geo_entries > ctx->data_size ||
+            16 > ctx->data_size - ctx->off_geo_entries) { return QZDB_ERR_BOUNDS; }
+        if (ctx->off_pools == 0 || ctx->off_pools >= ctx->data_size) { return QZDB_ERR_BOUNDS; }
+        /* 可选段：off==0 表示不存在，保持原有跳过语义，仅修正溢出 */
+        if (ctx->off_group_schema > 0) {
+            if (ctx->off_group_schema > ctx->data_size || 2 > ctx->data_size - ctx->off_group_schema) { return QZDB_ERR_BOUNDS; }
+        }
         if (ctx->off_row_schema > 0 && ctx->off_row_schema >= ctx->data_size) { return QZDB_ERR_BOUNDS; }
-        if (ctx->off_pools > 0 && ctx->off_pools >= ctx->data_size) { return QZDB_ERR_BOUNDS; }
         if (ctx->off_meta > 0 && ctx->off_meta > ctx->data_size) { return QZDB_ERR_BOUNDS; }
     }
 

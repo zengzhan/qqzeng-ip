@@ -1402,8 +1402,9 @@ class QzdbReader {
       const name = fieldNames[i];
       const idx = norm[GeoInfo.normalizeKey(name)];
       outNames[i] = name;
-      outVals[i] = idx === undefined ? '' : full._vals[idx];
-      floatFlags[i] = idx === undefined ? false : !!floatAll[idx];
+      const oob = idx === undefined || idx >= full._vals.length;
+      outVals[i] = oob ? '' : full._vals[idx];
+      floatFlags[i] = oob ? false : !!floatAll[idx];
     }
     return new GeoInfo(outVals, outNames, floatFlags, null);
   }

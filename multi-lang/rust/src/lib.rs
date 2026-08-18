@@ -13,7 +13,6 @@
 use std::collections::HashMap;
 use std::fs;
 use std::sync::{Arc, OnceLock};
-use std::sync::atomic::{AtomicU32, Ordering};
 
 use arc_swap::{ArcSwap, ArcSwapOption};
 
@@ -793,18 +792,23 @@ pub struct BatchResult {
 // 不可变快照（加载期构建一次，查询期只读）
 // ---------------------------------------------------------------------------
 
-/// 解码缓存槽：key=entry_id（u32::MAX 表示空槽），val=Arc<GeoInfo>。
-/// 读路径完全无锁（一次原子 u32 load + arc-swap debt 槽 load_full），
-/// 替代此前的 Mutex<CacheSlot>——16 线程下锁前缀指令与缓存行独占争用
-/// 是当时多核扩展性（0.2×）的主要来源之一。
+/// 解码缓存槽：把 key 与 val 绑定进同一个不可变 `CacheNode`，整节点以单一原子
+/// 指针发布。读路径完全无锁（一次 arc-swap `load_full` 即可同时拿到 key 与 val），
+/// 二者永不会撕裂——这是此前「key/val 双原子位置」实现的根本缺陷：哈希碰撞下可
+/// 写出 key=5/val=geo16389 的撕裂态，并发查询返回错误 IP 的 GeoInfo（静默损坏）。
+/// 此设计保留无锁高性能（无 Mutex 争用），同时杜绝撕裂写。
+struct CacheNode {
+    key: u32,
+    val: Arc<GeoInfo>,
+}
+
 struct CacheSlot {
-    key: AtomicU32,
-    val: ArcSwapOption<GeoInfo>,
+    node: ArcSwapOption<CacheNode>,
 }
 
 impl CacheSlot {
     fn empty() -> Self {
-        CacheSlot { key: AtomicU32::new(u32::MAX), val: ArcSwapOption::new(None) }
+        CacheSlot { node: ArcSwapOption::new(None) }
     }
 }
 
@@ -1703,21 +1707,22 @@ impl SnapshotInner {
             return None;
         }
         let slot = &self.geo_cache[(entry_id as usize) & (GEO_CACHE_SIZE - 1)];
-        // 快路径：无锁读。key 用 Acquire 与写侧的 Release 配对，保证 key 命中时
-        // val 里的 Arc 一定已发布（写侧先 store val 再 store key）。
-        if slot.key.load(Ordering::Acquire) == entry_id {
-            if let Some(v) = slot.val.load_full() {
-                return Some(v);
+        // 快路径：无锁读。node 内 key 与 val 是同一原子单元——key 命中时 val 必为该
+        // entry 的数据，绝不会出现 key/val 错位（此前双原子位置实现会撕裂）。
+        if let Some(node) = slot.node.load_full() {
+            if node.key == entry_id {
+                return Some(Arc::clone(&node.val));
             }
         }
         let geo = self.build_geo(entry_id);
-        // 发布顺序：先 val 后 key（key 是有效性标志）。
-        // 覆写旧条目安全：旧 Arc 由仍持有它的读者保命（引用计数语义）；
-        // 与 C 侧「不可变条目永不淘汰」的铁律不同——C 返回借用指针所以禁止
-        // 淘汰，Rust 返回 Arc 无生命周期问题，覆写是安全且期望的行为。
-        slot.val.store(Some(Arc::clone(&geo)));
-        slot.key.store(entry_id, Ordering::Release);
-        Some(geo)
+        let node = Arc::new(CacheNode { key: entry_id, val: geo });
+        // 发布：整节点原子替换。旧节点由仍持有它的读者保命（Arc 引用计数语义），
+        // 覆写是安全且期望的行为（与 C 侧「不可变条目永不淘汰」铁律不同——
+        // Rust 返回 Arc，无生命周期问题）。
+        slot.node.store(Some(Arc::clone(&node)));
+        // 直接返回本次构建的 GeoInfo，保证返回的必是 entry_id 的正确数据，
+        // 不受并发覆写影响。
+        Some(Arc::clone(&node.val))
     }
 
     fn build_geo(&self, entry_id: u32) -> Arc<GeoInfo> {

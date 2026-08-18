@@ -145,3 +145,87 @@ fn t_drop_no_panic() {
     let _ = r.find("119.51.194.142");
     drop(r);
 }
+
+/// 黑盒并发正确性：同一 IP 的并发查询结果必须始终等于单线程基准。
+///
+/// 直接针对此前「key/val 双原子位置」的撕裂写缺陷——`GEO_CACHE_SIZE=16384`，
+/// 两个不同 entry_id 可能落到同一槽位；交错写可写出 `key=5/val=geo16389` 的撕裂态，
+/// 使并发查询静默返回错误 IP 的 GeoInfo（不 panic，故常规并发测试抓不到）。
+/// 修复后 key 与 val 绑定于同一个原子 `CacheNode`，不可能撕裂，本测试必为恒等。
+#[test]
+fn t_concurrent_correctness_no_torn_read() {
+    let reader = Arc::new(load_std());
+
+    // 采样覆盖广泛段的 IP，并预先算出单线程基准（确定性）
+    let ips = gen_ips(500);
+    let mut expected: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for ip in &ips {
+        expected.insert(ip.clone(), reader.find_str(ip));
+    }
+
+    let mut handles = Vec::new();
+    for _ in 0..16 {
+        let reader = Arc::clone(&reader);
+        let ips = ips.clone();
+        let expected = expected.clone();
+        handles.push(thread::spawn(move || {
+            for _ in 0..400 {
+                for ip in &ips {
+                    let got = reader.find_str(ip);
+                    let exp = &expected[ip];
+                    assert_eq!(
+                        got, *exp,
+                        "torn/incorrect geo for {ip}: got={got} exp={exp}"
+                    );
+                }
+            }
+        }));
+    }
+    for h in handles {
+        h.join().expect("thread panicked during concurrent correctness check");
+    }
+}
+
+/// 大库（std_global，条目数 >> GEO_CACHE_SIZE=16384）并发正确性测试。
+///
+/// 小库（std_china）条目 < 16384，任一 entry_id 独占槽位、永无碰撞，撕裂写缺陷无
+/// 法触发；本测试改用 global 大库，使不同 entry_id 必然落到同一缓存槽，真正压到
+/// 「槽碰撞 + 并发覆写」的热路径。修复后 CacheNode 单一原子发布，命中碰撞槽也只会
+/// 重算、绝不返回错值；并发结果必须等于单线程基准。
+fn load_large() -> QzdbReader {
+    QzdbReader::from_file(data_dir().join("qqzeng_ip_std_global.qzdb").to_str().unwrap())
+        .expect("load std_global")
+}
+
+#[test]
+fn t_concurrent_correctness_large_db_collisions() {
+    let reader = Arc::new(load_large());
+
+    let ips = gen_ips(800);
+    let mut expected: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for ip in &ips {
+        expected.insert(ip.clone(), reader.find_str(ip));
+    }
+
+    let mut handles = Vec::new();
+    for _ in 0..16 {
+        let reader = Arc::clone(&reader);
+        let ips = ips.clone();
+        let expected = expected.clone();
+        handles.push(thread::spawn(move || {
+            for _ in 0..600 {
+                for ip in &ips {
+                    let got = reader.find_str(ip);
+                    let exp = &expected[ip];
+                    assert_eq!(
+                        got, *exp,
+                        "torn/incorrect geo under collision for {ip}: got={got} exp={exp}"
+                    );
+                }
+            }
+        }));
+    }
+    for h in handles {
+        h.join().expect("thread panicked during concurrent correctness check (large db)");
+    }
+}
