@@ -202,6 +202,34 @@ class Program
             callerBuffer[0] = (byte)'X';
             T1(copied.Find("223.5.5.5") != null, "Buffer: open copies caller memory");
         }
+        // Unsafe trie walkers must fail closed when a crafted child index points
+        // outside the node table. This guards the pointer-arithmetic boundary,
+        // independent of the CRC because the file is deliberately opened with
+        // verification disabled.
+        var hostileTrie = (byte[])rawStable.Clone();
+        ushort hostileFlags = BinaryPrimitives.ReadUInt16LittleEndian(hostileTrie.AsSpan(8, 2));
+        int hostileV4Count = BinaryPrimitives.ReadInt32LittleEndian(hostileTrie.AsSpan(152, 4));
+        long hostileV4Nodes = BinaryPrimitives.ReadInt64LittleEndian(hostileTrie.AsSpan(72, 8));
+        if ((hostileFlags & 1) != 0 && hostileV4Count > 0)
+        {
+            bool compactNodes = (hostileFlags & 0x10) != 0;
+            for (int i = 0; i < hostileV4Count; i++)
+            {
+                int node = checked((int)hostileV4Nodes + i * (compactNodes ? 6 : 8));
+                if (compactNodes)
+                {
+                    hostileTrie[node] = 0xFF; hostileTrie[node + 1] = 0xFF; hostileTrie[node + 2] = 0x7F;
+                    hostileTrie[node + 3] = 0xFF; hostileTrie[node + 4] = 0xFF; hostileTrie[node + 5] = 0x7F;
+                }
+                else
+                {
+                    BinaryPrimitives.WriteUInt32LittleEndian(hostileTrie.AsSpan(node, 4), 0x7FFF_FFFF);
+                    BinaryPrimitives.WriteUInt32LittleEndian(hostileTrie.AsSpan(node + 4, 4), 0x7FFF_FFFF);
+                }
+            }
+            using var hostileReader = QzdbReader.OpenBuffer(hostileTrie, new ReaderOptions { VerifyCrc = false });
+            T1(hostileReader.Find("223.5.5.5") == null, "Security: hostile trie child index fails closed");
+        }
         var malformedOffset = File.ReadAllBytes(BP + "/std/china/qqzeng_ip_std_china.qzdb");
         BinaryPrimitives.WriteInt64LittleEndian(malformedOffset.AsSpan(104, 8), 1);
         try

@@ -303,7 +303,7 @@ public sealed class QzdbReader : IDisposable
                 _mmf = mmf; _view = view; _ptr = ptr; _length = length;
             }
 
-            internal Memory<byte> Memory => CreateMemory(_length);
+            public override Memory<byte> Memory => CreateMemory(_length);
             internal byte* Pointer => _ptr;
 
             public override Span<byte> GetSpan() => new(_ptr, _length);
@@ -1139,6 +1139,10 @@ public sealed class QzdbReader : IDisposable
                 byte* nodesEnd = nodes + (long)snap._v4NodeCount * 6;
                 for (int step = 0; step < 16; step++)
                 {
+                    // Validate the table index before pointer arithmetic. A malformed
+                    // database can otherwise make idx * 6 wrap and escape the mapped
+                    // section before the end-pointer check runs.
+                    if (idx >= snap._v4NodeCount) return 0;
                     byte* node = nodes + idx * 6;
                     if (node >= nodesEnd) return 0;
                     int off = ((suffix >> 31) & 1) == 0 ? 0 : 3;
@@ -1154,6 +1158,7 @@ public sealed class QzdbReader : IDisposable
                 uint* nodesEnd = (uint*)(nodes + (long)snap._v4NodeCount * 8);
                 for (int step = 0; step < 16; step++)
                 {
+                    if (idx >= snap._v4NodeCount) return 0;
                     uint* node = (uint*)(nodes + idx * 8);
                     if (node >= nodesEnd) return 0;
                     uint bit = (suffix >> 31) & 1;
@@ -1195,6 +1200,7 @@ public sealed class QzdbReader : IDisposable
                 byte* nodesEnd = nodes + (long)snap._v6NodeCount * 6;
                 for (int depth = jumpBits; depth < 128; depth++)
                 {
+                    if (idx >= snap._v6NodeCount) return 0;
                     uint bit2 = depth <= 63 ? (uint)((ipHigh >> (63 - depth)) & 1) : (uint)((ipLow >> (127 - depth)) & 1);
                     byte* node = nodes + idx * 6;
                     if (node >= nodesEnd) return 0;
@@ -1210,6 +1216,7 @@ public sealed class QzdbReader : IDisposable
                 uint* nodesEnd = (uint*)(nodes + (long)snap._v6NodeCount * 8);
                 for (int depth = jumpBits; depth < 128; depth++)
                 {
+                    if (idx >= snap._v6NodeCount) return 0;
                     uint bit = depth <= 63 ? (uint)((ipHigh >> (63 - depth)) & 1) : (uint)((ipLow >> (127 - depth)) & 1);
                     uint* node = (uint*)(nodes + idx * 8);
                     if (node >= nodesEnd) return 0;
@@ -1352,7 +1359,7 @@ public sealed class QzdbReader : IDisposable
 
     private static string FormatV6Cidr(ulong ipHigh, ulong ipLow, int prefixLen)
     {
-        byte[] net = new byte[16];
+        Span<byte> net = stackalloc byte[16];
         for (int i = 0; i < 8; i++)
         {
             net[i] = (byte)(ipHigh >> (56 - 8 * i));
@@ -1361,9 +1368,9 @@ public sealed class QzdbReader : IDisposable
         for (int bit = prefixLen; bit < 128; bit++)
             net[bit >> 3] &= (byte)~(1 << (7 - (bit & 7)));
 
-        int[] g = new int[8];
+        Span<ushort> g = stackalloc ushort[8];
         for (int i = 0; i < 8; i++)
-            g[i] = (net[2 * i] << 8) | net[2 * i + 1];
+            g[i] = (ushort)((net[2 * i] << 8) | net[2 * i + 1]);
 
         int bestStart = -1, bestLen = 0, curStart = -1, curLen = 0;
         for (int i = 0; i < 8; i++)
@@ -1381,7 +1388,7 @@ public sealed class QzdbReader : IDisposable
         }
         if (curLen > bestLen) { bestStart = curStart; bestLen = curLen; }
 
-        var sb = new System.Text.StringBuilder();
+        var sb = new System.Text.StringBuilder(48);
         if (bestLen >= 2)
         {
             for (int i = 0; i < bestStart; i++)
