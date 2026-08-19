@@ -541,9 +541,12 @@ static uint32_t trie_walk_v6(const qzdb_reader_t* ctx, const uint8_t* ip_bin) {
  * handful of acquire loads; keys that don't land within it are simply reported
  * as a miss and served by the caller-owned decode path. */
 #define QZDB_CACHE_PROBE 4
+#ifndef QZDB_GEO_CACHE_CAP
+#define QZDB_GEO_CACHE_CAP 16384u
+#endif
 
 static void geo_cache_init(qzdb_reader_t* ctx) {
-    ctx->geo_cache_cap = 16384;   /* power of two */
+    ctx->geo_cache_cap = QZDB_GEO_CACHE_CAP;   /* power of two; compile-time configurable */
     ctx->geo_cache = calloc(ctx->geo_cache_cap, sizeof(qzdb_cache_entry_t*));
     if (!ctx->geo_cache) ctx->geo_cache_cap = 0;   /* degrade to no-cache, never NULL-deref */
 }

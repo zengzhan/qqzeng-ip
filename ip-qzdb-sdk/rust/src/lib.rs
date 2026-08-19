@@ -6,15 +6,16 @@
 //! - 浮点字段在解码期格式化为 6 位小数（NaN/Inf → ""）；`to_pipe` 直接拼接已解码字符串。
 //! - SENTINEL 哨兵位在 Trie 返回 row_id 时即剥离。
 
-// 本 crate 不含任何 unsafe：以下 lint 把"事实上零 unsafe"升级为编译期强制约束，
-// 任何后续改动若引入 unsafe 会直接编译失败。
-#![forbid(unsafe_code)]
+// mmap 的底层构造需要一次受控 unsafe；它被封装在 map_file() 中，
+// 对外仍提供完全安全的读取 API。
+#![deny(unsafe_op_in_unsafe_fn)]
 
 use std::collections::HashMap;
-use std::fs;
+use std::fs::File;
 use std::sync::{Arc, OnceLock};
 
 use arc_swap::{ArcSwap, ArcSwapOption};
+use memmap2::{Mmap, MmapOptions};
 
 // ---------------------------------------------------------------------------
 // 常量
@@ -25,6 +26,29 @@ const SENTINEL_MASK_31: u32 = 0x7FFFFFFF;
 
 /// GeoInfo 缓存槽位数（2 的幂，≈16K 槽 ≈ 196KB/快照）。
 const GEO_CACHE_SIZE: usize = 1 << 14;
+
+enum DataStorage {
+    Owned(Arc<Vec<u8>>),
+    Mapped(Arc<Mmap>),
+}
+
+impl DataStorage {
+    #[inline]
+    fn as_slice(&self) -> &[u8] {
+        match self {
+            DataStorage::Owned(data) => data.as_slice(),
+            DataStorage::Mapped(data) => data.as_ref(),
+        }
+    }
+}
+
+fn map_file(path: &str) -> Result<Arc<Mmap>, QzdbError> {
+    let file = File::open(path)?;
+    // SAFETY: the mapping is read-only, the File is kept alive by the OS mapping,
+    // and DataStorage owns the Mmap until every immutable snapshot is dropped.
+    let mmap = unsafe { MmapOptions::new().map(&file)? };
+    Ok(Arc::new(mmap))
+}
 
 // ---------------------------------------------------------------------------
 // 错误
@@ -817,7 +841,7 @@ fn new_geo_cache() -> Vec<CacheSlot> {
 }
 
 pub struct SnapshotInner {
-    data: Arc<Vec<u8>>,
+    data: DataStorage,
     group_index: usize,
 
     // 头部解析结果
@@ -882,7 +906,7 @@ pub struct SnapshotInner {
 
 impl SnapshotInner {
     fn from_bytes(
-        data: Arc<Vec<u8>>,
+        data: DataStorage,
         group_index: usize,
         verify_crc: bool,
     ) -> Result<SnapshotInner, QzdbError> {
@@ -2309,11 +2333,8 @@ impl std::fmt::Debug for QzdbReader {
 impl QzdbReader {
     /// 从文件路径加载（默认 CRC 校验开启）。
     pub fn from_file(path: &str) -> Result<QzdbReader, QzdbError> {
-        // 直连 Arc<Vec<u8>>：绕过 from_bytes 的防御性拷贝，
-        // 加载峰值内存从 2× 文件大小降为 1×，并省一次全文件 memcpy
-        // （与 Builder::build / reload 的加载路径行为一致）。
-        let data: Arc<Vec<u8>> = Arc::new(fs::read(path)?);
-        let inner = SnapshotInner::from_bytes(data, 0, true)?;
+        // 文件路径使用只读 mmap；内存字节入口仍保持拷贝语义。
+        let inner = SnapshotInner::from_bytes(DataStorage::Mapped(map_file(path)?), 0, true)?;
         Ok(QzdbReader {
             snap: ArcSwap::from_pointee(inner),
         })
@@ -2321,7 +2342,7 @@ impl QzdbReader {
 
     /// 从内存字节加载。
     pub fn from_bytes(bytes: &[u8], group_index: usize, verify_crc: bool) -> Result<QzdbReader, QzdbError> {
-        let data = Arc::new(bytes.to_vec());
+        let data = DataStorage::Owned(Arc::new(bytes.to_vec()));
         let inner = SnapshotInner::from_bytes(data, group_index, verify_crc)?;
         Ok(QzdbReader {
             snap: ArcSwap::from_pointee(inner),
@@ -2685,16 +2706,15 @@ impl QzdbReader {
     // ---- 热更新（原子替换，强制 CRC；失败旧快照继续服务） ----
 
     pub fn reload(&self, path: &str) -> Result<(), QzdbError> {
-        let bytes = fs::read(path)?;
         let group_index = self.inner().group_index;
-        let new_inner = SnapshotInner::from_bytes(Arc::new(bytes), group_index, true)?;
+        let new_inner = SnapshotInner::from_bytes(DataStorage::Mapped(map_file(path)?), group_index, true)?;
         self.snap.store(Arc::new(new_inner));
         Ok(())
     }
 
     pub fn reload_bytes(&self, bytes: &[u8]) -> Result<(), QzdbError> {
         let group_index = self.inner().group_index;
-        let new_inner = SnapshotInner::from_bytes(Arc::new(bytes.to_vec()), group_index, true)?;
+        let new_inner = SnapshotInner::from_bytes(DataStorage::Owned(Arc::new(bytes.to_vec())), group_index, true)?;
         self.snap.store(Arc::new(new_inner));
         Ok(())
     }
@@ -2708,7 +2728,7 @@ impl QzdbReader {
 /// 占位空快照（close 后使用），所有查询安全失败。
 fn empty_snapshot() -> SnapshotInner {
     // 构造一个最小合法（但无数据）的快照；查询在 has_v4/has_v6=false 时直接返回 None。
-    let data = Arc::new(vec![0u8; 192]);
+    let data = DataStorage::Owned(Arc::new(vec![0u8; 192]));
     // 该快照仅用于 close 后占位；CRC 等不校验。
     SnapshotInner {
         data,
@@ -2814,8 +2834,8 @@ impl Builder {
 
     pub fn build(self) -> Result<QzdbReader, QzdbError> {
         let data = match (self.path, self.bytes) {
-            (Some(p), _) => Arc::new(fs::read(p)?),
-            (None, Some(b)) => Arc::new(b),
+            (Some(p), _) => DataStorage::Mapped(map_file(&p)?),
+            (None, Some(b)) => DataStorage::Owned(Arc::new(b)),
             (None, None) => {
                 return Err(err(ErrorCode::InvalidParam, "no path or bytes provided"));
             }
