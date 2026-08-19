@@ -1,19 +1,49 @@
+# macOS junk
 .DS_Store
+
+# Commercial & sample offline data files
 *.dat
 *.db
 *.qzdb
 data/
-__pycache__/
-node_modules/
-*.pyc
 
-# Build and compilation directories
-qzdb/c/qzdb_test
-qzdb/java/build/
-qzdb/rust/target/
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Node.js
+node_modules/
+
+# C# / .NET build artifacts
 bin/
 obj/
+*.user
+*.suo
 
-# Local private documentation
+# Rust build artifacts
+target/
+ip-qzdb-sdk/rust/target/
+
+# C/C++ compiled binaries & objects
+*.o
+*.obj
+*.exe
+*.dll
+*.so
+*.dylib
+*.out
+ip-qzdb-sdk/c/qzdb_test
+ip-qzdb-sdk/c/bench_qps
+
+# Java build artifacts
+build/
+.gradle/
+*.class
+*.jar
+ip-qzdb-sdk/java/build/
+
+# Local private documentation & notes
 docs/GITHUB_FOLDER_DESCRIPTIONS.md
 docs/QZDB_SYNC_GUIDE.md

@@ -20,18 +20,31 @@
 
 ---
 
+## 🧭 核心产品线一键直达 (Product Navigation)
+
+| 产品线 | 说明与核心亮点 | 包含内容 / 支持语言 | 快速入口 |
+| :--- | :--- | :--- | :---: |
+| 🚀 **IP 旗舰 QZDB 解析 SDK** | **下一代旗舰**：双阶段 Trie 树 + `mmap` 零分配，微秒级响应，支持 IPv4/IPv6 全字段与风控 | 🦀 Rust · 🐹 Go · ☕ Java · ⚡ C/C++ <br> 🔷 C# · 🟩 Node · 🐍 Python · 🐘 PHP | 👉 [**`ip-qzdb-sdk/`**](./ip-qzdb-sdk) |
+| 📦 **IP 经典版解析 SDK** | **经典在用**：6.0 经典 `.db` 与 2.0 早期 `.dat` 格式多语言解析 SDK 与源码 | v6.0 (.db) SDK · v2.0 (.dat) SDK | 👉 [**`ip-classic-sdk/`**](./ip-classic-sdk) |
+| 📱 **手机号段归属地 SDK** | **50万+ 全号段**：压缩率 95.7%+ 的二进制 DAT 解析及 Redis 高并发缓存方案 | v2.0 ~ v6.0 DAT SDK · Redis 导入 | 👉 [**`phone-location-sdk/`**](./phone-location-sdk) |
+| 🗄️ **关系型数据库脚本** | **海量入库 DDL**：针对 IP 网段与号段优化的建表、前缀索引与批量高速入库脚本 | 🐬 MySQL · 🐘 PostgreSQL · 🪟 SQL Server | 👉 [**`database-sql/`**](./database-sql) |
+| 🗂️ **IP 历史版本与工具** | **演进留档**：IP 3.0~5.0 早期版本解析、Big DAT 与 Windows 离线查询工具 | v3.0~v5.0 源码 · 桌面查询工具 | 👉 [**`ip-history-sdk/`**](./ip-history-sdk) |
+| 📋 **脱敏测试样本数据** | **演示样例**：IP 归属地与号段 CSV / TXT / QZDB 样例数据 | 全国/全球 IP 样例 · 号段样例 | 👉 [**`demo/`**](./demo) |
+
+---
+
 ## 📊 多语言 SDK 性能横向评测榜单 (SDK Benchmark)
 
-| 排名 | 语言 | 查询模式 | 单线程吞吐量 (Ops/sec) | 平均查询延迟 | 性能评价 | 状态 | 适用场景 |
-| :---: | :--- | :--- | :--- | :--- | :--- | :---: | :--- |
-| **1** | **Rust** | Read-Only Mmap | **10.0 M+ ~ 18.0 M+** | **< 0.08 µs** | 🛡️ 极速安全 | ✅ 生产推荐 | 高并发服务、嵌入式、安全敏感场景 |
-| **2** | **C / C++** | Read-Only Mmap | **10.0 M+ ~ 18.0 M+** | **< 0.08 µs** | 👑 极致轻量 | ✅ 生产推荐 | IoT、网关、内核模块、资源受限环境 |
-| **3** | **Go** | Read-Only Mmap | **8.0 M+ ~ 12.0 M+** | **< 0.10 µs** | ⚡ 高并发 | ✅ 生产推荐 | Web 服务、API 网关、微服务 |
-| **4** | **C#** | Eager-load Once | **6.0 M+ ~ 10.5 M+** | **< 0.15 µs** | 🚀 优秀 | ✅ 生产推荐 | .NET 企业应用 |
-| **5** | **Java** | Eager-load Once | **5.0 M+ ~ 8.0 M+** | **< 0.20 µs** | ☕ 稳健 | ✅ 生产推荐 | Spring Boot / 大数据生态 |
-| **6** | **Node.js** | Eager-load Once | **3.0 M+ ~ 5.0 M+** | **< 0.33 µs** | 🔥 优异 | ✅ 生产推荐 | 全栈 JavaScript 应用 |
-| **7** | **PHP** | Dynamic Parsed | **100 K+ ~ 2.0 M+** | **< 0.90 µs** | 🐘 实用 | ✅ 生产推荐 | Web 项目快速集成 |
-| **8** | **Python** | Dynamic Parsed | **100 K+ ~ 2.2 M+** | **< 0.90 µs** | 🐍 标准 | ✅ 生产推荐 | 数据分析、脚本、快速原型 |
+| 排名 | 语言 | 查询模式 | 单线程吞吐量 (Ops/sec) | 平均查询延迟 | 性能评价 | 状态 | 快速入口 |
+| :---: | :--- | :--- | :--- | :--- | :--- | :---: | :---: |
+| **1** | **Rust** | Read-Only Mmap | **10.0 M+ ~ 18.0 M+** | **< 0.08 µs** | 🛡️ 极速安全 | ✅ 生产推荐 | [查看源码](./ip-qzdb-sdk/rust) |
+| **2** | **C / C++** | Read-Only Mmap | **10.0 M+ ~ 18.0 M+** | **< 0.08 µs** | 👑 极致轻量 | ✅ 生产推荐 | [查看源码](./ip-qzdb-sdk/c) |
+| **3** | **Go** | Read-Only Mmap | **8.0 M+ ~ 12.0 M+** | **< 0.10 µs** | ⚡ 高并发 | ✅ 生产推荐 | [查看源码](./ip-qzdb-sdk/go) |
+| **4** | **C#** | Eager-load Once | **6.0 M+ ~ 10.5 M+** | **< 0.15 µs** | 🚀 优秀 | ✅ 生产推荐 | [查看源码](./ip-qzdb-sdk/netcore) |
+| **5** | **Java** | Eager-load Once | **5.0 M+ ~ 8.0 M+** | **< 0.20 µs** | ☕ 稳健 | ✅ 生产推荐 | [查看源码](./ip-qzdb-sdk/java) |
+| **6** | **Node.js** | Eager-load Once | **3.0 M+ ~ 5.0 M+** | **< 0.33 µs** | 🔥 优异 | ✅ 生产推荐 | [查看源码](./ip-qzdb-sdk/nodejs) |
+| **7** | **PHP** | Dynamic Parsed | **100 K+ ~ 2.0 M+** | **< 0.90 µs** | 🐘 实用 | ✅ 生产推荐 | [查看源码](./ip-qzdb-sdk/php) |
+| **8** | **Python** | Dynamic Parsed | **100 K+ ~ 2.2 M+** | **< 0.90 µs** | 🐍 标准 | ✅ 生产推荐 | [查看源码](./ip-qzdb-sdk/python) |
 
 *(注：基准测试基于普通 x86_64 / ARM64 处理器单线程单核内存检索测试，不同 CPU 频率及物理内存带宽下测试数值可能有所浮动，仅供技术选型参考)*
 
@@ -39,7 +52,7 @@
 
 ## ⚡ 一行代码快速集成 (Quick Start)
 
-> 更完整的 API 文档与多语言用例，请参见 **[QZDB 多语言 SDK 指南](./qzdb/README_zh.md)**。
+> 更完整的 API 文档与多语言用例，请参见 **[QZDB 多语言 SDK 指南](./ip-qzdb-sdk/README_zh.md)**。
 
 ```go
 // 🐹 Go 示例 (mmap 零拷贝, 实例持有用法)
@@ -95,7 +108,7 @@ flowchart LR
 
 ## ⚖️ 主流二进制 IP 数据格式对比 (Format Comparison)
 
-为了帮助架构师进行技术选型，以下列出了 QZDB 与业界主流二进制 IP 格式设计的客观对比：
+为了帮助架构师进行技术选型，以下列出了 QZDB 与业界主流二进制 IP 格式设计的客观对比（详细基准报告见 [`docs/benchmark-comparison.md`](./docs/benchmark-comparison.md)）：
 
 | 格式分类 | 检索时间复杂度 | 数据结构体积 | 核心检索树与数据机制 | QZDB 的技术优化点 |
 | :--- | :--- | :--- | :--- | :--- |
@@ -110,15 +123,13 @@ flowchart LR
 
 | 目录/文件 | 说明 (Description) |
 | :--- | :--- |
-| **`qzdb/`** | ⚡ **QZDB 极速解析引擎**——C / Go / Java / Rust / C# / Node.js / PHP / Python 八语言 SDK 全覆盖 |
-| **`qqzeng-phone-6.0/`** | 📱 **号段归属地 v6.0**——TXT 压缩 95%→DAT，全平台多语言查询 |
-| **`qqzeng-phone-redis/`** | 📱 **号段 Redis 缓存**——高并发 Redis 导入脚本与查询接口 |
-| **`mysql/`, `mssql/`, `pgsql/`** | 🗄️ **数据库入库**——MySQL / SQL Server / PostgreSQL DDL 与 IP 数据批处理 |
-| **`demo/`** | 📋 **演示样本**——IP 归属地与号段 CSV / TXT 数据一览 |
-| **`docs/`** | 📄 **项目文档**——架构设计、接口说明与使用指南 |
-| **`qqzeng-ip-6.0/` , `-2.0/`** | 🗂️ **IP 引擎演进**——v2.0 至 v6.0 历史版本 |
-| **`qqzeng-phone-5.0/` ~ `-2.0/`** | 🗂️ **号段引擎演进**——v2.0 至 v5.0 历史版本 |
-| **`archive/`** | 🗂️ **设计归档**——历史设计稿、资料与附件 |
+| **[`ip-qzdb-sdk/`](./ip-qzdb-sdk)** | ⚡ **QZDB 极速解析引擎**——Rust / C / Go / Java / C# / Node.js / PHP / Python 八语言 SDK 全覆盖 |
+| **[`ip-classic-sdk/`](./ip-classic-sdk)** | 📦 **IP 数据库经典版 SDK**——v6.0 (.db) 与 v2.0 (.dat) 经典在用解析源码 |
+| **[`phone-location-sdk/`](./phone-location-sdk)** | 📱 **手机号段归属地 SDK**——v2.0 至 v6.0 全版本多语言 DAT 解析 SDK 与 Redis 方案 |
+| **[`database-sql/`](./database-sql)** | 🗄️ **数据库建表与入库脚本**——MySQL / PostgreSQL / SQL Server DDL 与高速导入脚本 |
+| **[`ip-history-sdk/`](./ip-history-sdk)** | 🗂️ **IP 历史版本与工具归档**——v3.0~v5.0 历史源码、Big DAT 与桌面离线查询工具 |
+| **[`demo/`](./demo)** | 📋 **演示样本**——IP 归属地与号段 CSV / TXT / QZDB 数据样例 |
+| **[`docs/`](./docs)** | 📄 **项目文档与基准**——架构设计、性能基准报告与维护指南 |
 
 ### 数据交付格式与产品规格 (Data Delivery Formats & Specifications)
 
@@ -178,69 +189,35 @@ QZDB 最新版支持动态字段拓扑（Schema），各版本通过标准的 CS
 
 ---
 
-# IP Search Performance Tests & Verification
+# 📱 手机号段归属地数据库 (Phone Location Database)
 
-> **算法机制与性能基准测试**：QZDB 引擎采用双阶段 Patricia Trie 树 + 物理偏移只读字符串池设计，在压测环境下实现**单机微秒级响应**与**零 GC 停顿**。
+> **50万+ 手机号段（前7位）**：包含归属地省市区、邮编、区号、行政代码与运营商，提供极致压缩的 `.dat` 二进制解析 SDK 与 Redis 缓存支持。详细源码请见 **[`phone-location-sdk/`](./phone-location-sdk)**。
 
-## 🔬 算法演化与检索耗时对比 (亿级数据并发检索)
+```text
+字段信息：广东|深圳|518000|0755|440300|中国移动
+编码：UTF-8    字节序：Little-Endian
+```
 
-| 解析引擎版本 | 数据索引结构 | 时间复杂度 | 相对检索效率 | 内存占用 | 核心技术特征 |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **qqzeng-ip 2.0** | 早期二进制索引 | $\mathcal{O}(\log N)$ | 1.0x (基线) | ~25 MB | 二分查找，线性读取 |
-| **qqzeng-ip 3.0** | 优化型二分树 | $\mathcal{O}(\log N)$ | **~1.6x 提升** | ~18 MB | 局部索引缓存，结构压缩 |
-| **QZDB (当前最新版)** | **双阶段 Patricia Trie 树** | **$\mathcal{O}(W - K)$** | **~3.2x 极致提升** | **< 10 MB** | **16-bit 静态跳转表 + mmap 零拷贝 + 无锁并发** |
+### 存储与压缩效果 (Storage & Compression)
 
-*(注：全量边界核验经由全自动验证流水线校验，涵盖全部 959,162 个 CIDR 掩码段与 2,877,486 次无抽样精准测试，验证通过率 100.00%)*
-
----
-
-## 手机号段归属地-多语言解析以及导入数据库脚本
-
-qqzeng-phone-6.0.dat    [6.0版本](./qqzeng-phone-6.0/)   
-
-字段信息：  
-广东|深圳|518000|0755|440300|移动   
-
-编码：UTF8  字节序：Little-Endian  
-
-### 存储与性能
-
-#### 压缩效果  
-| **版本** | **格式** | **体积** | **压缩率** |  
-|----------|----------|----------|-------------|  
-| 原始数据 | TXT      | 30 MB    | -           |  
-| v6.0     | DAT      | 1.28 MB  | ▸ 95.7%     |  
-| v3.0     | DAT      | 1.95 MB  | ▸ 93.5%     |  
-| v2.0     | DAT      | 2.40 MB  | ▸ 92.0%     |  
-
-#### 性能说明  
-- **解析响应**：单机微秒级极速响应，适配高并发高吞吐网关与服务架构 
-- **资源占用**：内存消耗 < 10MB，超低开销  
-- **架构优势**：二进制 DAT 格式结合前缀节点跳转，实现接近 $\mathcal{O}(1)$ 的平滑查询复杂度
-
-### 号段归属地查询性能与版本演化（2.0-6.0版本）
-
-| 版本 | 文件格式 | 查询时间复杂度 | 性能与技术特征 |
-| :--- | :--- | :--- | :--- |
-| **v6.0** (最新版) | `.db` / `.dat` | **$\mathcal{O}(1)$** | **超高并发微秒级响应，空间压缩率 95.7%+** |
-| **v5.0** | `.dat` | **$\mathcal{O}(1)$** | 扁平化数据块，高并发无锁检索 |
-| **v4.0** | `.dat` | **$\mathcal{O}(\log N)$** | 区间二分索引结构 |
-| **v3.0** | `.dat` | **$\mathcal{O}(\log N)$** | 基础二分查找，低内存占用 |
-| **v2.0** | `.dat` | **$\mathcal{O}(\log N)$** | 早期经典二进制解析格式 |
-
-*注：随着号段结构和树形节点跳转的优化，高版本号段库在单机环境下的查询耗时近乎恒定。*
+| **版本** | **文件格式** | **文件体积** | **压缩率** | **查询时间复杂度** | **核心技术特征** |
+| :--- | :---: | :---: | :---: | :---: | :--- |
+| **原始数据** | `.txt` / `.csv` | ~30 MB | — | — | 原始纯文本明文 |
+| **v6.0 (最新版)** | `.dat` / `.db` | **1.28 MB** | **▸ 95.7%** | **$\mathcal{O}(1)$** | **超高并发微秒级响应，空间极致压缩** |
+| **v5.0** | `.dat` | 1.60 MB | ▸ 94.6% | $\mathcal{O}(1)$ | 扁平化数据块，高并发无锁检索 |
+| **v4.0** | `.dat` | 1.80 MB | ▸ 94.0% | $\mathcal{O}(\log N)$ | 区间二分索引结构 |
+| **v3.0** | `.dat` | 1.95 MB | ▸ 93.5% | $\mathcal{O}(\log N)$ | 基础二分查找，低内存占用 |
+| **v2.0** | `.dat` | 2.40 MB | ▸ 92.0% | $\mathcal{O}(\log N)$ | 早期经典二进制解析格式 |
 
 ---
 
-![Image text](./archive/qqzeng-ip-查询工具/qqzeng-ip-trace-2026.webp)
+![Image text](./ip-history-sdk/qqzeng-ip-查询工具/qqzeng-ip-trace-2026.webp)
 
-演示  https://www.qqzeng.com/ip
+* **在线演示**：https://www.qqzeng.com/ip
+* **统计分析**：https://www.qqzeng.com/tongji.html
+* **官方网站**：https://www.qqzeng.com
 
-统计  https://www.qqzeng.com/tongji.html
-
-官网  https://www.qqzeng.com   
-
-# 未来  
-**qqzeng-ip** 我们持续更新和完善数据库，以提供更加准确和精细，高性能的产品。
+# 🌟 未来展望
+**qqzeng-ip** 持续专注于高性能地理位置与号段解析引擎的打磨，以提供更准确、更精细、极低延迟的数据基础设施产品。
 
 ![Image text](https://www.qqzeng-ip.com/res/github-qrcode.png)

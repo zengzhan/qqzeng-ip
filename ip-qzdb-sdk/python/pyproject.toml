@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qzdb"
+version = "1.0.0"
+description = "High-performance Python reader for .qzdb IP geolocation databases (multi-language QZDB SDK)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "qqzeng" }]
+keywords = ["ip", "geolocation", "ip-lookup", "qzdb", "maxmind-alternative", "ip-geolocation"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+
+[project.urls]
+Homepage = "https://github.com/qqzeng/qzdb"
+Repository = "https://github.com/qqzeng/qzdb"
+
+[tool.setuptools]
+py-modules = ["qzdb"]
