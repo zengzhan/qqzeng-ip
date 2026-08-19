@@ -1,28 +1,29 @@
-# qzdb_reader (Go)
+# QZDB Go SDK（qqzeng-ip）
 
-> 纯离线、零依赖、高性能的 **QZDB IP 地理定位数据库**官方 Go SDK（支持 IPv4 / IPv6 双栈）。
+> 纯离线、零第三方依赖的 **QZDB IP 地理定位数据库**官方 Go 语言 SDK（支持 IPv4 / IPv6 双栈）。
 
-- **模块名**：`qzdb_reader`（与全仓统一）；包名 `qzdb`
+- **模块名**：`github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go`；包名 `qzdb`
 - **定位**：离线解析 `.qzdb` 二进制数据库文件，不依赖任何外部网络请求
-- **架构**：不可变快照（immutable snapshot）+ `atomic.Pointer` 原子替换 —— 并发查询无锁、对快照只读；per-snapshot 有界无锁 `GeoInfo` 缓存（row_id 为键，开放寻址，碰撞只重算）
-- **Go 版本**：1.21+
+- **特性**：无锁快照（`atomic.Pointer[Snapshot]`）+ per-snapshot 有界 `GeoInfo` 解码缓存，并发查询互不阻塞
+- **依赖**：Go 标准库（`go >= 1.21`）+ `golang.org/x/sys/unix`（仅用于只读 `mmap`）
 - **许可**：MIT
+- **跨语言规范**：以仓库根 [`API_CONTRACT.md`](../../API_CONTRACT.md) 为唯一事实来源（SSOT）
 
 ---
 
 ## 目录
 
 1. [环境要求](#1-环境要求)
-2. [安装](#2-安装)
+2. [安装与集成](#2-安装与集成)
 3. [快速开始](#3-快速开始)
 4. [加载数据库](#4-加载数据库)
-5. [查询 API 全表](#5-查询-api-全表)
-6. [结果对象 `GeoInfo`](#6-结果对象-geoinfo)
-7. [CIDR 反查](#7-cidr-反查)
-8. [批量与流式查询](#8-批量与流式查询)
-9. [链式多库查询 `ChainedReader`](#9-链式多库查询-chainedreader)
-10. [命名注册表 `QzdbRegistry`](#10-命名注册表-qzdbregistry)
-11. [元信息自省](#11-元信息自省)
+5. [查询 API](#5-查询-api)
+6. [结果实体 `GeoInfo`](#6-结果实体-geoinfo)
+7. [字段投影 `FindFields`](#7-字段投影-findfields)
+8. [行号 / ID 反查与 CIDR](#8-行号--id-反查与-cidr)
+9. [批量与流式查询](#9-批量与流式查询)
+10. [多库联合查询 `ChainedReader`](#10-多库联合查询-chainedreader)
+11. [命名注册表 `QzdbRegistry`](#11-命名注册表-qzdbregistry)
 12. [热更新与生命周期](#12-热更新与生命周期)
 13. [错误处理](#13-错误处理)
 14. [性能说明](#14-性能说明)
@@ -37,7 +38,6 @@
 | Go | 1.21 及以上 |
 | 操作系统 | Windows / Linux / macOS 均可 |
 | 数据库文件 | `.qzdb` 格式（由官方数据构建工具生成，含所需分组的二进制数据） |
-| 依赖 | 仅标准库（`encoding/binary`、`hash/crc32`、`math`、`sync`、`sync/atomic`、`syscall` 等），零第三方依赖 |
 
 ---
 
@@ -60,7 +60,7 @@ replace qzdb_reader => ../path/to/multi-lang/go
 代码中导入：
 
 ```go
-import "qzdb_reader/qzdb"
+import "github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go/qzdb"
 ```
 
 ---
@@ -73,7 +73,7 @@ package main
 import (
 	"fmt"
 
-	"qzdb_reader/qzdb"
+	"github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go/qzdb"
 )
 
 func main() {
@@ -357,7 +357,7 @@ reader.Close()
 - **`GeoInfo.Get` / `GetXxx`**：任一缺失均返回 `""` 或 `nil`，绝不 panic / 越界。
 
 ```go
-import "qzdb_reader/qzdb"
+import "github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go/qzdb"
 
 if errors.Is(err, qzdb.ErrClosed) { /* 已关闭 */ }
 if qe, ok := err.(*qzdb.QzdbError); ok {
