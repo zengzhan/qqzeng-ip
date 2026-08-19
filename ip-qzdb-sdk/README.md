@@ -180,3 +180,5 @@ The QZDB engine uses a custom **two-phase Patricia Trie search algorithm**:
 ## License
 
 MIT
+
+<!-- commit description sync 1787122549 -->
