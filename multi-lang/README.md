@@ -4,7 +4,7 @@
 [![Platform](https://img.shields.io/badge/platform-Cross--Platform-lightgrey.svg)]()
 [![Verification](https://img.shields.io/badge/Verification-100%25%20Passed-brightgreen.svg)]()
 
-QZDB (qqzeng IP 数据库) 是一款面向生产环境的 IP 地理位置查询二进制格式与搜索引擎。采用 **Jump Table + Patricia Trie 双阶段检索**、动态 Schema 以及零分配内存映射（mmap）技术，在海量 IP 数据集上提供**单机微秒级**查询延迟。
+QZDB (qqzeng IP 数据库) 是一款面向生产环境的 IP 地理位置查询二进制格式与搜索引擎。采用 **Jump Table + Patricia Trie 双阶段检索**与动态 Schema；支持 mmap 的原生 SDK 可进行零拷贝寻址，在海量 IP 数据集上提供**单机微秒级**查询延迟。
 
 [简体中文](./README.md)
 
@@ -13,7 +13,7 @@ QZDB (qqzeng IP 数据库) 是一款面向生产环境的 IP 地理位置查询�
 ## 💡 核心能力
 
 * **🔬 跨语言验证**：完整数据库经由内部交叉验证流水线（`cross_verify.py`）校验——将每个生成的 `.qzdb` 文件依次交由全部 8 种 SDK 解析（以 Python 为参考基线），逐字段比对竖线分隔输出。该流水线在每次发布前的 CI 中执行；本仓库仅发布 SDK 引擎与测试脚手架，`.qzdb` 数据集单独分发（见下文「数据库文件」）。
-* **⚙️ 线程安全与只读 Mmap**：C、Go、Rust、Java 和 C# 实现均在加载时将所有字符串池装载进只读内存，确保多线程并发查询无锁竞争。
+* **⚙️ 线程安全与只读数据**：C、Go、Rust、Java 和 C# 的文件路径加载使用只读映射（Rust 通过 `memmap2`）；Python 大文件也使用 mmap。Node.js 读取为全量 `Buffer`，PHP 根据内存限制选择缓冲或带 64 KiB 页缓存的流式模式。所有实现的查询快照均为只读，可并发复用。
 * **🌐 动态 Schema**：自动从数据库元数据解析字段结构（例如大洲、国家、省份、城市、区县、ISP、经纬度、时区），保证 SDK 具有极强的向前与向后兼容性。
 
 ---
@@ -152,7 +152,7 @@ QZDB 引擎核心采用专门定制的 **双阶段 Patricia Trie 树型检索算
 | :--- | :--- | :--- |
 | **检索时间复杂度** | $\mathcal{O}(W - K)$ | 其中 $W$ 为 IP 地址总位数（IPv4 为 32 位，IPv6 为 128 位），$K$ 为首阶段跳转位数（如 16 位）。平均只需 16 次比对即可完成检索。 |
 | **空间复杂度** | 极小量级 | 经过前缀压路机压缩，每个 Trie 节点仅占用 6~8 字节，千万级全球 IP 树存储开销低于 20MB。 |
-| **内存开销 (Memory)** | $\mathcal{O}(F)$ 映射地址空间 / $\mathcal{O}(1)$ 单次查询 | 原生编译型语言（Rust/C/Go）直接借助操作系统 `mmap` 进行零拷贝（Zero-copy）寻址，初始化后查询路径无堆分配与 GC 停顿。 |
+| **内存开销 (Memory)** | 取决于加载后端 / $\mathcal{O}(1)$ 单次查询 | C/Go/Rust/Java/C# 文件路径加载使用只读映射；Node.js 与 Rust/各语言内存字节入口保留拷贝语义；PHP 流式路径使用 64 KiB 页缓存。 |
 
 ---
 
@@ -172,7 +172,7 @@ QZDB 引擎核心采用专门定制的 **双阶段 Patricia Trie 树型检索算
 ## ⚠️ 生产环境使用注意事项
 
 1. **复用实例而非每次重建**：加载数据库涉及解析头部元数据、CRC 校验、预装载字符串索引池，有一定初始化开销。请在程序启动时创建 `QzdbReader` 实例**一次**并长期持有复用（跨文件/跨版本各自持有一个实例，或用 `QzdbRegistry` 管理）。v2.4 已无单例，所谓「复用」指的是持有同一实例引用，而非依赖全局单例。
-2. **内存考虑**：在 C、Go、Rust 中数据库通过内存映射（`mmap`）加载，可在多进程间共享物理内存。在 JVM 等托管运行环境中，请确保堆内存上限（Heap limits）能够容纳数据库大小。
+2. **内存考虑**：C、Go、Rust、Java、C# 的文件路径加载使用只读映射，可由操作系统共享物理页；Node.js 是全量 `Buffer`，PHP 流式模式只保留页缓存。使用 `from_bytes` / `OpenBuffer` 等内存入口时，应按其 API 的拷贝语义单独规划内存。
 3. **线程安全性**：所有查询 API（`find`、`find_str`）皆为无状态设计，且核心字段在初始化后均为只读，完全支持多线程高并发免锁查询。
 
 ---

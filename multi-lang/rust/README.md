@@ -135,7 +135,7 @@ let reader = Builder::from_bytes(&bytes).build()?;
 
 ### 4.4 加载异常处理
 
-`build()` / `from_file` / `from_bytes` 可能在以下情况返回 `Err(QzdbError)`（务必在启动期 `?` / `match`，避免程序崩溃）：
+文件路径加载（`build()` / `from_file` / `reload`）使用只读 mmap；内存字节入口（`from_bytes` / `reload_bytes`）保持拷贝语义。上述 API 可能在以下情况返回 `Err(QzdbError)`（务必在启动期 `?` / `match`，避免程序崩溃）：
 
 | ErrorCode | 触发场景 |
 |-----------|---------|
@@ -418,8 +418,8 @@ match QzdbReader::from_file("ip_china.qzdb") {
 本 SDK 在查询热路径上做了极致优化：
 
 - **无锁快照架构**：查询只读 `ArcSwap` 快照引用，多线程零竞争；`reload` 用原子替换切换。
-- **零拷贝解析**：数据以 `Arc<Vec<u8>>` 持有，字段解析按需切片，无整库反序列化。
-- **per-snapshot 有界无锁缓存**：快照不可变 → 同一 `entry_id` 永远解析出同一 `GeoInfo`。对热点 IP（同段 / 邻近客户端、批量扫段）直接命中缓存，**命中路径零分配**。缓存约 16K 槽（≈196 KB / 快照），开放寻址；**碰撞仅触发重算、绝不返回错值**。
+- **只读 mmap 加载 + 懒解析**：文件路径加载（`from_file`/`reload`/`Builder::build(path)`）通过 `memmap2` 只读内存映射，可在多进程间共享物理页；unsafe 仅隔离在 `map_file()` 一处（配 SAFETY 注释说明不变式），crate 其余部分仍是安全代码。内存字节入口（`from_bytes`/`reload_bytes`）保持拷贝语义（`Vec<u8>`）。字段解析按需切片，不做整库反序列化。
+- **per-snapshot 有界无锁缓存**：GeoInfo 解码缓存为固定 **16384 槽位**（`1 << 14`）、只填不淘汰的开放寻址表。快照不可变 → 同一 `entry_id` 永远解析出同一 `GeoInfo`。对热点 IP（同段 / 邻近客户端、批量扫段）直接命中缓存，**命中路径零分配**。超出容量后新查询到的条目走非缓存路径解码，不影响正确性但会降低该条目的吞吐；如数据库 distinct 地理条目数明显超过该值，命中率会相应下降。
 - **SENTINEL 位即时剥离**：Trie 返回的 row_id / index 在遍历时即剥离哨兵位（`& 0x7FFFFFFF`），无需调用方处理。
 - **IPv4 映射地址自动降级**：`::ffff:a.b.c.d` 在解析阶段即降级到 V4 Trie，双栈查询统一路径。
 
@@ -480,7 +480,7 @@ cargo update -p qzdb_reader
 | `tests/csv_oracle.rs` | **独立 CSV 地面真值校验**：以源数据 `test_data_202608/{std,ult}/china/*_range.csv` 为裁判，对 std/ult_china 各约 6000 区间内 + 5000 全局随机样本比对 `country/province/city/isp`，强制 0 失配 |
 | `tests/cidr_oracle.rs` | CIDR 反查独立 Oracle（不依赖内部 Trie，交叉验证网络地址/前缀长度） |
 | `tests/concurrency.rs` / `tests/edge_cases.rs` / `tests/ipv4_scan.rs` / `tests/ipv6_boundary.rs` | 并发安全 / 边界 / 扫描 测试 |
-| `Cargo.toml` | 包定义与依赖（仅 `arc-swap`，crate `qzdb_reader` v1.0.0） |
+| `Cargo.toml` | 包定义与依赖（`arc-swap`, `memmap2`, `serde_json`） |
 
 > **运行测试**：`cargo test`（覆盖 Tier1 + golden + 独立 CSV 真值 + CIDR Oracle + 并发/边界）。其中 `csv_oracle` 需仓库根 `test_data_202608/` 源 CSV 与 `../data/` 真实库，强制 0 失配。
 
@@ -491,3 +491,5 @@ cargo update -p qzdb_reader
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
+
+<!-- commit: rust: Rust 极速解析引擎 (mmap + 最小 unsafe surface, 6900 万+ QPS) -->

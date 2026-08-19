@@ -132,10 +132,17 @@ def run(label, qzdb_path, csv_path):
 def main():
     print('=== CSV oracle (independent ground-truth correctness) ===')
     total = 0
+    exercised = 0
     for label, qzdb_name, csv_rel in TARGETS:
-        total += run(label, os.path.join(DATA, qzdb_name), os.path.join(SRC, csv_rel))
-    if total == 0:
+        qzdb_path = os.path.join(DATA, qzdb_name)
+        csv_path = os.path.join(SRC, csv_rel)
+        if os.path.exists(qzdb_path) and os.path.exists(csv_path):
+            exercised += 1
+        total += run(label, qzdb_path, csv_path)
+    if total == 0 and exercised == 0:
         print('CSV_ORACLE_OK (no targets exercised)')
+    elif total == 0:
+        print(f'CSV_ORACLE_OK (targets exercised={exercised})')
     else:
         print(f'CSV_ORACLE: total MISMATCH={total} -> '
               f'{"PASS" if total == 0 else "FAIL"}')

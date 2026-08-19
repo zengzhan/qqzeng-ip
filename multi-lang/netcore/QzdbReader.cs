@@ -848,11 +848,13 @@ public sealed class QzdbReader : IDisposable
 
     #region Public query API (lock-free, no contention)
 
-    public GeoInfo? Find(string ipStr)
+    public GeoInfo? Find(string ipStr) => Find(ipStr.AsSpan());
+
+    public GeoInfo? Find(ReadOnlySpan<char> ipSpan)
     {
         var snap = RequireSnapshot();
-        if (string.IsNullOrEmpty(ipStr) || !TryParseIp(ipStr, out var v4, out var v6High, out var v6Low, out var isV4))
-            throw new QzdbException(ErrorCode.InvalidIp, $"Invalid IP address: '{ipStr}'");
+        if (ipSpan.IsEmpty || !TryParseIp(ipSpan, out var v4, out var v6High, out var v6Low, out var isV4))
+            throw new QzdbException(ErrorCode.InvalidIp, $"Invalid IP address: '{ipSpan.ToString()}'");
 
         if (isV4)
         {
@@ -872,11 +874,13 @@ public sealed class QzdbReader : IDisposable
         return FindBytes(address.GetAddressBytes());
     }
 
-    public bool TryFind(string ipStr, out GeoInfo? info)
+    public bool TryFind(string ipStr, out GeoInfo? info) => TryFind(ipStr.AsSpan(), out info);
+
+    public bool TryFind(ReadOnlySpan<char> ipSpan, out GeoInfo? info)
     {
         try
         {
-            info = Find(ipStr);
+            info = Find(ipSpan);
             return info != null;
         }
         catch (QzdbException e) when (e.ErrorCode == ErrorCode.InvalidIp)
@@ -912,11 +916,13 @@ public sealed class QzdbReader : IDisposable
         return rowId > 0 ? ResolveRowId(snap, rowId) : null;
     }
 
-    public string FindStr(string ipStr)
+    public string FindStr(string ipStr) => FindStr(ipStr.AsSpan());
+
+    public string FindStr(ReadOnlySpan<char> ipSpan)
     {
         try
         {
-            var info = Find(ipStr);
+            var info = Find(ipSpan);
             return info == null ? "" : info.ToPipe();
         }
         catch (QzdbException)
@@ -926,15 +932,23 @@ public sealed class QzdbReader : IDisposable
         }
     }
 
-    public uint LookupRowId(string ipStr)
+    public uint LookupRowId(string ipStr) => LookupRowId(ipStr.AsSpan());
+
+    public uint LookupRowId(ReadOnlySpan<char> ipSpan)
     {
-        if (string.IsNullOrEmpty(ipStr)) return 0;
-        if (!TryParseIp(ipStr, out var v4, out var v6High, out var v6Low, out var isV4)) return 0;
+        if (ipSpan.IsEmpty) return 0;
+        if (!TryParseIp(ipSpan, out var v4, out var v6High, out var v6Low, out var isV4)) return 0;
 
         var snap = RequireSnapshot();
         if (snap == null) return 0;
 
         return isV4 ? TrieWalkV4(snap, v4) : TrieWalkV6(snap, v6High, v6Low);
+    }
+
+    /// <summary>Strict IP address parsing helper (zero-allocation).</summary>
+    public static bool ParseIp(ReadOnlySpan<char> ipSpan, out uint v4, out ulong v6High, out ulong v6Low, out bool isV4)
+    {
+        return TryParseIp(ipSpan, out v4, out v6High, out v6Low, out isV4);
     }
 
     public GeoInfo? FindUint(uint ipInt)

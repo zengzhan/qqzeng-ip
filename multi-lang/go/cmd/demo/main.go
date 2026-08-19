@@ -10,7 +10,7 @@ package main
 import (
 	"fmt"
 	"os"
-	"qzdb_reader/qzdb"
+	"github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go/qzdb"
 )
 
 func findDb() string {

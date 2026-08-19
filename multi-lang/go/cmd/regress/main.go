@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"qzdb_reader/qzdb"
+	"github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go/qzdb"
 )
 
 func main() {

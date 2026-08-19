@@ -8,7 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"qzdb_reader/qzdb"
+	"github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go/qzdb"
 )
 
 // geoToPipe uses GeoInfo.ToPipe() so output byte-matches Python to_pipe()

@@ -11,6 +11,20 @@ DATA_DIR="$SCRIPT_DIR/data"
 RESULTS_DIR="$SCRIPT_DIR/.test_results"
 mkdir -p "$RESULTS_DIR"
 
+PYTHON_BIN="${PYTHON_BIN:-}"
+if [ -z "$PYTHON_BIN" ]; then
+    for candidate in python3.14 python3.13 python3.12 python3.11 python3; do
+        if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+            PYTHON_BIN="$candidate"
+            break
+        fi
+    done
+fi
+if [ -z "$PYTHON_BIN" ]; then
+    echo "ERROR: Python 3.10+ is required for the smoke tests"
+    exit 1
+fi
+
 if [ ! -d "$DATA_DIR" ]; then
     echo "ERROR: Data directory not found: $DATA_DIR"
     exit 1
@@ -64,7 +78,7 @@ run_l1_test "go" "go run ./cmd/main.go"
 run_l1_test "rust" "cargo run --bin main"
 
 # Python smoke test
-run_l1_test "python" "python3 qzdb.py --test"
+run_l1_test "python" "$PYTHON_BIN qzdb.py --test"
 
 # Node.js smoke test
 run_l1_test "nodejs" "node qzdb.js --test"
@@ -72,8 +86,8 @@ run_l1_test "nodejs" "node qzdb.js --test"
 # PHP smoke test
 run_l1_test "php" "php -r 'require_once \"QzdbReader.php\"; echo \"OK\";'"
 
-# Java smoke test
-run_l1_test "java" "javac -d build src/*.java && java -cp build com.qqzeng.ip.QzdbReader"
+# Java smoke test (包名 com.qqzeng.qzdb；优先用 openjdk@21，系统占位 java 不可用)
+run_l1_test "java" "JH=$(for h in /opt/homebrew/opt/openjdk@21 /Library/Java/JavaVirtualMachines/*/Contents/Home; do [ -x \"$h/bin/javac\" ] && { echo \"$h\"; break; }; done); export JAVA_HOME=$JH; mkdir -p build && \"$JAVA_HOME/bin/javac\" -encoding UTF-8 -d build $(find src -name '*.java') && \"$JAVA_HOME/bin/java\" -cp build com.qqzeng.qzdb.QzdbReaderTest"
 
 # C# smoke test
 run_l1_test "csharp" "dotnet run --project netcore/"
@@ -109,7 +123,7 @@ echo ""
 echo "=========================================="
 echo "  L2: Cross-Language Verification"
 echo "=========================================="
-cd "$SCRIPT_DIR" && python3 cross_lang_verify.py
+cd "$SCRIPT_DIR" && $PYTHON_BIN cross_lang_verify.py
 
 echo ""
 echo "=========================================="
@@ -117,7 +131,7 @@ echo "  L3: Batch Regression"
 echo "=========================================="
 CSV_FILES=("$DATA_DIR"/*.csv)
 if [ ${#CSV_FILES[@]} -gt 0 ] && [ -f "${CSV_FILES[0]}" ]; then
-    python3 run_batch_test_suite.py --db "$DB_PATH" --csv "${CSV_FILES[0]}"
+    $PYTHON_BIN run_batch_test_suite.py --db "$DB_PATH" --csv "${CSV_FILES[0]}"
 else
     echo "L3 SKIP (no CSV ground truth file)"
 fi
@@ -126,7 +140,7 @@ echo ""
 echo "=========================================="
 echo "  L4: Deep Accuracy Analysis"
 echo "=========================================="
-python3 accuracy_analysis.py
+$PYTHON_BIN accuracy_analysis.py
 
 echo ""
 echo "=========================================="

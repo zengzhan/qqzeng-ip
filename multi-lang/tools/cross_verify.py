@@ -515,12 +515,13 @@ def main():
     
     if not db_list:
         print("No databases selected")
-        return
+        return 1
     
     os.makedirs(TEST_CASES_DIR, exist_ok=True)
     os.makedirs(RESULTS_DIR, exist_ok=True)
     
     overall_pass = True
+    verified_count = 0
     
     for db_config in db_list:
         db_name = db_config['name']
@@ -532,10 +533,12 @@ def main():
         print(f"{'='*60}")
         
         if not os.path.exists(qzdb_path):
-            print(f"  ⚠ SKIP: {qzdb_path} not found")
+            print(f"  ✗ MISSING: {qzdb_path}")
+            overall_pass = False
             continue
         if not os.path.exists(csv_path):
-            print(f"  ⚠ SKIP: {csv_path} not found")
+            print(f"  ✗ MISSING: {csv_path}")
+            overall_pass = False
             continue
         
         # Phase 1: Generate test cases
@@ -543,8 +546,11 @@ def main():
         rng = random.Random(42)
         cases = generate_test_cases(db_config, rng)
         if not cases:
-            print(f"  ⚠ No test cases generated")
+            print(f"  ✗ No test cases generated")
+            overall_pass = False
             continue
+
+        verified_count += 1
         
         results = generate_expected(cases, qzdb_path)
         v4_test, v6_test, v4_exp, v6_exp = save_test_cases(results, db_name)
@@ -689,7 +695,10 @@ def main():
             overall_pass = False
     
     print(f"\n{'='*60}")
-    if overall_pass:
+    if verified_count == 0:
+        overall_pass = False
+        print("  ✗ OVERALL: no database was actually verified")
+    elif overall_pass:
         print(f"  ★ OVERALL: ALL TESTS PASSED")
     else:
         print(f"  ✗ OVERALL: SOME TESTS FAILED")

@@ -150,6 +150,26 @@ $reader = QzdbBuilder::stream($fh)->build();
 | `4` | `QzdbReader::ERROR_INVALID_PARAM` | `groupIndex` 超出范围、字段宽度非法等 |
 | `1` | `QzdbReader::ERROR_NOT_FOUND` | 文件不存在或无读取权限 |
 
+### 4.5 大文件自适应流式模式
+
+PHP SDK 会根据文件大小与 `memory_limit` 自动选择加载方式：
+
+- **触发条件**：`filesize(db) > memory_limit * 0.5`（且 `memory_limit` 非 `-1` 无限制）时，自动切换为**流式模式**（`fopen` + 按需 `fseek`/`fread`）；否则一次性 `file_get_contents` 读入内存（**缓冲模式**）。
+- **两种模式解析结果完全一致**，共用同一套 `readBytes()` 读取入口，唯一区别是性能特征。
+
+```php
+// 不需要手动指定，SDK 会自动判断；如需强制观察当前走的是哪种模式，可通过反射或
+// 提前对比 filesize() 与 ini_get('memory_limit') 自行预判
+$reader = new QzdbReader('qqzeng_ip_ult_global.qzdb');
+```
+
+**⚠️ 性能提示**：流式模式下，Trie 遍历的**每一步子节点读取都对应一次 `fseek`+`fread` 系统调用**（IPv4 最多 16 步、IPv6 最多 `v6_jump_bits` 之后 128-N 步），相比缓冲模式（纯内存访问）会有**数量级级别**的延迟差距。
+
+**生产环境建议**：
+1. 如果部署环境允许，优先调高 `memory_limit`，让常用数据库文件走缓冲模式；
+2. 如果必须使用流式模式（容器内存受限等场景），务必提前用 `php` 自带的 `microtime()` 或 `hrtime()` 对目标数据库文件做一次真实 QPS 基准测试，确认延迟是否满足业务 SLA，不要直接照搬本文档缓冲模式下的性能数字做容量规划；
+3. 流式模式更适合**低频、单次查询**的脚本化场景（如 CLI 批处理工具），持续高 QPS 服务场景建议评估是否能保证走缓冲模式。
+
 ---
 
 ## 5. 查询 API

@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"qzdb_reader/qzdb"
+	"github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go/qzdb"
 )
 
 type row struct {

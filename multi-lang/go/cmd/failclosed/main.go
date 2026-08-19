@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"qzdb_reader/qzdb"
+	"github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go/qzdb"
 )
 
 func probe(m []byte) (panicked bool) {

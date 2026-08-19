@@ -277,11 +277,8 @@ if (file_exists($cacheDb)) {
     $cr   = new QzdbReader($cacheDb, 0);
     $crf  = new ReflectionClass($cr);
     $mResolve = $crf->getMethod('resolveGeo');
-    $mResolve->setAccessible(true);
     $pCache = $crf->getProperty('geoCache');
-    $pCache->setAccessible(true);
     $pCounts = $crf->getProperty('groupEntryCounts');
-    $pCounts->setAccessible(true);
     $nEntry = $pCounts->getValue($cr)[0];
 
     $cap = QzdbReader::GEO_CACHE_LIMIT;

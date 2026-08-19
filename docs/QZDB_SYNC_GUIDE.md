@@ -223,7 +223,7 @@ for dir in c netcore go java nodejs php python rust; do
     nodejs) desc="nodejs: Node.js 极速解析引擎 (V8 BigInt, 4700 万+ QPS)" ;;
     php)    desc="php: PHP 极速解析引擎 (动态解析, 400 万+ QPS)" ;;
     python) desc="python: Python 参考实现 (动态解析, 250 万+ QPS)" ;;
-    rust)   desc="rust: Rust 极速解析引擎 (mmap 安全, 6900 万+ QPS)" ;;
+    rust)   desc="rust: Rust 极速解析引擎 (只读 mmap, 6900 万+ QPS)" ;;
   esac
   if [ -n "$desc" ] && [ -f "qzdb/$dir/README.md" ]; then
     if grep -q "<!-- commit:" "qzdb/$dir/README.md"; then

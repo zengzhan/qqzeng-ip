@@ -5,7 +5,22 @@ cd "$SCRIPT_DIR"
 
 DATA_DIR="$SCRIPT_DIR/data"
 RESULTS_DIR="$SCRIPT_DIR/.test_results"
+rm -rf "$RESULTS_DIR"
 mkdir -p "$RESULTS_DIR"
+
+PYTHON_BIN="${PYTHON_BIN:-}"
+if [ -z "$PYTHON_BIN" ]; then
+    for candidate in python3.14 python3.13 python3.12 python3.11 python3; do
+        if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' >/dev/null 2>&1; then
+            PYTHON_BIN="$candidate"
+            break
+        fi
+    done
+fi
+if [ -z "$PYTHON_BIN" ]; then
+    echo "ERROR: Python 3.10+ is required for the verification layers"
+    exit 1
+fi
 
 # --- Data directory validation ---
 if [ ! -d "$DATA_DIR" ]; then
@@ -72,12 +87,13 @@ echo "DB: $DB_PATH"
 echo ""
 
 # --- L1: Smoke Tests (parallel with L2) ---
+# 以 RUN_AS_LAYER=1 调用，告知子脚本不要清理共享结果目录（避免误删其他并行层状态文件）
 echo "[L1] Running smoke tests..."
-run_layer "L1_smoke" "./run_all_tests.sh"
+run_layer "L1_smoke" "RUN_AS_LAYER=1 ./run_all_tests.sh"
 
 # --- L1b: IPv6 Smoke Tests ---
 echo "[L1b] Running IPv6 smoke tests..."
-run_layer "L1b_ipv6_smoke" "python3 -c \"
+run_layer "L1b_ipv6_smoke" "$PYTHON_BIN -c \"
 import sys
 sys.path.insert(0, 'python')
 from qzdb import QzdbReader
@@ -97,13 +113,13 @@ sys.exit(0 if failed == 0 else 1)
 
 # --- L2: Cross-Language Verification (IPv4 + IPv6) ---
 echo "[L2] Running cross-language verification..."
-run_layer "L2_cross_lang" "python3 cross_lang_verify.py && python3 cross_lang_verify_v6.py"
+run_layer "L2_cross_lang" "$PYTHON_BIN cross_lang_verify.py && $PYTHON_BIN cross_lang_verify_v6.py"
 
 # --- L3: Batch Regression (needs CSV ground truth) ---
 echo "[L3] Running batch regression..."
 CSV_FILES=("$DATA_DIR"/*.csv)
 if [ ${#CSV_FILES[@]} -gt 0 ] && [ -f "${CSV_FILES[0]}" ]; then
-    run_layer "L3_batch" "python3 run_batch_test_suite.py --db '$DB_PATH' --csv '${CSV_FILES[0]}'"
+    run_layer "L3_batch" "$PYTHON_BIN run_batch_test_suite.py --db '$DB_PATH' --csv '${CSV_FILES[0]}'"
 else
     echo "[L3] SKIP (no CSV ground truth file found in data/)"
     echo "SKIP" > "$RESULTS_DIR/L3_batch.status"
@@ -111,13 +127,15 @@ fi
 
 # --- L3b: IPv6 Batch Regression ---
 echo "[L3b] Running IPv6 batch regression..."
-run_layer "L3b_ipv6_batch" "python3 -c \"
+L3B_CSV="$DATA_DIR/qqzeng_ip_std_china_range.csv"
+if [ -f "$L3B_CSV" ]; then
+run_layer "L3b_ipv6_batch" "$PYTHON_BIN -c \"
 import csv, sys
 sys.path.insert(0, 'python')
 from qzdb import QzdbReader
 
 DB_PATH = '$DB_PATH'
-CSV_PATH = '$DATA_DIR/qqzeng_ip_std_china_range.csv'
+CSV_PATH = '$L3B_CSV'
 
 searcher = QzdbReader(DB_PATH)
 
@@ -156,14 +174,18 @@ for row in v6_rows[:500]:
 print(f'IPv6 batch: {passed} passed, {failed} failed, {no_result} no-result')
 sys.exit(0 if failed == 0 else 1)
 \""
+else
+    echo "[L3b] SKIP (no IPv6 CSV ground truth: $L3B_CSV)"
+    echo "SKIP" > "$RESULTS_DIR/L3b_ipv6_batch.status"
+fi
 
 # --- L4: Deep Accuracy Analysis (IPv4 + IPv6) ---
 echo "[L4] Running deep accuracy analysis..."
-run_layer "L4_accuracy" "python3 accuracy_analysis.py"
+run_layer "L4_accuracy" "$PYTHON_BIN accuracy_analysis.py"
 
 # --- L4b: IPv6 Deep Accuracy Analysis ---
 echo "[L4b] Running IPv6 deep accuracy analysis..."
-run_layer "L4b_ipv6_accuracy" "python3 -c \"
+run_layer "L4b_ipv6_accuracy" "$PYTHON_BIN -c \"
 import sys
 sys.path.insert(0, 'python')
 from qzdb import QzdbReader
@@ -208,7 +230,7 @@ PASSED=0
 FAILED=0
 SKIPPED=0
 
-for layer in L1_smoke L1b_ipv6_smoke L2_cross_lang L3_batch L4_accuracy; do
+for layer in L1_smoke L1b_ipv6_smoke L2_cross_lang L3_batch L3b_ipv6_batch L4_accuracy L4b_ipv6_accuracy; do
     status_file="$RESULTS_DIR/${layer}.status"
     if [ -f "$status_file" ]; then
         status=$(cat "$status_file")

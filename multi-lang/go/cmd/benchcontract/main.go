@@ -36,7 +36,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"qzdb_reader/qzdb"
+	"github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go/qzdb"
 )
 
 // ---------------------------------------------------------------- constants

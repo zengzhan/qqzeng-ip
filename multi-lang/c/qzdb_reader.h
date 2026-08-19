@@ -202,6 +202,10 @@ int  qzdb_init(qzdb_reader_t* ctx, const char* db_path);
 int  qzdb_init_ex(qzdb_reader_t* ctx, const char* db_path, int verify_crc);
 void qzdb_free(qzdb_reader_t* ctx);
 
+/*
+ * The C file-loader uses read-only mmap.  The cache capacity can be tuned at
+ * compile time with -DQZDB_GEO_CACHE_CAP=N (power of two, default 16384).
+ */
 /* Buffer-based loading — default copy semantics (spec §4.1) */
 int  qzdb_init_buffer(qzdb_reader_t* ctx, const uint8_t* buf, size_t len, int verify_crc);
 

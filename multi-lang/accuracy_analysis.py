@@ -37,7 +37,6 @@ class QzdbAnalyzer:
         self.v6_jump_bits = h[11]
         self.pool_count = h[12]
         self.pool_idx_size = h[13]
-        self.geo_count = struct.unpack_from('<H', h, 14)[0]
         self.row_count = struct.unpack_from('<I', h, 20)[0]
         self.v4_record = struct.unpack_from('<I', h, 24)[0]
         self.v6_record = struct.unpack_from('<I', h, 28)[0]
@@ -49,6 +48,22 @@ class QzdbAnalyzer:
         self.v4_node_count = struct.unpack_from('<I', h, 152)[0]
         self.v6_node_count = struct.unpack_from('<I', h, 156)[0]
         self.ip_row_size = struct.unpack_from('<I', h, 160)[0]
+
+        # Header offset 14 is a legacy 16-bit field, not the number of geo
+        # entries. The authoritative count lives in the first GeoEntries group
+        # table: byte 0 is the group count, byte 1 is field count, bytes 2..5
+        # are the group's uint32 entry count.
+        self.offset_geo_entries = struct.unpack_from('<Q', h, 104)[0]
+        if self.offset_geo_entries:
+            if self.offset_geo_entries + 6 <= len(self.data):
+                self.geo_count = struct.unpack_from('<I', self.data, self.offset_geo_entries + 2)[0]
+                self.dimension_mask = struct.unpack_from('<H', self.data, self.offset_geo_entries + 6)[0]
+            else:
+                self.geo_count = 0
+                self.dimension_mask = 0
+        else:
+            self.geo_count = 0
+            self.dimension_mask = 0
 
     def _parse_jump_table(self):
         if self.offset_v4_jump > 0:
@@ -67,8 +82,11 @@ class QzdbAnalyzer:
             """idx is 0-based node index"""
             off = idx * self.node_size
             if self.node_size == 6:
-                left = struct.unpack_from('<I', nodes_data, off)[0] & 0xFFFFFF
-                right = struct.unpack_from('<I', nodes_data, off + 3)[0] & 0xFFFFFF
+                # Compact nodes contain two overlapping 24-bit little-endian
+                # children. Do not unpack 32 bits: the final right child only
+                # occupies bytes 3..5 and has no fourth byte in the slice.
+                left = nodes_data[off] | (nodes_data[off + 1] << 8) | (nodes_data[off + 2] << 16)
+                right = nodes_data[off + 3] | (nodes_data[off + 4] << 8) | (nodes_data[off + 5] << 16)
             else:
                 left = struct.unpack_from('<I', nodes_data, off)[0]
                 right = struct.unpack_from('<I', nodes_data, off + 4)[0]
@@ -133,6 +151,8 @@ class QzdbAnalyzer:
 
         for bit_pos in range(15, -1, -1):
             bit = (remaining >> bit_pos) & 1
+            if node_idx >= len(self.v4_nodes_raw) // self.node_size:
+                return None
             left, right = self._read_node(self.v4_nodes_raw, node_idx)
             child = right if bit else left
 
@@ -235,8 +255,10 @@ def test_boundary_ips(analyzer, sdk, label):
                     mismatches.append((ip, f"row_id {row_id} >= row_count {analyzer.row_count}"))
                     failed += 1
                     continue
-                if geo_id >= analyzer.geo_count:
-                    mismatches.append((ip, f"geo_id {geo_id} >= geo_count {analyzer.geo_count}"))
+                entry_id = asn_id if analyzer.dimension_mask & 0x02 else geo_id
+                if entry_id >= analyzer.geo_count:
+                    dimension = "asn_id" if analyzer.dimension_mask & 0x02 else "geo_id"
+                    mismatches.append((ip, f"{dimension} {entry_id} >= entry_count {analyzer.geo_count}"))
                     failed += 1
                     continue
 

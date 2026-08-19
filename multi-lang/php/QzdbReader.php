@@ -659,6 +659,9 @@ class QzdbReader
     // 数据源
     private $data = null;        // 缓冲模式：完整文件字节
     private $stream = null;      // 流式模式：fopen 句柄（大文件）
+    private const STREAM_PAGE_SIZE = 65536;
+    private $streamPageOffset = -1;
+    private $streamPageData = '';
     private $fileSize = 0;
     /** $this->dataLen 的缓存：热路径原语读取免每次 strlen。 */
     private $dataLen = 0;
@@ -774,6 +777,8 @@ class QzdbReader
             @fclose($this->stream);
         }
         $this->stream = null;
+        $this->streamPageOffset = -1;
+        $this->streamPageData = '';
         $this->data = null;
         $this->dataLen = 0;
         $this->closed = true;
@@ -809,6 +814,8 @@ class QzdbReader
             }
             $this->data = null;
             $this->dataLen = 0;
+            $this->streamPageOffset = -1;
+            $this->streamPageData = '';
         } else {
             $this->data = @file_get_contents($dbPath);
             if ($this->data === false) {
@@ -816,6 +823,8 @@ class QzdbReader
             }
             $this->dataLen = strlen($this->data);
             $this->stream = null;
+            $this->streamPageOffset = -1;
+            $this->streamPageData = '';
         }
 
         $this->parseHeader();
@@ -833,6 +842,8 @@ class QzdbReader
         $this->data = $bytes;
         $this->dataLen = strlen($bytes);
         $this->stream = null;
+        $this->streamPageOffset = -1;
+        $this->streamPageData = '';
         $this->parseHeader();
         if ($this->verifyCrc && !$this->rawVerifyCrc()) {
             throw new QzdbException('CRC32 checksum mismatch — the .qzdb buffer is corrupted or truncated', self::ERROR_CORRUPTED);
@@ -2131,9 +2142,29 @@ class QzdbReader
         if ($len <= 0) return '';
         if ($this->stream !== null) {
             if ($off < 0) return '';
-            if (@fseek($this->stream, $off, SEEK_SET) !== 0) return '';
-            $b = @fread($this->stream, $len);
-            return ($b === false) ? '' : $b;
+            // 分块缓存避免 Trie 热路径中每次节点读取都触发 fseek/fread。
+            // 大于一页的请求（例如 CRC）仍按页拼接，保证 O(1) 峰值额外内存。
+            $out = '';
+            $remaining = $len;
+            $pos = $off;
+            while ($remaining > 0) {
+                $pageOffset = intdiv($pos, self::STREAM_PAGE_SIZE) * self::STREAM_PAGE_SIZE;
+                if ($pageOffset !== $this->streamPageOffset) {
+                    if (@fseek($this->stream, $pageOffset, SEEK_SET) !== 0) return '';
+                    $page = @fread($this->stream, self::STREAM_PAGE_SIZE);
+                    if ($page === false || $page === '') return '';
+                    $this->streamPageOffset = $pageOffset;
+                    $this->streamPageData = $page;
+                }
+                $within = $pos - $pageOffset;
+                $available = strlen($this->streamPageData) - $within;
+                if ($available <= 0) return '';
+                $take = min($remaining, $available);
+                $out .= substr($this->streamPageData, $within, $take);
+                $pos += $take;
+                $remaining -= $take;
+            }
+            return $out;
         }
         if ($this->data === null || $off < 0) return '';
         $avail = $this->dataLen - $off;
