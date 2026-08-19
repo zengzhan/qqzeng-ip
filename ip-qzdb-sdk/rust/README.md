@@ -135,7 +135,7 @@ let reader = Builder::from_bytes(&bytes).build()?;
 
 ### 4.4 加载异常处理
 
-`build()` / `from_file` / `from_bytes` 可能在以下情况返回 `Err(QzdbError)`（务必在启动期 `?` / `match`，避免程序崩溃）：
+文件路径加载（`build()` / `from_file` / `reload`）使用只读 mmap；内存字节入口（`from_bytes` / `reload_bytes`）保持拷贝语义。上述 API 可能在以下情况返回 `Err(QzdbError)`（务必在启动期 `?` / `match`，避免程序崩溃）：
 
 | ErrorCode | 触发场景 |
 |-----------|---------|
@@ -418,8 +418,8 @@ match QzdbReader::from_file("ip_china.qzdb") {
 本 SDK 在查询热路径上做了极致优化：
 
 - **无锁快照架构**：查询只读 `ArcSwap` 快照引用，多线程零竞争；`reload` 用原子替换切换。
-- **零拷贝解析**：数据以 `Arc<Vec<u8>>` 持有，字段解析按需切片，无整库反序列化。
-- **per-snapshot 有界无锁缓存**：快照不可变 → 同一 `entry_id` 永远解析出同一 `GeoInfo`。对热点 IP（同段 / 邻近客户端、批量扫段）直接命中缓存，**命中路径零分配**。缓存约 16K 槽（≈196 KB / 快照），开放寻址；**碰撞仅触发重算、绝不返回错值**。
+- **懒解析（Lazy Field Decoding）**：数据以 `Arc<Vec<u8>>` 一次性读入堆内存后按需切片解析，不做整库反序列化。注意：文件加载为安全的全量读取（`fs::read`），**非 OS 级 mmap**——这是为保证 crate 全程 `#![forbid(unsafe_code)]`（100% Safe Rust）所做的取舍，与 C/Go/Java/.NET 的 mmap 加载机制不同：不支持多进程间共享物理内存页，大文件加载有一次完整的磁盘 IO + 堆拷贝开销。
+- **per-snapshot 有界无锁缓存**：GeoInfo 解码缓存为固定 **16384 槽位**（`1 << 14`）、只填不淘汰的开放寻址表。快照不可变 → 同一 `entry_id` 永远解析出同一 `GeoInfo`。对热点 IP（同段 / 邻近客户端、批量扫段）直接命中缓存，**命中路径零分配**。超出容量后新查询到的条目走非缓存路径解码，不影响正确性但会降低该条目的吞吐；如数据库 distinct 地理条目数明显超过该值，命中率会相应下降。
 - **SENTINEL 位即时剥离**：Trie 返回的 row_id / index 在遍历时即剥离哨兵位（`& 0x7FFFFFFF`），无需调用方处理。
 - **IPv4 映射地址自动降级**：`::ffff:a.b.c.d` 在解析阶段即降级到 V4 Trie，双栈查询统一路径。
 
@@ -492,4 +492,4 @@ cargo update -p qzdb_reader
 
 [MIT](https://opensource.org/licenses/MIT)
 
-<!-- commit: rust: Rust 极速解析引擎 (mmap 安全, 6900 万+ QPS) -->
+<!-- commit: rust: Rust 极速解析引擎 (Safe Rust 全量加载, 6900 万+ QPS) -->

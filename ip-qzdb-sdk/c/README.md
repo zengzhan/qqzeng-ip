@@ -20,11 +20,14 @@
 6. [结果对象 `qzdb_geo_info_t`](#6-结果对象-qzdb_geo_info_t)
 7. [字段投影 `find_fields`](#7-字段投影-find_fields)
 8. [行号 / ID 反查与 CIDR](#8-行号--id-反查与-cidr)
-9. [元数据访问器](#9-元数据访问器)
-10. [错误处理](#10-错误处理)
-11. [并发与性能](#11-并发与性能)
-12. [完整 API 参考](#12-完整-api-参考)
-13. [项目结构](#13-项目结构)
+9. [批量与流式查询](#9-批量与流式查询)
+10. [链式多库查询 `ChainedReader`](#10-链式多库查询-chainedreader)
+11. [命名注册表 `QzdbRegistry`](#11-命名注册表-qzdbregistry)
+12. [元数据访问器](#12-元数据访问器)
+13. [错误处理](#13-错误处理)
+14. [并发与性能](#14-并发与性能)
+15. [完整 API 参考](#15-完整-api-参考)
+16. [项目结构](#16-项目结构)
 
 ---
 
@@ -94,7 +97,7 @@ int main(void) {
 }
 ```
 
-> **查询语义约定**：`qzdb_find` / `qzdb_find_uint` / `qzdb_find_bytes` 等**在 IP 未命中或格式非法时返回 `QZDB_ERR_NOT_FOUND`，不抛异常、不崩溃**。只有数据库文件损坏、格式不支持、CRC 校验失败等**加载期错误**才会在 `qzdb_init*` 阶段返回负错误码（见[第 10 节](#10-错误处理)）。
+> **查询语义约定**：`qzdb_find` / `qzdb_find_uint` / `qzdb_find_bytes` 等**在 IP 未命中或格式非法时返回 `QZDB_ERR_NOT_FOUND`，不抛异常、不崩溃**。只有数据库文件损坏、格式不支持、CRC 校验失败等**加载期错误**才会在 `qzdb_init*` 阶段返回负错误码（见[第 13 节](#13-错误处理)）。
 
 ---
 
@@ -150,6 +153,25 @@ if (qzdb_reload(&ctx, "ip_china_new.qzdb") != QZDB_OK) { /* 旧数据仍有效 *
 ```
 
 > 对「零中断 + 多读线程」场景，推荐调用方用原子指针持有 `qzdb_reader_t*`，把 `qzdb_reload` 的结果换入新 ctx 再 `swap` 指针，避免更新瞬间旧数据被释放。
+
+### 4.5 零拷贝借用式加载（`qzdb_init_buffer_borrowed`）
+
+`qzdb_init_buffer` 会把传入缓冲区的内容**拷贝**进内部管理的内存；如果你已经用 mmap、共享内存、或其他方式持有一块生命周期明确的只读缓冲区，可以用借用式加载跳过这次拷贝：
+
+```c
+qzdb_reader_t ctx;
+int rc = qzdb_init_buffer_borrowed(&ctx, mmap_ptr, mmap_len, /*verify_crc=*/1);
+if (rc != QZDB_OK) {
+    fprintf(stderr, "load failed: %s\n", qzdb_strerror(rc));
+}
+// ... 使用 ctx 正常查询 ...
+qzdb_free(&ctx);  // 仅释放内部解析出的辅助结构，不会 free/munmap 传入的 mmap_ptr
+```
+
+**调用约定（必须遵守，否则未定义行为）**：
+- 调用方必须保证 `mmap_ptr` 指向的内存在 `qzdb_free(&ctx)` 调用之前**始终有效且不被修改**。
+- `qzdb_free` 不会释放/`munmap` 这块缓冲区——归还它是调用方的责任。
+- 适用场景：数据库文件已由上层框架（自定义资源加载器、共享内存 IPC、`embed` 打包）映射好，只想复用这块内存做解析，不想再产生一份堆拷贝。
 
 ---
 
@@ -295,7 +317,124 @@ if (qzdb_parse_ip("114.114.114.114", &v4, v6, &is_v4)) {
 
 ---
 
-## 9. 元数据访问器
+## 9. 批量与流式查询
+
+`qzdb_find_batch` 和 `qzdb_find_each` 都是**顺序执行**（内部不建线程池、不做并行调度），区别在于结果的返回方式：
+
+### 9.1 一次性批量：`qzdb_find_batch`
+
+```c
+const char* ips[] = {"114.114.114.114", "223.5.5.5", "8.8.8.8"};
+qzdb_batch_result_t results[3];
+
+qzdb_find_batch(&ctx, ips, 3, results);
+
+for (int i = 0; i < 3; i++) {
+    if (results[i].error_code == QZDB_OK) {
+        printf("%s => %s\n", ips[i], qzdb_geo_info_get(&ctx, &results[i].info, "country"));
+    } else {
+        printf("%s => error: %s\n", ips[i], qzdb_strerror(results[i].error_code));
+    }
+    qzdb_free_geo_info(&results[i].info);  /* 逐条释放 */
+}
+```
+
+`results` 数组由调用方分配（栈上或堆上均可），大小需 ≥ `count`；每个 `qzdb_batch_result_t` 含 `info`（`qzdb_geo_info_t`）和 `error_code`（单条查询的独立错误码，一条失败不影响其余条目）。
+
+### 9.2 回调流式：`qzdb_find_each`
+
+不预分配结果数组，每查完一条立即回调，内存占用恒定，适合大批量 IP 扫描：
+
+```c
+void on_result(int index, const qzdb_batch_result_t* result, void* user_data) {
+    if (result->error_code == QZDB_OK) {
+        printf("[%d] %s\n", index, qzdb_geo_info_get(NULL, &result->info, "country"));
+    }
+    /* 回调内不会自动释放 result->info，如需长期持有字段字符串，
+       请自行 qzdb_free_geo_info() 或拷贝所需字段后再返回 */
+}
+
+qzdb_find_each(&ctx, ips, 3, on_result, /*user_data=*/NULL);
+```
+
+回调签名：`void (*qzdb_find_callback)(int index, const qzdb_batch_result_t* result, void* user_data)`；`user_data` 原样透传，用于携带上下文（如输出文件句柄、计数器等）。
+
+---
+
+## 10. 链式多库查询 `ChainedReader`
+
+用于合并多个已加载的 `qzdb_reader_t`（比如标准版+ASN版、国内库+国际库），按顺序查询直到命中。支持三种模式：
+
+| 模式 | 常量 | 行为 |
+|---|---|---|
+| Fallback（默认推荐） | `QZDB_CHAIN_FALLBACK` | 按顺序查询，**返回第一个命中的完整结果**，不合并字段 |
+| Merge | `QZDB_CHAIN_MERGE` | 依次查询所有 reader，**逐字段合并**，同名字段以**先注册的 reader 为准**（不覆盖已有值） |
+| MergeOverride | `QZDB_CHAIN_MERGE_OVERRIDE` | 同 Merge，但同名字段以**后注册的 reader 为准**（后者覆盖前者） |
+
+```c
+qzdb_reader_t std_ctx, asn_ctx;
+qzdb_init(&std_ctx, "qqzeng_ip_std.qzdb");
+qzdb_init(&asn_ctx, "qqzeng_ip_asn.qzdb");
+
+qzdb_reader_t* readers[] = { &std_ctx, &asn_ctx };
+qzdb_chain_t* chain = qzdb_chain_new(readers, 2, QZDB_CHAIN_MERGE);
+
+qzdb_geo_info_t info;
+int rc = qzdb_chain_find(chain, "114.114.114.114", &info);
+if (rc == QZDB_OK) {
+    printf("country=%s asn=%s\n",
+           qzdb_geo_info_get(&std_ctx, &info, "country"),
+           qzdb_geo_info_get(&asn_ctx, &info, "asn"));
+}
+qzdb_free_geo_info(&info);
+
+// 批量版本
+qzdb_batch_result_t results[3];
+qzdb_chain_find_batch(chain, ips, 3, results);
+
+qzdb_chain_free(chain);  // 只释放 chain 自身，不会释放传入的各个 reader
+```
+
+**注意事项**：
+- `qzdb_chain_new` 不会接管传入 reader 的生命周期——调用方需要自行在释放 chain 前后分别 `qzdb_free` 每个 reader。
+- Fallback 模式下，如果某个 reader 查询返回的不是“未命中”而是真实错误（如损坏数据），链式查询会**立即停止并返回该错误**，不会静默跳到下一个 reader。
+- 提供 `qzdb_chain_find_uint`（IPv4 整数入参）、`qzdb_chain_find_bytes`（16 字节 IPv6/v4-mapped 入参）、`qzdb_chain_find_str`（直接输出竖线字符串）等变体，用法与 `qzdb_find_*` 系列对应。
+
+---
+
+## 11. 命名注册表 `QzdbRegistry`
+
+管理多个带名字的 reader 实例（比如按业务线/按版本命名），提供线程安全的注册、查找、注销。内部为哈希表+互斥锁实现，注册/注销有锁，但通过 `qzdb_registry_get` 拿到的 `qzdb_reader_t*` 之后的查询本身仍是无锁的。
+
+```c
+qzdb_registry_t* reg = qzdb_registry_new();
+
+qzdb_registry_register(reg, "std", "qqzeng_ip_std.qzdb");
+qzdb_registry_register(reg, "ult", "qqzeng_ip_ult.qzdb");
+// 也可以从内存缓冲注册（CRC 校验固定开启）：
+// qzdb_registry_register_buffer(reg, "asn", buf, buf_len);
+
+qzdb_reader_t* r = qzdb_registry_get(reg, "ult");
+if (r) {
+    char out[256];
+    qzdb_find_str(r, "114.114.114.114", out, sizeof(out));
+    printf("%s\n", out);
+}
+
+printf("registered: %d\n", qzdb_registry_count(reg));
+
+qzdb_registry_unregister(reg, "std");  // 内部会 qzdb_free 对应 reader 并释放
+qzdb_registry_free(reg);               // 释放 registry 及其持有的全部 reader
+```
+
+**注意事项**：
+- `qzdb_registry_register` / `_register_buffer` 内部会加载数据库，**加载失败时不会注册该条目**，函数直接返回对应错误码。
+- `qzdb_registry_free` 会级联释放所有已注册的 reader，调用方**不应该**再对通过 `qzdb_registry_get` 拿到的指针单独调用 `qzdb_free`（会造成 double free）。
+- 与 `qzdb_chain_t` 的区别：Registry 是“按名字取用单个 reader”，Chain 是“按顺序合并查询多个 reader”，两者可以组合使用。
+
+---
+
+## 12. 元数据访问器
 
 加载后即可读取文件元数据，**全部永不返回 NULL**（缺失时返回 `""` 或合理默认值）：
 
@@ -325,9 +464,41 @@ if (qzdb_get_file_hash(&ctx, hash, sizeof(hash)) == 0)
     printf("crc32=%s\n", hash);
 ```
 
+### 12.1 版本档次判定与用途分类
+
+**档次（Edition）判定来源**：`qzdb_get_edition()` 返回的档次字符串（`std`/`asn`/`pro`/`max`/`ult`）有多种推断来源，可用 `qzdb_get_edition_source()` 查看当前是按哪种方式判定的：
+
+```c
+uint16_t mask = qzdb_get_version_mask(&ctx);        // Header offset 6 的原始 one-hot 掩码
+const char* edition = qzdb_edition_from_mask(mask); // 掩码 → 档次名，非 one-hot 或越界返回 ""
+const char* source = qzdb_get_edition_source(&ctx); // "version_mask" / "metadata" / "inferred" / "unknown"
+const char* names_src = qzdb_get_field_names_source(&ctx); // "metadata" / "edition" / "synthetic"
+```
+
+`version_mask` 是档次判定的**权威来源**（bit0=std bit1=asn bit2=pro bit3=max bit4=ult，one-hot 编码）；不可用或非法 one-hot 值时才降级到 metadata 推断或 synthetic 兜底。
+
+**用途分类（UsageType）**：如果数据库带 `usage_type` 字段（不同档次库不一定都有）：
+
+```c
+qzdb_geo_info_t info;
+qzdb_find(&ctx, "1.2.3.4", &info);
+
+const char* raw = qzdb_geo_usage_type(&ctx, &info);  // 如 "IDC" / "Mobile" / "VPN" 等原始标签
+if (qzdb_usage_type_is_known(raw)) {
+    printf("%s / %s\n",
+           qzdb_usage_type_display_zh(raw),   // 中文展示名，如"数据中心"
+           qzdb_usage_type_description(raw));
+} else {
+    printf("未知用途类型: %s\n", raw);
+}
+qzdb_free_geo_info(&info);
+```
+
+已知类型覆盖：`Government`（政府）、`ISP`、`IXP`（交换中心）、`IoT`、`Mobile`、`Reserved`（保留地址）、`Satellite`（卫星互联网）、`Spider`（爬虫）、`Streaming`（流媒体）、`Unknown`、`VPN` 等；`qzdb_usage_type_display_zh/en` 对未收录标签分别兜底返回 `"未知"` / `"Unknown"`。
+
 ---
 
-## 10. 错误处理
+## 13. 错误处理
 
 加载/解析期错误以**负错误码**返回（不抛异常、不 `longjmp`）。`qzdb_strerror(code)` 给出可读描述：
 
@@ -358,10 +529,10 @@ if (rc != QZDB_OK) {
 
 ---
 
-## 11. 并发与性能
+## 14. 并发与性能
 
 - **无锁快照读取**：加载完成后，所有 `find*` / `lookup*` / 元数据 API 均为只读，多个线程可同时调用同一 `ctx`，互不阻塞。
-- **per-snapshot 有界 `GeoInfo` 解码缓存**：快照不可变 → 同一 `(group<<40 | entry_id)` 永远解析出同一组字段字符串。热点 IP（同段/邻近客户端、批量扫段）直接命中缓存，**命中路径零分配、零锁争用**。缓存容量受单快照约束、有界；冲突仅触发重算，绝不返回错值。
+- **per-snapshot 有界 `GeoInfo` 解码缓存**：GeoInfo 解码缓存为固定 **16384 槽位**（`1 << 14`）、只填不淘汰的开放寻址表。快照不可变 → 同一 `(group<<40 | entry_id)` 永远解析出同一组字段字符串。热点 IP 直接命中缓存，**命中路径零分配、零锁争用**。超出容量后新查询到的条目走非缓存路径解码，不影响正确性但会降低该条目的吞吐；如数据库 distinct 地理条目数明显超过该值，命中率会相应下降。
 - **SENTINEL 截断**：字段索引的最高位 sentinel 位（`0x80000000` / `0x800000`）在解析前被剥离，避免误判为越界。
 - **零堆分配查询路径**：`*_buf` 系列与 `find_str` 全程使用调用方缓冲，`malloc` 次数趋近于 0。
 - **IPv4-Mapped 降级**：`::ffff:a.b.c.d` 自动降级到 V4 trie，无需调用方特判。
@@ -370,14 +541,15 @@ if (rc != QZDB_OK) {
 
 ---
 
-## 12. 完整 API 参考
+## 15. 完整 API 参考
 
-### 12.1 加载与生命周期
+### 15.1 加载与生命周期
 
 ```c
 int  qzdb_init(qzdb_reader_t* ctx, const char* db_path);
 int  qzdb_init_ex(qzdb_reader_t* ctx, const char* db_path, int verify_crc);
 int  qzdb_init_buffer(qzdb_reader_t* ctx, const uint8_t* buf, size_t len, int verify_crc);
+int  qzdb_init_buffer_borrowed(qzdb_reader_t* ctx, const uint8_t* buf, size_t len, int verify_crc);
 void qzdb_free(qzdb_reader_t* ctx);
 int  qzdb_reload(qzdb_reader_t* ctx, const char* db_path);
 int  qzdb_set_group_index(qzdb_reader_t* ctx, int group_index);
@@ -387,7 +559,7 @@ int  qzdb_verify_crc(qzdb_reader_t* ctx);              /* 手动重新校验 CRC
 
 > **无单例设计**：v2.4 起 C SDK 不提供任何进程级单例。每个 `qzdb_reader_t` 由调用方在栈/堆上持有，自行决定生命周期与复用策略（如存入全局指针或线程局部变量）。多文件/多版本请用多个 `qzdb_reader_t` 实例分别 `qzdb_init`，互不干扰。
 
-### 12.2 查询
+### 15.2 查询
 
 ```c
 int  qzdb_find(qzdb_reader_t* ctx, const char* ip_str, qzdb_geo_info_t* result);
@@ -413,7 +585,43 @@ int  qzdb_find_fields_uint_buf(qzdb_reader_t* ctx, uint32_t ip_int,
                                char** values, char (*bufs)[64], int buf_size);
 ```
 
-### 12.3 行号 / ID / CIDR / 解析
+### 15.3 批量与流式查询
+
+```c
+int  qzdb_find_batch(qzdb_reader_t* ctx, const char** ips, int count,
+                     qzdb_batch_result_t* results);
+int  qzdb_find_each(qzdb_reader_t* ctx, const char** ips, int count,
+                    qzdb_find_callback callback, void* user_data);
+```
+
+### 15.4 链式多库查询与命名注册表
+
+```c
+/* ChainedReader */
+qzdb_chain_t* qzdb_chain_new(qzdb_reader_t** ctxs, int count, int mode);
+int           qzdb_chain_find(qzdb_chain_t* chain, const char* ip, qzdb_geo_info_t* out);
+int           qzdb_chain_find_uint(qzdb_chain_t* chain, uint32_t ip, qzdb_geo_info_t* out);
+int           qzdb_chain_find_bytes(qzdb_chain_t* chain, const uint8_t ip16[16], qzdb_geo_info_t* out);
+int           qzdb_chain_find_batch(qzdb_chain_t* chain, const char** ips, int count,
+                                    qzdb_batch_result_t* results);
+int           qzdb_chain_find_str(qzdb_chain_t* chain, const char* ip, char* buf, size_t size);
+const char**  qzdb_chain_editions(qzdb_chain_t* chain, int* count);
+const char**  qzdb_chain_scopes(qzdb_chain_t* chain, int* count);
+const char**  qzdb_chain_data_months(qzdb_chain_t* chain, int* count);
+void          qzdb_chain_free(qzdb_chain_t* chain);
+
+/* QzdbRegistry */
+qzdb_registry_t* qzdb_registry_new(void);
+void             qzdb_registry_free(qzdb_registry_t* reg);
+int              qzdb_registry_register(qzdb_registry_t* reg, const char* name, const char* path);
+int              qzdb_registry_register_buffer(qzdb_registry_t* reg, const char* name,
+                                               const uint8_t* buf, size_t len);
+qzdb_reader_t*   qzdb_registry_get(qzdb_registry_t* reg, const char* name);
+void             qzdb_registry_unregister(qzdb_registry_t* reg, const char* name);
+int              qzdb_registry_count(qzdb_registry_t* reg);
+```
+
+### 15.5 行号 / ID / CIDR / 解析
 
 ```c
 uint32_t qzdb_lookup_row_id(qzdb_reader_t* ctx, const char* ip_str);
@@ -429,7 +637,7 @@ char* qzdb_lookup_cidr_bytes(qzdb_reader_t* ctx, const uint8_t* ip_bytes, int le
                              char* out, size_t out_size);
 ```
 
-### 12.4 结果对象访问
+### 15.6 结果对象访问
 
 ```c
 const char* qzdb_geo_info_get(qzdb_reader_t* ctx, const qzdb_geo_info_t* info, const char* name);
@@ -439,12 +647,16 @@ const char* qzdb_geo_info_get_cidr(void);   /* 永远返回 "" */
 void qzdb_free_geo_info(qzdb_geo_info_t* info);
 ```
 
-### 12.5 元数据访问器
+### 15.7 元数据访问与自省
 
 ```c
 const char* qzdb_get_version(qzdb_reader_t* ctx);
 const char* qzdb_get_data_month(qzdb_reader_t* ctx);
 const char* qzdb_get_edition(qzdb_reader_t* ctx);
+const char* qzdb_get_edition_source(qzdb_reader_t* ctx);
+const char* qzdb_get_field_names_source(qzdb_reader_t* ctx);
+uint16_t    qzdb_get_version_mask(qzdb_reader_t* ctx);
+const char* qzdb_edition_from_mask(uint16_t mask);
 const char* qzdb_get_scope(qzdb_reader_t* ctx);       /* 永远返回 "" */
 const char* qzdb_get_build_time(qzdb_reader_t* ctx);
 const char* qzdb_get_description(qzdb_reader_t* ctx);
@@ -454,9 +666,15 @@ int  qzdb_get_field_count(qzdb_reader_t* ctx);
 int  qzdb_has_field(qzdb_reader_t* ctx, const char* name);
 int  qzdb_get_group_count(qzdb_reader_t* ctx);
 int  qzdb_get_pool_count(qzdb_reader_t* ctx);
+
+/* UsageType */
+int         qzdb_usage_type_is_known(const char* raw);
+const char* qzdb_usage_type_display_zh(const char* raw);
+const char* qzdb_usage_type_display_en(const char* raw);
+const char* qzdb_usage_type_description(const char* raw);
 ```
 
-### 12.6 数据结构
+### 15.8 数据结构
 
 ```c
 typedef struct {
@@ -470,7 +688,14 @@ typedef struct {
     uint32_t usage_id;
 } qzdb_ids_t;
 
-/* 错误码见第 10 节；QZDB_OK=0，其余为负。 */
+typedef struct {
+    qzdb_geo_info_t info;
+    int error_code;
+} qzdb_batch_result_t;
+
+typedef void (*qzdb_find_callback)(int index, const qzdb_batch_result_t* result, void* user_data);
+
+/* 错误码见第 13 节；QZDB_OK=0，其余为负。 */
 typedef enum { QZDB_OK=0, QZDB_ERR_NOT_FOUND=-1, QZDB_ERR_CORRUPTED=-2,
                QZDB_ERR_OUT_OF_MEMORY=-3, QZDB_ERR_INVALID_PARAM=-4,
                QZDB_ERR_BAD_HEADER=-5, QZDB_ERR_BAD_MAGIC=-6,
@@ -479,14 +704,14 @@ typedef enum { QZDB_OK=0, QZDB_ERR_NOT_FOUND=-1, QZDB_ERR_CORRUPTED=-2,
 
 ---
 
-## 13. 项目结构
+## 16. 项目结构
 
 `multi-lang/c/` 目录：
 
 | 文件 | 职责 |
 |------|------|
 | `qzdb_reader.h` | 公共头：全部函数声明、数据结构、`QZDB_*` 宏与错误码 |
-| `qzdb_reader.c` | 核心实现：加载、trie 遍历（V4/V6）、查询、解码缓存、CRC、元数据、CIDR、热更新 |
+| `qzdb_reader.c` | 核心实现：加载、trie 遍历（V4/V6）、查询、解码缓存、CRC、元数据、CIDR、热更新、ChainedReader、Registry |
 | `test_main.c` | Tier1 单元测试（≥50 断言、无需数据库即可覆盖合同 §10 九大类） |
 | `golden_check.c` | Tier2 黄金校验：加载 `std`/`ult` 库，对 `golden_vectors.json` 断言 `to_pipe()` 一致（强制 0 失败） |
 | `main.c` / `batch_query.c` / `batch_cli.c` | 示例与批量查询 CLI |
