@@ -18,3 +18,5 @@
 
 - **索引优化**：脚本针对 IP 起止整型（或 CIDR 前缀）建立了专用索引，在单表千万级数据下依然保证查询毫秒级响应。
 - **批量入库**：建议使用数据库原生的批量导入机制（如 MySQL 的 `LOAD DATA LOCAL INFILE` 或 PostgreSQL 的 `COPY`），几秒内即可完成数百万网段数据的初始化。
+
+<!-- commit description sync 1787122549 -->
