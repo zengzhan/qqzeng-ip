@@ -471,3 +471,5 @@ dotnet add package QQZeng.Qzdb --version x.y.z
 [MIT](https://opensource.org/licenses/MIT)
 
 <!-- commit: netcore: .NET 极速解析引擎 (堆分配, 8500 万+ QPS) -->
+
+<!-- commit description sync 1787122549 -->
