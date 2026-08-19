@@ -347,3 +347,5 @@ python3 test_csv_oracle.py  # Tier0 独立真值校验（对源 CSV 抽样，证
 4. 多语言行为以 `../API_CONTRACT.md` 为准；新增 IP 样本后重建 `tools/golden_vectors.json` 并跑全语言 Tier2 校验。
 
 <!-- commit: python: Python 参考实现 (动态解析, 250 万+ QPS) -->
+
+<!-- commit description sync 1787122549 -->
