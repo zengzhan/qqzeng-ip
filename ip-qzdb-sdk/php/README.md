@@ -513,3 +513,5 @@ php csv_oracle_test.php                    # 独立真值校验（需源 CSV + �
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
+
+<!-- commit: php: ⚡ PHP 极速解析引擎 (高性能内存解析, 开箱即用) sync=1787246276 -->
