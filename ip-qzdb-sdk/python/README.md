@@ -345,5 +345,3 @@ python3 test_csv_oracle.py  # Tier0 独立真值校验（对源 CSV 抽样，证
 2. 放入 `../data/` 或指定路径，`QzdbReader(path)` 重新加载即可；线上热更新用 `reader.reload(path)`（原子替换，不影响在途查询）。
 3. 字段新增/布局变化由文件头 `GROUP_SCHEMA` / `ROW_SCHEMA` 自描述，SDK 自动适配，无需改代码。
 4. 多语言行为以 `../API_CONTRACT.md` 为准；新增 IP 样本后重建 `tools/golden_vectors.json` 并跑全语言 Tier2 校验。
-
-<!-- commit: python: ⚡ Python 极速解析引擎 (二进制轻量解析, 极简集成) sync=1787246204 -->
