@@ -522,5 +522,4 @@ String hash = reader.getFileHash();
 
 [MIT](https://opensource.org/licenses/MIT)
 
-<!-- commit: java: Java 极速解析引擎 (堆分配, 9600 万+ QPS) -->
- 
+<!-- commit: java: ⚡ Java 极速解析引擎 (堆外内存优化, 极致并发性能) sync=1787246204 -->
