@@ -24,3 +24,5 @@
 3. **高并发缓存支持**：提供 Redis 快速批量导入脚本与热点缓存方案，轻松应对千万级 QPS。
 
 <!-- commit description sync 1787122549 -->
+
+<!-- commit: phone-location-sdk: 📱 50万+ 手机号段归属地 2.0~6.0 全版本多语言 DAT 解析 SDK 与 Redis 方案 sync=1787246204 -->
