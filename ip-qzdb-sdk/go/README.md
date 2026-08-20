@@ -423,5 +423,4 @@ go/
 └── cmd/               # demo / batch / bench / dump / regress 等示例
 ```
 
-<!-- commit: go: Go 语言极速解析引擎 (跨平台 mmap, 9500 万+ QPS) -->
- 
+<!-- commit: go: ⚡ Go 语言极速解析引擎 (跨平台 mmap 零拷贝, 无锁并发, 极致低延迟) sync=1787246204 -->
