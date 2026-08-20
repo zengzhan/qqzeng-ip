@@ -9,3 +9,5 @@
   `continent|continent_en|country|country_code|country_en|country_alpha3|province|province_en|city|city_en|district|geo_id|longitude|latitude|timezone|languages|currency_code|phone_prefix|emoji_flag|isp|asn|as_name|as_domain|usage_type`。**不要用 std/asn/pro/max 的字段数去解析**，否则列会错位。
 
 <!-- commit description sync 1787122549 -->
+
+<!-- commit: demo: 📋 IP 归属地及手机号段 CSV/TXT 与 QZDB 演示样本数据 sync=1787246204 -->
