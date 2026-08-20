@@ -23,7 +23,6 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
-	"syscall"
 )
 
 // SENTINEL 高位哨兵位（32 位节点）。
@@ -947,6 +946,13 @@ func (s *Snapshot) trieWalkV6(ip [16]byte) (uint32, error) {
 
 // readV6Prefix 提取 IPv6 地址高 bits 位作为跳表索引。
 func readV6Prefix(ip [16]byte, bits int) int {
+	if bits <= 0 {
+		return 0
+	}
+	if bits <= 32 {
+		hi32 := uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
+		return int(hi32 >> (32 - bits))
+	}
 	val := 0
 	for i := 0; i < bits; i++ {
 		val = (val << 1) | int((ip[i>>3]>>(7-uint(i&7)))&1)
@@ -1559,15 +1565,15 @@ func buildSnapshotFromFile(path string, groupIndex int, verifyCrc bool) (*Snapsh
 	if fi.Size() < 192 {
 		return nil, newErr(ErrCodeBadHeader, "file too small for QZDB header")
 	}
-	data, err := syscall.Mmap(int(f.Fd()), 0, int(fi.Size()), syscall.PROT_READ, syscall.MAP_PRIVATE)
+	data, release, err := mmapFile(f, int(fi.Size()))
 	if err != nil {
 		return nil, err
 	}
-	snap, err := buildSnapshot(data, func() { _ = syscall.Munmap(data) }, groupIndex, verifyCrc)
+	snap, err := buildSnapshot(data, release, groupIndex, verifyCrc)
 	if err != nil {
 		// buildSnapshot 的 release 闭包只在快照成功安装后才会被调用；
 		// 解析失败（BadMagic/CRC/越界）时必须在这里归还映射，否则打开失败即泄漏。
-		_ = syscall.Munmap(data)
+		release()
 		return nil, err
 	}
 	return snap, nil

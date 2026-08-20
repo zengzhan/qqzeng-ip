@@ -871,65 +871,155 @@ public sealed class QzdbReader : IDisposable
     public GeoInfo? Find(System.Net.IPAddress address)
     {
         ArgumentNullException.ThrowIfNull(address);
-        return FindBytes(address.GetAddressBytes());
+        Span<byte> bytes = stackalloc byte[16];
+        if (address.TryWriteBytes(bytes, out int written))
+        {
+            return Find(bytes[..written]);
+        }
+        return null;
     }
 
-    public bool TryFind(string ipStr, out GeoInfo? info) => TryFind(ipStr.AsSpan(), out info);
-
-    public bool TryFind(ReadOnlySpan<char> ipSpan, out GeoInfo? info)
-    {
-        try
-        {
-            info = Find(ipSpan);
-            return info != null;
-        }
-        catch (QzdbException e) when (e.ErrorCode == ErrorCode.InvalidIp)
-        {
-            info = null;
-            return false;
-        }
-    }
-
-    public GeoInfo? FindBytes(byte[]? ipBytes)
+    public GeoInfo? Find(ReadOnlySpan<byte> ipBytes)
     {
         var snap = RequireSnapshot();
-        if (ipBytes == null || (ipBytes.Length != 4 && ipBytes.Length != 16))
+        if (ipBytes.Length != 4 && ipBytes.Length != 16)
             throw new QzdbException(ErrorCode.InvalidIp, "IP bytes must contain exactly 4 or 16 bytes");
 
         uint rowId = 0;
         if (ipBytes.Length == 16)
         {
-            bool mapped = IsV4Mapped(ipBytes);
-            if (mapped) { rowId = TrieWalkV4(snap, V4FromMapped(ipBytes)); }
+            if (IsV4Mapped(ipBytes))
+            {
+                rowId = TrieWalkV4(snap, V4FromMapped(ipBytes));
+            }
             else
             {
-                var (hi, lo) = V6FromBytes(ipBytes);
+                ulong hi = BinaryPrimitives.ReadUInt64BigEndian(ipBytes[..8]);
+                ulong lo = BinaryPrimitives.ReadUInt64BigEndian(ipBytes[8..]);
                 rowId = TrieWalkV6(snap, hi, lo);
             }
         }
-        else if (ipBytes.Length == 4)
+        else
         {
-            uint v4 = (uint)((ipBytes[0] << 24) | (ipBytes[1] << 16) | (ipBytes[2] << 8) | ipBytes[3]);
+            uint v4 = BinaryPrimitives.ReadUInt32BigEndian(ipBytes);
             rowId = TrieWalkV4(snap, v4);
         }
 
         return rowId > 0 ? ResolveRowId(snap, rowId) : null;
     }
 
+    public bool TryFind(string ipStr, out GeoInfo? info) => TryFind(ipStr.AsSpan(), out info);
+
+    public bool TryFind(ReadOnlySpan<char> ipSpan, out GeoInfo? info)
+    {
+        var snap = _activeSnapshot;
+        if (snap == null || ipSpan.IsEmpty || !TryParseIp(ipSpan, out var v4, out var v6High, out var v6Low, out var isV4))
+        {
+            info = null;
+            return false;
+        }
+
+        uint rowId = isV4 ? TrieWalkV4(snap, v4) : TrieWalkV6(snap, v6High, v6Low);
+        if (rowId == 0)
+        {
+            info = null;
+            return false;
+        }
+
+        info = ResolveRowId(snap, rowId);
+        return info != null;
+    }
+
+    public bool TryFind(ReadOnlySpan<byte> ipBytes, out GeoInfo? info)
+    {
+        var snap = _activeSnapshot;
+        if (snap == null || (ipBytes.Length != 4 && ipBytes.Length != 16))
+        {
+            info = null;
+            return false;
+        }
+
+        uint rowId = 0;
+        if (ipBytes.Length == 16)
+        {
+            if (IsV4Mapped(ipBytes))
+            {
+                rowId = TrieWalkV4(snap, V4FromMapped(ipBytes));
+            }
+            else
+            {
+                ulong hi = BinaryPrimitives.ReadUInt64BigEndian(ipBytes[..8]);
+                ulong lo = BinaryPrimitives.ReadUInt64BigEndian(ipBytes[8..]);
+                rowId = TrieWalkV6(snap, hi, lo);
+            }
+        }
+        else
+        {
+            uint v4 = BinaryPrimitives.ReadUInt32BigEndian(ipBytes);
+            rowId = TrieWalkV4(snap, v4);
+        }
+
+        if (rowId == 0)
+        {
+            info = null;
+            return false;
+        }
+
+        info = ResolveRowId(snap, rowId);
+        return info != null;
+    }
+
+    public GeoInfo? FindBytes(byte[]? ipBytes)
+    {
+        if (ipBytes == null)
+            throw new QzdbException(ErrorCode.InvalidIp, "IP bytes must not be null");
+        return Find(ipBytes.AsSpan());
+    }
+
     public string FindStr(string ipStr) => FindStr(ipStr.AsSpan());
 
     public string FindStr(ReadOnlySpan<char> ipSpan)
     {
-        try
+        var snap = _activeSnapshot;
+        if (snap == null || ipSpan.IsEmpty || !TryParseIp(ipSpan, out var v4, out var v6High, out var v6Low, out var isV4))
+            return string.Empty;
+
+        uint rowId = isV4 ? TrieWalkV4(snap, v4) : TrieWalkV6(snap, v6High, v6Low);
+        if (rowId == 0) return string.Empty;
+
+        var info = ResolveRowId(snap, rowId);
+        return info == null ? string.Empty : info.ToPipe();
+    }
+
+    public string FindStr(ReadOnlySpan<byte> ipBytes)
+    {
+        var snap = _activeSnapshot;
+        if (snap == null || (ipBytes.Length != 4 && ipBytes.Length != 16))
+            return string.Empty;
+
+        uint rowId = 0;
+        if (ipBytes.Length == 16)
         {
-            var info = Find(ipSpan);
-            return info == null ? "" : info.ToPipe();
+            if (IsV4Mapped(ipBytes))
+            {
+                rowId = TrieWalkV4(snap, V4FromMapped(ipBytes));
+            }
+            else
+            {
+                ulong hi = BinaryPrimitives.ReadUInt64BigEndian(ipBytes[..8]);
+                ulong lo = BinaryPrimitives.ReadUInt64BigEndian(ipBytes[8..]);
+                rowId = TrieWalkV6(snap, hi, lo);
+            }
         }
-        catch (QzdbException)
+        else
         {
-            // 非法 IP：宽松语义，对齐 findStr 规范（§3 未命中/非法统一返回 ""）
-            return "";
+            uint v4 = BinaryPrimitives.ReadUInt32BigEndian(ipBytes);
+            rowId = TrieWalkV4(snap, v4);
         }
+
+        if (rowId == 0) return string.Empty;
+        var info = ResolveRowId(snap, rowId);
+        return info == null ? string.Empty : info.ToPipe();
     }
 
     public uint LookupRowId(string ipStr) => LookupRowId(ipStr.AsSpan());
@@ -938,12 +1028,33 @@ public sealed class QzdbReader : IDisposable
     {
         if (ipSpan.IsEmpty) return 0;
         if (!TryParseIp(ipSpan, out var v4, out var v6High, out var v6Low, out var isV4)) return 0;
-
-        var snap = RequireSnapshot();
+        var snap = _activeSnapshot;
         if (snap == null) return 0;
-
         return isV4 ? TrieWalkV4(snap, v4) : TrieWalkV6(snap, v6High, v6Low);
     }
+
+    public uint LookupRowId(ReadOnlySpan<byte> ipBytes)
+    {
+        if (ipBytes.Length != 4 && ipBytes.Length != 16) return 0;
+        var snap = _activeSnapshot;
+        if (snap == null) return 0;
+
+        if (ipBytes.Length == 16)
+        {
+            if (IsV4Mapped(ipBytes))
+                return TrieWalkV4(snap, V4FromMapped(ipBytes));
+
+            ulong hi = BinaryPrimitives.ReadUInt64BigEndian(ipBytes[..8]);
+            ulong lo = BinaryPrimitives.ReadUInt64BigEndian(ipBytes[8..]);
+            return TrieWalkV6(snap, hi, lo);
+        }
+        else
+        {
+            uint v4 = BinaryPrimitives.ReadUInt32BigEndian(ipBytes);
+            return TrieWalkV4(snap, v4);
+        }
+    }
+
 
     /// <summary>Strict IP address parsing helper (zero-allocation).</summary>
     public static bool ParseIp(ReadOnlySpan<char> ipSpan, out uint v4, out ulong v6High, out ulong v6Low, out bool isV4)
@@ -958,10 +1069,23 @@ public sealed class QzdbReader : IDisposable
         return rowId > 0 ? ResolveRowId(snap, rowId) : null;
     }
 
+    public GeoInfo? Find(ulong ipHigh, ulong ipLow)
+    {
+        var snap = RequireSnapshot();
+        uint rowId = TrieWalkV6(snap, ipHigh, ipLow);
+        return rowId > 0 ? ResolveRowId(snap, rowId) : null;
+    }
+
     public uint LookupRowIdUint(uint ipInt)
     {
         var snap = RequireSnapshot();
         return snap == null ? 0u : TrieWalkV4(snap, ipInt);
+    }
+
+    public uint LookupRowId(ulong ipHigh, ulong ipLow)
+    {
+        var snap = _activeSnapshot;
+        return snap == null ? 0u : TrieWalkV6(snap, ipHigh, ipLow);
     }
 
     public uint LookupRowIdBytes(byte[]? ipBytes)
@@ -1051,30 +1175,21 @@ public sealed class QzdbReader : IDisposable
         return (geoId, asnId, usageId);
     }
 
-    public GeoInfo? FindFields(string ipStr, string[]? fields)
+    public GeoInfo? FindFields(string ipStr, string[]? fields) => FindFields(ipStr.AsSpan(), fields);
+
+    public GeoInfo? FindFields(ReadOnlySpan<char> ipSpan, string[]? fields)
     {
         var snap = RequireSnapshot();
-        if (string.IsNullOrEmpty(ipStr) || !TryParseIp(ipStr, out var v4, out var v6High, out var v6Low, out var isV4))
-            throw new QzdbException(ErrorCode.InvalidIp, $"Invalid IP address: '{ipStr}'");
+        if (ipSpan.IsEmpty || !TryParseIp(ipSpan, out var v4, out var v6High, out var v6Low, out var isV4))
+            throw new QzdbException(ErrorCode.InvalidIp, $"Invalid IP address: '{ipSpan.ToString()}'");
 
         uint rowId = isV4 ? TrieWalkV4(snap, v4) : TrieWalkV6(snap, v6High, v6Low);
         if (rowId == 0) return null;
 
-        var full = ResolveRowId(snap, rowId); // rides decode cache
-        if (full == null) return null;
-        if (fields == null || fields.Length == 0) return full;
+        if (fields == null || fields.Length == 0)
+            return ResolveRowId(snap, rowId);
 
-        // 字段投影：按请求顺序从全字段结果切片（对齐 Java golden）。
-        // 未知字段在该位置补 ""（不跳过）、保留重复字段、全部未知仍返回 GeoInfo。
-        var normMap = snap._normMap;
-        var values = new string[fields.Length];
-        for (int i = 0; i < fields.Length; i++)
-        {
-            values[i] = normMap.TryGetValue(GeoInfo.NormalizeKey(fields[i]), out var fi)
-                ? full.Get(fields[i])
-                : "";
-        }
-        return new GeoInfo(fields, values, GeoInfo.BuildNormalizedMap(fields), null);
+        return ResolveRowIdFields(snap, rowId, fields);
     }
 
     public BatchResult[] FindBatch(string[] ipStrs)
@@ -1452,6 +1567,84 @@ public sealed class QzdbReader : IDisposable
         return ResolveGeo(snap, entryId);
     }
 
+    private static GeoInfo? ResolveRowIdFields(Snapshot snap, uint rowId, string[] fields)
+    {
+        if (rowId >= snap._rowCount) return null;
+
+        var span = snap._data.Span;
+        long rOff = snap._offIPRow + (long)rowId * snap._ipRowSize;
+
+        uint geoId = ReadUintWidth(span, (int)rOff, snap._rowGeoWidth);
+        uint asnId = snap._rowAsnWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowGeoWidth), snap._rowAsnWidth) : 0;
+        uint usageId = snap._rowUsageWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowGeoWidth + snap._rowAsnWidth), snap._rowUsageWidth) : 0;
+
+        int mask = snap._groupDimMasks[snap._groupIndex];
+        uint entryId = (mask & 0x02) != 0 ? asnId : (mask & 0x04) != 0 ? usageId : geoId;
+
+        if (entryId == 0) return null;
+        return ResolveGeoFields(snap, entryId, fields);
+    }
+
+    private static GeoInfo? ResolveGeoFields(Snapshot snap, uint entryId, string[] fields)
+    {
+        if (entryId == 0) return null;
+        int gi = snap._groupIndex;
+        if (entryId >= snap._groupEntryCounts[gi]) return null;
+
+        int fc = snap._groupFieldCounts[gi];
+        long entryOff = snap._groupEntryOffsets[gi] + (long)entryId * snap._groupStrides[gi];
+
+        var span = snap._data.Span;
+        var widths = snap._groupFieldWidths[gi];
+        var offsets = snap._groupFieldOffsets[gi];
+        var natives = snap._groupFieldNative[gi];
+        var natTypes = snap._groupFieldNativeType[gi];
+        var groupPools = snap._pools[gi];
+        var normMap = snap._normMap;
+
+        var values = new string[fields.Length];
+        var numFlags = new bool[fields.Length];
+
+        for (int i = 0; i < fields.Length; i++)
+        {
+            string reqField = fields[i];
+            if (!normMap.TryGetValue(GeoInfo.NormalizeKey(reqField), out int fi) || fi < 0 || fi >= fc)
+            {
+                values[i] = "";
+                continue;
+            }
+
+            int w = widths[fi];
+            int fo = (int)(entryOff + offsets[fi]);
+
+            if (natives[fi])
+            {
+                int nt = natTypes[fi];
+                if (nt == 1)
+                {
+                    ref var r = ref Unsafe.Add(ref MemoryMarshal.GetReference(span), fo);
+                    values[i] = w == 4
+                        ? FormatFloat6(Unsafe.ReadUnaligned<float>(ref r))
+                        : FormatFloat6(Unsafe.ReadUnaligned<double>(ref r));
+                }
+                else
+                {
+                    values[i] = ReadUintWidth(span, fo, w).ToString();
+                }
+                numFlags[i] = true;
+            }
+            else
+            {
+                uint idx = ReadUintWidth(span, fo, w);
+                var pool = groupPools[fi];
+                values[i] = idx < (uint)pool.Length ? pool[(int)idx] : "";
+                numFlags[i] = snap._numericFlags != null && fi < snap._numericFlags.Length && snap._numericFlags[fi];
+            }
+        }
+
+        return new GeoInfo(fields, values, GeoInfo.BuildNormalizedMap(fields), numFlags, takeOwnership: true);
+    }
+
     // Bounded, lock-free per-snapshot cache of resolved GeoInfo keyed by entryId.
     // A complete immutable CacheEntry is published as one reference. This prevents a
     // colliding writer from exposing a key from one result with the value of another.
@@ -1554,18 +1747,20 @@ public sealed class QzdbReader : IDisposable
     #region IPv4-mapped detection
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool IsV4Mapped(byte[] b) =>
+    private static bool IsV4Mapped(ReadOnlySpan<byte> b) =>
+        b.Length >= 16 &&
         b[10] == 0xFF && b[11] == 0xFF &&
         b[0] == 0 && b[1] == 0 && b[2] == 0 && b[3] == 0 &&
         b[4] == 0 && b[5] == 0 && b[6] == 0 && b[7] == 0 &&
         b[8] == 0 && b[9] == 0;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static uint V4FromMapped(byte[] b) =>
+    private static uint V4FromMapped(ReadOnlySpan<byte> b) =>
         (uint)((b[12] << 24) | (b[13] << 16) | (b[14] << 8) | b[15]);
 
-    private static (ulong hi, ulong lo) V6FromBytes(byte[] b) =>
-        (BinaryPrimitives.ReadUInt64BigEndian(b), BinaryPrimitives.ReadUInt64BigEndian(b.AsSpan(8)));
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static (ulong hi, ulong lo) V6FromBytes(ReadOnlySpan<byte> b) =>
+        (BinaryPrimitives.ReadUInt64BigEndian(b), BinaryPrimitives.ReadUInt64BigEndian(b[8..]));
 
     #endregion
 
@@ -1839,22 +2034,26 @@ public sealed class QzdbReader : IDisposable
 
     #region Lifecycle
 
-    /// <summary>Atomically swap in a freshly loaded snapshot from <paramref name="path"/> (CRC always enforced).</summary>
+    private long _reloadEpoch = 0;
+
+    /// <summary>Atomically swap in a freshly loaded snapshot from <paramref name="path"/> (CRC always enforced, latest-wins strategy).</summary>
     public void Reload(string path)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
+        long epoch = Interlocked.Increment(ref _reloadEpoch);
         int groupIndex = RequireSnapshot()._groupIndex;
         var snap = LoadPath(path, groupIndex, verifyCrc: true);
-        PublishSnapshot(snap);
+        PublishSnapshot(snap, epoch);
     }
 
-    /// <summary>Atomically swap in a freshly loaded snapshot from <paramref name="buffer"/> (CRC always enforced).</summary>
+    /// <summary>Atomically swap in a freshly loaded snapshot from <paramref name="buffer"/> (CRC always enforced, latest-wins strategy).</summary>
     public void ReloadBuffer(byte[] buffer)
     {
         ArgumentNullException.ThrowIfNull(buffer);
+        long epoch = Interlocked.Increment(ref _reloadEpoch);
         int groupIndex = RequireSnapshot()._groupIndex;
         var snap = Snapshot.FromBuffer(buffer, groupIndex, verifyCrc: true);
-        PublishSnapshot(snap);
+        PublishSnapshot(snap, epoch);
     }
 
     public void Dispose()
@@ -1866,12 +2065,19 @@ public sealed class QzdbReader : IDisposable
         }
     }
 
-    private void PublishSnapshot(Snapshot snapshot)
+    private void PublishSnapshot(Snapshot snapshot, long epoch = 0)
     {
         lock (_lifecycleGate)
         {
             if (Volatile.Read(ref _lifecycleState) != 0)
+            {
                 throw new ObjectDisposedException(nameof(QzdbReader));
+            }
+            if (epoch > 0 && epoch < Volatile.Read(ref _reloadEpoch))
+            {
+                // A newer reload has already started or succeeded; discard stale snapshot
+                return;
+            }
             Interlocked.Exchange(ref _activeSnapshot, snapshot);
         }
     }

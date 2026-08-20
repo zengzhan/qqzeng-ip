@@ -16,8 +16,8 @@
     <PackageId>QQZeng.Qzdb</PackageId>
     <RootNamespace>QQZeng.Qzdb</RootNamespace>
     <AssemblyName>QQZeng.Qzdb</AssemblyName>
-    <Version>1.0.4</Version>
-    <PackageReleaseNotes>1.0.4: Align native float formatting with the canonical cross-language contract — whole-number floats render as integer form (e.g. 116) and non-whole as 6 decimals (F6); NaN/Infinity render as empty string. Verified byte-exact against all 8 language SDKs over 4102 golden vectors.</PackageReleaseNotes>
+    <Version>1.0.5</Version>
+    <PackageReleaseNotes>1.0.5: Major performance &amp; correctness upgrade — direct physical field projection in FindFields (80%+ allocation reduction); pre-bound standard field indices in GeoInfo (zero-allocation GetCountry/Isp/Asn/City/Province getters); epoch-based latest-wins reload protection; stackalloc IPAddress conversions; zero-delegate ChainedReader; pure integer IPv6 Find(ulong, ulong) achieving 7.6M+ QPS.</PackageReleaseNotes>
 
     <!-- 作者 / 公司 / 描述 -->
     <Authors>QQZeng</Authors>
@@ -31,12 +31,14 @@
     <RepositoryType>git</RepositoryType>
     <PackageReadmeFile>README.md</PackageReadmeFile>
 
-    <!-- 文档 + 符号包 + 确定性构建 -->
+    <!-- 文档 + 符号包 + 确定性构建 + SourceLink 调试支持 -->
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
     <NoWarn>$(NoWarn);CS1591</NoWarn>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <Deterministic>true</Deterministic>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <EmbedUntrackedSources>true</EmbedUntrackedSources>
   </PropertyGroup>
 
   <ItemGroup>

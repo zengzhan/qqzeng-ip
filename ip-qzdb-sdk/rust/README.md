@@ -492,6 +492,4 @@ cargo update -p qzdb_reader
 
 [MIT](https://opensource.org/licenses/MIT)
 
-<!-- commit: rust: Rust 极速解析引擎 (mmap + 最小 unsafe surface, 6900 万+ QPS) -->
-
-<!-- commit description sync 1787122549 -->
+<!-- commit: rust: Rust 极速解析引擎 (只读 mmap, 6900 万+ QPS) -->

@@ -1806,20 +1806,24 @@ class QzdbReader
     private function trieWalkV6(string $ipBin)
     {
         $v6_jump_bits = $this->v6JumpBits;
-
         $idx_jump = 0;
-        $bits_collected = 0;
-        for ($i = 0; $i < 16; $i++) {
-            $byte = ord($ipBin[$i]);
-            $bits_left = $v6_jump_bits - $bits_collected;
-            if ($bits_left <= 0) break;
-            if ($bits_left >= 8) {
-                $idx_jump = ($idx_jump << 8) | $byte;
-                $bits_collected += 8;
-            } else {
-                $idx_jump = ($idx_jump << $bits_left) | ($byte >> (8 - $bits_left));
-                $bits_collected += $bits_left;
-                break;
+        if ($v6_jump_bits <= 32 && $v6_jump_bits > 0 && strlen($ipBin) >= 4) {
+            $u = unpack('N', $ipBin);
+            $idx_jump = ($u[1] >> (32 - $v6_jump_bits)) & ((1 << $v6_jump_bits) - 1);
+        } else {
+            $bits_collected = 0;
+            for ($i = 0; $i < 16; $i++) {
+                $byte = ord($ipBin[$i]);
+                $bits_left = $v6_jump_bits - $bits_collected;
+                if ($bits_left <= 0) break;
+                if ($bits_left >= 8) {
+                    $idx_jump = ($idx_jump << 8) | $byte;
+                    $bits_collected += 8;
+                } else {
+                    $idx_jump = ($idx_jump << $bits_left) | ($byte >> (8 - $bits_left));
+                    $bits_collected += $bits_left;
+                    break;
+                }
             }
         }
 

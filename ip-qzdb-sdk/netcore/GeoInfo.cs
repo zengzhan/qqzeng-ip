@@ -12,6 +12,28 @@ public sealed class GeoInfo
     private readonly bool[]? _numericFlags;
     private string? _pipe; // lazily memoized ToPipe() result (immutable per instance)
 
+    // Pre-bound standard field indices (avoids NormalizeKey and Dictionary lookup in hot-path getters)
+    private readonly int _idxCountry = -1;
+    private readonly int _idxCountryEn = -1;
+    private readonly int _idxProvince = -1;
+    private readonly int _idxProvinceEn = -1;
+    private readonly int _idxCity = -1;
+    private readonly int _idxCityEn = -1;
+    private readonly int _idxDistrict = -1;
+    private readonly int _idxIsp = -1;
+    private readonly int _idxIspEn = -1;
+    private readonly int _idxContinent = -1;
+    private readonly int _idxContinentEn = -1;
+    private readonly int _idxCountryCode = -1;
+    private readonly int _idxAsn = -1;
+    private readonly int _idxGeoId = -1;
+    private readonly int _idxLongitude = -1;
+    private readonly int _idxLatitude = -1;
+    private readonly int _idxTimezone = -1;
+    private readonly int _idxAsName = -1;
+    private readonly int _idxAsDomain = -1;
+    private readonly int _idxUsageType = -1;
+
     public GeoInfo(string[] fieldNames, string[] values, Dictionary<string, int>? normMap, bool[]? numericFlags)
     {
         ArgumentNullException.ThrowIfNull(fieldNames);
@@ -20,6 +42,10 @@ public sealed class GeoInfo
         _values = (string[])values.Clone();
         _normMap = normMap == null ? BuildNormalizedMap(_fieldNames) : new Dictionary<string, int>(normMap, StringComparer.Ordinal);
         _numericFlags = numericFlags == null ? null : (bool[])numericFlags.Clone();
+        BindStandardIndices(_normMap, out _idxCountry, out _idxCountryEn, out _idxProvince, out _idxProvinceEn,
+            out _idxCity, out _idxCityEn, out _idxDistrict, out _idxIsp, out _idxIspEn, out _idxContinent,
+            out _idxContinentEn, out _idxCountryCode, out _idxAsn, out _idxGeoId, out _idxLongitude,
+            out _idxLatitude, out _idxTimezone, out _idxAsName, out _idxAsDomain, out _idxUsageType);
     }
 
     internal GeoInfo(string[] fieldNames, string[] values, Dictionary<string, int>? normMap,
@@ -29,10 +55,56 @@ public sealed class GeoInfo
         _values = values;
         _normMap = normMap;
         _numericFlags = numericFlags;
+        if (_normMap != null)
+        {
+            BindStandardIndices(_normMap, out _idxCountry, out _idxCountryEn, out _idxProvince, out _idxProvinceEn,
+                out _idxCity, out _idxCityEn, out _idxDistrict, out _idxIsp, out _idxIspEn, out _idxContinent,
+                out _idxContinentEn, out _idxCountryCode, out _idxAsn, out _idxGeoId, out _idxLongitude,
+                out _idxLatitude, out _idxTimezone, out _idxAsName, out _idxAsDomain, out _idxUsageType);
+        }
+    }
+
+    private static void BindStandardIndices(Dictionary<string, int> map,
+        out int country, out int countryEn, out int province, out int provinceEn,
+        out int city, out int cityEn, out int district, out int isp, out int ispEn,
+        out int continent, out int continentEn, out int countryCode, out int asn,
+        out int geoId, out int longitude, out int latitude, out int timezone,
+        out int asName, out int asDomain, out int usageType)
+    {
+        map.TryGetValue("country", out country);
+        map.TryGetValue("countryen", out countryEn);
+        map.TryGetValue("province", out province);
+        map.TryGetValue("provinceen", out provinceEn);
+        map.TryGetValue("city", out city);
+        map.TryGetValue("cityen", out cityEn);
+        map.TryGetValue("district", out district);
+        map.TryGetValue("isp", out isp);
+        map.TryGetValue("ispen", out ispEn);
+        map.TryGetValue("continent", out continent);
+        map.TryGetValue("continenten", out continentEn);
+        map.TryGetValue("countrycode", out countryCode);
+        map.TryGetValue("asn", out asn);
+        map.TryGetValue("geoid", out geoId);
+        map.TryGetValue("longitude", out longitude);
+        map.TryGetValue("latitude", out latitude);
+        map.TryGetValue("timezone", out timezone);
+        map.TryGetValue("asname", out asName);
+        map.TryGetValue("asdomain", out asDomain);
+        map.TryGetValue("usagetype", out usageType);
     }
 
     public string[] FieldNames => (string[])_fieldNames.Clone();
     public string[] Values => (string[])_values.Clone();
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private string GetFast(int idx)
+    {
+        if ((uint)idx < (uint)_values.Length)
+        {
+            return _values[idx] ?? "";
+        }
+        return "";
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public string Get(string? name)
@@ -234,58 +306,58 @@ public sealed class GeoInfo
     public string CountryCode => GetCountryCode();
 
     public string GetCidr() => Get("cidr");
-    public string GetCountry() => Get("country");
-    public string GetCountryEn() => Get("country_en");
-    public string GetProvince() => Get("province");
-    public string GetProvinceEn() => Get("province_en");
-    public string GetCity() => Get("city");
-    public string GetCityEn() => Get("city_en");
-    public string GetDistrict() => Get("district");
+    public string GetCountry() => _idxCountry >= 0 ? GetFast(_idxCountry) : Get("country");
+    public string GetCountryEn() => _idxCountryEn >= 0 ? GetFast(_idxCountryEn) : Get("country_en");
+    public string GetProvince() => _idxProvince >= 0 ? GetFast(_idxProvince) : Get("province");
+    public string GetProvinceEn() => _idxProvinceEn >= 0 ? GetFast(_idxProvinceEn) : Get("province_en");
+    public string GetCity() => _idxCity >= 0 ? GetFast(_idxCity) : Get("city");
+    public string GetCityEn() => _idxCityEn >= 0 ? GetFast(_idxCityEn) : Get("city_en");
+    public string GetDistrict() => _idxDistrict >= 0 ? GetFast(_idxDistrict) : Get("district");
 
     public uint? GetGeoId()
     {
-        var v = Get("geo_id");
+        var v = _idxGeoId >= 0 ? GetFast(_idxGeoId) : Get("geo_id");
         if (string.IsNullOrEmpty(v)) return null;
         return uint.TryParse(v, out var r) ? r : null;
     }
 
     public double? GetLongitude()
     {
-        var v = Get("longitude");
+        var v = _idxLongitude >= 0 ? GetFast(_idxLongitude) : Get("longitude");
         if (string.IsNullOrEmpty(v)) return null;
         return double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var r) ? r : null;
     }
 
     public double? GetLatitude()
     {
-        var v = Get("latitude");
+        var v = _idxLatitude >= 0 ? GetFast(_idxLatitude) : Get("latitude");
         if (string.IsNullOrEmpty(v)) return null;
         return double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var r) ? r : null;
     }
 
-    public string GetTimezone() => Get("timezone");
-    public string GetIsp() => Get("isp");
-    public string GetIspEn() => Get("isp_en");
+    public string GetTimezone() => _idxTimezone >= 0 ? GetFast(_idxTimezone) : Get("timezone");
+    public string GetIsp() => _idxIsp >= 0 ? GetFast(_idxIsp) : Get("isp");
+    public string GetIspEn() => _idxIspEn >= 0 ? GetFast(_idxIspEn) : Get("isp_en");
 
     public uint? GetAsn()
     {
-        var v = Get("asn");
+        var v = _idxAsn >= 0 ? GetFast(_idxAsn) : Get("asn");
         if (string.IsNullOrEmpty(v)) return null;
         return uint.TryParse(v, out var r) ? r : null;
     }
 
-    public string GetAsName() => Get("as_name");
-    public string GetAsDomain() => Get("as_domain");
+    public string GetAsName() => _idxAsName >= 0 ? GetFast(_idxAsName) : Get("as_name");
+    public string GetAsDomain() => _idxAsDomain >= 0 ? GetFast(_idxAsDomain) : Get("as_domain");
 
-    public UsageType GetUsageType() => UsageType.FromString(Get("usage_type"));
+    public UsageType GetUsageType() => UsageType.Parse(_idxUsageType >= 0 ? GetFast(_idxUsageType) : Get("usage_type"));
 
     // 数据集以 country_code 存储 ISO 3166-1 alpha-2（如 "CN"），并不存在 country_alpha2 字段；
     // GetCountryAlpha2 重定向到 country_code 以返回真实二字码（历史返回 "" 为字段名笔误 bug）。
     public string GetCountryAlpha2() => Get("country_code");
     public string GetCountryAlpha3() => Get("country_alpha3");
-    public string GetContinent() => Get("continent");
-    public string GetContinentEn() => Get("continent_en");
-    public string GetCountryCode() => Get("country_code");
+    public string GetContinent() => _idxContinent >= 0 ? GetFast(_idxContinent) : Get("continent");
+    public string GetContinentEn() => _idxContinentEn >= 0 ? GetFast(_idxContinentEn) : Get("continent_en");
+    public string GetCountryCode() => _idxCountryCode >= 0 ? GetFast(_idxCountryCode) : Get("country_code");
     public string GetCurrencyCode() => Get("currency_code");
     public string GetCurrencyName() => Get("currency_name");
     public string GetPhonePrefix() => Get("phone_prefix");
