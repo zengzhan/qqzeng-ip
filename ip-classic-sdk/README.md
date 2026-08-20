@@ -17,3 +17,5 @@
 > 如果您正在开发新系统或追求极高并发与超低延迟（< 0.08 µs），推荐使用最新一代旗舰 **[QZDB 极速解析引擎](../ip-qzdb-sdk)**。
 
 <!-- commit description sync 1787122549 -->
+
+<!-- commit: ip-classic-sdk: 📦 IP 数据库经典版 SDK (经典 6.0 .db 与 2.0 .dat 多语言源码) sync=1787246204 -->
