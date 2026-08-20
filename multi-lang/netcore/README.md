@@ -54,7 +54,7 @@ dotnet add package QQZeng.Qzdb
 或在 `.csproj` 中直接引用：
 
 ```xml
-<PackageReference Include="QQZeng.Qzdb" Version="1.0.2" />
+<PackageReference Include="QQZeng.Qzdb" Version="1.0.5" />
 ```
 
 C# 代码统一使用命名空间：
@@ -146,14 +146,17 @@ using var reader = QzdbReader.OpenBuffer(bytes);
 
 | 方法 | 签名 | 返回 | 说明 |
 |------|------|------|------|
-| 字符串查询 | `GeoInfo? Find(string ipStr)` | `GeoInfo?` | 按字符串查（IPv4 / IPv6 / IPv4 映射地址均可） |
-| 字节查询 | `GeoInfo? FindBytes(byte[]? ipBytes)` | `GeoInfo?` | 按 4 字节（IPv4）或 16 字节（IPv6）原始字节查 |
-| 整数查询 | `GeoInfo? FindUint(uint ipInt)` | `GeoInfo?` | 按 IPv4 的 `uint` 整型查（网络序/主机序见下方说明） |
-| 字段子集 | `GeoInfo? FindFields(string ipStr, string[]? fields)` | `GeoInfo?` | 只解析指定字段，减少不必要的字符串分配 |
-| 管道字符串 | `string FindStr(string ipStr)` | `string` | 直接返回 `ToPipe()` 结果；未命中返回 `""` |
-| 行号查询 | `uint LookupRowId(string ipStr)` | `uint` | 仅返回内部行号（不含字段，最轻） |
-| 行号（整数） | `uint LookupRowIdUint(uint ipInt)` | `uint` | `FindUint` 的轻量版，只返回行号 |
-| 行号（字节） | `uint LookupRowIdBytes(byte[]? ipBytes)` | `uint` | `FindBytes` 的轻量版，只返回行号 |
+| 字符串查询 | `GeoInfo? Find(string ipStr)` / `Find(ReadOnlySpan<char> ipSpan)` | `GeoInfo?` | 按字符串/Span 查（IPv4 / IPv6 / IPv4 映射地址均可） |
+| 字节查询 | `GeoInfo? Find(ReadOnlySpan<byte> ipBytes)` / `FindBytes(byte[])` | `GeoInfo?` | 按 4 字节（IPv4）或 16 字节（IPv6）原始字节查，支持栈上 Span 零分配 |
+| 整数查询 (v4) | `GeoInfo? FindUint(uint ipInt)` | `GeoInfo?` | 按 IPv4 的 `uint` 整型查（主机序） |
+| 整数查询 (v6) | `GeoInfo? Find(ulong ipHigh, ulong ipLow)` | `GeoInfo?` | 按 IPv6 的高/低 64 位整数直接查，极速寄存器寻址（760万+ QPS） |
+| IPAddress | `GeoInfo? Find(System.Net.IPAddress address)` | `GeoInfo?` | 内部栈分配零 GC 转换 |
+| 字段子集 | `GeoInfo? FindFields(string ipStr, string[]? fields)` | `GeoInfo?` | **物理按需直解**：只解析指定字段，减少 80%+ 字符串分配 |
+| 管道字符串 | `string FindStr(string ipStr)` / `FindStr(ReadOnlySpan<char>)` | `string` | 直接返回 `ToPipe()` 结果；未命中/非法返回 `""`（零异常） |
+| 行号查询 | `uint LookupRowId(string ipStr)` / `LookupRowId(ReadOnlySpan<char>)` | `uint` | 仅返回内部行号（不物化字段，最轻量） |
+| 行号（v4 整数） | `uint LookupRowIdUint(uint ipInt)` | `uint` | `FindUint` 的轻量版，只返回行号 |
+| 行号（v6 整数） | `uint LookupRowId(ulong ipHigh, ulong ipLow)` | `uint` | `Find(ulong, ulong)` 的轻量版，只返回行号 |
+| 行号（字节） | `uint LookupRowId(ReadOnlySpan<byte> ipBytes)` | `uint` | `Find(ReadOnlySpan<byte>)` 的轻量版，只返回行号 |
 | CIDR 反查 | `string LookupCidr(string ipStr)` | `string` | 返回包含该 IP 的最具体网段 CIDR（如 `114.114.0.0/16`）；未命中/非法返回 `""` |
 | CIDR（整数） | `string LookupCidrUint(uint ipInt)` | `string` | `LookupCidr` 的 IPv4 uint32 入口 |
 | CIDR（字节） | `string LookupCidrBytes(byte[]? ipBytes)` | `string` | `LookupCidr` 的 4/16 字节入口（IPv4-mapped 自动降级） |
@@ -201,9 +204,9 @@ string isp     = info.Get("isp");
 | `GetProvince()` / `GetProvinceEn()` | `string` | 省份 |
 | `GetCity()` / `GetCityEn()` / `GetDistrict()` | `string` | 城市 / 区县 |
 | `GetIsp()` / `GetIspEn()` | `string` | 运营商 |
-| `GetAsn()` | `ulong?` | ASN（自治域号） |
+| `GetAsn()` | `uint?` | ASN（自治域号） |
 | `GetAsName()` / `GetAsDomain()` | `string` | ASN 名称 / 域名 |
-| `GetGeoId()` | `ulong?` | 地理 ID |
+| `GetGeoId()` | `uint?` | 地理 ID |
 | `GetLongitude()` / `GetLatitude()` | `double?` | 经纬度 |
 | `GetTimezone()` | `string` | 时区 |
 | `GetUsageType()` | `UsageType` | 用途分类（见下） |

@@ -1191,12 +1191,8 @@ class QzdbReader {
   _trieWalkV6Buf(ipBuf) {
     const jumpBits = this._v6JumpBits;
     let idxJump = 0;
-    if (jumpBits <= 32) {
-      const b0 = ipBuf[0], b1 = ipBuf[1], b2 = ipBuf[2], b3 = ipBuf[3];
-      if (jumpBits <= 8) idxJump = b0 >> (8 - jumpBits);
-      else if (jumpBits <= 16) idxJump = ((b0 << 8) | b1) >> (16 - jumpBits);
-      else if (jumpBits <= 24) idxJump = ((b0 << 16) | (b1 << 8) | b2) >> (24 - jumpBits);
-      else idxJump = ((b0 << 24) | (b1 << 16) | (b2 << 8) | b3) >> (32 - jumpBits);
+    if (jumpBits <= 32 && jumpBits > 0) {
+      idxJump = ipBuf.readUInt32BE(0) >>> (32 - jumpBits);
     } else {
       const b0 = ipBuf[0], b1 = ipBuf[1], b2 = ipBuf[2], b3 = ipBuf[3];
       const b4 = ipBuf[4], b5 = ipBuf[5], b6 = ipBuf[6];

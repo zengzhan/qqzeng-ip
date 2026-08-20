@@ -21,14 +21,126 @@ public sealed class ChainedReader : IDisposable
     public static ChainedReader ChainMerge(params QzdbReader[] readers) => new(readers, Mode.Merge);
     public static ChainedReader ChainMergeOverride(params QzdbReader[] readers) => new(readers, Mode.MergeOverride);
 
-    public GeoInfo? Find(string ipStr) => ChainQuery(r => r.Find(ipStr));
-    public GeoInfo? Find(System.Net.IPAddress address) => ChainQuery(r => r.Find(address));
+    public GeoInfo? Find(string ipStr) => Find(ipStr.AsSpan());
 
-    public GeoInfo? FindUint(uint ipInt) => ChainQuery(r => r.FindUint(ipInt));
+    public GeoInfo? Find(ReadOnlySpan<char> ipSpan)
+    {
+        if (_mode == Mode.Fallback)
+        {
+            for (int i = 0; i < _readers.Count; i++)
+            {
+                var res = _readers[i].Find(ipSpan);
+                if (res != null) return res;
+            }
+            return null;
+        }
 
-    public GeoInfo? FindBytes(byte[]? ipBytes) => ChainQuery(r => r.FindBytes(ipBytes));
+        var indexes = new Dictionary<string, int>(StringComparer.Ordinal);
+        var names = new List<string>();
+        var values = new List<string>();
+        for (int i = 0; i < _readers.Count; i++)
+        {
+            var info = _readers[i].Find(ipSpan);
+            if (info != null) MergeInfo(indexes, names, values, info);
+        }
+        if (names.Count == 0) return null;
+        var nameArray = names.ToArray();
+        return new GeoInfo(nameArray, values.ToArray(), GeoInfo.BuildNormalizedMap(nameArray), null, takeOwnership: true);
+    }
 
-    public GeoInfo? FindFields(string ipStr, string[]? fields) => ChainQuery(r => r.FindFields(ipStr, fields));
+    public GeoInfo? Find(System.Net.IPAddress address)
+    {
+        ArgumentNullException.ThrowIfNull(address);
+        Span<byte> bytes = stackalloc byte[16];
+        if (address.TryWriteBytes(bytes, out int written))
+        {
+            return Find(bytes[..written]);
+        }
+        return null;
+    }
+
+    public GeoInfo? Find(ReadOnlySpan<byte> ipBytes)
+    {
+        if (_mode == Mode.Fallback)
+        {
+            for (int i = 0; i < _readers.Count; i++)
+            {
+                var res = _readers[i].Find(ipBytes);
+                if (res != null) return res;
+            }
+            return null;
+        }
+
+        var indexes = new Dictionary<string, int>(StringComparer.Ordinal);
+        var names = new List<string>();
+        var values = new List<string>();
+        for (int i = 0; i < _readers.Count; i++)
+        {
+            var info = _readers[i].Find(ipBytes);
+            if (info != null) MergeInfo(indexes, names, values, info);
+        }
+        if (names.Count == 0) return null;
+        var nameArray = names.ToArray();
+        return new GeoInfo(nameArray, values.ToArray(), GeoInfo.BuildNormalizedMap(nameArray), null, takeOwnership: true);
+    }
+
+    public GeoInfo? FindUint(uint ipInt)
+    {
+        if (_mode == Mode.Fallback)
+        {
+            for (int i = 0; i < _readers.Count; i++)
+            {
+                var res = _readers[i].FindUint(ipInt);
+                if (res != null) return res;
+            }
+            return null;
+        }
+
+        var indexes = new Dictionary<string, int>(StringComparer.Ordinal);
+        var names = new List<string>();
+        var values = new List<string>();
+        for (int i = 0; i < _readers.Count; i++)
+        {
+            var info = _readers[i].FindUint(ipInt);
+            if (info != null) MergeInfo(indexes, names, values, info);
+        }
+        if (names.Count == 0) return null;
+        var nameArray = names.ToArray();
+        return new GeoInfo(nameArray, values.ToArray(), GeoInfo.BuildNormalizedMap(nameArray), null, takeOwnership: true);
+    }
+
+    public GeoInfo? FindBytes(byte[]? ipBytes)
+    {
+        if (ipBytes == null) throw new QzdbException(ErrorCode.InvalidIp, "IP bytes cannot be null");
+        return Find(ipBytes.AsSpan());
+    }
+
+    public GeoInfo? FindFields(string ipStr, string[]? fields) => FindFields(ipStr.AsSpan(), fields);
+
+    public GeoInfo? FindFields(ReadOnlySpan<char> ipSpan, string[]? fields)
+    {
+        if (_mode == Mode.Fallback)
+        {
+            for (int i = 0; i < _readers.Count; i++)
+            {
+                var res = _readers[i].FindFields(ipSpan, fields);
+                if (res != null) return res;
+            }
+            return null;
+        }
+
+        var indexes = new Dictionary<string, int>(StringComparer.Ordinal);
+        var names = new List<string>();
+        var values = new List<string>();
+        for (int i = 0; i < _readers.Count; i++)
+        {
+            var info = _readers[i].FindFields(ipSpan, fields);
+            if (info != null) MergeInfo(indexes, names, values, info);
+        }
+        if (names.Count == 0) return null;
+        var nameArray = names.ToArray();
+        return new GeoInfo(nameArray, values.ToArray(), GeoInfo.BuildNormalizedMap(nameArray), null, takeOwnership: true);
+    }
 
     public BatchResult[] FindBatch(string[] ipStrs)
     {
@@ -69,30 +181,7 @@ public sealed class ChainedReader : IDisposable
         catch (QzdbException e) { return new BatchResult(null, e, ip); }
     }
 
-    private GeoInfo? ChainQuery(Func<QzdbReader, GeoInfo?> query)
-    {
-        if (_mode == Mode.Fallback)
-        {
-            foreach (var r in _readers)
-            {
-                var res = query(r);
-                if (res != null) return res;
-            }
-            return null;
-        }
 
-        var indexes = new Dictionary<string, int>(StringComparer.Ordinal);
-        var names = new List<string>();
-        var values = new List<string>();
-        foreach (var r in _readers)
-        {
-            var info = query(r);
-            if (info != null) MergeInfo(indexes, names, values, info);
-        }
-        if (names.Count == 0) return null;
-        var nameArray = names.ToArray();
-        return new GeoInfo(nameArray, values.ToArray(), GeoInfo.BuildNormalizedMap(nameArray), null, takeOwnership: true);
-    }
 
     private void MergeInfo(Dictionary<string, int> indexes, List<string> names, List<string> values, GeoInfo info)
     {

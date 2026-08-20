@@ -5,7 +5,7 @@
 - **模块名**：`github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go`；包名 `qzdb`
 - **定位**：离线解析 `.qzdb` 二进制数据库文件，不依赖任何外部网络请求
 - **特性**：无锁快照（`atomic.Pointer[Snapshot]`）+ per-snapshot 有界 `GeoInfo` 解码缓存，并发查询互不阻塞
-- **依赖**：Go 标准库（`go >= 1.21`）+ `golang.org/x/sys/unix`（仅用于只读 `mmap`）
+- **依赖**：Go 标准库（`go >= 1.21`）+ `golang.org/x/sys`（跨平台只读 `mmap`：Unix 使用 `x/sys/unix`，Windows 使用 `x/sys/windows` 的 `CreateFileMapping`）
 - **许可**：MIT
 - **跨语言规范**：以仓库根 [`API_CONTRACT.md`](../../API_CONTRACT.md) 为唯一事实来源（SSOT）
 

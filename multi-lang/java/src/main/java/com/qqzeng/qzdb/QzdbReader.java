@@ -1744,6 +1744,12 @@ public class QzdbReader implements AutoCloseable {
     }
 
     private static int readPrefixBits(byte[] bytes, int bits) {
+        if (bits <= 0) return 0;
+        if (bits <= 32 && bytes.length >= 4) {
+            int hi32 = ((bytes[0] & 0xFF) << 24) | ((bytes[1] & 0xFF) << 16) |
+                       ((bytes[2] & 0xFF) << 8)  | (bytes[3] & 0xFF);
+            return hi32 >>> (32 - bits);
+        }
         int val = 0;
         for (int i = 0; i < bits; i++) {
             int bit = (bytes[i >> 3] >>> (7 - (i & 7))) & 1;

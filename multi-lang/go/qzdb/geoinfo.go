@@ -187,16 +187,28 @@ func newGeoCache(capacity uint32) *geoCache {
 }
 
 // get 命中且键匹配时返回缓存，否则返回 nil（碰撞只重算、绝不返回错值）。
+// 采用轻量乐观读与二次检查，杜绝并发 put 时读到不一致的脏快照。
 func (c *geoCache) get(rowID uint32) *GeoInfo {
+	if rowID == 0 {
+		return nil
+	}
 	s := &c.slots[rowID&c.mask]
+	if s.key.Load() != rowID {
+		return nil
+	}
+	val := s.val.Load()
 	if s.key.Load() == rowID {
-		return s.val.Load()
+		return val
 	}
 	return nil
 }
 
 func (c *geoCache) put(rowID uint32, g *GeoInfo) {
+	if rowID == 0 || g == nil {
+		return
+	}
 	s := &c.slots[rowID&c.mask]
+	s.key.Store(0) // 先废除当前槽位 key，防止并发读者读到新旧混合状态
 	s.val.Store(g)
 	s.key.Store(rowID)
 }

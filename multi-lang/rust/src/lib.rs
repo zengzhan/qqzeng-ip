@@ -1562,8 +1562,14 @@ impl SnapshotInner {
         if !self.has_v6 || self.off_v6_jump == 0 {
             return None;
         }
-        let shift = 128 - self.v6_jump_bits;
-        let idx_jump = ((u128::from_be_bytes(*bytes) >> shift) & ((1u128 << self.v6_jump_bits) - 1)) as usize;
+        let idx_jump = if self.v6_jump_bits <= 32 && self.v6_jump_bits > 0 {
+            let mut prefix = [0u8; 4];
+            prefix.copy_from_slice(&bytes[..4]);
+            (u32::from_be_bytes(prefix) >> (32 - self.v6_jump_bits)) as usize
+        } else {
+            let shift = 128 - self.v6_jump_bits;
+            ((u128::from_be_bytes(*bytes) >> shift) & ((1u128 << self.v6_jump_bits) - 1)) as usize
+        };
         let ptr = safe_read_u32(self.data.as_slice(), self.off_v6_jump as usize + idx_jump * 4)?;
         if ptr == 0 {
             return None;
@@ -1613,8 +1619,14 @@ impl SnapshotInner {
         if !self.has_v6 || self.off_v6_jump == 0 {
             return None;
         }
-        let shift = 128 - self.v6_jump_bits;
-        let idx_jump = ((u128::from_be_bytes(*bytes) >> shift) & ((1u128 << self.v6_jump_bits) - 1)) as usize;
+        let idx_jump = if self.v6_jump_bits <= 32 && self.v6_jump_bits > 0 {
+            let mut prefix = [0u8; 4];
+            prefix.copy_from_slice(&bytes[..4]);
+            (u32::from_be_bytes(prefix) >> (32 - self.v6_jump_bits)) as usize
+        } else {
+            let shift = 128 - self.v6_jump_bits;
+            ((u128::from_be_bytes(*bytes) >> shift) & ((1u128 << self.v6_jump_bits) - 1)) as usize
+        };
         let ptr = safe_read_u32(self.data.as_slice(), self.off_v6_jump as usize + idx_jump * 4)?;
         if ptr == 0 {
             return None;

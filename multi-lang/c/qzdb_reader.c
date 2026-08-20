@@ -504,13 +504,19 @@ static uint32_t trie_walk_v4(const qzdb_reader_t* ctx, uint32_t ip_int) {
 static uint32_t trie_walk_v6(const qzdb_reader_t* ctx, const uint8_t* ip_bin) {
     int v6_jump_bits = ctx->v6_jump_bits;
     uint32_t idx_jump = 0;
-    int bits_collected = 0;
-    for (int i = 0; i < 16; i++) {
-        uint8_t b = ip_bin[i];
-        int bits_left = v6_jump_bits - bits_collected;
-        if (bits_left <= 0) break;
-        if (bits_left >= 8) { idx_jump = (idx_jump << 8) | b; bits_collected += 8; }
-        else { idx_jump = (idx_jump << bits_left) | (b >> (8 - bits_left)); bits_collected += bits_left; break; }
+    if (v6_jump_bits <= 32 && v6_jump_bits > 0) {
+        uint32_t hi32 = ((uint32_t)ip_bin[0] << 24) | ((uint32_t)ip_bin[1] << 16) |
+                        ((uint32_t)ip_bin[2] << 8)  | (uint32_t)ip_bin[3];
+        idx_jump = hi32 >> (32 - v6_jump_bits);
+    } else {
+        int bits_collected = 0;
+        for (int i = 0; i < 16; i++) {
+            uint8_t b = ip_bin[i];
+            int bits_left = v6_jump_bits - bits_collected;
+            if (bits_left <= 0) break;
+            if (bits_left >= 8) { idx_jump = (idx_jump << 8) | b; bits_collected += 8; }
+            else { idx_jump = (idx_jump << bits_left) | (b >> (8 - bits_left)); bits_collected += bits_left; break; }
+        }
     }
     uint32_t ptr;
     if (safe_read_u32(ctx->data, ctx->data_size, ctx->off_v6_jump + idx_jump * 4, &ptr) != QZDB_OK) return 0;
@@ -543,6 +549,10 @@ static uint32_t trie_walk_v6(const qzdb_reader_t* ctx, const uint8_t* ip_bin) {
 #define QZDB_CACHE_PROBE 4
 #ifndef QZDB_GEO_CACHE_CAP
 #define QZDB_GEO_CACHE_CAP 16384u
+#endif
+
+#if (QZDB_GEO_CACHE_CAP & (QZDB_GEO_CACHE_CAP - 1)) != 0
+#error "QZDB_GEO_CACHE_CAP must be a power of two!"
 #endif
 
 static void geo_cache_init(qzdb_reader_t* ctx) {
