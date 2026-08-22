@@ -10,7 +10,8 @@ from enum import Enum
 SENTINEL = 0x80000000
 SENTINEL_MASK_24 = 0x7FFFFF
 SENTINEL_MASK_31 = 0x7FFFFFFF
-MAX_TRIE_WALK_STEPS = 1000
+MAX_TRIE_WALK_STEPS_V4 = 32 + 8   # IPv4 walk cap = max(32+8,40) = 40
+MAX_TRIE_WALK_STEPS_V6 = 128 + 8  # IPv6 walk cap = max(128+8,40) = 136
 MAX_POOL_COUNT = 1 << 26
 FLOAT_FIELDS = frozenset(['longitude', 'latitude'])
 
@@ -1564,7 +1565,7 @@ class QzdbReader:
         if v4_node_24:
             while True:
                 steps += 1
-                if steps >= MAX_TRIE_WALK_STEPS:
+                if steps >= MAX_TRIE_WALK_STEPS_V4:
                     return 0
                 bit = (suffix >> 31) & 1
                 if idx >= v4_node_count:
@@ -1584,7 +1585,7 @@ class QzdbReader:
             unpack_u32 = struct.Struct('<I').unpack_from
             while True:
                 steps += 1
-                if steps >= MAX_TRIE_WALK_STEPS:
+                if steps >= MAX_TRIE_WALK_STEPS_V4:
                     return 0
                 bit = (suffix >> 31) & 1
                 if idx >= v4_node_count:
@@ -1623,7 +1624,7 @@ class QzdbReader:
         if v6_node_24:
             while depth < 128:
                 steps += 1
-                if steps >= MAX_TRIE_WALK_STEPS:
+                if steps >= MAX_TRIE_WALK_STEPS_V6:
                     return 0
                 bit = (ip_int >> (127 - depth)) & 1
                 if idx >= v6_node_count:
@@ -1641,7 +1642,7 @@ class QzdbReader:
             unpack_u32 = struct.Struct('<I').unpack_from
             while depth < 128:
                 steps += 1
-                if steps >= MAX_TRIE_WALK_STEPS:
+                if steps >= MAX_TRIE_WALK_STEPS_V6:
                     return 0
                 bit = (ip_int >> (127 - depth)) & 1
                 if idx >= v6_node_count:

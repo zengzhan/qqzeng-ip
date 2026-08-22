@@ -155,3 +155,29 @@ git push origin main
 2. ❌ **严禁上传内部开发/审计文档**：`CODE_AUDIT_REPORT.md`, `RELEASE_READINESS_REPORT.md` 等内部文件仅保留在本地 dev 仓库；
 3. ❌ **严禁使用 `rsync --delete` 直接覆盖 GitHub 根目录**：会导致 GitHub 根目录专属的 `README.md`, `database-sql/`, `phone-location-sdk/` 等独立仓库文件被误删；
 4. ⚠️ **必须使用拓扑顺序 Commit**：如果修改了 `ip-qzdb-sdk` 顶级目录的内容，必须重新执行 Step 3 刷一遍子目录和顶级目录的 Commit，否则 GitHub 网页右侧会回退显示为旧的通用 Commit Message。
+
+---
+
+## 五、Trie 游走终止保护审计（跨语言统一）
+
+> **背景**：Trie 游走若遇敌对 / 自引用节点（指针回指形成环），可能陷入死循环导致 DoS。
+> 各语言需保证**任何文件下游走必然终止**。终止机制分三类：
+> - **(a) 派生步数上限**：步数上限由 IP 位宽派生 `cap = max(IPBits + 8, 40)`，即 IPv4 ≤ 40、IPv6 ≤ 136；超过即视为敌对文件，拒绝（返回 miss）是正确 fail-closed 行为。正确 Patricia 树深度不可能超过位宽 + root 余量，故该上限对良构文件零影响。
+> - **(b) 魔法常量上限**：硬编码经验值（如 `1000`），功能等价但不可解释、易误改。
+> - **(c) 构造性有界（bounded-by-construction）**：循环变量严格按位宽递增（`for depth < 128` / `for step < 16`），深度天然封顶，无需步数上限。
+> - **(d) 逐步结构边界校验**：每步校验 `idx < nodeCount` 等，防止越界读取（属内存安全，不单独防环）。
+>
+> **统一结论**：原 Node.js 等 5 语言使用的魔法常量 `1000` 已统一替换为按位宽派生的命名常量；Rust / Java / C# 本就构造性有界，无需改动，仅在此登记机制。
+
+| 语言 | 终止机制 | 上限来源 | 理由 |
+|:---|:---|:---|:---|
+| **C** | 派生步数上限（V4）+ 构造性有界（V6） | V4 = `max(32+8,40)` = 40；V6 = `max(128+8,40)` = 136（按位宽派生） | V4 游走 `while(1)` 仅靠步数上限兜底；V6 `while(depth<128)` 构造性有界，步数上限为冗余防御。原魔法常量 `1000` 已替换为按位宽派生常量 `QZDB_MAX_TRIE_WALK_STEPS_V4/V6`。 |
+| **C# (.NET)** | 构造性有界 + 逐步结构校验 | 无魔法常量；V4 `for step < 16`，V6 `for depth < 128` | unsafe 指针游走，每步校验 `idx >= nodeCount` 与 `node >= nodesEnd`；循环深度由 IP 位宽天然封顶，无需步数上限。 |
+| **Go** | 派生步数上限（V4）+ 构造性有界（V6） | V4 = `max(32+8,40)` = 40（按位宽派生）；V6 无步数上限 | V4 `for steps < maxTrieWalkSteps` 兜底；V6 `for depth < 128` 构造性有界。原魔法常量 `1000` 已替换为按位宽派生常量 `maxTrieWalkSteps`。 |
+| **Java** | 构造性有界 | 无魔法常量；V4 `for step < 16`，V6 `for depth < 128` | V4 行号游走 `for step < 16`、V4/V6 深度游走 `for depth < maxDepth`（maxDepth = 32 / 128）；循环深度由 IP 位宽天然封顶。 |
+| **Node.js** | 派生步数上限（V4）+ 构造性有界（V6） | V4 = `max(32+8,40)` = 40（按位宽派生）；V6 无步数上限 | V4 `while(true)` 仅靠步数上限兜底；V6 `while(depth < 128)` 构造性有界。原魔法常量 `1000` 已替换为按位宽派生常量 `MAX_TRIE_WALK_STEPS`。 |
+| **PHP** | 派生步数上限（V4）+ 构造性有界（V6） | V4 = `max(32+8,40)` = 40；V6 = `max(128+8,40)` = 136（按位宽派生） | V4 `while(true)` 仅靠步数上限兜底；V6 `while(depth < 128)` 构造性有界，步数上限为冗余防御。原魔法常量 `1000` 已替换为按位宽派生常量 `MAX_TRIE_WALK_STEPS_V4/V6`。 |
+| **Python** | 派生步数上限（V4）+ 构造性有界（V6） | V4 = `max(32+8,40)` = 40；V6 = `max(128+8,40)` = 136（按位宽派生） | V4 `while True` 仅靠步数上限兜底（每步 `idx >= nodeCount` 仅防越界、不防环）；V6 `while depth < 128` 构造性有界，步数上限为冗余防御。原魔法常量 `1000` 已替换为按位宽派生常量 `MAX_TRIE_WALK_STEPS_V4/V6`。 |
+| **Rust** | 构造性有界 | 无魔法常量；V4 `for _ in 0..16` / `while depth < max_depth`，V6 `while depth < 128` | 深度游走 `while depth < max_depth`（max_depth = 32 / 128）、行号游走 `for _ in 0..16`；循环深度由 IP 位宽天然封顶。 |
+
+> **变更清单（仅 5 个文件，其余 3 个语言仅登记）**：`multi-lang/nodejs/qzdb.js`、`multi-lang/go/qzdb/qzdb.go`、`multi-lang/c/qzdb_reader.h` + `multi-lang/c/qzdb_reader.c`、`multi-lang/python/qzdb.py`、`multi-lang/php/QzdbReader.php`。所有改动仅替换终止上限的推导方式，未触碰解析语义、公开 API、缓存或文件格式假设；良构文件行为完全不变（V4 实际 ≤ 16 步、V6 实际 ≤ 128 步，均远低于派生上限）。
