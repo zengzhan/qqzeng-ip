@@ -1,0 +1,153 @@
+name: QZDB CI Gate
+
+# Two-tier design (replaces the old verify.yml whose hard data-directory check
+# made it unpassable on hosted runners, since .qzdb files are intentionally
+# gitignored):
+#
+#   Tier 1  compile-gate       Always runs. No proprietary data required.
+#                              Catches API/compile breaks across all 8 language
+#                              ports and runs the data-free ASan/UBSan hostile
+#                              harness recommended by c/fuzz/boundary_test.c.
+#
+#   Tier 2  full-verification  Runs L1-L4 only when test databases are
+#                              available: create a PRIVATE GitHub release
+#                              (default tag `test-data`) holding the .qzdb
+#                              files, add a PAT with repo-read access as the
+#                              DATA_DOWNLOAD_TOKEN secret. Skips cleanly when
+#                              the secret is absent.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile-gate:
+    name: Compile gate (data-free)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Java — compile full source tree
+        working-directory: multi-lang/java
+        run: |
+          mkdir -p build
+          javac -encoding UTF-8 -d build $(find src -name '*.java')
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: C# — build SDK + test suite (harness command)
+        working-directory: multi-lang
+        run: >
+          dotnet build netcore.Tests/netcore.Tests.csproj -c Release
+          -p:TargetFramework=net10.0 -p:TargetFrameworks=net10.0 -v:q
+
+      - name: Set up Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Rust — cargo check all targets
+        working-directory: multi-lang/rust
+        run: cargo check --all-targets
+
+      - name: Set up Go 1.22
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Go — build & vet
+        working-directory: multi-lang/go
+        run: |
+          go build ./...
+          go vet ./...
+
+      - name: Install PHP CLI and C toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y php-cli gcc
+
+      - name: C — build & run ASan/UBSan hostile harness (data-free)
+        working-directory: multi-lang/c/fuzz
+        run: |
+          cc -std=c11 -g -O1 -fsanitize=address,undefined \
+             ../qzdb_reader.c boundary_test.c -o /tmp/boundary_test -pthread -lm
+          /tmp/boundary_test
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Node.js — syntax check
+        run: |
+          node --check multi-lang/nodejs/qzdb.js
+          node --check multi-lang/nodejs/test_suite.js
+
+      - name: PHP — lint
+        run: php -l multi-lang/php/QzdbReader.php
+
+      - name: Python — byte-compile sources and tests
+        working-directory: multi-lang/python
+        run: |
+          python3 -m py_compile qzdb.py test_tier1.py test_golden.py \
+                                test_csv_oracle.py test_regression.py
+
+  full-verification:
+    name: Full L1-L4 (needs test-data release)
+    needs: compile-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve test databases from private release
+        id: fetch
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.DATA_DOWNLOAD_TOKEN }}
+          DATA_RELEASE_TAG: ${{ vars.DATA_RELEASE_TAG || 'test-data' }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::notice::DATA_DOWNLOAD_TOKEN not set — skipping full verification (compile gate still enforced)."
+            echo "::notice::Enable by creating a PRIVATE release tagged '$DATA_RELEASE_TAG' with .qzdb assets, then adding the token as a repository secret."
+            exit 1
+          fi
+          mkdir -p multi-lang/data
+          gh release download "$DATA_RELEASE_TAG" \
+             --repo "$GITHUB_REPOSITORY" --dir multi-lang/data --pattern '*.qzdb'
+          echo "Fetched $(find multi-lang/data -name '*.qzdb' | wc -l) database file(s)"
+
+      - name: Run unified verification (L1-L4)
+        if: steps.fetch.outcome == 'success'
+        working-directory: multi-lang
+        run: |
+          chmod +x run_all.sh
+          ./run_all.sh
+
+      - name: Upload test results
+        if: always() && steps.fetch.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-results
+          path: multi-lang/.test_results/
+          retention-days: 30
+        continue-on-error: true
