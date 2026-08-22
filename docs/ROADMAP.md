@@ -57,6 +57,14 @@
 - **验收**：8 语言 walk 上限来源可追溯（常量或推导式），SYNC_GUIDE 有对照表；正常数据全量查询无回归。
 - **验证**：`cd multi-lang && ./run_all.sh`
 
+### T6 · CI 编译门禁 【P0】✅ 2026-08-22
+
+- **现状（已修复的缺陷）**：原 `verify.yml` 在无数据步骤硬性 `exit 1`，而 `.qzdb` 因安全规则不入库 → 托管 runner 上该工作流**从未可能通过**，形同虚设；`188ca29` 的坏构建因此在 main 上存活一周。
+- **做法**：两层设计。Tier 1 `compile-gate` 永远执行——8 语言编译/语法门禁 + C ASan/UBSan 无数据 hostile 套件（`boundary_test.c` 文件头注释预定的用途），全部命令经本地实测；Tier 2 `full-verification` 仅当配置 `DATA_DOWNLOAD_TOKEN` secret 且存在私有 release（默认 tag `test-data`，含 .qzdb 资产）时拉取数据跑完整 L1-L4，否则优雅跳过。
+- **验收**：新 workflow YAML 结构校验通过；gate 内全部命令在本地逐条实测绿；verify.yml 移除。
+- **验证**：push 后观察 Actions 首跑；本地等价命令见 `.github/workflows/ci.yml` 各步骤。
+- **完成**：`.github/workflows/ci.yml` 替代 verify.yml。Tier 2 待仓库管理员配置 secret + test-data release 后激活。
+
 ### T5 · Validation 分级演进 【P2·可选】
 
 - **现状**：`init_ex(verify_crc)` 已提供开关雏形；Strict/Normal/Fast 三级仅在出现真实启动耗时痛点时才有价值。
