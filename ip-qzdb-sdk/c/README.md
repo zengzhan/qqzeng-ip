@@ -724,3 +724,5 @@ typedef enum { QZDB_OK=0, QZDB_ERR_NOT_FOUND=-1, QZDB_ERR_CORRUPTED=-2,
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
+
+<!-- commit: c: ⚡ C/C++ 语言极速解析引擎 (mmap 零拷贝, 微秒级响应, 零堆内存分配) sync=1787422034 -->
