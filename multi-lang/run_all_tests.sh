@@ -152,6 +152,8 @@ if [ -n "$JAVA_HOME" ]; then
         run_test "Java" "$JAVA_HOME/bin/java -cp java/build com.qqzeng.qzdb.QzdbReaderTest" ""
         run_test "Java-Tier2" "$JAVA_HOME/bin/java -cp java/build com.qqzeng.qzdb.FullAccuracyAndPerfTester" ""
         run_test "Java-Tier3" "$JAVA_HOME/bin/java -Xmx4g -cp java/build com.qqzeng.qzdb.DualStackBenchmark" ""
+        # Gate passes only when the suite prints FAILCLOSED_OK (29/29, no genuine SDK bug).
+        run_test "Java-FailClosed" "$JAVA_HOME/bin/java -Xmx2g -cp java/build com.qqzeng.qzdb.FailClosedHostileTest" "" "FAILCLOSED_OK" "0"
     fi
 else
     echo "[SKIP] Java (JDK not found)"
