@@ -1618,9 +1618,13 @@ class QzdbReader:
 
         idx = ptr
         depth = jump_bits
+        steps = 0
 
         if v6_node_24:
             while depth < 128:
+                steps += 1
+                if steps >= MAX_TRIE_WALK_STEPS:
+                    return 0
                 bit = (ip_int >> (127 - depth)) & 1
                 if idx >= v6_node_count:
                     return 0
@@ -1636,6 +1640,9 @@ class QzdbReader:
         else:
             unpack_u32 = struct.Struct('<I').unpack_from
             while depth < 128:
+                steps += 1
+                if steps >= MAX_TRIE_WALK_STEPS:
+                    return 0
                 bit = (ip_int >> (127 - depth)) & 1
                 if idx >= v6_node_count:
                     return 0

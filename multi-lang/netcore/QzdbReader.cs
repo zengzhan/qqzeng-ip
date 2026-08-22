@@ -244,6 +244,17 @@ public sealed class QzdbReader : IDisposable
         internal long _storedCrc;
         internal long? _canonicalCrc;
 
+        /// <summary>
+        /// Best-effort, idempotent release of the mmap view/handle (byte[]-backed
+        /// snapshots have no owner and this is a no-op). Safe to call multiple
+        /// times: MmapManager.Dispose(bool) guards on an internal _disposed flag.
+        /// NOT safe to call while another thread may still be mid-TrieWalk against
+        /// this exact snapshot instance — see the one-generation grace period in
+        /// QzdbReader.PublishSnapshot/Dispose, which is what makes calling this
+        /// safe in practice without per-query reference counting.
+        /// </summary>
+        internal void DisposeOwner() => _dataOwner?.Dispose();
+
         internal sealed class CacheEntry
         {
             internal readonly uint Key;
@@ -2036,6 +2047,34 @@ public sealed class QzdbReader : IDisposable
 
     private long _reloadEpoch = 0;
 
+    /// <summary>
+    /// mmap-backed snapshot retired by the previous Reload/dispose cycle, held one
+    /// extra generation before its view/handle is actually released.
+    ///
+    /// WHY: queries never take a lock or increment a per-call refcount (that is the
+    /// whole point of the lock-free snapshot design), so at the instant a snapshot
+    /// is swapped out there is no cheap way to know whether some thread is still
+    /// mid-TrieWalk against its raw mmap pointer. Calling MmapManager.Dispose()
+    /// synchronously at swap time would unmap memory a concurrent reader could be
+    /// dereferencing that same instant -> AccessViolationException, not a benign
+    /// GC-timing issue. Waiting for GC finalization (the old behaviour) avoids that
+    /// crash but makes release non-deterministic: under frequent Reload() calls the
+    /// process can accumulate multiple open mmap handles, and on Windows an
+    /// unreleased mapping blocks deleting/replacing the underlying file.
+    ///
+    /// Fix: keep exactly one retired snapshot "in quarantine" instead of releasing
+    /// immediately. By the time a *second* Reload/Dispose happens, every query that
+    /// was in flight against the first-retired snapshot (a microsecond-scale
+    /// critical section) has long since returned — Reload/Dispose is an operational
+    /// action invoked at most every few minutes in realistic deployments, many
+    /// orders of magnitude longer than any in-flight query. This bounds the leak to
+    /// "at most one extra generation" with zero added per-query cost, instead of
+    /// "whenever GC next happens to run" with unbounded generations in flight.
+    /// Callers needing a hard synchronous guarantee (e.g. immediately deleting the
+    /// old file on Windows) should add their own drain delay before doing so.
+    /// </summary>
+    private Snapshot? _retiring;
+
     /// <summary>Atomically swap in a freshly loaded snapshot from <paramref name="path"/> (CRC always enforced, latest-wins strategy).</summary>
     public void Reload(string path)
     {
@@ -2061,7 +2100,14 @@ public sealed class QzdbReader : IDisposable
         lock (_lifecycleGate)
         {
             if (Interlocked.Exchange(ref _lifecycleState, 1) != 0) return;
-            Interlocked.Exchange(ref _activeSnapshot, null);
+            var last = Interlocked.Exchange(ref _activeSnapshot, null);
+            // Dispose() is the terminal call: per the standard .NET IDisposable
+            // contract the caller must not have concurrent queries in flight once
+            // Dispose() is invoked (same expectation as FileStream/Socket), so an
+            // eager, synchronous release is correct and appropriate here — this is
+            // NOT the frequent-reload path, so no quarantine delay is needed.
+            last?.DisposeOwner();
+            Interlocked.Exchange(ref _retiring, null)?.DisposeOwner();
         }
     }
 
@@ -2071,14 +2117,20 @@ public sealed class QzdbReader : IDisposable
         {
             if (Volatile.Read(ref _lifecycleState) != 0)
             {
+                snapshot.DisposeOwner(); // never published; nothing can be reading it yet
                 throw new ObjectDisposedException(nameof(QzdbReader));
             }
             if (epoch > 0 && epoch < Volatile.Read(ref _reloadEpoch))
             {
-                // A newer reload has already started or succeeded; discard stale snapshot
+                // A newer reload has already started or succeeded; discard stale snapshot.
+                snapshot.DisposeOwner(); // this one was never published either — release now
                 return;
             }
-            Interlocked.Exchange(ref _activeSnapshot, snapshot);
+            var old = Interlocked.Exchange(ref _activeSnapshot, snapshot);
+            // Quarantine the just-retired snapshot for one more generation before
+            // releasing its mmap handle; release whatever finished quarantine.
+            var toRelease = Interlocked.Exchange(ref _retiring, old);
+            toRelease?.DisposeOwner();
         }
     }
 
