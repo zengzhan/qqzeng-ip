@@ -26,26 +26,29 @@
 
 ## 开放任务
 
-### T1 · Java 补齐 Tier-1 fail-closed 套件 【P0】
+### T1 · Java 补齐 Tier-1 fail-closed 套件 【P0】✅ 2026-08-22
 
 - **现状**：`multi-lang/java/src/test/java/com/qqzeng/qzdb/` 仅 `QzdbReaderTest` / `DualStackBenchmark` / `FullAccuracyAndPerfTester`，无恶意文件用例。8 语言中唯一缺口。
 - **做法**：断言集对标 Rust `tests/failclosed.rs` 与 Go `tier1_test.go`——截断 header、offset 越界、CRC 不匹配、Trie node 自环、Pool offset 溢出等 hostile 输入，一律抛异常或返回空结果，**禁止返回看似合法的错误数据**。
 - **验收**：≥10 个 hostile case 全部 fail-closed；`mvn test` 通过。
 - **验证**：`cd multi-lang/java && mvn -q test`
+- **完成**：新增 `FailClosedHostileTest.java`（自研零依赖 JSON 解析 + 10 种变异 op 引擎），消费 T3 向量文件 29/29 全部 fail-closed（含 CRC 有效重算的查询期行级攻击）；已接入 `run_all_tests.sh` 为 `Java-FailClosed` 门禁项。已知差异：Java 查询期对越界 entryId 选择优雅空而非抛异常（fail-closed 成立，记录于套件 DIVERGENT 报告）。
 
-### T2 · .NET 接入 golden_vectors.json 【P0】
+### T2 · .NET 接入 golden_vectors.json 【P0】✅ 2026-08-22
 
 - **现状**：`multi-lang/netcore.Tests/` 只有 `Tier1.cs`，未消费共享向量源；跨语言一致性矩阵在 .NET 上断链。
 - **做法**：新增 golden 测试类，读取 `tools/golden_vectors.json`，逐条比对 Find 结果与 pipe 字符串（对齐 Python 基线行为）。
 - **验收**：golden 全量 PASS；纳入 `run_all_tests.sh` 的 .NET 测试入口。
 - **验证**：`cd multi-lang && ./run_all_tests.sh`
+- **完成**：新增 `GoldenTests.cs`，4102/4102 通过（std+ult 双库 × random/boundary/invalid 五类），失败计入 `ALL TIERS PASSED` 门禁。
 
-### T3 · Hostile 向量单一事实源 【P1】
+### T3 · Hostile 向量单一事实源 【P1】◐ 数据文件已建（2026-08-22），存量消费者迁移待做
 
 - **现状**：6 个语言各自内联构造恶意输入，无共享文件；新语言接入时需重写一遍。
 - **做法**：新建 `tools/hostile_vectors.json`（case id、篡改字段、期望失败模式），各语言 fail-closed 测试改为消费该文件；保留语言特有的内存安全用例（如 C/Rust 的 ASAN 场景）。
 - **验收**：≥5 语言消费同一向量文件；`run_all.sh` L1 层通过。
 - **依赖**：T1 完成后 Java 直接接入。
+- **进展**：文件已产出（29 用例 × 10 类场景，配方经真实文件头核验）；Java 已作为首个消费者接入。剩余：C/Rust/Go/C#/Py 存量 hostile 测试迁移至同一向量源。
 
 ### T4 · Trie walk 终止保护策略统一 【P1】
 
