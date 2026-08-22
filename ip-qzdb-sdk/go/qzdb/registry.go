@@ -351,22 +351,112 @@ type QzdbRegistry struct {
 	names   []string
 	readers map[string]*QzdbReader
 	order   []*QzdbReader
+
+	// quarantine 保存最近被替换/注销的 reader，延迟关闭而不是立即 Close()。
+	//
+	// 为什么需要它：Get(name) 把 *QzdbReader 本体交给调用方；调用方完全可能
+	// 先 Get() 拿到引用，还没来得及 Find()，另一个 goroutine 的热更新
+	// Register(name, newReader) 就把旧 reader 换掉了。QzdbReader.Close() 本身
+	// 对并发调用是安全的（不会 panic，只会让后续 Find() 返回 ErrClosed，
+	// 见 Close()/snapshot() 的实现），但对调用方来说仍然是一次不该发生的
+	// "毫无预兆的查询失败"。Register/Unregister 是运维触发的低频动作
+	// （分钟级以上间隔），而一次 Find() 只是微秒级临界区，所以把刚替换下来的
+	// reader 在有限容量的队列里多留几轮，能让几乎所有在途调用安全完成，
+	// 同时把最坏情况（进程一直不退出、reader 永不释放）限制在 quarantineCap
+	// 个以内，而不是无限增长。
+	quarantine []*QzdbReader
 }
+
+const registryQuarantineCap = 8
 
 // NewQzdbRegistry 创建空注册表。
 func NewQzdbRegistry() *QzdbRegistry {
 	return &QzdbRegistry{readers: make(map[string]*QzdbReader)}
 }
 
-// Register 注册一个命名 reader（注册顺序决定查找优先级）。
+// Register 注册一个命名 reader（注册顺序决定 Find() 的查找优先级）。
+// 对已存在的 name 重复调用会原地替换 order 中的旧条目（热更新对 Find() 立即生效），
+// 而不是把旧 reader 悄悄留在 order 里继续被使用；旧 reader 移入退休队列延迟关闭。
 func (reg *QzdbRegistry) Register(name string, r *QzdbReader) {
 	reg.mu.Lock()
 	defer reg.mu.Unlock()
-	if _, exists := reg.readers[name]; !exists {
+	if old, exists := reg.readers[name]; exists {
+		for i, cur := range reg.order {
+			if cur == old {
+				reg.order[i] = r
+				break
+			}
+		}
+		reg.retireLocked(old)
+	} else {
 		reg.names = append(reg.names, name)
 		reg.order = append(reg.order, r)
 	}
 	reg.readers[name] = r
+}
+
+// Unregister 移除一个命名 reader；旧 reader 移入退休队列延迟关闭。
+// 未注册的 name 是安全的空操作。
+func (reg *QzdbRegistry) Unregister(name string) {
+	reg.mu.Lock()
+	defer reg.mu.Unlock()
+	old, exists := reg.readers[name]
+	if !exists {
+		return
+	}
+	delete(reg.readers, name)
+	for i, n := range reg.names {
+		if n == name {
+			reg.names = append(reg.names[:i], reg.names[i+1:]...)
+			break
+		}
+	}
+	for i, cur := range reg.order {
+		if cur == old {
+			reg.order = append(reg.order[:i], reg.order[i+1:]...)
+			break
+		}
+	}
+	reg.retireLocked(old)
+}
+
+// retireLocked 把 old 放入退休队列；超出容量时关闭最早退休的 reader。
+// 调用方必须已持有 reg.mu 的写锁。
+func (reg *QzdbRegistry) retireLocked(old *QzdbReader) {
+	if old == nil {
+		return
+	}
+	reg.quarantine = append(reg.quarantine, old)
+	for len(reg.quarantine) > registryQuarantineCap {
+		evicted := reg.quarantine[0]
+		reg.quarantine = reg.quarantine[1:]
+		_ = evicted.Close()
+	}
+}
+
+// Clear 移除并关闭全部已注册的 reader（视为终止关闭动作，非热更新，
+// 因此同步立即 Close，语义与直接调用某个 reader 的 Close() 一致）。
+// 退休队列中尚未关闭的旧 reader 一并冲刷关闭。
+func (reg *QzdbRegistry) Clear() {
+	reg.mu.Lock()
+	order := reg.order
+	quarantined := reg.quarantine
+	reg.names = nil
+	reg.order = nil
+	reg.quarantine = nil
+	reg.readers = make(map[string]*QzdbReader)
+	reg.mu.Unlock()
+
+	for _, r := range order {
+		if r != nil {
+			_ = r.Close()
+		}
+	}
+	for _, r := range quarantined {
+		if r != nil {
+			_ = r.Close()
+		}
+	}
 }
 
 // Get 按名称取回 reader。

@@ -1739,10 +1739,7 @@ class QzdbReader
         if ($this->v4Node24) {
             $nodeOffset = $this->offV4Nodes + $nodeIdx * 6;
             $offset = $bit === 0 ? $nodeOffset : $nodeOffset + 3;
-            $b0 = $this->readByte($offset);
-            $b1 = $this->readByte($offset + 1);
-            $b2 = $this->readByte($offset + 2);
-            $val = $b0 | ($b1 << 8) | ($b2 << 16);
+            $val = $this->readUint24($offset);
             if ($val & 0x800000) {
                 return ($val & 0x7FFFFF) | self::SENTINEL;
             }
@@ -1759,10 +1756,7 @@ class QzdbReader
         if ($this->v6Node24) {
             $nodeOffset = $this->offV6Nodes + $nodeIdx * 6;
             $offset = $bit === 0 ? $nodeOffset : $nodeOffset + 3;
-            $b0 = $this->readByte($offset);
-            $b1 = $this->readByte($offset + 1);
-            $b2 = $this->readByte($offset + 2);
-            $val = $b0 | ($b1 << 8) | ($b2 << 16);
+            $val = $this->readUint24($offset);
             if ($val & 0x800000) {
                 return ($val & 0x7FFFFF) | self::SENTINEL;
             }
@@ -2177,6 +2171,22 @@ class QzdbReader
             $len = $avail;
         }
         return substr($this->data, $off, $len);
+    }
+
+    /**
+     * 24 位紧凑节点读取（3 字节小端）。合并边界检查为 1 次，
+     * 替代 getV4Child/getV6Child 里连续 3 次 readByte() 各自判断越界的写法，
+     * 把每节点 3 次分支判断收敛为 1 次。仅缓冲模式（$this->data 非 null）走快路径，
+     * 流式模式回退到旧的按字节读取，保证行为一致。
+     */
+    private function readUint24($off)
+    {
+        if ($this->data !== null) {
+            if ($off < 0 || $off + 3 > $this->dataLen) return 0;
+            $d = $this->data;
+            return ord($d[$off]) | (ord($d[$off + 1]) << 8) | (ord($d[$off + 2]) << 16);
+        }
+        return $this->readByte($off) | ($this->readByte($off + 1) << 8) | ($this->readByte($off + 2) << 16);
     }
 
     private function readByte($off)

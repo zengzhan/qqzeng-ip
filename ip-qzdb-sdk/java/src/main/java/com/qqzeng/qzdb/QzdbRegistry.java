@@ -2,7 +2,9 @@ package com.qqzeng.qzdb;
 
 import java.io.File;
 import java.util.Map;
+import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * 便利管理层 (QzdbRegistry)
@@ -12,10 +14,26 @@ import java.util.concurrent.ConcurrentHashMap;
 public class QzdbRegistry {
 
     private static final QzdbRegistry GLOBAL_INSTANCE = new QzdbRegistry();
+    private static final int QUARANTINE_CAPACITY = 8;
 
     private final Map<String, QzdbReader> registryMap = new ConcurrentHashMap<>();
+    private final Queue<QzdbReader> quarantine = new ConcurrentLinkedQueue<>();
 
     public QzdbRegistry() {
+    }
+
+    private void retire(QzdbReader old) {
+        if (old == null) return;
+        quarantine.add(old);
+        while (quarantine.size() > QUARANTINE_CAPACITY) {
+            QzdbReader evicted = quarantine.poll();
+            if (evicted != null) {
+                try {
+                    evicted.close();
+                } catch (Exception ignored) {
+                }
+            }
+        }
     }
 
     /**
@@ -27,9 +45,7 @@ public class QzdbRegistry {
         }
         QzdbReader reader = new QzdbReader.Builder(new File(path)).build();
         QzdbReader old = registryMap.put(name, reader);
-        if (old != null) {
-            old.close();
-        }
+        retire(old);
     }
 
     /**
@@ -41,9 +57,7 @@ public class QzdbRegistry {
         }
         QzdbReader reader = new QzdbReader.Builder(buffer).build();
         QzdbReader old = registryMap.put(name, reader);
-        if (old != null) {
-            old.close();
-        }
+        retire(old);
     }
 
     /**
@@ -60,9 +74,7 @@ public class QzdbRegistry {
     public void unregister(String name) {
         if (name == null) return;
         QzdbReader removed = registryMap.remove(name);
-        if (removed != null) {
-            removed.close();
-        }
+        retire(removed);
     }
 
     /**
@@ -76,6 +88,13 @@ public class QzdbRegistry {
             }
         }
         registryMap.clear();
+        QzdbReader q;
+        while ((q = quarantine.poll()) != null) {
+            try {
+                q.close();
+            } catch (Exception ignored) {
+            }
+        }
     }
 
     // =========================================================================
