@@ -21,7 +21,12 @@ const SENTINEL = 0x80000000;        // 32 位节点哨兵位
 const SENTINEL_24 = 0x800000;       // 24 位节点哨兵位
 const SENTINEL_MASK_31 = 0x7FFFFFFF;
 const SENTINEL_MASK_24 = 0x7FFFFF;
-const MAX_TRIE_WALK_STEPS = 1000;
+// 派生步数上限（取代魔法常量 1000）：正确 Patricia 树深度不可能超过
+// IP 地址位数 + 8（root 余量）；超过即视为敌对文件，拒绝（返回 miss）
+// 是正确的 fail-closed 行为。IPv4 = max(32+8, 40) = 40，IPv6 = max(128+8, 40) = 136。
+// 本文件 V4 游走使用此上限；V6 游走由 `while (depth < 128)` 构造性有界，无需步数上限。
+const V4_ADDR_BITS = 32;
+const MAX_TRIE_WALK_STEPS = V4_ADDR_BITS + 8; // = max(32+8, 40) = 40，IPv4 路径使用
 const MAX_POOL_COUNT = 1 << 26;
 const GEO_CACHE_CAP = 1 << 16;      // per-snapshot 有界 GeoInfo 缓存容量
 
@@ -552,6 +557,8 @@ class QzdbReader {
     this._fieldNamesSource = FIELD_NAMES_SOURCE_SYNTHETIC;
     this._dataMonth = '';
     this._buildTimeStr = '';
+    this._metaDataMonth = ''; // Metadata TLV type=5（v2.4 权威）
+    this._scope = '';         // Metadata TLV type=6（v2.4 权威；无条目 ""）
 
     // 行 schema
     this._rowGeoWidth = 3;
@@ -956,6 +963,8 @@ class QzdbReader {
         else if (t === 2) metaNames = val.split('|');
         else if (t === 3) this._description = val;
         else if (t === 4) this._primaryVersion = val;
+        else if (t === 5) this._metaDataMonth = val; // v2.4：数据期号（权威）
+        else if (t === 6) this._scope = val;         // v2.4：数据覆盖范围（权威）
         // 未知 type 按设计跳过（FORMAT §8.1）
         pos += 4 + length;
       }
@@ -1026,18 +1035,24 @@ class QzdbReader {
     }
     this._floatFlags = this._fieldNames.map((n) => GeoInfo.isNumericFieldName(n));
 
-    // 构建日期 → dataMonth / buildTime
+    // 数据期号 / 覆盖范围（FORMAT §8.2）：Metadata TLV type=5(data_month)、
+    // type=6(scope) 为权威来源；Header BuildDate 仅作回落，buildTimeStr 始终取自它。
     if (this._buildDate > 0) {
       const y = Math.floor(this._buildDate / 10000);
       const m = Math.floor(this._buildDate / 100) % 100;
       const dd = this._buildDate % 100;
       const mm = String(m).padStart(2, '0');
       const dds = String(dd).padStart(2, '0');
-      this._dataMonth = `${y}-${mm}`;
       this._buildTimeStr = `${y}-${mm}-${dds}`;
     } else {
-      this._dataMonth = '';
       this._buildTimeStr = '';
+    }
+    if (!this._metaDataMonth) {
+      this._dataMonth = this._buildDate > 0
+        ? `${Math.floor(this._buildDate / 10000)}-${String(Math.floor(this._buildDate / 100) % 100).padStart(2, '0')}`
+        : '';
+    } else {
+      this._dataMonth = this._metaDataMonth;
     }
   }
 
@@ -1713,7 +1728,8 @@ class QzdbReader {
   getEditionSource() { return this._editionSource; }
   /** 字段名来源：metadata / edition / synthetic。 */
   getFieldNamesSource() { return this._fieldNamesSource; }
-  getScope() { return ''; }
+  /** 数据覆盖范围：Metadata TLV type=6（v2.4 权威；无条目 ""，FORMAT §8.2）。 */
+  getScope() { return this._scope; }
   getBuildTime() { return this._buildTimeStr; }
   getDescription() { return this._description; }
   getFileHash() {

@@ -491,7 +491,7 @@ static uint32_t trie_walk_v4(const qzdb_reader_t* ctx, uint32_t ip_int) {
     uint32_t suffix = (ip_int & 0xFFFF) << 16;
     uint32_t steps = 0;
     while (1) {
-        if (++steps >= QZDB_MAX_TRIE_WALK_STEPS) return 0;
+        if (++steps >= QZDB_MAX_TRIE_WALK_STEPS_V4) return 0;
         uint32_t bit = (suffix >> 31) & 1;
         uint32_t child = get_v4_child(ctx, idx, bit);
         if (child == 0) return 0;
@@ -526,7 +526,7 @@ static uint32_t trie_walk_v6(const qzdb_reader_t* ctx, const uint8_t* ip_bin) {
     int depth = v6_jump_bits;
     int steps = 0;
     while (depth < 128) {
-        if (++steps >= QZDB_MAX_TRIE_WALK_STEPS) return 0;
+        if (++steps >= QZDB_MAX_TRIE_WALK_STEPS_V6) return 0;
         if (idx >= ctx->v6_node_count) return 0;
         int byte_idx = depth / 8;
         int bit_idx = 7 - (depth % 8);

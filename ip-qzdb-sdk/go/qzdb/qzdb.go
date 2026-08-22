@@ -34,7 +34,12 @@ const (
 	SENTINEL_MASK_31 uint32 = 0x7FFFFFFF
 )
 
-const maxTrieWalkSteps = 1000
+// 派生步数上限（取代魔法常量 1000）：正确 Patricia 树深度不可能超过
+// IP 地址位数 + 8（root 余量）；超过即视为敌对文件，拒绝（返回 ErrCorrupted）
+// 是正确的 fail-closed 行为。IPv4 = max(32+8, 40) = 40，IPv6 = max(128+8, 40) = 136。
+// 本文件 V4 游走使用此上限；V6 游走由 `for depth < 128` 构造性有界，无需步数上限。
+const v4AddrBits = 32
+const maxTrieWalkSteps = v4AddrBits + 8 // = max(32+8, 40) = 40，IPv4 路径使用
 
 // -----------------------------------------------------------------------------
 // 版本档次与字段名的自描述契约（FORMAT §10.3）
@@ -587,6 +592,7 @@ func (s *Snapshot) parseGroups() error {
 func (s *Snapshot) parseMetadata() error {
 	d := s.data
 	var metaVersion, metaDesc, metaPrimary string
+	var metaDataMonth, metaScope string
 	var metaFields []string
 	if s.flags&4 != 0 && s.offMeta > 0 && s.offMeta+4 <= uint64(len(d)) {
 		cursor := s.offMeta
@@ -611,6 +617,10 @@ func (s *Snapshot) parseMetadata() error {
 				metaDesc = val
 			case 4:
 				metaPrimary = val
+			case 5:
+				metaDataMonth = val // v2.4：数据期号（权威）
+			case 6:
+				metaScope = val // v2.4：数据覆盖范围（权威）
 			}
 			cursor += 4 + length
 		}
@@ -695,16 +705,22 @@ func (s *Snapshot) parseMetadata() error {
 		}
 	}
 
-	// 构建日期（Header 偏移 32：yyyyMMdd）推算
+	// 数据期号 / 覆盖范围（FORMAT §8.2）：Metadata TLV type=5(data_month)、
+	// type=6(scope) 为权威来源；Header BuildDate（offset 32，yyyyMMdd）仅作回落，
+	// buildTimeStr 始终取自 BuildDate。
 	buildDate := safeReadU32(d, 32)
+	if metaDataMonth != "" {
+		s.dataMonth = metaDataMonth
+	} else if buildDate > 0 {
+		s.dataMonth = fmt.Sprintf("%04d-%02d", buildDate/10000, (buildDate/100)%100)
+	}
 	if buildDate > 0 {
 		y := buildDate / 10000
 		m := (buildDate / 100) % 100
 		dd := buildDate % 100
-		s.dataMonth = fmt.Sprintf("%04d-%02d", y, m)
 		s.buildTimeStr = fmt.Sprintf("%04d-%02d-%02d", y, m, dd)
 	}
-	s.scope = ""
+	s.scope = metaScope
 	return nil
 }
 
@@ -1414,8 +1430,14 @@ func (r *QzdbReader) GetFieldNamesSource() string {
 	return FieldNamesSourceSynthetic
 }
 
-// GetScope 始终返回 ""（当前格式 Header 尚无 scope 字段）。
-func (r *QzdbReader) GetScope() string { return "" }
+// GetScope 返回数据覆盖范围（FORMAT §8.2 Metadata TLV type=6，v2.4 权威来源；
+// 文件无该条目时返回 ""）。
+func (r *QzdbReader) GetScope() string {
+	if s := r.snapshot(); s != nil {
+			return s.scope
+	}
+	return ""
+}
 
 // GetBuildTime 返回构建日期 "yyyy-MM-dd"。
 func (r *QzdbReader) GetBuildTime() string {

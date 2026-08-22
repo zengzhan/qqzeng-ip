@@ -475,5 +475,3 @@ node tier3_concurrent.js        # 并发安全验证
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: nodejs: ⚡ Node.js 极速解析引擎 (V8 原生 BigInt 优化, 异步高效检索) sync=1787391447 -->

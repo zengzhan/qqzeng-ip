@@ -90,15 +90,24 @@ run_test "Python" "$PYTHON_BIN test.py" "python"
 # oracle compares the SDK with the authoritative range CSV directly).
 run_test "CSV Oracle" "$PYTHON_BIN test_csv_oracle.py" "python" "CSV_ORACLE_OK"
 
+# Hostile-vector conformance (consumes tools/hostile_vectors.json; skips
+# gracefully when the base DB is absent).
+run_test "Python-HostileVectors" "$PYTHON_BIN test_hostile_vectors.py" "python" "HOSTILE_VECTORS_OK"
+
 # Node.js
 run_test "Node.js" "node test.js" "nodejs"
 
 # PHP
 run_test "PHP" "php test.php" "php"
 
+# PHP hostile-vector conformance (skips gracefully without base DB).
+run_test "PHP-HostileVectors" "php tier2_hostile.php" "php" "HOSTILE_VECTORS_OK"
+
 # Go
 if command -v go &> /dev/null; then
     run_test "Go" "go run ./cmd/demo" "go"
+    # Hostile-vector conformance (skips gracefully without base DB).
+    run_test "Go-HostileVectors" "go test ./qzdb/ -run 'TestHostileVectors' -count=1 -v" "go" "HOSTILE_VECTORS_OK"
 fi
 
 # Rust
@@ -152,6 +161,8 @@ if [ -n "$JAVA_HOME" ]; then
         run_test "Java" "$JAVA_HOME/bin/java -cp java/build com.qqzeng.qzdb.QzdbReaderTest" ""
         run_test "Java-Tier2" "$JAVA_HOME/bin/java -cp java/build com.qqzeng.qzdb.FullAccuracyAndPerfTester" ""
         run_test "Java-Tier3" "$JAVA_HOME/bin/java -Xmx4g -cp java/build com.qqzeng.qzdb.DualStackBenchmark" ""
+        # Gate passes only when the suite prints FAILCLOSED_OK (29/29, no genuine SDK bug).
+        run_test "Java-FailClosed" "$JAVA_HOME/bin/java -Xmx2g -cp java/build com.qqzeng.qzdb.FailClosedHostileTest" "" "FAILCLOSED_OK" "0"
     fi
 else
     echo "[SKIP] Java (JDK not found)"

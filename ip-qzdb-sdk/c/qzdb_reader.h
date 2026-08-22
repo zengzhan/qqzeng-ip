@@ -10,7 +10,8 @@ extern "C" {
 #include <pthread.h>
 
 #define QZDB_MAX_FIELDS 32
-#define QZDB_MAX_TRIE_WALK_STEPS 1000
+#define QZDB_MAX_TRIE_WALK_STEPS_V4  (32 + 8)  /* IPv4 walk cap = max(32+8,40)=40 */
+#define QZDB_MAX_TRIE_WALK_STEPS_V6  (128 + 8) /* IPv6 walk cap = max(128+8,40)=136 */
 #define QZDB_SENTINEL 0x80000000u
 #define QZDB_SENTINEL_MASK_24 0x7FFFFFu
 #define QZDB_SENTINEL_MASK_31 0x7FFFFFFFu

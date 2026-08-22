@@ -649,7 +649,8 @@ class QzdbReader
         }
         return $hit;
     }
-    const MAX_TRIE_WALK_STEPS = 1000;
+    const MAX_TRIE_WALK_STEPS_V4 = 32 + 8;   // IPv4 walk cap = max(32+8,40) = 40
+const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     const MAX_POOL_COUNT = 1 << 26;
     // 有界 GeoInfo 缓存容量。直接映射（direct-mapped）：碰撞覆盖单槽，**永不整表清空**。
     // 与 Go(geoCache.slots) / Node.js(_geoCache.keys|vals) / C#(槽位数组) 语义一致。
@@ -1793,7 +1794,7 @@ class QzdbReader
             $idx = $child;
             $suffix <<= 1;
             $steps++;
-            if ($steps >= self::MAX_TRIE_WALK_STEPS) return 0;
+            if ($steps >= self::MAX_TRIE_WALK_STEPS_V4) return 0;
         }
     }
 
@@ -1835,7 +1836,7 @@ class QzdbReader
 
         $steps = 0;
         while ($depth < $maxDepth) {
-            if (++$steps >= self::MAX_TRIE_WALK_STEPS) return 0;
+            if (++$steps >= self::MAX_TRIE_WALK_STEPS_V6) return 0;
             $byteIdx = (int)($depth / 8);
             $bitIdx = 7 - ($depth % 8);
             $bit = (ord($ipBin[$byteIdx]) >> $bitIdx) & 1;
