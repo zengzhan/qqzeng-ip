@@ -63,7 +63,7 @@
 - **做法**：两层设计。Tier 1 `compile-gate` 永远执行——8 语言编译/语法门禁 + C ASan/UBSan 无数据 hostile 套件（`boundary_test.c` 文件头注释预定的用途），全部命令经本地实测；Tier 2 `full-verification` 仅当配置 `DATA_DOWNLOAD_TOKEN` secret 且存在私有 release（默认 tag `test-data`，含 .qzdb 资产）时拉取数据跑完整 L1-L4，否则优雅跳过。
 - **验收**：新 workflow YAML 结构校验通过；gate 内全部命令在本地逐条实测绿；verify.yml 移除。
 - **验证**：push 后观察 Actions 首跑；本地等价命令见 `.github/workflows/ci.yml` 各步骤。
-- **完成**：`.github/workflows/ci.yml` 替代 verify.yml。Tier 2 待仓库管理员配置 secret + test-data release 后激活。
+- **完成**：`.github/workflows/ci.yml` 替代 verify.yml。Tier 2 已按用户决策改为**公共 demo 样本方案**：上游公开的 `demo/qqzeng-ip-ult.qzdb`（360 行样本，非购买数据）连同 CSV 真值入库（.gitignore 加否定规则），新增 `tools/demo_sample_check.py` 做 Python↔CSV 逐字段锚定 + node/php parity 校验，本地实测 2160/2160 通过；CI 无需任何 secret 或下载。真实购买库的 L1-L4 全量验证仍按既有惯例在本地执行。
 
 ### T5 · Validation 分级演进 【P2·可选】
 
