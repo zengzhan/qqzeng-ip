@@ -112,3 +112,9 @@ multi-lang/netcore/nupkgs/
 
 # Test run reports (regenerated each run, timestamped filenames)
 multi-lang/java/test_reports/
+
+# Exception: the published demo sample (public upstream zengzeng/qqzeng-ip)
+# is intentionally tracked so CI can run data-backed verification without
+# secrets or downloads. Real/purchased databases remain ignored above.
+!demo/*.qzdb
+!demo/*.csv
