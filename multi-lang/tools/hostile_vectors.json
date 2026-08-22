@@ -1,0 +1,304 @@
+{
+  "version": 1,
+  "_doc": {
+    "purpose": "Language-agnostic single source of truth describing malicious/corrupt .qzdb test inputs. Extracted and deduplicated from existing per-language fail-closed / hostile test suites. Consumed by fail-closed suites across all 8 SDKs (Java first). Each consumer resolves byte offsets from its OWN parsed header at runtime; absolute offsets are intentionally NOT baked in because the .qzdb layout varies per file (v4/v6 presence, node24 flag, pool count, geo count all shift section offsets).",
+    "how_to_consume": "1) Load a real .qzdb into bytes. 2) Parse the 192-byte header to resolve the anchors in `anchor_table`. 3) Apply the `mutation` recipe to the bytes. 4) Feed the mutated bytes to the SDK's open-from-bytes path. 5) Assert `expected_outcome` holds (fail_closed + one of error_code_any, or GracefulNull). Do NOT modify production SDK code or existing test files; this file is the shared fixture.",
+    "mutation_schema": "Each `mutation` is an object with a `type` (one of the op types below) plus type-specific fields. A `compound` mutation applies an ordered list of `steps` (each a mutation object) to the same bytes.",
+    "op_types": {
+      "header_field": "Overwrite a fixed header field. fields: offset(int 0..192), width(1|2|4|8|48), value(int), endian('le'), mask(optional int, XORed with current value instead of overwrite). width=48 writes a 48-bit little-endian value across 6 bytes.",
+      "header_byte_sweep": "For offset in [start,end): write each pattern in `patterns` (array of ints 0..255), one mutated copy per pattern. fields: start, end, patterns.",
+      "header_field_sweep": "For each offset in `offsets` (array of ints): write `value` (width `width`, endian `endian`). fields: offsets, width, value, endian.",
+      "truncate": "Truncate file. fields: bytes(int, absolute length) OR mode('to_zero'|'below_header'|'at_header'|'sweep'). 'below_header' = truncate to 100 bytes (< 192). 'at_header' = truncate to 191 bytes. 'sweep' = geometric lengths [0,1,2,4,8,...,file_size] (one mutated copy per length).",
+      "append_junk": "Append bytes after EOF. fields: length(int), fill('random'|'zeros'|'0xFF').",
+      "section_mutate": "Flip the first `span` bytes of a section. fields: anchor(str from anchor_table), span(int), patterns(array of ints 0..255) — one mutated copy per pattern.",
+      "trie_nodes_fill": "Fill every trie node's pointer slots with a sentinel value (self-loop / forward-pointer attack). fields: anchor('trie_v4_nodes_start'|'trie_v6_nodes_start'), count_field('v4_node_count'|'v6_node_count'), value(int, e.g. 0x7FFFFFFF), write_width(4), sentinel(bool). Node stride is resolved by the consumer from header flags: bit4 (0x10) v4Node24 -> 6 bytes else 8; bit5 (0x20) v6Node24 -> 6 bytes else 8. For each node at anchor + i*stride, write `value` into the left pointer (offset 0) and right pointer (offset write_width) slots.",
+      "random_bitflips": "Deterministic LCG bit flips over the first `span` bytes (or whole file if span='file'). fields: seed(int), rounds(int), max_flips(int), span(int|'file').",
+      "crc_field_corrupt": "Flip the stored CRC field (header offset 16, 4 bytes LE) to a value that does NOT match the recomputed CRC (e.g. recomputed_crc XOR 0xFFFFFFFF). fields: none."
+    },
+    "anchor_table": {
+      "magic_field": "header offset 0 (4 bytes 'QZDB')",
+      "header_version_field": "header offset 4 (u8)",
+      "version_mask_field": "header offset 6 (u16 LE)",
+      "flags_field": "header offset 8 (u16 LE); bit0 hasV4, bit1 hasV6, bit2 hasMetadata, bit4 v4Node24, bit5 v6Node24",
+      "v6jump_bits_field": "header offset 11 (u8) — number of v6 jump-table bits",
+      "pool_idx_size_field": "header offset 13 (u8)",
+      "geo_count_field": "header offset 14 (u16 LE)",
+      "crc_field": "header offset 16 (u32 LE)",
+      "row_count_field": "header offset 20 (u32 LE)",
+      "row_schema_start": "header offset 40 (u64 LE) -> OffsetRowSchema",
+      "group_schema_start": "header offset 48 (u64 LE) -> OffsetGroupSchema",
+      "trie_v4_jump_start": "header offset 64 (u64 LE) -> OffsetV4Jump",
+      "trie_v4_nodes_start": "header offset 72 (u64 LE) -> OffsetV4Nodes",
+      "trie_v6_jump_start": "header offset 80 (u64 LE) -> OffsetV6Jump",
+      "trie_v6_nodes_start": "header offset 88 (u64 LE) -> OffsetV6Nodes",
+      "iprow_start": "header offset 96 (u64 LE) -> OffsetIPRow",
+      "geo_entries_start": "header offset 104 (u64 LE) -> OffsetGeoEntries",
+      "pools_start": "header offset 136 (u64 LE) -> OffsetPools",
+      "meta_start": "header offset 144 (u64 LE) -> OffsetMeta",
+      "geo_entry_offset_table": "header offset 168 (four u48 LE) -> GeoEntryOffsets[4]",
+      "group_count_field": "header offset 164 (u32 LE) -> GeoEntryGroupCount",
+      "v4_node_count_field": "header offset 152 (u32 LE) -> V4NodeCount",
+      "v6_node_count_field": "header offset 156 (u32 LE) -> V6NodeCount",
+      "iprow_size_field": "header offset 160 (u32 LE) -> IPRowSize"
+    },
+    "error_code_vocabulary": {
+      "note": "Canonical cross-language families. Map each SDK's native enum to these: C QZDB_ERR_* (-1..-8), Rust BadMagic/BadHeader/Unsupported/Corrupted/InvalidParam/OutOfBounds/NotFound/InvalidIp, Go BAD_MAGIC/BAD_HEADER/UNSUPPORTED/CORRUPTED/INVALID_PARAM, C# BadMagic/BadHeader/Unsupported/Corrupted/InvalidParam/InvalidIp, Python BAD_MAGIC/UNSUPPORTED/CORRUPTED/BAD_HEADER/INVALID_PARAM/OUT_OF_BOUNDS/NOT_FOUND, PHP ERROR_BAD_MAGIC(6)/ERROR_BAD_HEADER(5)/ERROR_UNSUPPORTED(7)/ERROR_CORRUPTED(2)/ERROR_INVALID_PARAM(4)/ERROR_NOT_FOUND(1).",
+      "codes": ["BadMagic", "BadHeader", "Unsupported", "Corrupted", "InvalidParam", "OutOfBounds", "NotFound", "FileNotFound", "InvalidIp", "GracefulNull"],
+      "GracefulNull": "Extension code: the SDK returns empty/null/None WITHOUT throwing and WITHOUT returning wrong data. Used for attacks that degrade gracefully (e.g. C# hostile trie -> Find()==null). fail_closed is still true."
+    },
+    "expected_outcome_semantics": {
+      "fail_closed": "bool. true = SDK must NOT crash, must NOT return plausibly-correct-but-wrong data, and must surface an error OR a graceful empty result.",
+      "error_code_any": "array of acceptable codes. If the SDK raises a structured error, its code must be in this list. If 'GracefulNull' is listed, a non-throwing empty/null result is also acceptable.",
+      "notes": "free text; records cross-language divergences."
+    },
+    "source_suites_legend": {
+      "c": "multi-lang/c/fuzz/boundary_test.c",
+      "rust": "multi-lang/rust/tests/failclosed.rs (+ edge_cases.rs, tier1.rs)",
+      "go": "multi-lang/go/qzdb/tier1_test.go",
+      "csharp": "multi-lang/netcore.Tests/Tier1.cs",
+      "python": "multi-lang/python/test_tier1.py",
+      "php": "multi-lang/php/tier2_golden.php ('invalid' kind)",
+      "java": "PROPOSED — not yet implemented (this file is the seed for it)"
+    }
+  },
+  "cases": [
+    {
+      "id": "bad_magic_overwrite",
+      "category": "bad_magic",
+      "description": "Overwrite the 4-byte magic 'QZDB' at header offset 0 with wrong bytes (e.g. 'XXXX'). Every SDK must reject on open.",
+      "mutation": {"type": "header_field", "offset": 0, "width": 4, "value": 1481655374, "endian": "le"},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["BadMagic"], "notes": "Universal. All 6 implemented suites assert BadMagic. Java: proposed."},
+      "source_suites": ["c", "rust", "go", "csharp", "python", "php"]
+    },
+    {
+      "id": "header_version_bump",
+      "category": "version_mismatch",
+      "description": "Set HeaderVersion (offset 4, u8) to an unsupported value (99).",
+      "mutation": {"type": "header_field", "offset": 4, "width": 1, "value": 99, "endian": "le"},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["Unsupported"], "notes": "Universal across C/Rust/Go/C#/Python/PHP. Java: proposed."},
+      "source_suites": ["c", "rust", "go", "csharp", "python", "php"]
+    },
+    {
+      "id": "version_mask_mismatch",
+      "category": "version_mismatch",
+      "description": "Set VersionMask (offset 6, u16 LE) to an unsupported value (0xFFFF) so no known schema matches.",
+      "mutation": {"type": "header_field", "offset": 6, "width": 2, "value": 65535, "endian": "le"},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["Unsupported", "BadHeader"], "notes": "C/Rust/Go/C#/Python/PHP all reject unknown mask. Java: proposed."},
+      "source_suites": ["c", "rust", "go", "csharp", "python", "php"]
+    },
+    {
+      "id": "crc_field_corrupt",
+      "category": "corrupted_crc",
+      "description": "Flip the stored CRC field (offset 16, u32 LE) to a value that does not match the recomputed CRC.",
+      "mutation": {"type": "crc_field_corrupt"},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["Corrupted"], "notes": "Consistent: Rust Corrupted, Go CORRUPTED, C# Corrupted, Python CORRUPTED, C Corrupted. Java: proposed."},
+      "source_suites": ["c", "rust", "go", "csharp", "python"]
+    },
+    {
+      "id": "truncate_to_zero",
+      "category": "truncated_file",
+      "description": "Truncate the file to 0 bytes.",
+      "mutation": {"type": "truncate", "mode": "to_zero"},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["Corrupted", "BadHeader", "BadMagic", "InvalidParam"], "notes": "DIVERGENCE: C->Corrupted; Rust->BadMagic/BadHeader/Corrupted/InvalidParam (any); Go->CORRUPTED; C#->Corrupted (or BadMagic if <4 bytes); Python->CORRUPTED. error_code_any captures all."},
+      "source_suites": ["c", "rust", "go", "csharp", "python"]
+    },
+    {
+      "id": "truncate_below_header",
+      "category": "truncated_file",
+      "description": "Truncate the file to 100 bytes (below the 192-byte header).",
+      "mutation": {"type": "truncate", "mode": "below_header"},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["Corrupted", "BadHeader", "InvalidParam"], "notes": "Same divergence family as truncate_to_zero. Java: proposed."},
+      "source_suites": ["c", "rust", "go", "csharp", "python"]
+    },
+    {
+      "id": "truncate_at_header_boundary",
+      "category": "truncated_file",
+      "description": "Truncate the file to 191 bytes (just below the 192-byte header boundary).",
+      "mutation": {"type": "truncate", "mode": "at_header"},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["Corrupted", "BadHeader", "InvalidParam"], "notes": "Covered by C (truncate to 191) and Rust (header_bit_patterns includes 191). Java: proposed."},
+      "source_suites": ["c", "rust"]
+    },
+    {
+      "id": "truncate_sweep",
+      "category": "truncated_file",
+      "description": "Geometric sweep of truncation lengths [0,1,2,4,8,...,file_size]; each length is a separate mutated copy.",
+      "mutation": {"type": "truncate", "mode": "sweep"},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["Corrupted", "BadHeader", "BadMagic", "InvalidParam"], "notes": "Rust-only sweep (truncate_sweep). Java: proposed."},
+      "source_suites": ["rust"]
+    },
+    {
+      "id": "geo_offset_to_one",
+      "category": "out_of_bounds_section_offset",
+      "description": "Set OffsetGeoEntries (header offset 104, u64 LE) to 1, pointing the geo section into the middle of the header.",
+      "mutation": {"type": "header_field", "offset": 104, "width": 8, "value": 1, "endian": "le"},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["Corrupted", "InvalidParam", "OutOfBounds"], "notes": "C# malformed-offset test (OffsetGeoEntries=1). Rust/C also reject out-of-bounds section offsets. Java: proposed."},
+      "source_suites": ["csharp", "rust", "c"]
+    },
+    {
+      "id": "all_section_offsets_to_one",
+      "category": "out_of_bounds_section_offset",
+      "description": "Sweep every section-offset header field {40,48,64,72,80,88,96,104,136,144} to 1 (u64 LE). One mutated copy per offset.",
+      "mutation": {"type": "header_field_sweep", "offsets": [40, 48, 64, 72, 80, 88, 96, 104, 136, 144], "width": 8, "value": 1, "endian": "le"},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["Corrupted", "InvalidParam", "OutOfBounds"], "notes": "C# badOffsetRejected sweeps these offsets. Java: proposed."},
+      "source_suites": ["csharp"]
+    },
+    {
+      "id": "section_offset_beyond_file",
+      "category": "out_of_bounds_section_offset",
+      "description": "Set a section offset (e.g. OffsetPools at 136) to a value far beyond the file size.",
+      "mutation": {"type": "header_field", "offset": 136, "width": 8, "value": 9223372036854775807, "endian": "le"},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["Corrupted", "InvalidParam", "OutOfBounds"], "notes": "Rust out-of-bounds section offset; C rejects with Corrupted/OutOfBounds. Java: proposed."},
+      "source_suites": ["rust", "c"]
+    },
+    {
+      "id": "trie_v4_nodes_fill_sentinel",
+      "category": "trie_node_attack",
+      "description": "Fill every v4 trie node's left/right pointer slots with 0x7FFFFFFF (self-loop / forward-pointer), forcing infinite traversal or out-of-range node fetch.",
+      "mutation": {"type": "trie_nodes_fill", "anchor": "trie_v4_nodes_start", "count_field": "v4_node_count", "value": 2147483647, "write_width": 4, "sentinel": true},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["GracefulNull", "Corrupted", "OutOfBounds"], "notes": "DIVERGENCE: C# expects Find()==null (graceful, no throw) — represented as GracefulNull. Rust asserts no panic (Err or graceful). Java: proposed."},
+      "source_suites": ["csharp", "rust"]
+    },
+    {
+      "id": "trie_v6_nodes_fill_sentinel",
+      "category": "trie_node_attack",
+      "description": "Fill every v6 trie node's left/right pointer slots with 0x7FFFFFFF.",
+      "mutation": {"type": "trie_nodes_fill", "anchor": "trie_v6_nodes_start", "count_field": "v6_node_count", "value": 2147483647, "write_width": 4, "sentinel": true},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["GracefulNull", "Corrupted", "OutOfBounds"], "notes": "C# hostile v6 trie -> Find()==null. Java: proposed."},
+      "source_suites": ["csharp", "rust"]
+    },
+    {
+      "id": "trie_node_self_loop",
+      "category": "trie_node_attack",
+      "description": "Generic trie self-loop: corrupt a trie node so traversal loops or jumps out of bounds. Modeled as filling v4 nodes with a sentinel; consumers may additionally corrupt individual node pointers.",
+      "mutation": {"type": "trie_nodes_fill", "anchor": "trie_v4_nodes_start", "count_field": "v4_node_count", "value": 2147483647, "write_width": 4, "sentinel": true},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["GracefulNull", "Corrupted", "OutOfBounds"], "notes": "Rust/C assert no crash / no wrong data on hostile trie. Java: proposed."},
+      "source_suites": ["rust", "c"]
+    },
+    {
+      "id": "pool_offset_overflow",
+      "category": "pool_offset_overflow",
+      "description": "Set a pool offset field (OffsetPools at 136, u64) to 0x7FFFFFFF, far beyond the file.",
+      "mutation": {"type": "header_field", "offset": 136, "width": 8, "value": 2147483647, "endian": "le"},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["Corrupted", "OutOfBounds", "InvalidParam"], "notes": "Rust pool offset overflow; C rejects with OutOfBounds/Corrupted. Java: proposed."},
+      "source_suites": ["rust", "c"]
+    },
+    {
+      "id": "row_count_overflow",
+      "category": "absurd_counts",
+      "description": "Set RowCount (offset 20, u32) to 0xFFFFFFFF.",
+      "mutation": {"type": "header_field", "offset": 20, "width": 4, "value": 4294967295, "endian": "le"},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["Corrupted", "OutOfBounds", "InvalidParam"], "notes": "Rust absurd row count; C rejects. Java: proposed."},
+      "source_suites": ["rust", "c"]
+    },
+    {
+      "id": "v4_node_count_overflow",
+      "category": "absurd_counts",
+      "description": "Set V4NodeCount (offset 152, u32) to 0xFFFFFFFF.",
+      "mutation": {"type": "header_field", "offset": 152, "width": 4, "value": 4294967295, "endian": "le"},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["Corrupted", "OutOfBounds", "InvalidParam"], "notes": "Rust absurd node count; C rejects. Java: proposed."},
+      "source_suites": ["rust", "c"]
+    },
+    {
+      "id": "v6_node_count_overflow",
+      "category": "absurd_counts",
+      "description": "Set V6NodeCount (offset 156, u32) to 0xFFFFFFFF.",
+      "mutation": {"type": "header_field", "offset": 156, "width": 4, "value": 4294967295, "endian": "le"},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["Corrupted", "OutOfBounds", "InvalidParam"], "notes": "Rust absurd node count; C rejects. Java: proposed."},
+      "source_suites": ["rust", "c"]
+    },
+    {
+      "id": "geo_count_overflow",
+      "category": "absurd_counts",
+      "description": "Set GeoCount (offset 14, u16) to 0xFFFF.",
+      "mutation": {"type": "header_field", "offset": 14, "width": 2, "value": 65535, "endian": "le"},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["Corrupted", "OutOfBounds", "InvalidParam"], "notes": "Rust absurd counts; C rejects. Java: proposed."},
+      "source_suites": ["rust", "c"]
+    },
+    {
+      "id": "iprow_size_corrupt",
+      "category": "absurd_counts",
+      "description": "Set IPRowSize (offset 160, u32) to 0 (or a huge value), breaking IPRow stride math.",
+      "mutation": {"type": "header_field", "offset": 160, "width": 4, "value": 0, "endian": "le"},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["Corrupted", "OutOfBounds", "InvalidParam"], "notes": "Rust/C reject absurd IPRowSize. Java: proposed."},
+      "source_suites": ["rust", "c"]
+    },
+    {
+      "id": "group_count_zero",
+      "category": "zero_group_count",
+      "description": "Set GeoEntryGroupCount (offset 164, u32) to 0.",
+      "mutation": {"type": "header_field", "offset": 164, "width": 4, "value": 0, "endian": "le"},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["Corrupted", "InvalidParam", "OutOfBounds"], "notes": "Rust zero group count; C rejects. Java: proposed."},
+      "source_suites": ["rust", "c"]
+    },
+    {
+      "id": "group_index_invalid",
+      "category": "invalid_group_index",
+      "description": "Craft a row whose group index exceeds GeoEntryGroupCount, so resolving the group reads out of bounds.",
+      "mutation": {"type": "compound", "steps": [
+        {"type": "header_field", "offset": 164, "width": 4, "value": 1, "endian": "le"},
+        {"type": "header_field", "offset": 160, "width": 4, "value": 3, "endian": "le"}
+      ]},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["Corrupted", "OutOfBounds", "InvalidParam"], "notes": "Rust invalid group index; C rejects. The compound is a representative recipe; consumers may craft a concrete row. Java: proposed."},
+      "source_suites": ["rust", "c"]
+    },
+    {
+      "id": "append_junk_after_eof",
+      "category": "junk_appended",
+      "description": "Append junk bytes after EOF (trailing garbage the parser must ignore or reject).",
+      "mutation": {"type": "append_junk", "length": 4096, "fill": "random"},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["Corrupted", "InvalidParam", "GracefulNull"], "notes": "Rust append junk; C rejects trailing garbage. Some SDKs may ignore trailing bytes (GracefulNull) — both are fail-closed. Java: proposed."},
+      "source_suites": ["rust", "c"]
+    },
+    {
+      "id": "header_byte_sweep",
+      "category": "header_corruption_sweep",
+      "description": "Sweep header bytes [4,192) writing each pattern in {0x00,0xFF,0x80,0x7F}; one mutated copy per (offset,pattern).",
+      "mutation": {"type": "header_byte_sweep", "start": 4, "end": 192, "patterns": [0, 255, 128, 127]},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["BadMagic", "BadHeader", "Unsupported", "Corrupted", "InvalidParam", "OutOfBounds"], "notes": "Rust header_bit_patterns. Java: proposed."},
+      "source_suites": ["rust"]
+    },
+    {
+      "id": "section_internal_mutate",
+      "category": "header_corruption_sweep",
+      "description": "Flip the first 64 bytes of each major section with patterns {0x00,0xFF,0x80,0x7F}; one mutated copy per (section,pattern).",
+      "mutation": {"type": "section_mutate", "anchor": "iprow_start", "span": 64, "patterns": [0, 255, 128, 127]},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["Corrupted", "InvalidParam", "OutOfBounds"], "notes": "Rust section_internal_mutation (applied to each section anchor). Java: proposed."},
+      "source_suites": ["rust"]
+    },
+    {
+      "id": "random_bitflips",
+      "category": "header_corruption_sweep",
+      "description": "Deterministic LCG random bit flips over the first 512KiB (or whole file).",
+      "mutation": {"type": "random_bitflips", "seed": 4660, "rounds": 200, "max_flips": 50, "span": 524288},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["BadMagic", "BadHeader", "Unsupported", "Corrupted", "InvalidParam", "OutOfBounds"], "notes": "Rust random_bitflips (deterministic seed). Java: proposed."},
+      "source_suites": ["rust"]
+    },
+    {
+      "id": "crafted_entry_offset_overflow",
+      "category": "crafted_precision_attack",
+      "description": "Coordinated attack: set GeoEntryOffsets[0] (header offset 168, u48) to max, set group count, and craft a row so the resolver reads far out of bounds / wrong data.",
+      "mutation": {"type": "compound", "steps": [
+        {"type": "header_field", "offset": 168, "width": 48, "value": 281474976710655, "endian": "le"},
+        {"type": "header_field", "offset": 164, "width": 4, "value": 1, "endian": "le"}
+      ]},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["Corrupted", "OutOfBounds", "InvalidParam"], "notes": "Rust crafted_entry_offset_overflow (precise adversarial case). Java: proposed."},
+      "source_suites": ["rust"]
+    },
+    {
+      "id": "php_invalid_truncated",
+      "category": "truncated_file",
+      "description": "PHP 'invalid' kind: a truncated / malformed database must surface an error rather than crash.",
+      "mutation": {"type": "truncate", "mode": "below_header"},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["Corrupted", "BadHeader"], "notes": "PHP tier2 'invalid' kind. Overlaps with truncate_below_header; kept distinct because PHP's harness drives it via golden_vectors 'invalid' entries. Java: proposed."},
+      "source_suites": ["php"]
+    },
+    {
+      "id": "php_invalid_offset",
+      "category": "out_of_bounds_section_offset",
+      "description": "PHP 'invalid' kind: a database with a bad section offset must surface an error.",
+      "mutation": {"type": "header_field", "offset": 104, "width": 8, "value": 1, "endian": "le"},
+      "expected_outcome": {"fail_closed": true, "error_code_any": ["BadHeader", "Corrupted", "InvalidParam"], "notes": "PHP tier2 'invalid' kind (bad offset). Java: proposed."},
+      "source_suites": ["php"]
+    }
+  ]
+}
