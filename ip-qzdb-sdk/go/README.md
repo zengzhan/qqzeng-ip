@@ -422,3 +422,5 @@ go/
 │   ├── *_test.go      # Tier1 单测 + Tier2 黄金校验 + Tier0 CSV 真值 + Tier3 并发/性能
 └── cmd/               # demo / batch / bench / dump / regress 等示例
 ```
+
+<!-- commit: go: ⚡ Go 语言极速解析引擎 (跨平台 mmap 零拷贝, 无锁并发, 极致低延迟) sync=1787391447 -->
