@@ -253,7 +253,7 @@ public sealed class QzdbReader : IDisposable
         /// QzdbReader.PublishSnapshot/Dispose, which is what makes calling this
         /// safe in practice without per-query reference counting.
         /// </summary>
-        internal void DisposeOwner() => _dataOwner?.Dispose();
+        internal void DisposeOwner() => ((IDisposable?)_dataOwner)?.Dispose();
 
         internal sealed class CacheEntry
         {
