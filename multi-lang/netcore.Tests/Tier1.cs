@@ -19,7 +19,8 @@ class Program
         RunTier2();
         RunTier3();
         GoldenTests.Run();
-        bool allPass = tier1Fail == 0 && tier2Err == 0 && GoldenTests.FailCount == 0;
+        HostileVectors.Run();
+        bool allPass = tier1Fail == 0 && tier2Err == 0 && GoldenTests.FailCount == 0 && HostileVectors.FailCount == 0;
         Console.WriteLine("\n" + new string('=', 60));
         Console.WriteLine((allPass ? "ALL TIERS PASSED" : "SOME TIERS FAILED"));
         return allPass ? 0 : 1;
