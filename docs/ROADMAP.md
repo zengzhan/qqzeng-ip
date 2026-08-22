@@ -42,20 +42,20 @@
 - **验证**：`cd multi-lang && ./run_all_tests.sh`
 - **完成**：新增 `GoldenTests.cs`，4102/4102 通过（std+ult 双库 × random/boundary/invalid 五类），失败计入 `ALL TIERS PASSED` 门禁。
 
-### T3 · Hostile 向量单一事实源 【P1】◐ 数据文件已建（2026-08-22），存量消费者迁移待做
+### T3 · Hostile 向量单一事实源 【P1】✅ 2026-08-23
 
 - **现状**：6 个语言各自内联构造恶意输入，无共享文件；新语言接入时需重写一遍。
 - **做法**：新建 `tools/hostile_vectors.json`（case id、篡改字段、期望失败模式），各语言 fail-closed 测试改为消费该文件；保留语言特有的内存安全用例（如 C/Rust 的 ASAN 场景）。
 - **验收**：≥5 语言消费同一向量文件；`run_all.sh` L1 层通过。
-- **依赖**：T1 完成后 Java 直接接入。
-- **进展**：文件已产出（29 用例 × 10 类场景，配方经真实文件头核验）；Java 已作为首个消费者接入。剩余：C/Rust/Go/C#/Py 存量 hostile 测试迁移至同一向量源。
+- **完成**：6 语言直接消费同一向量文件——Java `FailClosedHostileTest` / Python `test_hostile_vectors.py` / Go `hostile_vectors_test.go` / C# `HostileVectors.cs`（并入 ALL TIERS 门禁）/ PHP `tier2_hostile.php`，均已接入 `run_all_tests.sh` 且 29/29 全绿。C 保留 ASan 随机模糊职责（`fuzz/boundary_test.c`，与向量套件互补）、Rust 保留 panic 扫描职责（`failclosed.rs`），分工登记于本表与 SYNC_GUIDE。
 
-### T4 · Trie walk 终止保护策略统一 【P1】
+### T4 · Trie walk 终止保护策略统一 【P1】✅ 2026-08-23
 
 - **现状**：Node.js 用 magic number 1000；其余语言靠每步 bounds-check。两种策略都安全，但无文档说明，且 magic number 无法表达"超过即文件异常"的语义。
 - **做法**：统一为推导式上限 `max(IPBits + 8, 配置下限)`（IPv4≈40 / IPv6≈136），替换硬编码；若某语言保留现有机制，须在 `QZDB_SYNC_GUIDE.md` 记录理由。
 - **验收**：8 语言 walk 上限来源可追溯（常量或推导式），SYNC_GUIDE 有对照表；正常数据全量查询无回归。
 - **验证**：`cd multi-lang && ./run_all.sh`
+- **完成**：5 语言（C/Go/Node.js/PHP/Python）魔法常量 1000 → 按位宽派生命名常量（V4=40/V6=136）；C#/Java/Rust 审计确认构造性有界，仅登记不改动。8 语言对照表见 `QZDB_SYNC_GUIDE.md` 第五节。良构文件行为零变化（V4 实际 ≤16 步、V6 ≤128 步）。
 
 ### T6 · CI 编译门禁 【P0】✅ 2026-08-22
 
