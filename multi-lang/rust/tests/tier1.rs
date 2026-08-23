@@ -460,7 +460,7 @@ fn t1_meta_accessors() {
     let rs = load("qqzeng_ip_std_china.qzdb");
     assert_eq!(rs.get_version(), "std");
     assert_eq!(rs.get_edition(), "std");
-    assert_eq!(rs.get_scope(), "", "scope always empty");
+    assert_eq!(rs.get_scope(), "", "scope empty: legacy file has no Metadata TLV type=6");
     assert_eq!(rs.get_data_month(), "2026-08");
     assert_eq!(rs.get_build_time(), "2026-08-09");
     assert!(!rs.get_description().is_empty());

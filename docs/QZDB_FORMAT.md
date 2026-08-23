@@ -445,7 +445,7 @@ bit3~7:       保留
   槽位 = 池索引（width 字节，指向 String Pool）
 ```
 
-**查询语义**：`ResolveGeo` 对 `fieldFlags.bit0==1` 的字段调用 `DecodeNativeValue` 直接返回数值字符串（int 原样，float 按 6 位小数或更高精度格式化）；非原生字段仍走 Pool 索引。原生字段的 String Pool **不会被写入**（GROUP_SCHEMA 中 `poolSectionId=0`），读取器亦不解析其 Pool。
+**查询语义**：`ResolveGeo` 对 `fieldFlags.bit0==1` 的字段调用 `DecodeNativeValue` 直接返回数值字符串（int 原样；float 按 **§10.5 统一契约**格式化：整数值无小数点、非整数固定 6 位小数、NaN/Inf 为 `""`）；非原生字段仍走 Pool 索引。原生字段的 String Pool **不会被写入**（GROUP_SCHEMA 中 `poolSectionId=0`），读取器亦不解析其 Pool。
 
 ---
 
@@ -524,8 +524,18 @@ Entry:
 | 2 | field_names | **Pipe 分隔的字段名列表** | `"continent|country|province|city|isp"` |
 | 3 | description | 版本描述 | `"qqzeng-ip max edition 2026-07"` |
 | 4 | primary_version | 主版本名 | `"max"` |
+| 5 | data_month | 数据期号 yyyy-MM（★ v2.4） | `"2026-07"` |
+| 6 | scope | 数据覆盖范围（★ v2.4） | `"global"` / `"cn"` |
 
 **SDK 必须优先从 Metadata 读取 type=2 的字段名列表**，而非硬编码版本→字段映射。
+
+**type=5 / type=6 的权威语义（★ v2.4，8 语言逐字一致）**：
+
+- `data_month`：Metadata type=5 是 `getDataMonth()`（"yyyy-MM"）的**权威来源**；
+  文件无 type=5 条目时，回落到 Header BuildDate（offset 32，yyyyMMdd）的前 6 位。
+- `scope`：Metadata type=6 是 `getScope()` 的**权威来源**；文件无 type=6 条目时返回空串 `""`。
+- Header BuildDate **始终**用于 `getBuildTime()`（"yyyy-MM-dd"），与 type=5 无关。
+- value 按字节原样存储（不做 trim）；未知 type 一律跳过（§8.1），向前兼容。
 
 ---
 
@@ -752,10 +762,33 @@ for each versionGroup:
             poolIdxSize = 3
 ```
 
-### 10.5 浮点字段处理
+### 10.5 浮点字段处理（★ v2.4 统一契约）
 
-`longitude` / `latitude` 字段在 String Pool 中以字符串存储。
-SDK 应通过字段名匹配识别浮点字段，格式化为 6 位小数 (`%.6f`)。
+浮点字段（`longitude` / `latitude` 等）有两类来源，输出契约统一：
+
+1. **Pool 字符串存储（v1 常规路径）**：字符串原样透传——`toPipe()` / `toJson()` 不做任何再格式化。
+2. **原生标量（§11.1，nativeType=1 float32/float64）**：解码后按下表格式化为规范字符串。
+   跨语言必须逐字一致；与 locale 无关，小数点恒为 `.`。
+
+| 输入 | 输出 | 示例 |
+|---|---|---|
+| NaN / ±Inf | 空字符串 `""` | |
+| 整数值且 \|v\| < 2^63 | 十进制整数字面量（无小数点） | `116.0 → 116`；`-3.0 → -3`；`-0.0 → 0` |
+| 整数值且 \|v\| ≥ 2^63 | 整数位定点形式（无小数点、无科学计数法） | `1e20 → 100000000000000000000` |
+| 非整数（必然 \|v\| < 2^53） | 固定 6 位小数 | `116.4 → 116.400000` |
+
+实现要点（★ 各语言一致遵守）：
+
+- 整数判定统一为 `v == trunc(v)`（等价于 `floor` 对有符号数的判定）。
+- **cast 到 64 位整数前必须做范围保护**：仅 `\|v\| < 9223372036854775808.0`（2^63）允许
+  int64 转换；超范围的整数走无小数点的定点格式化（C# `"F0"` / Go `'f',0` /
+  Java `%.0f` ROOT / C `%.0f` / Rust `{:.0}` / PHP `%.0F`）。直接 cast 超范围值在
+  多数运行时是未定义或饱和行为（C# 未指定、Go 实现相关、Java 饱和到 MAX/MIN），禁止。
+- 非整数分支用各语言 locale 无关的固定 6 位小数格式化（`F6` / `'f',6` / `%.6f` /
+  `toFixed(6)` / `{:.6}` / `%.6F` / `{:.6f}`）。
+- 参考实现：C# `FormatFloat6`（canonical）、Go `formatFloat6`、C `format_float_value`、
+  Rust `fmt_native_float`、PHP `GeoInfo::formatFloatValue`、Node `_formatNativeFloat`、
+  Python `_decode_native`、Java `readNativeValue`。
 
 ### 10.6 CRC32
 

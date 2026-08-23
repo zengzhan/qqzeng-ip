@@ -46,6 +46,24 @@ public class QzdbReader implements AutoCloseable {
             ThreadLocal.withInitial(() -> new java.text.DecimalFormat("0.000000",
                     java.text.DecimalFormatSymbols.getInstance(Locale.US)));
 
+    /** FORMAT §10.5 统一契约：整数值无小数点、非整数固定 6 位小数、NaN/Inf 为 ""。 */
+    static String formatNativeFloat(float v) {
+        if (Float.isNaN(v) || Float.isInfinite(v)) return "";
+        return formatNativeFloat((double) v);   // float→double 拓宽无损，语义等价
+    }
+
+    static String formatNativeFloat(double v) {
+        if (Double.isNaN(v) || Double.isInfinite(v)) return "";
+        if (v == Math.floor(v)) {
+            // cast 到 long 前范围保护（|v| < 2^63）：Java 超范围转换饱和到
+            // Long.MAX/MIN，结果错误。超范围整数走 %.0f ROOT 定点。
+            if (v >= -9223372036854775808.0 && v < 9223372036854775808.0)
+                return Long.toString((long) v);
+            return String.format(Locale.ROOT, "%.0f", v);
+        }
+        return FLOAT6.get().format(v);
+    }
+
     static {
         java.util.Arrays.fill(HEX_DIGITS, -1);
         for (int i = 0; i < 10; i++) HEX_DIGITS['0' + i] = i;
@@ -189,13 +207,13 @@ public class QzdbReader implements AutoCloseable {
         // 元数据属性
         String version;      // Metadata type=1 version_list（无则 ""）
         String description;  // Metadata type=3 description（无则 ""）
-        String dataMonth;    // Header BuildDate -> "yyyy-MM"（无则 ""）
+        String dataMonth;    // Metadata type=5 data_month（权威）-> "yyyy-MM"，回落 Header BuildDate（无则 ""）
         String buildTimeStr; // Header BuildDate -> "yyyy-MM-dd"（无则 ""）
         String edition;      // 按 §10.3 优先级判定：groupId/VersionMask -> Metadata -> 字段数 -> ""
         String editionSource;    // edition 命中了哪条规则
         String fieldNamesSource; // fieldNames 是读出来的还是补出来的
         int versionMask;         // Header 偏移 6：文件级 one-hot 档次位掩码
-        String scope;        // 当前格式 Header 尚无 scope 字段，按规范 §13.1 返回 ""
+        String scope;        // Metadata type=6 scope（v2.4 权威；无条目则 ""，§13.1）
 
         // CRC32（canonical：CRC 字段填 0 计算）。open 校验时顺带得出，否则首次 getFileHash 惰性计算。
         long storedCrc;
@@ -546,6 +564,8 @@ public class QzdbReader implements AutoCloseable {
             String metaVersion = "";
             String metaDesc = "";
             String metaPrimary = "";
+            String metaDataMonth = "";
+            String metaScope = "";
             String[] metaFields = null;
             if ((flags & 4) != 0 && offMeta > 0 && offMeta + 4 <= dataLen) {
                 int cursor = (int) offMeta;
@@ -560,6 +580,8 @@ public class QzdbReader implements AutoCloseable {
                         case 2 -> metaFields = splitFieldNames(val);
                         case 3 -> metaDesc = val;
                         case 4 -> metaPrimary = val;
+                        case 5 -> metaDataMonth = val; // v2.4：数据期号（权威）
+                        case 6 -> metaScope = val;     // v2.4：数据覆盖范围（权威）
                         default -> { /* 未知 type 按设计跳过（FORMAT §8.1） */ }
                     }
                     cursor += 4 + length;
@@ -632,18 +654,25 @@ public class QzdbReader implements AutoCloseable {
 
             repairDimMasks();
 
+            // 数据期号 / 覆盖范围（FORMAT §8.2）：Metadata TLV type=5(data_month)、
+            // type=6(scope) 为权威来源；Header BuildDate 仅作回落，buildTimeStr 始终取自它。
             if (buildDate > 0) {
                 int y = buildDate / 10000;
                 int m = (buildDate / 100) % 100;
                 int dd = buildDate % 100;
-                this.dataMonth = String.format(Locale.US, "%04d-%02d", y, m);
                 this.buildTimeStr = String.format(Locale.US, "%04d-%02d-%02d", y, m, dd);
             } else {
-                this.dataMonth = "";
                 this.buildTimeStr = "";
             }
+            if (!metaDataMonth.isEmpty()) {
+                this.dataMonth = metaDataMonth;
+            } else if (buildDate > 0) {
+                this.dataMonth = String.format(Locale.US, "%04d-%02d", buildDate / 10000, (buildDate / 100) % 100);
+            } else {
+                this.dataMonth = "";
+            }
 
-            this.scope = "";
+            this.scope = metaScope;
         }
 
         /**
@@ -869,21 +898,15 @@ public class QzdbReader implements AutoCloseable {
             return "";
         }
 
-        /** 原生标量字段解码（§6.6 / §10.5）：int 原样；float 按 6 位小数格式化（FORMAT 规范跨语言一致）。 */
+        /** 原生标量字段解码（§6.6 / FORMAT §10.5 统一契约）：int 原样；float 走 formatNativeFloat。 */
         private String readNativeValue(long off, int fw, int nt) {
             int iOff = (int) off;
             if (iOff < 0 || iOff + fw > dataLen) return "";
             if (nt == 1) {
                 if (fw == 4) {
-                    float f = Float.intBitsToFloat(readU32(data, iOff));
-                    if (Float.isNaN(f) || Float.isInfinite(f)) return "";
-                    if (f == Math.floor(f)) return Long.toString((long) f);
-                    return FLOAT6.get().format(f);
+                    return formatNativeFloat(Float.intBitsToFloat(readU32(data, iOff)));
                 } else if (fw == 8) {
-                    double dVal = Double.longBitsToDouble(readU64(data, iOff));
-                    if (Double.isNaN(dVal) || Double.isInfinite(dVal)) return "";
-                    if (dVal == Math.floor(dVal)) return Long.toString((long) dVal);
-                    return FLOAT6.get().format(dVal);
+                    return formatNativeFloat(Double.longBitsToDouble(readU64(data, iOff)));
                 }
             }
             long valNum = readUintWidth(data, iOff, fw) & 0xFFFFFFFFL;

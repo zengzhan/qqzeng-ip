@@ -151,14 +151,14 @@ func TestREADMEAPISurface(t *testing.T) {
 	if len(reader.GetFieldNames()) != 8 {
 		t.Errorf("GetFieldNames %d", len(reader.GetFieldNames()))
 	}
-	if reader.GetDataMonth() == "" {
-		t.Error("GetDataMonth empty")
+	if got := reader.GetDataMonth(); got != "2026-07" {
+		t.Errorf("GetDataMonth=%q, want TLV type=5 value", got)
 	}
 	if reader.GetEdition() != "asn" {
 		t.Errorf("GetEdition=%q", reader.GetEdition())
 	}
-	if reader.GetScope() != "" {
-		t.Error("GetScope must be empty")
+	if got := reader.GetScope(); got != "global" {
+		t.Errorf("GetScope=%q, want TLV type=6 value", got)
 	}
 	if reader.GetBuildTime() == "" {
 		t.Error("GetBuildTime empty")

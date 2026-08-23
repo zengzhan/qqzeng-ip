@@ -107,14 +107,22 @@ check(strpos($json, '"usage_type":"Broadband"') !== false, 'toJson 字符串字�
 check(strpos($json, '"country":"CN"') !== false, 'toJson country 为字符串');
 
 /* ----------------------------------------------------------------------
- * 类别 2：浮点原生格式 = 6 位小数（契约 §8 规则 2）
+ * 类别 2：浮点原生格式 = 6 位小数（FORMAT §10.5 统一契约）
  * ---------------------------------------------------------------------- */
 check(GeoInfo::formatFloatValue(116.0) === '116', '整数值无小数点');
 check(GeoInfo::formatFloatValue(116.4) === '116.400000', '非整数固定 6 位小数');
 check(GeoInfo::formatFloatValue(-3.5) === '-3.500000', '负数 6 位小数');
 check(GeoInfo::formatFloatValue(0.0) === '0', '0 无小数点');
+check(GeoInfo::formatFloatValue(-0.0) === '0', '-0.0 归一为 "0"');
 check(GeoInfo::formatFloatValue(NAN) === '', 'NaN -> ""');
 check(GeoInfo::formatFloatValue(INF) === '', 'Inf -> ""');
+// §10.5 大整值边界：int64 范围内走 (int) 字面量；恰为 2^63 及以上必须走 %.0F
+// 定点（(int) cast 对超范围浮点是未定义/异常行为——回归守卫）
+check(GeoInfo::formatFloatValue(1.0e16) === '10000000000000000', '2^53 整值无小数点');
+check(GeoInfo::formatFloatValue(9.2e18) === '9200000000000000000', 'int64 上界内大整值');
+check(GeoInfo::formatFloatValue(9223372036854775808.0) === '9223372036854775808', '恰为 2^63 走 %.0F 定点');
+check(GeoInfo::formatFloatValue(-9223372036854775808.0) === '-9223372036854775808', '恰为 -2^63');
+check(GeoInfo::formatFloatValue(1.0e20) === '100000000000000000000', '> 2^63 定点整数位');
 
 /* ----------------------------------------------------------------------
  * 类别 5：UsageType 21 场景 + 未知兜底
@@ -256,13 +264,44 @@ check($brErr->hasError(), 'BatchResult error');
 $reader2 = QzdbBuilder::path($tmp)->verifyCrc(false)->build();
 check($reader2 instanceof QzdbReader, '重建 reader');
 check(is_string($reader2->getVersion()), 'getVersion 返回 string');
-check(is_string($reader2->getScope()) && $reader2->getScope() === '', 'getScope 恒 ""');
+check(is_string($reader2->getScope()) && $reader2->getScope() === '', 'getScope 无 TLV 条目时返回 ""');
 check(is_string($reader2->getEdition()), 'getEdition 返回 string');
 check(is_string($reader2->getFileHash()) && strlen($reader2->getFileHash()) === 8, 'getFileHash 8 位 hex');
 check($reader2->getGroupCount() >= 1, 'getGroupCount >= 1');
 check(is_array($reader2->getFieldNames()), 'getFieldNames 数组');
 check($reader2->hasField('field_0'), 'hasField 命中');
 check(!$reader2->hasField('nonexistent_field'), 'hasField 未命中');
+
+/* ----------------------------------------------------------------------
+ * 类别：Metadata TLV type=5/6 权威语义（FORMAT §8.2 / ROADMAP T7）
+ * 带 type=5/6 条目的文件：getDataMonth()/getScope() 取 TLV 值（原样、不 trim）；
+ * 无条目的文件走回落（见上方 reader2：scope 为 ""）。
+ * ---------------------------------------------------------------------- */
+$metaBuf = str_repeat("\0", 256);
+$metaBuf[0] = 'Q'; $metaBuf[1] = 'Z'; $metaBuf[2] = 'D'; $metaBuf[3] = 'B';
+$metaBuf[4] = "\1";
+$f2 = pack('v', 0x0004);              // flags bit2 = has metadata
+$metaBuf[8] = $f2[0]; $metaBuf[9] = $f2[1];
+$h2 = pack('V', 192);
+$metaBuf[36] = $h2[0]; $metaBuf[37] = $h2[1]; $metaBuf[38] = $h2[2]; $metaBuf[39] = $h2[3];
+$r2b = pack('V', 6);
+$metaBuf[160] = $r2b[0]; $metaBuf[161] = $r2b[1]; $metaBuf[162] = $r2b[2]; $metaBuf[163] = $r2b[3];
+$g2b = pack('V', 1);
+$metaBuf[164] = $g2b[0]; $metaBuf[165] = $g2b[1]; $metaBuf[166] = $g2b[2]; $metaBuf[167] = $g2b[3];
+$om = pack('P', 256);                 // offMeta (U64 LE) @144
+$metaBuf[144] = $om[0]; $metaBuf[145] = $om[1]; $metaBuf[146] = $om[2]; $metaBuf[147] = $om[3];
+$metaBuf[148] = $om[4]; $metaBuf[149] = $om[5]; $metaBuf[150] = $om[6]; $metaBuf[151] = $om[7];
+// TLV：type=5 "2026-07"、type=6 "global"（含一个前后带空格的对照不做——原样存储即契约）
+$meta = "\x05\x00" . pack('v', 7) . '2026-07'
+      . "\x06\x00" . pack('v', 6) . 'global';
+$tmpMeta = __DIR__ . '/.tier1_synthetic_meta.qzdb';
+file_put_contents($tmpMeta, $metaBuf . $meta);
+$readerMeta = QzdbBuilder::path($tmpMeta)->verifyCrc(false)->build();
+check($readerMeta->getDataMonth() === '2026-07', 'TLV type=5 为权威 dataMonth');
+check($readerMeta->getScope() === 'global', 'TLV type=6 为权威 scope');
+check($readerMeta->getBuildTime() === '', 'buildTime 与 TLV 无关（无 BuildDate 时为 ""）');
+$readerMeta->close();
+unlink($tmpMeta);
 
 /* ----------------------------------------------------------------------
  * GeoInfo 缓存淘汰策略（直接映射 / 碰撞覆盖 / 永不整表清空）

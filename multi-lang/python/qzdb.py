@@ -748,6 +748,8 @@ class QzdbReader:
         self._build_date = 0
         self._description = ''
         self._primary_version = ''
+        self._meta_data_month = ''  # Metadata TLV type=5 (v2.4 authoritative)
+        self._scope = ''            # Metadata TLV type=6 (v2.4 authoritative; '' if absent)
         self._edition = ''
         self._edition_source = EDITION_SOURCE_UNKNOWN
         self._field_names_source = FIELD_NAMES_SOURCE_SYNTHETIC
@@ -1360,6 +1362,10 @@ class QzdbReader:
         off_meta = self._off_meta
         gi = self._group_index if self._group_index < len(self._group_field_counts) else 0
 
+        # reload_buffer()/load_buffer() 复用实例重载时先复位（§8.2：无条目即回落/''）
+        self._meta_data_month = ''
+        self._scope = ''
+
         # --- Metadata TLV walk -------------------------------------------------
         meta_field_names = None
         if (self._flags & 4) and off_meta > 0 and off_meta + 4 <= len(d):
@@ -1384,6 +1390,10 @@ class QzdbReader:
                     self._description = val
                 elif t == 4:
                     self._primary_version = val
+                elif t == 5:
+                    self._meta_data_month = val  # v2.4: authoritative data month
+                elif t == 6:
+                    self._scope = val  # v2.4: authoritative scope (raw, no trim)
                 # Unknown types are skipped by design (FORMAT §8.1).
                 pos += 4 + length
 
@@ -2290,7 +2300,8 @@ class QzdbReader:
         return self._field_names_source
 
     def get_scope(self):
-        return ''
+        """Data scope — Metadata TLV type=6 (v2.4 authoritative; '' if absent, FORMAT §8.2)."""
+        return self._scope
 
     def get_description(self):
         return self._description
@@ -2304,6 +2315,9 @@ class QzdbReader:
         return ''
 
     def get_data_month(self):
+        # FORMAT §8.2: TLV type=5 is authoritative; Header BuildDate is the fallback.
+        if self._meta_data_month:
+            return self._meta_data_month
         if self._build_date > 0:
             y = self._build_date // 10000
             m = (self._build_date // 100) % 100

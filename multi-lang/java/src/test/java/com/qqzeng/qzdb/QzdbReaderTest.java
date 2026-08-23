@@ -85,6 +85,33 @@ public class QzdbReaderTest {
     // =========================================================================
 
     private static void runPureLogicTests() {
+        test("P0-2. FORMAT §10.5 原生浮点统一契约边界", () -> {
+            // 与 python/test_native_float.py、nodejs/native_float_test.js、
+            // go native_float_test.go、c native_float_boundary_test.c 用例同源。
+            assertEquals("116", QzdbReader.formatNativeFloat(116.0), "整值无小数点");
+            assertEquals("-3", QzdbReader.formatNativeFloat(-3.0), "负整值");
+            assertEquals("0", QzdbReader.formatNativeFloat(0.0), "零");
+            assertEquals("0", QzdbReader.formatNativeFloat(-0.0), "负零归一");
+            assertEquals("116.400000", QzdbReader.formatNativeFloat(116.4), "非整数固定 6 位");
+            assertEquals("-3.500000", QzdbReader.formatNativeFloat(-3.5), "负非整数");
+            assertEquals("", QzdbReader.formatNativeFloat(Double.NaN), "NaN -> \"\"");
+            assertEquals("", QzdbReader.formatNativeFloat(Double.POSITIVE_INFINITY), "+Inf -> \"\"");
+            assertEquals("", QzdbReader.formatNativeFloat(Float.NaN), "f32 NaN -> \"\"");
+            assertEquals("", QzdbReader.formatNativeFloat(Float.NEGATIVE_INFINITY), "f32 -Inf -> \"\"");
+            assertEquals("10000000000000000", QzdbReader.formatNativeFloat(1e16), "2^53 整值（int64 路径）");
+            assertEquals("9200000000000000000", QzdbReader.formatNativeFloat(9.2e18), "int64 上界内大整值");
+            assertEquals("9223372036854774784", QzdbReader.formatNativeFloat(9223372036854774784.0),
+                    "< 2^63 最大可表示偶数整值");
+            assertEquals("9223372036854775808", QzdbReader.formatNativeFloat(9223372036854775808.0),
+                    "恰为 2^63 走 %.0f 定点分支");
+            assertEquals("-9223372036854775808", QzdbReader.formatNativeFloat(-9223372036854775808.0),
+                    "恰为 -2^63");
+            assertEquals("100000000000000000000", QzdbReader.formatNativeFloat(1e20), "> 2^63 定点整数位");
+            assertEquals("116.400002", QzdbReader.formatNativeFloat(116.4f),
+                    "f32 按精确 double 值舍入（float32 116.4 = 116.40000152587890625）");
+            assertEquals("116", QzdbReader.formatNativeFloat(116.0f), "f32 整值无小数点");
+        });
+
         test("P1. IPv4 严格解析（拒绝前导 0 / 越界 / 缺段）", () -> {
             assertEquals(0x01020304, QzdbReader.parseIPv4Uint("1.2.3.4"), "basic");
             assertEquals(0, QzdbReader.parseIPv4Uint("0.0.0.0"), "all zero");

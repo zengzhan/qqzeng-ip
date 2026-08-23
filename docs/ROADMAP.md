@@ -68,6 +68,21 @@
 - **验证**：push 后观察 Actions 首跑；本地等价命令见 `.github/workflows/ci.yml` 各步骤。
 - **完成**：`.github/workflows/ci.yml` 替代 verify.yml。Tier 2 已按用户决策改为**公共 demo 样本方案**：上游公开的 `demo/qqzeng-ip-ult.qzdb`（360 行样本，非购买数据）连同 CSV 真值入库（.gitignore 加否定规则），新增 `tools/demo_sample_check.py` 做 Python↔CSV 逐字段锚定 + node/php parity 校验，本地实测 2160/2160 通过；CI 无需任何 secret 或下载。真实购买库的 L1-L4 全量验证仍按既有惯例在本地执行。
 
+### T7 · Metadata TLV type=5/6（data_month/scope）权威对齐 8 语言 【P0】✅ 已完成（2026-08-23）
+
+- **现状**：C# 参考实现已消费 Metadata TLV type=5(data_month)/type=6(scope)（`QzdbReader.cs` case 5/6），但其余 7 语言忽略这两类条目——同一带 TLV 的文件在 C# 与其他 SDK 上 `getDataMonth()`/`getScope()` 结果不一致，违反 SYNC_GUIDE 跨语言一致性要求。此前 ff78fed 以「未经审查」为由剥离过一版实现，属流程问题而非方案问题；本任务按维护规则 3 重走 docs 先行 → 8 语言同步。
+- **做法**：FORMAT §8.2 增补 type=5/6 定义与权威语义（TLV 权威、Header BuildDate 仅作 data_month 回落、无条目 scope 返回 ""）；SDK_API §4.5 以 TLV 方案取代「header 迁移前置依赖」；7 语言（Go/Java/Node/PHP/Python/Rust/C）补 TLV case 5/6 消费与 getter 对齐；PHP repairDimMasks 同步改为逐组推导（该组自己的字段名判 asn，不用当前组顶替）。
+- **验收**：8 语言 `getDataMonth()`/`getScope()` 对带/不带 type=5/6 的文件行为逐字一致；不带 TLV 的旧文件行为零变化（回归保护：现有 GetScope=="" 等断言全部保持绿）。
+- **验证结果（2026-08-23）**：Python `test_tlv_meta.py` 6/6（合成库正/反两路）、`test_regression.py` 6/6 + `demo_sample_check.py` 1440/1440 + `test_hostile_vectors.py` OK（真实旧文件回落零变化）；Node `test.js` / `regression_test.js` / `test_suite.js` 全绿（Tier1 379、Tier2 黄金校验 4102/4102）；PHP tier1 新增 TLV 权威断言；C 新增 `tlv_meta_test.c`（真实库注入 TLV，ASan 下 3 用例全绿：TLV 权威/旧文件回落/重复条目 last-wins，兼作 scope 所有权 UAF 回归守卫），run_all_tests.sh 已接线 C-TlvMeta 门禁。Go/Java/C#/Rust 无 VM 工具链，待本地 `cd multi-lang && ./run_all.sh` 终验（新增 Go `tlv_meta_test.go` 正/反两测、readme_api_test 断言已同步新契约）。
+- **遗留验证**：本地跑 `./run_all.sh`（重点 `go test ./qzdb/ -run TestMetadata -v`）。
+
+### T8 · 原生浮点格式化统一契约（FORMAT §10.5）8 语言对齐 【P0】✅ 已完成（2026-08-23）
+
+- **现状**：各语言原生标量（§11.1 nativeType=1）浮点格式化各自为政：C#/Go/Java 对 |v| ≥ 2^63 的整值直接 cast 到 int64（.NET 未指定 / Go 实现相关 / Java 饱和到 MAX/MIN）；Rust 阈值 1e16 导致 ≥1e16 整值输出 `.000000` 尾巴；C 的 ±2^52 guard 同病；Node 对 ≥2^53 整值走最短 round-trip（`9223372036854774784 → "9223372036854775000"`）、≥1e21 更泄漏科学计数法（`1e300 → "1e+300"`）。同一文件跨语言 `toPipe()` 逐字不一致。
+- **做法**：FORMAT §10.5 落统一契约（整数值→精确十进制展开；非整数→固定 6 位小数；NaN/Inf→""；cast 前必须 \|v\| < 2^63 范围保护，超范围走无小数点定点格式化）；API_CONTRACT §三.2 同步。修复 C#（F0 分支 + float 重载委托 double）、Go（'f',0 分支）、Java（抽包级静态 formatNativeFloat + %.0f ROOT 分支）、C（guard 放宽至 ±2^63 + %.0f 分支）、Rust（阈值提至 2^63 + {:.0} 分支）、Node（≥2^53 经 IEEE754 位解码转 BigInt 定点）、PHP（边界 <= 收紧为 <，恰为 2^63 走 %.0F）。
+- **验收**：8 语言对 116.0/-3.0/-0.0/116.4/-3.5/NaN/±Inf/1e16/9.2e18/±2^63 边界/1e20/±1e300 全部逐字一致。
+- **验证结果（2026-08-23）**：Python `test_native_float.py` 20/20、Node `native_float_test.js` 22/22、C `native_float_boundary_test.c` 19/19（VM 实测 NATIVE_FLOAT_OK）；同源用例已入 Go `native_float_test.go`、Rust lib.rs `t_fmt_native_float_boundaries`、Java QzdbReaderTest 纯逻辑段、C# netcore.Tests/NativeFloatTests.cs，待本地工具链终验；run_all_tests.sh 已接线 Python-NativeFloat / Node-NativeFloat / Go-NativeFloat / C-NativeFloat 四个门禁。
+
 ### T5 · Validation 分级演进 【P2·可选】
 
 - **现状**：`init_ex(verify_crc)` 已提供开关雏形；Strict/Normal/Fast 三级仅在出现真实启动耗时痛点时才有价值。

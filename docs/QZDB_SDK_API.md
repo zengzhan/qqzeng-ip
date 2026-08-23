@@ -1,11 +1,10 @@
 # QZDB Multi-Language SDK API 设计规范 v2.4
 
-> **状态**: 正式规范（真·全量无损合并版：v2.1 全部细节表格 + v2.3 商业版矩阵扩展，逐条修正 v2.3 审计发现的缺口）
-> **范围**: Go / Rust / Java / C# / Python / Node.js / PHP / C 八种语言 SDK
-> **对标**: 业界主流 IP 地理库 SDK 的 reader/registry 命名与使用习惯
-> **原则**: 全新设计，不兼容旧 API，不保留任何 deprecated 过渡
-> **适用前提**: 本 SDK 适配 qzdb 商业数据库矩阵（标准版/专业版/ASN版/旗舰版/至尊版 × 国内版/全球版），无外部历史包袱，允许一次性 breaking change
-> **v2.4 修订说明**：v2.3 自称"全量无损合并版"但实际静默删除了 v2.1/R2 中已敲定的批量语义表、并发时序图、跨语言能力矩阵、文件变更矩阵；本版本原样恢复上述内容，同时保留 v2.3 新增的 `ChainedReader`/`openBuffer`/版本自省等能力，并修正其中未收口的设计缺口（详见附录 C 审计记录）。
+> **状态**: 正式规范
+> **范围**: C / C# / Go / Java / Node.js / PHP / Python / Rust 八种语言 SDK
+> **适用数据库**: qzdb 商业数据库矩阵（标准版 / 专业版 / ASN 版 / 旗舰版 / 至尊版 × 国内版 / 全球版）
+> **命名对标**: 业界主流 IP 地理库 SDK 的 reader / registry 使用习惯
+> **兼容性**: 本版为全新设计，不保留 deprecated 过渡；修订履历见附录 B，v2.3 → v2.4 审计记录见附录 C
 
 ---
 
@@ -194,10 +193,7 @@ reg.get("test-db").find(ip);
 reader.version()         // 数据库版本号（例 "2.0"）
 reader.dataMonth()       // 数据期号 "YYYY-MM"
 reader.edition()         // 版本档次 "std"|"pro"|"asn"|"max"|"ult"
-reader.scope()           // 地域覆盖 "cn"|"global"
-                        // ⚠️ 当前 .qzdb 格式未含 scope 字段：8 语言 SDK 与
-                        // golden 测试现状一律返回 ""；上表取值为格式迁移完成
-                        // 后的目标契约（需走 create-migration 落地，见下方前置依赖）。
+reader.scope()           // 地域覆盖 "cn"|"global"（无条目 ""，见下）
 reader.buildTime()       // 构建时间戳
 reader.fileHash()        // CRC32/MD5
 reader.fieldNames()      // 字段名列表
@@ -206,12 +202,11 @@ reader.poolCount()       // 字符串池计数
 reader.verifyCRC()       // 完整性校验
 ```
 
-> ⚠️ **前置依赖（非纯 SDK 侧改动）**：`dataMonth()`/`edition()`/`scope()` 假定 qzdb **二进制文件格式本身**在 header 里新增了对应字段。这不是单纯的 SDK 代码改动，需要：
-> 1. qzdb 文件格式版本号提升，header 结构增加 `edition`/`scope`/`build_month` 字段；
-> 2. 数据库构建工具链（生成 `.qzdb` 的脚本）同步支持写入这几个字段；
-> 3. 旧版本 `.qzdb` 文件（未来 header 里没有这几个字段）打开时，这几个 API 应返回空字符串而不是报错，保证向后兼容旧数据文件。
->
-> 这条依赖必须排在 8 种语言 SDK 改造**之前**完成，作为独立的前置任务。
+> ✅ **已落地（2026-08，v2.4）**：`dataMonth()` / `scope()` 经 Metadata TLV 解析，
+> **无需** header 格式迁移（下方旧的前置依赖已被本方案取代）：
+> - `dataMonth()`：Metadata TLV type=5(data_month) 为权威；无该条目时回落 Header BuildDate 前 6 位。
+> - `scope()`：Metadata TLV type=6(scope) 为权威；无该条目时返回 `""`。
+> 语义定义见 QZDB_FORMAT.md §8.2；8 语言实现逐字一致，由跨语言测试守护。
 
 ---
 

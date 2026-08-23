@@ -266,6 +266,8 @@ func buildMetaGo() []byte {
 		{2, "continent|country_code|country|isp|asn|as_name|as_domain|usage_type"},
 		{3, "synthetic test database"},
 		{4, "asn"},
+		{5, "2026-07"}, // v2.4 data_month：权威期号（Header BuildDate=20260805 仅为回落）
+		{6, "global"},  // v2.4 scope
 	}
 	out := make([]byte, 0)
 	for _, e := range entries {

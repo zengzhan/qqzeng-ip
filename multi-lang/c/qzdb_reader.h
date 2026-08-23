@@ -10,6 +10,8 @@ extern "C" {
 #include <pthread.h>
 
 #define QZDB_MAX_FIELDS 32
+/* FORMAT §10.5：原生浮点整值定点展开最长 ~309 位（1e308）+ 符号 + NUL，取 512 留余量 */
+#define QZDB_VALUE_BUF_SIZE 512
 #define QZDB_MAX_TRIE_WALK_STEPS_V4  (32 + 8)  /* IPv4 walk cap = max(32+8,40)=40 */
 #define QZDB_MAX_TRIE_WALK_STEPS_V6  (128 + 8) /* IPv6 walk cap = max(128+8,40)=136 */
 #define QZDB_SENTINEL 0x80000000u
@@ -137,6 +139,7 @@ typedef struct {
     const char* field_names_source;     /* metadata / edition / synthetic */
     char*    data_month;
     char*    build_time_str;
+    char*    scope;      /* Metadata TLV type=6（v2.4 权威；无条目 ""，FORMAT §8.2） */
     int      build_date;
     char**   norm_field_names;
 
@@ -236,17 +239,18 @@ int  qzdb_find_batch(qzdb_reader_t* ctx, const char** ips, int count,
 int  qzdb_find_each(qzdb_reader_t* ctx, const char** ips, int count,
                     qzdb_find_callback cb, void* user_data);
 
-/* Caller-buffer (zero-heap-allocation) variants */
+/* Caller-buffer (zero-heap-allocation) variants.
+ * bufs 元素尺寸必须为 QZDB_VALUE_BUF_SIZE（§10.5 大整值定点展开需要 ~310 字节）。 */
 int  qzdb_find_uint_buf(qzdb_reader_t* ctx, uint32_t ip_int,
-                        char** values, char (*bufs)[64], int buf_size);
+                        char** values, char (*bufs)[QZDB_VALUE_BUF_SIZE], int buf_size);
 int  qzdb_find_v6_buf(qzdb_reader_t* ctx, const uint8_t* ip_bin,
-                      char** values, char (*bufs)[64], int buf_size);
+                      char** values, char (*bufs)[QZDB_VALUE_BUF_SIZE], int buf_size);
 int  qzdb_find_fields_buf(qzdb_reader_t* ctx, const char* ip_str,
                           const char** field_names,
-                          char** values, char (*bufs)[64], int buf_size);
+                          char** values, char (*bufs)[QZDB_VALUE_BUF_SIZE], int buf_size);
 int  qzdb_find_fields_uint_buf(qzdb_reader_t* ctx, uint32_t ip_int,
                                const char** field_names,
-                               char** values, char (*bufs)[64], int buf_size);
+                               char** values, char (*bufs)[QZDB_VALUE_BUF_SIZE], int buf_size);
 
 /* ---- Low-level lookups ---- */
 uint32_t qzdb_lookup_row_id(qzdb_reader_t* ctx, const char* ip_str);
