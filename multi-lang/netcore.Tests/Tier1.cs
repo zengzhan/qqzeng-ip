@@ -395,40 +395,54 @@ class Program
 
     static void VerifyVersion(string ver, string scope, string dbPath, string csvPath)
     {
-        var csvLines = System.IO.File.ReadAllLines(csvPath);
-        if (csvLines.Length < 2) return;
-        var csvHeaders = ParseCsv(csvLines[0]);
-        var colMap = new System.Collections.Generic.Dictionary<string, int>();
-        for (int i = 0; i < csvHeaders.Length; i++) colMap[csvHeaders[i].Trim()] = i;
+        // 流式逐行读取 CSV：全球库 CSV 达数百万行，ReadAllLines 会把
+        // 数 GB 字符串同时驻留内存（曾导致受限环境 OOM）。断言逻辑不变。
         using var r = new QzdbReader.Builder(dbPath).Build();
-        var sample = r.Find(ParseCsv(csvLines[1])[0].Trim());
+        string[] csvHeaders;
+        var colMap = new System.Collections.Generic.Dictionary<string, int>();
+        string sampleLine;
+        using (var head = new System.IO.StreamReader(csvPath))
+        {
+            var h = head.ReadLine();
+            if (h == null) return;
+            csvHeaders = ParseCsv(h);
+            for (int i = 0; i < csvHeaders.Length; i++) colMap[csvHeaders[i].Trim()] = i;
+            sampleLine = head.ReadLine();
+            if (sampleLine == null) return;
+        }
+        var sample = r.Find(ParseCsv(sampleLine)[0].Trim());
         if (sample == null) return;
         var dbFields = new System.Collections.Generic.HashSet<string>(sample.FieldNames);
         int verErr = 0, verChk = 0;
-        for (int i = 1; i < csvLines.Length; i++)
+        using (var body = new System.IO.StreamReader(csvPath))
         {
-            var cols = ParseCsv(csvLines[i]);
-            if (cols.Length < csvHeaders.Length) continue;
-            var ip = cols[0].Trim();
-            if (string.IsNullOrEmpty(ip) || ip == "0.0.0.0" || ip == "::") continue;
-            if (ip.StartsWith("::ffff:") || ip.StartsWith("0:0:0:0:0:ffff:")) { tier2Excl++; continue; }
-            if (ip.Contains(':')) tier2Ipv6++; else tier2Ipv4++;
-            var info = r.Find(ip);
-            if (info == null) continue;
-            verChk++;
-            foreach (var h in csvHeaders)
+            body.ReadLine();   // skip header
+            string line;
+            while ((line = body.ReadLine()) != null)
             {
-                var header = h.Trim();
-                if (header == "start_ip" || header == "end_ip" || header == "start_ip_num" || header == "end_ip_num") continue;
-                if (!colMap.ContainsKey(header) || !dbFields.Contains(header)) continue;
-                var idx = colMap[header];
-                if (idx >= cols.Length) continue;
-                var exp = cols[idx].Trim();
-                var act = info.Get(header).Trim();
-                if (!Match(ip, header, exp, act))
+                var cols = ParseCsv(line);
+                if (cols.Length < csvHeaders.Length) continue;
+                var ip = cols[0].Trim();
+                if (string.IsNullOrEmpty(ip) || ip == "0.0.0.0" || ip == "::") continue;
+                if (ip.StartsWith("::ffff:") || ip.StartsWith("0:0:0:0:0:ffff:")) { tier2Excl++; continue; }
+                if (ip.Contains(':')) tier2Ipv6++; else tier2Ipv4++;
+                var info = r.Find(ip);
+                if (info == null) continue;
+                verChk++;
+                foreach (var h in csvHeaders)
                 {
-                    verErr++;
-                    if (verErr <= 2) Console.WriteLine("  ERR [" + ver + " " + scope + "] " + ip + " " + header + ": csv='" + exp + "' db='" + act + "'");
+                    var header = h.Trim();
+                    if (header == "start_ip" || header == "end_ip" || header == "start_ip_num" || header == "end_ip_num") continue;
+                    if (!colMap.ContainsKey(header) || !dbFields.Contains(header)) continue;
+                    var idx = colMap[header];
+                    if (idx >= cols.Length) continue;
+                    var exp = cols[idx].Trim();
+                    var act = info.Get(header).Trim();
+                    if (!Match(ip, header, exp, act))
+                    {
+                        verErr++;
+                        if (verErr <= 2) Console.WriteLine("  ERR [" + ver + " " + scope + "] " + ip + " " + header + ": csv='" + exp + "' db='" + act + "'");
+                    }
                 }
             }
         }

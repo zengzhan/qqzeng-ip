@@ -282,6 +282,7 @@ $metaBuf[0] = 'Q'; $metaBuf[1] = 'Z'; $metaBuf[2] = 'D'; $metaBuf[3] = 'B';
 $metaBuf[4] = "\1";
 $f2 = pack('v', 0x0004);              // flags bit2 = has metadata
 $metaBuf[8] = $f2[0]; $metaBuf[9] = $f2[1];
+$metaBuf[13] = "\x02";                // poolIdxSize ∈ {2,3}（与 python/test_tlv_meta.py 对齐）
 $h2 = pack('V', 192);
 $metaBuf[36] = $h2[0]; $metaBuf[37] = $h2[1]; $metaBuf[38] = $h2[2]; $metaBuf[39] = $h2[3];
 $r2b = pack('V', 6);
@@ -318,6 +319,10 @@ if (file_exists($cacheDb)) {
     $mResolve = $crf->getMethod('resolveGeo');
     $pCache = $crf->getProperty('geoCache');
     $pCounts = $crf->getProperty('groupEntryCounts');
+    // PHP 8.0 需显式 setAccessible（8.1+ 免除，此处保留以兼容 8.0）
+    $mResolve->setAccessible(true);
+    $pCache->setAccessible(true);
+    $pCounts->setAccessible(true);
     $nEntry = $pCounts->getValue($cr)[0];
 
     $cap = QzdbReader::GEO_CACHE_LIMIT;
