@@ -1,58 +1,64 @@
-# qzdb — 跨平台 IP 地理位置查询 SDK
+# qzdb — IP 地理位置查询 SDK
 
-高性能、跨平台的 IP 地理位置数据库查询引擎，支持 **8 种语言**：C, C#, Go, Java, Node.js, PHP, Python, Rust。
+基于自定义二进制格式（`.qzdb`）的高性能 IP 地理位置查询引擎。单文件或单目录即可集成，8 种语言共享同一 API 设计与同一套验证体系。
 
-## 项目结构与文档规范
+| 特性 | 说明 |
+|------|------|
+| 检索结构 | Jump Table + Patricia Trie 双阶段前缀检索，IPv4 平均约 16 次比对 |
+| 访问方式 | mmap 只读映射，零拷贝寻址，无锁并发查询 |
+| Schema | 字段集合由数据库元数据驱动，向前向后兼容 |
+| 一致性 | 四层验证：冒烟测试 / 跨语言一致性 / 回归基准 / 精度分析 |
 
-```
-├── docs/                       ← 核心权威规范目录
-│   ├── QZDB_FORMAT.md          ← QZDB 二进制文件格式规范（底层存储）
-│   ├── QZDB_SDK_API.md         ← QZDB 多语言 SDK API 设计规范 v2.4（接口设计基线）
-│   └── QZDB_SYNC_GUIDE.md      ← 多语言 SDK 同步与测试构建指南
-├── multi-lang/                 ← 8 种语言 SDK 代码库
-│   ├── c/                      C SDK (qzdb)
-│   ├── csharp/                 C# (.NET) SDK
-│   ├── go/                     Go Package SDK
-│   ├── java/                   Java SDK (QzdbReader + GeoInfo)
-│   ├── nodejs/                 Node.js SDK
-│   ├── php/                    PHP SDK
-│   ├── python/                 Python SDK
-│   ├── rust/                   Rust Crate SDK
-│   └── run_all_tests.sh        一键验证测试脚手架
-├── CLAUDE.md                   LLM / 开发者指南
-├── README.md                   项目入口说明
-└── LICENSE                     MIT 开源协议
+## 快速开始
+
+以 Python 为例，其余语言仅构造方式不同：
+
+```python
+from qzdb import QzdbReader
+
+reader = QzdbReader("qqzeng_ip_std_china.qzdb")
+print(reader.find_str("114.114.114.114"))   # 亚洲|CN|中国|江苏|南京|114DNS
+loc = reader.find("114.114.114.114")        # 结构化 GeoInfo 对象
+print(loc.country, loc.city)                # 中国 南京
 ```
 
-## 📖 核心设计文档
+## 集成方式
 
-在开始开发或使用 SDK 前，请参考 `docs/` 目录下的权威文档：
+| 语言 | 入口 | 集成 | 语言文档 |
+|------|------|------|---------|
+| Python | `qzdb.py` | 拷贝单文件，`from qzdb import QzdbReader` | [python](multi-lang/python/README.md) |
+| Node.js | `qzdb.js` | 拷贝单文件，`require('./qzdb')` | [nodejs](multi-lang/nodejs/README.md) |
+| Go | `qzdb/` 包 | 拷贝 `go/qzdb/` 目录，`import` 该包 | [go](multi-lang/go/README.md) |
+| Java | `com.qqzeng.qzdb` 包 | 拷贝 `java/src/main/java/com/qqzeng/qzdb/` 整个包 | [java](multi-lang/java/README.md) |
+| C# | `QQZeng.Qzdb` | 拷贝 `netcore/*.cs` 实现文件集，`using QQZeng.Qzdb` | [netcore](multi-lang/netcore/README.md) |
+| PHP | `QzdbReader.php` | 拷贝单文件，`use Qqzeng\Ip\QzdbReader` | [php](multi-lang/php/README.md) |
+| Rust | `src/lib.rs` | 引入 `rust/` crate（核心为单文件 `lib.rs`） | [rust](multi-lang/rust/README.md) |
+| C | `qzdb_reader.c/.h` | 两个文件一起编译 | [c](multi-lang/c/README.md) |
 
-1. **[QZDB 二进制文件格式规范](docs/QZDB_FORMAT.md)**：包含 64 字节 Header 结构、Patricia Trie 存储结构、字符串池编码、CRC32 校验、Group 组扩展逻辑。
-2. **[QZDB 多语言 SDK API 设计规范 v2.4](docs/QZDB_SDK_API.md)**：包含 8 种语言统一的 API 签名、`ChainedReader` 多库联合、`openBuffer` 内存加载、`UsageType` 21 场景定义与多语言映射、`BatchResult` 批量处理、`GeoInfo` 25 字段全集 Getter。
-3. **[QZDB SDK 同步与构建指南](docs/QZDB_SYNC_GUIDE.md)**：跨仓库文件同步与交叉测试运行指南。
+各语言统一的 API 语义（生命周期 / 查询 / GeoInfo / 批量 / 多库联合）见 [API 设计规范](docs/QZDB_SDK_API.md)；语言间差异见 [multi-lang/README.md](multi-lang/README.md)。
 
-## 前置条件
+## 数据库
 
-1. **购买数据库**: 从 [qqzeng.com](https://qqzeng.com) 购买 IP 数据库，获取 `.qzdb` 文件
-2. **放置数据**: 将 `.qzdb` 文件放入 `multi-lang/data/` 目录
-3. **运行测试**: `cd multi-lang && ./run_all_tests.sh`
+从 [qqzeng.com](https://qqzeng.com) 购买数据库取得 `.qzdb` 文件，放置于 `multi-lang/data/` 目录。格式规范见 [QZDB_FORMAT.md](docs/QZDB_FORMAT.md)：192 字节定长 Header、Metadata TLV、Patricia Trie 存储结构、字符串池编码、CRC32 校验。
 
-## 各语言使用方法
+## 验证
 
-| 语言 | 文件 | 使用方式 |
-|------|------|---------|
-| Python | `qzdb.py` | 拷贝 `qzdb.py` 到项目，`from qzdb import QzdbReader` |
-| Node.js | `qzdb.js` | 拷贝 `qzdb.js`，`const QzdbReader = require('./qzdb')` |
-| Go | `qzdb/qzdb.go` | 拷贝 `qzdb/` 目录，`import "your-project/qzdb"` |
-| PHP | `QzdbReader.php` | 拷贝文件，`use Qqzeng\Ip\QzdbReader` |
-| Rust | `lib.rs` | 拷贝 `src/lib.rs` + `Cargo.toml` 依赖 |
-| C | `qzdb_reader.c/.h` | 拷贝两个文件一起编译 |
-| Java | `QzdbReader.java` | 拷贝到项目，`import com.qqzeng.qzdb.QzdbReader` |
-| C# | `QzdbReader.cs` | 拷贝到项目，`using QQZeng.Qzdb` |
+```bash
+cd multi-lang && ./run_all.sh        # L1–L4 全量编排（冒烟/交叉一致性/回归基准/精度分析）
+cd multi-lang && ./run_all_tests.sh  # L1 冒烟 + 新增门禁
+```
 
-详见 [multi-lang/README.md](multi-lang/README.md)
+## 仓库结构
 
-## 许可证
+```
+├── docs/                  权威规范：FORMAT / SDK_API / SYNC_GUIDE / TEST_SPECIFICATION
+├── multi-lang/            8 语言 SDK 与四层验证脚本（c / netcore / go / java / nodejs / php / python / rust）
+│   └── data/              .qzdb 数据库放置处（不入库）
+├── sql/                   IPv6 数据融合管线
+├── tools/                 元数据探针等辅助工具（6 语言版本）
+└── LICENSE                MIT
+```
+
+## License
 
 MIT

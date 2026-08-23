@@ -58,7 +58,7 @@ res := searcher.FindStr("114.114.114.114")
 // 查询结构化 GeoInfo
 info := searcher.Find("114.114.114.114")
 if info != nil {
-    println(info.Get("country"), info.Get("city"))
+    fmt.Println(info.Get("country"), info.Get("city"))
 }
 ```
 
@@ -83,7 +83,9 @@ try (QzdbReader reader = new QzdbReader.Builder(new File("qqzeng_ip_ult_china.qz
 ```rust
 use qzdb_reader::{from_file, QzdbReader};
 
-let searcher = from_file("qqzeng_ip_ult_china.qzdb");
+// from_file 返回 Result<QzdbReader, QzdbError>
+let searcher = from_file("qqzeng_ip_ult_china.qzdb").expect("open qzdb failed");
+
 if let Some(loc) = searcher.find("114.114.114.114") {
     // 直接字段访问 (O(1))
     println!("Country: {}, City: {}", loc.country(), loc.city());
@@ -109,13 +111,23 @@ if (loc != null) {
 
 ### 🔌 C / C++
 ```c
+#include <stdio.h>
 #include "qzdb_reader.h"
 
-qzdb_reader_t searcher;
-qzdb_init(&searcher, "qqzeng_ip_ult_china.qzdb");   // 栈上持有实例，无单例
-char buf[256];
-qzdb_find_str(&searcher, "114.114.114.114", buf, sizeof(buf));
-printf("Result: %s\n", buf);
+int main(void) {
+    qzdb_reader_t reader;                       /* 栈上持有实例，无单例 */
+    if (qzdb_init(&reader, "qqzeng_ip_ult_china.qzdb") != QZDB_OK) {
+        fprintf(stderr, "init failed\n");
+        return 1;
+    }
+    char buf[QZDB_VALUE_BUF_SIZE];              /* 值缓冲统一容量，防截断 */
+    int rc = qzdb_find_str(&reader, "114.114.114.114", buf, sizeof(buf));
+    if (rc == QZDB_OK) {
+        printf("Result: %s\n", buf);            /* rc == QZDB_ERR_NOT_FOUND 表示未命中 */
+    }
+    qzdb_close(&reader);
+    return 0;
+}
 ```
 
 ### 🟢 Node.js

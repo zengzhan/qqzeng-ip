@@ -23,7 +23,7 @@
 2. 把压测工作负载从"单一混合分布"升级为 **四种分布**（random / hot / sequential / real_world），以包围缓存的真实行为；
 3. 规定一个**规范化 JSON 输出 schema** 与 **baseline 回归门禁**，让性能像正确性一样可被 CI 冻结。
 
-**本契约是其余一切 Runtime 优化（见 `RUNTIME_PROPOSAL_ASSESSMENT_20260810.md` 第 3 节 4 条真缺口）的决策门。未用本契约口径测得瓶颈前，任何"性能优化"不得合入。**
+**本契约是其余一切 Runtime 优化（见 `docs/archive/RUNTIME_PROPOSAL_ASSESSMENT_20260810.md` 第 3 节 4 条真缺口）的决策门。未用本契约口径测得瓶颈前，任何"性能优化"不得合入。**
 
 ---
 
@@ -249,7 +249,7 @@ else:       ip = sequential 采样     // 10% 单调
 
 ## 11. 与 4 条真缺口的关系（决策门语义）
 
-`RUNTIME_PROPOSAL_ASSESSMENT_20260810.md` 第 3 节判定：
+`docs/archive/RUNTIME_PROPOSAL_ASSESSMENT_20260810.md` 第 3 节判定：
 
 - **P0 统一基准口径** → 即本契约。无本契约，下面三条无从证伪。
 - **P1 Rust 去 Mutex** → 用本契约 `hot` 分布在 8/16 线程下观察同槽争用；若 QPS 不随线程线性扩展且 `p99` 显著高于 C/Go，则进入优化。

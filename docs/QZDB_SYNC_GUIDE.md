@@ -181,3 +181,16 @@ git push origin main
 | **Rust** | 构造性有界 | 无魔法常量；V4 `for _ in 0..16` / `while depth < max_depth`，V6 `while depth < 128` | 深度游走 `while depth < max_depth`（max_depth = 32 / 128）、行号游走 `for _ in 0..16`；循环深度由 IP 位宽天然封顶。 |
 
 > **变更清单（仅 5 个文件，其余 3 个语言仅登记）**：`multi-lang/nodejs/qzdb.js`、`multi-lang/go/qzdb/qzdb.go`、`multi-lang/c/qzdb_reader.h` + `multi-lang/c/qzdb_reader.c`、`multi-lang/python/qzdb.py`、`multi-lang/php/QzdbReader.php`。所有改动仅替换终止上限的推导方式，未触碰解析语义、公开 API、缓存或文件格式假设；良构文件行为完全不变（V4 实际 ≤ 16 步、V6 实际 ≤ 128 步，均远低于派生上限）。
+
+## 六、文档同步规范
+
+代码同步之外，以下文档面变更必须随同一提交落地，防止文档与实现漂移：
+
+| 触发变更 | 必须同步的位置 |
+|:---|:---|
+| 公开 API 签名 / 语义变化 | `docs/QZDB_SDK_API.md`（先改）→ `docs/QZDB_SYNC_GUIDE.md` → 各语言 README 的 API 章节 |
+| 二进制格式变化 | `docs/QZDB_FORMAT.md`（唯一权威来源，先改）→ 全部 8 语言实现 |
+| README 示例代码 | 两份总 README（根 + `multi-lang/`）中的示例片段必须来自可运行代码并实测输出；示例须体现错误处理路径（fail-closed），不得省略返回值检查与资源释放 |
+| 集成方式描述 | 根 README「集成方式」表：语言入口文件数与实际目录一致（Java/C# 为多文件包，Python/Node/PHP/C 为单/双文件） |
+
+**一致性检查项**（每次发布前人工过一遍）：8 语言 README 章节骨架同构；事实性数字（Header 大小、复杂度、缓冲容量）全仓只允许一处权威来源、他处引用；无 emoji 与营销化措辞（技术陈述以数据结构与实测指标为准）。
