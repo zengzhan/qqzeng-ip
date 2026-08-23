@@ -933,10 +933,60 @@ public class QzdbReader implements AutoCloseable {
         boolean verifyCrcNow() {
             return computeCanonicalCrc(data) == storedCrc;
         }
+
+        /**
+         * 尽力而为地立即释放底层 mmap 视图（仅当 data 是 {@link MappedByteBuffer} 时才有意义；
+         * reload/OpenBuffer 走的堆内 ByteBuffer 交给 GC 正常回收即可，此方法对它是安全的空操作）。
+         * <p>
+         * 背景：{@code java.nio.MappedByteBuffer} 从 JDK 1.4 起就没有公开的 unmap()/close() —— 这是
+         * 众所周知的 JDK API 缺口。默认行为完全依赖 GC 在不确定的将来某个时刻跑内部 Cleaner 做
+         * native munmap；在频繁 reload()（比如按小时刷新地理库）的生产服务里，这意味着句柄可能
+         * 无限堆积，Windows 上未释放的映射还会阻塞删除/替换旧文件。这里用 JDK 9+ 起提供的
+         * {@code sun.misc.Unsafe.invokeCleaner(ByteBuffer)}（Lucene/Netty/Hadoop 等高性能库处理
+         * MappedByteBuffer 释放的标准手法）主动触发 munmap，失败（比如非 HotSpot/OpenJDK 实现、
+         * 模块系统限制反射）时静默回落到"等 GC"这一原本就安全的行为，不抛异常、不影响可用性。
+         * <p>
+         * 安全前提：调用方必须保证没有其他线程正在这个快照上执行查询——立即 unmap 一段仍在被
+         * 并发读取的映射内存会导致 JVM 直接 native 崩溃（SIGSEGV），不是可恢复的 Java 异常。
+         * 这正是 QzdbReader 用"晚一代再释放"的隔离队列而不是替换瞬间同步调用本方法的原因，
+         * 见 {@link QzdbReader#retiring}。
+         */
+        void unmapIfMapped() {
+            if (!(data instanceof MappedByteBuffer)) return;
+            try {
+                Class<?> unsafeClass = Class.forName("sun.misc.Unsafe");
+                java.lang.reflect.Field f = unsafeClass.getDeclaredField("theUnsafe");
+                f.setAccessible(true);
+                Object unsafe = f.get(null);
+                java.lang.reflect.Method invokeCleaner = unsafeClass.getMethod("invokeCleaner", ByteBuffer.class);
+                invokeCleaner.invoke(unsafe, data);
+            } catch (ReflectiveOperationException | RuntimeException ignored) {
+                // 落回默认行为：等 GC 的 Cleaner 兜底释放，不影响正确性，只是不再确定性及时。
+            }
+        }
     }
 
     private final AtomicReference<Snapshot> activeSnapshot = new AtomicReference<>();
     private final File loadedFile;
+
+    /**
+     * 保存最近一次被替换下来的快照，延迟一代再真正 unmap，而不是在 activeSnapshot
+     * 换引用的瞬间同步释放。
+     * <p>
+     * 原因与 QzdbRegistry 的退休队列（quarantine）完全一致：查询路径是无锁的，不做
+     * 每次调用的引用计数，所以在替换的瞬间无法廉价判断是否还有线程正在这个旧快照上
+     * 跑 trie walk。reload()/close() 是运维触发的低频动作（分钟级以上间隔），而单次
+     * 查询是微秒级临界区，所以把刚替换下来的快照多留一代——等*再下一次* reload()/close()
+     * 发生时才真正 unmap 它——足以让几乎所有在途查询安全结束，同时把最坏情况限制在
+     * "最多多晾一代"，而不是无界地依赖 GC 什么时候心情好。
+     */
+    private final AtomicReference<Snapshot> retiring = new AtomicReference<>();
+
+    private void retireSnapshot(Snapshot old) {
+        if (old == null) return;
+        Snapshot toRelease = retiring.getAndSet(old);
+        if (toRelease != null) toRelease.unmapIfMapped();
+    }
 
     /**
      * QzdbReader 构建器
@@ -1419,7 +1469,8 @@ public class QzdbReader implements AutoCloseable {
             }
             MappedByteBuffer buffer = ch.map(FileChannel.MapMode.READ_ONLY, 0, size);
             Snapshot newSnap = new Snapshot(buffer, requireSnapshot().groupIndex, true); // reload 强制 CRC
-            activeSnapshot.set(newSnap);
+            Snapshot old = activeSnapshot.getAndSet(newSnap);
+            retireSnapshot(old);
         } catch (IOException e) {
             throw new QzdbException(ErrorCode.FILE_NOT_FOUND, "Failed to read reload file: " + path, e);
         }
@@ -1437,15 +1488,22 @@ public class QzdbReader implements AutoCloseable {
         }
         ByteBuffer wrap = ByteBuffer.wrap(buffer.clone()); // 拷贝保护
         Snapshot newSnap = new Snapshot(wrap, requireSnapshot().groupIndex, true);
-        activeSnapshot.set(newSnap);
+        Snapshot old = activeSnapshot.getAndSet(newSnap);
+        retireSnapshot(old);
     }
 
     /**
      * 释放 mmap/文件句柄/内存引用。幂等操作；关闭后任何查询/自省 API 抛 {@link IllegalStateException}。
+     * <p>
+     * close() 是终止调用（同 .NET/Go 的约定：调用方需自行保证 close() 时无并发查询在途），
+     * 因此这里对当前快照和退休队列里尚未释放的旧快照都做同步立即 unmap，不再走一代宽限期。
      */
     @Override
     public void close() {
-        activeSnapshot.set(null);
+        Snapshot last = activeSnapshot.getAndSet(null);
+        if (last != null) last.unmapIfMapped();
+        Snapshot old = retiring.getAndSet(null);
+        if (old != null) old.unmapIfMapped();
     }
 
     // =========================================================================
