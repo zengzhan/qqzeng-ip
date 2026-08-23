@@ -1947,13 +1947,38 @@ function fastParseIp(ip) {
 class QzdbRegistry {
   constructor() {
     this._map = Object.create(null);
+    // 退休队列：register()/unregister() 用它延迟关闭被替换/移除的 reader，
+    // 而不是立即同步 close()。
+    //
+    // 原因：get(name) 把 reader 对象本体交给调用方；Node 是单线程事件循环，
+    // 但异步代码依然可能交错执行——调用方完全可能写出
+    //   const r = registry.get('geo');
+    //   await someAsyncOp();
+    //   const info = r.find(ip);
+    // 而 await 让出期间恰好有另一次 register('geo', newPath) 在事件循环里跑完。
+    // QzdbReader.close() 本身是内存安全的（只是把内部 Buffer 换成空的，
+    // find() 系列方法都有 _closed 检查后 fail-safe 返回 null，不会抛异常
+    // 更不会读取已释放内存），但这意味着上面那段代码会静默拿到 null——
+    // 比异常更难排查的一类 bug。register/unregister 是运维触发的低频动作，
+    // 而一次 find() 调用之间的 await 间隙通常是毫秒级，把刚替换下来的 reader
+    // 在有限容量队列里多留几轮，几乎总能让在途调用安全完成，同时把最坏情况
+    // （reader 一直不被关闭）限制在 QUARANTINE_CAPACITY 个以内。
+    this._quarantine = [];
+  }
+  _retire(old) {
+    if (!old) return;
+    this._quarantine.push(old);
+    while (this._quarantine.length > QzdbRegistry.QUARANTINE_CAPACITY) {
+      const evicted = this._quarantine.shift();
+      try { evicted.close(); } catch (e) { /* ignore */ }
+    }
   }
   register(name, path) {
     if (!name || !path) throw new QzdbError('Name and path must not be empty', QzdbError.INVALID_PARAM);
     const reader = new QzdbReader.Builder(path).build();
     const old = this._map[name];
     this._map[name] = reader;
-    if (old) old.close();
+    this._retire(old);
     return reader;
   }
   registerBuffer(name, buffer) {
@@ -1961,19 +1986,25 @@ class QzdbRegistry {
     const reader = new QzdbReader.Builder(buffer).build();
     const old = this._map[name];
     this._map[name] = reader;
-    if (old) old.close();
+    this._retire(old);
     return reader;
   }
   get(name) { return name == null ? null : (this._map[name] || null); }
   unregister(name) {
     const removed = name ? this._map[name] : null;
-    if (removed) { delete this._map[name]; removed.close(); }
+    if (removed) { delete this._map[name]; this._retire(removed); }
   }
   clear() {
+    // clear() 视为终止关闭动作（而非热更新），同步立即 close，
+    // 与直接调用某个 reader 的 close() 语义一致；调用方在调用 clear() 时
+    // 应已停止发起查询。退休队列中尚未关闭的旧 reader 一并冲刷关闭。
     for (const k of Object.keys(this._map)) { try { this._map[k].close(); } catch (e) { /* ignore */ } }
     this._map = Object.create(null);
+    let q;
+    while ((q = this._quarantine.shift())) { try { q.close(); } catch (e) { /* ignore */ } }
   }
 }
+QzdbRegistry.QUARANTINE_CAPACITY = 8;
 // 进程全局快捷方式
 const _GLOBAL_REG = new QzdbRegistry();
 QzdbRegistry.registerGlobal = (name, path) => _GLOBAL_REG.register(name, path);
