@@ -113,7 +113,8 @@ static int safe_read_uint_width(const uint8_t* data, size_t data_size, uint64_t 
         *out = data[off];
     } else if (w == 2) {
         uint16_t v; int r = safe_read_u16(data, data_size, off, &v);
-        if (r != QZDB_OK) return r; *out = v;
+        if (r != QZDB_OK) return r;
+        *out = v;
     } else if (w == 3) {
         return safe_read_u24(data, data_size, off, out);
     } else {
@@ -986,7 +987,8 @@ static int split_hextets(const char* src, int src_len, char parts[][16], int max
         if (count >= max_parts) return -1;
         if (seglen > 15) return -1;
         memcpy(parts[count], src + start, (size_t)seglen); parts[count][seglen] = '\0'; count++;
-        if (i >= src_len) break; i++;
+        if (i >= src_len) break;
+        i++;
     }
     return count;
 }
@@ -1321,7 +1323,42 @@ struct qzdb_registry {
     uint32_t      cap;
     uint32_t      count;
     pthread_mutex_t lock;
+    /* 退休环形缓冲区：register()/unregister() 用它延迟 free()/munmap 被替换/
+     * 移除的 reader，而不是立即同步释放。
+     *
+     * 为什么必须这样做：qzdb_registry_get() 把裸指针 qzdb_reader_t* 交给调用方，
+     * 且不做任何引用计数——这是 C 没有 GC 的直接后果。调用方完全可能先
+     * get() 拿到指针，还没来得及 qzdb_find()，另一个线程的
+     * register(同名)/unregister() 就把它 free() 掉了：这不是"抛异常"或
+     * "返回 null" 那种软失败，而是直接对已释放/已 munmap 内存解引用——
+     * SIGSEGV 或堆损坏。register/unregister 是运维触发的低频动作
+     * （分钟级以上间隔），而一次 qzdb_find() 只是微秒级临界区，所以把刚
+     * 被替换下来的 reader 在固定容量的环形缓冲区里多留几轮，几乎总能让
+     * 在途查询安全结束，同时把最坏情况限制在 QZDB_REGISTRY_QUARANTINE_CAP
+     * 个未释放 reader 以内，而不是让第一个 bug 已经造成的泄漏雪上加霜。 */
+    qzdb_reader_t* quarantine[8];
+    int quarantine_next;
 };
+#define QZDB_REGISTRY_QUARANTINE_CAP 8
+
+/* 把 old（可能为 NULL）放入环形退休队列；若目标槽位已有旧条目，
+ * 说明它已经在队列里晾了整整一圈的 register/unregister 调用，
+ * 这时才真正 qzdb_free()+free() 它。调用方必须已持有 reg->lock。 */
+static void reg_retire_locked(qzdb_registry_t* reg, qzdb_reader_t* old) {
+    if (!old) return;
+    qzdb_reader_t* evicted = reg->quarantine[reg->quarantine_next];
+    reg->quarantine[reg->quarantine_next] = old;
+    reg->quarantine_next = (reg->quarantine_next + 1) % QZDB_REGISTRY_QUARANTINE_CAP;
+    if (evicted) { qzdb_free(evicted); free(evicted); }
+}
+
+/* 在桶 idx 对应的链表里查找 name 的现有条目；未找到返回 NULL。
+ * 调用方必须已持有 reg->lock。 */
+static reg_entry_t* reg_find_locked(qzdb_registry_t* reg, uint32_t idx, const char* name) {
+    for (reg_entry_t* e = reg->buckets[idx]; e; e = e->next)
+        if (strcmp(e->name, name) == 0) return e;
+    return NULL;
+}
 
 qzdb_registry_t* qzdb_registry_new(void) {
     qzdb_registry_t* reg = calloc(1, sizeof(qzdb_registry_t));
@@ -1346,9 +1383,22 @@ int qzdb_registry_register(qzdb_registry_t* reg, const char* name, const char* p
     if (rc != QZDB_OK) { free(reader); return rc; }
     pthread_mutex_lock(&reg->lock);
     uint32_t idx = reg_hash(name) & (reg->cap - 1);
-    reg_entry_t* e = calloc(1, sizeof(reg_entry_t));
-    e->name = strdup(name); e->reader = reader; e->next = reg->buckets[idx];
-    reg->buckets[idx] = e; reg->count++;
+    reg_entry_t* e = reg_find_locked(reg, idx, name);
+    if (e) {
+        /* 同名重复注册：原地替换指针，绝不再往桶链表里插入第二个同名节点
+         * （旧代码在这里会产生重复条目 + 永久泄漏，见结构体上方注释）。
+         * 旧 reader 走退休队列延迟释放，而不是立即 free。 */
+        qzdb_reader_t* old = e->reader;
+        e->reader = reader;
+        reg_retire_locked(reg, old);
+    } else {
+        e = calloc(1, sizeof(reg_entry_t));
+        if (!e) { pthread_mutex_unlock(&reg->lock); qzdb_free(reader); free(reader); return QZDB_ERR_OUT_OF_MEMORY; }
+        e->name = strdup(name);
+        if (!e->name) { pthread_mutex_unlock(&reg->lock); free(e); qzdb_free(reader); free(reader); return QZDB_ERR_OUT_OF_MEMORY; }
+        e->reader = reader; e->next = reg->buckets[idx];
+        reg->buckets[idx] = e; reg->count++;
+    }
     pthread_mutex_unlock(&reg->lock);
     return QZDB_OK;
 }
@@ -1361,9 +1411,19 @@ int qzdb_registry_register_buffer(qzdb_registry_t* reg, const char* name, const 
     if (rc != QZDB_OK) { free(reader); return rc; }
     pthread_mutex_lock(&reg->lock);
     uint32_t idx = reg_hash(name) & (reg->cap - 1);
-    reg_entry_t* e = calloc(1, sizeof(reg_entry_t));
-    e->name = strdup(name); e->reader = reader; e->next = reg->buckets[idx];
-    reg->buckets[idx] = e; reg->count++;
+    reg_entry_t* e = reg_find_locked(reg, idx, name);
+    if (e) {
+        qzdb_reader_t* old = e->reader;
+        e->reader = reader;
+        reg_retire_locked(reg, old);
+    } else {
+        e = calloc(1, sizeof(reg_entry_t));
+        if (!e) { pthread_mutex_unlock(&reg->lock); qzdb_free(reader); free(reader); return QZDB_ERR_OUT_OF_MEMORY; }
+        e->name = strdup(name);
+        if (!e->name) { pthread_mutex_unlock(&reg->lock); free(e); qzdb_free(reader); free(reader); return QZDB_ERR_OUT_OF_MEMORY; }
+        e->reader = reader; e->next = reg->buckets[idx];
+        reg->buckets[idx] = e; reg->count++;
+    }
     pthread_mutex_unlock(&reg->lock);
     return QZDB_OK;
 }
@@ -1386,7 +1446,8 @@ void qzdb_registry_unregister(qzdb_registry_t* reg, const char* name) {
     while (*pp) {
         if (strcmp((*pp)->name, name) == 0) {
             reg_entry_t* del = *pp; *pp = del->next;
-            qzdb_free(del->reader); free(del->reader); free(del->name); free(del);
+            reg_retire_locked(reg, del->reader);
+            free(del->name); free(del);
             reg->count--; break;
         }
         pp = &(*pp)->next;
@@ -1403,6 +1464,12 @@ void qzdb_registry_free(qzdb_registry_t* reg) {
     for (uint32_t i = 0; i < reg->cap; i++) {
         reg_entry_t* e = reg->buckets[i];
         while (e) { reg_entry_t* next = e->next; qzdb_free(e->reader); free(e->reader); free(e->name); free(e); e = next; }
+    }
+    /* qzdb_registry_free() 是终止关闭动作（同 close()/Dispose() 的约定：
+     * 调用方需自行保证此时无并发查询在途），因此这里对退休队列里尚未
+     * 释放的 reader 也一并同步冲刷释放，不再保留任何宽限期。 */
+    for (int i = 0; i < QZDB_REGISTRY_QUARANTINE_CAP; i++) {
+        if (reg->quarantine[i]) { qzdb_free(reg->quarantine[i]); free(reg->quarantine[i]); }
     }
     free(reg->buckets); pthread_mutex_destroy(&reg->lock); free(reg);
 }
