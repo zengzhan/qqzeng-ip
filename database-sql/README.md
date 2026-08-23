@@ -21,4 +21,4 @@
 
 <!-- commit description sync 1787122549 -->
 
-<!-- commit: database-sql: 🗄️ MySQL / PostgreSQL / SQL Server IP 与号段数据库建表与批量入库 DDL sync=1787422536 -->
+<!-- commit: database-sql: MySQL / PostgreSQL / SQL Server 建表与入库 DDL sync=1787461446 -->
