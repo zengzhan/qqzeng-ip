@@ -513,5 +513,3 @@ php csv_oracle_test.php                    # 独立真值校验（需源 CSV + �
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: php: PHP SDK（纯 PHP 实现，缓冲与流式双模式） sync=1787461446 -->

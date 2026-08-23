@@ -422,5 +422,3 @@ go/
 │   ├── *_test.go      # Tier1 单测 + Tier2 黄金校验 + Tier0 CSV 真值 + Tier3 并发/性能
 └── cmd/               # demo / batch / bench / dump / regress 等示例
 ```
-
-<!-- commit: go: Go SDK（跨平台 mmap，无锁并发查询） sync=1787461446 -->
