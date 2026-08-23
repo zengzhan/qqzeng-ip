@@ -4,7 +4,7 @@ Cross-language result verification.
 Queries the same IPs across all 8 language SDKs and diffs the pipe output.
 Any difference = parsing bug.
 """
-import os, sys, subprocess, json, ipaddress
+import os, sys, subprocess, json, ipaddress, shutil
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -277,6 +277,11 @@ public class CrossVerify {{
 
 
 def _find_java_home():
+    # 1) 显式 JAVA_HOME 环境变量优先（CI/容器环境常规做法）
+    env_jh = os.environ.get("JAVA_HOME", "")
+    if env_jh and os.path.exists(os.path.join(env_jh, "bin", "javac")):
+        return env_jh
+    # 2) 常见安装路径探测（macOS Homebrew 等）
     import glob
     candidates = glob.glob("/opt/homebrew/Cellar/openjdk@21/*/libexec/openjdk.jdk/Contents/Home") + \
                  glob.glob("/opt/homebrew/opt/openjdk@21") + \
@@ -334,10 +339,21 @@ int main() {{
         f.write(c_code)
     try:
         exe = os.path.join(SCRIPT_DIR, "c", "_cross_verify")
-        subprocess.check_output(
-            ["clang", "-O2", "-o", exe, tmp_c, "qzdb_reader.c", "-lm"],
-            cwd=os.path.join(SCRIPT_DIR, "c"), timeout=30, stderr=subprocess.STDOUT
-        )
+        # 编译器回退：macOS 用 clang，多数 Linux 容器只有 gcc/cc
+        last_err = None
+        for cc in ("clang", "gcc", "cc"):
+            if not shutil.which(cc):
+                continue
+            try:
+                subprocess.check_output(
+                    [cc, "-O2", "-o", exe, tmp_c, "qzdb_reader.c", "-lm"],
+                    cwd=os.path.join(SCRIPT_DIR, "c"), timeout=30, stderr=subprocess.STDOUT
+                )
+                break
+            except Exception as e:
+                last_err = e
+        else:
+            raise RuntimeError(f"no C compiler (clang/gcc/cc) available: {last_err}")
         out = subprocess.check_output([exe], timeout=30).decode()
         return json.loads(out.strip())
     except Exception as e:
