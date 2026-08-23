@@ -20,28 +20,30 @@ import shutil
 import subprocess
 
 DEV_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "multi-lang"))
-GITHUB_REPO = "/Users/zengxiangzhan/ZengData/网站/GitHub/qqzeng-ip/qqzeng-ip"
+GITHUB_REPO = os.environ.get("QZDB_GITHUB_REPO",
+            "/Users/zengxiangzhan/ZengData/网站/GitHub/qqzeng-ip/qqzeng-ip")
+DEV_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 GITHUB_SDK = os.path.join(GITHUB_REPO, "ip-qzdb-sdk")
 
 # 目录与 Commit 描述映射（严格先子目录后顶级目录）
 FOLDER_SEQUENCE = [
     # 1. 先刷 ip-qzdb-sdk 8 个子语言
-    ("ip-qzdb-sdk/rust", "rust: ⚡ Rust 极速解析引擎 (内存安全 mmap 零拷贝, 微秒级响应)"),
-    ("ip-qzdb-sdk/c", "c: ⚡ C/C++ 语言极速解析引擎 (mmap 零拷贝, 微秒级响应, 零堆内存分配)"),
-    ("ip-qzdb-sdk/go", "go: ⚡ Go 语言极速解析引擎 (跨平台 mmap 零拷贝, 无锁并发, 极致低延迟)"),
-    ("ip-qzdb-sdk/netcore", "netcore: ⚡ C# .NET 极速解析引擎 (内存映射优化, 高并发 760 万+ QPS 零分配)"),
-    ("ip-qzdb-sdk/java", "java: ⚡ Java 极速解析引擎 (堆外内存优化, 极致并发性能)"),
-    ("ip-qzdb-sdk/nodejs", "nodejs: ⚡ Node.js 极速解析引擎 (V8 原生 BigInt 优化, 异步高效检索)"),
-    ("ip-qzdb-sdk/php", "php: ⚡ PHP 极速解析引擎 (高性能内存解析, 开箱即用)"),
-    ("ip-qzdb-sdk/python", "python: ⚡ Python 极速解析引擎 (二进制轻量解析, 极简集成)"),
+    ("ip-qzdb-sdk/rust", "rust: Rust SDK（mmap 只读映射，内存安全）"),
+    ("ip-qzdb-sdk/c", "c: C SDK（零拷贝 mmap 读取，单文件集成）"),
+    ("ip-qzdb-sdk/go", "go: Go SDK（跨平台 mmap，无锁并发查询）"),
+    ("ip-qzdb-sdk/netcore", "netcore: C# .NET SDK（内存映射与高并发查询）"),
+    ("ip-qzdb-sdk/java", "java: Java SDK（堆外内存与 Builder API）"),
+    ("ip-qzdb-sdk/nodejs", "nodejs: Node.js SDK（BigInt 偏移解析）"),
+    ("ip-qzdb-sdk/php", "php: PHP SDK（纯 PHP 实现，缓冲与流式双模式）"),
+    ("ip-qzdb-sdk/python", "python: Python SDK（mmap 轻量读取）"),
     # 2. 顶级产品目录
-    ("ip-qzdb-sdk", "ip-qzdb-sdk: 👑 下一代 QZDB 极速 IP 解析引擎多语言 SDK (支持 Rust/C/Go/Java/C#/Node/PHP/Python)"),
-    ("ip-classic-sdk", "ip-classic-sdk: 📦 IP 数据库经典版 SDK (经典 6.0 .db 与 2.0 .dat 多语言源码)"),
-    ("ip-history-sdk", "ip-history-sdk: 🗂️ IP 数据库历史版本与工具 (3.0~5.0 历史演进与桌面查询工具)"),
-    ("phone-location-sdk", "phone-location-sdk: 📱 50万+ 手机号段归属地 2.0~6.0 全版本多语言 DAT 解析 SDK 与 Redis 方案"),
-    ("database-sql", "database-sql: 🗄️ MySQL / PostgreSQL / SQL Server IP 与号段数据库建表与批量入库 DDL"),
-    ("demo", "demo: 📋 IP 归属地及手机号段 CSV/TXT 与 QZDB 演示样本数据"),
-    ("docs", "docs: 📚 项目核心设计文档、多格式性能基准对比报告与维护指南"),
+    ("ip-qzdb-sdk", "ip-qzdb-sdk: QZDB 多语言 SDK（Rust/C/Go/Java/C#/Node.js/PHP/Python）"),
+    ("ip-classic-sdk", "ip-classic-sdk: 经典版 IP 数据库 SDK（6.0 .db 与 2.0 .dat 多语言源码）"),
+    ("ip-history-sdk", "ip-history-sdk: 历史版本与工具（3.0~5.0 演进与桌面查询工具）"),
+    ("phone-location-sdk", "phone-location-sdk: 手机号段归属地 DAT 解析 SDK（2.0~6.0 全版本多语言）"),
+    ("database-sql", "database-sql: MySQL / PostgreSQL / SQL Server 建表与入库 DDL"),
+    ("demo", "demo: 归属地与号段 CSV/TXT 及 QZDB 演示样本数据"),
+    ("docs", "docs: 设计文档、性能基准对比与维护指南"),
 ]
 
 def run(cmd, cwd=None, check=True):
@@ -115,6 +117,7 @@ def sync_sdk_files():
     shutil.copy2(os.path.join(DEV_DIR, "run_all_tests.sh"), GITHUB_SDK)
     shutil.copy2(os.path.join(DEV_DIR, "FORMAT.md"), GITHUB_SDK)
     shutil.copy2(os.path.join(DEV_DIR, "API_CONTRACT.md"), GITHUB_SDK)
+    shutil.copy2(os.path.join(DEV_ROOT, "CHANGELOG.md"), GITHUB_SDK)
     print("✅ 源码与文档同步拷贝完成。")
 
 def clean_and_verify():
