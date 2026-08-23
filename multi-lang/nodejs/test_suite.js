@@ -650,6 +650,23 @@ function t1_extended(t) {
   reg.clear();
   eq(reg.get('buf'), null, 'clear 后全部释放');
 
+  // E7.1 Registry 退休队列：热更新期间在途调用安全窗口（对齐 Go/Java/netcore）
+  eq(QzdbReader.QzdbRegistry.QUARANTINE_CAPACITY, 8, '退休队列容量与 Go/Java 一致');
+  const qFirst = reg.register('q', STD_DB);
+  const qNext = reg.register('q', STD_DB);
+  ok(qNext.find('114.114.114.114') !== null, '替换后新 reader 可查询');
+  ok(qFirst.find('114.114.114.114') !== null, '替换后旧 reader 在退休窗口内仍可查询');
+  for (let i = 0; i < QzdbReader.QzdbRegistry.QUARANTINE_CAPACITY; i++) {
+    reg.register('q', STD_DB);
+  }
+  ok(qFirst.find('114.114.114.114') === null, '超出容量的最旧 reader 已关闭（fail-safe null）');
+  const qUnreg = reg.register('u', STD_DB);
+  reg.unregister('u');
+  eq(reg.get('u'), null, 'unregister 后名称立即失效');
+  ok(qUnreg.find('114.114.114.114') !== null, 'unregister 后旧 reader 在退休窗口内仍可查询');
+  reg.clear();
+  ok(qUnreg.find('114.114.114.114') === null, 'clear 冲刷退休队列中未关闭的 reader');
+
   section('E8 GeoInfo 语义 Getter（ult 25 字段）');
   const ultR = new QzdbReader(ULT_DB);
   const uinfo = ultR.find('114.114.114.114');
