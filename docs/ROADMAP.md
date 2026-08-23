@@ -83,6 +83,14 @@
 - **验收**：8 语言对 116.0/-3.0/-0.0/116.4/-3.5/NaN/±Inf/1e16/9.2e18/±2^63 边界/1e20/±1e300 全部逐字一致。
 - **验证结果（2026-08-23）**：Python `test_native_float.py` 20/20、Node `native_float_test.js` 22/22、C `native_float_boundary_test.c` 19/19（VM 实测 NATIVE_FLOAT_OK）；同源用例已入 Go `native_float_test.go`、Rust lib.rs `t_fmt_native_float_boundaries`、Java QzdbReaderTest 纯逻辑段、C# netcore.Tests/NativeFloatTests.cs，已随四语言工具链终验确认：Go/`native_float_test.go` PASS、Rust `t_fmt_native_float_boundaries` PASS、Java 纯逻辑段 20 向量全绿（含 ±E300）、C# NativeFloatTests 计入 Tier1 117/117；run_all_tests.sh 已接线 Python-NativeFloat / Node-NativeFloat / Go-NativeFloat / C-NativeFloat / C-TlvMeta 五个门禁。
 
+### T9 · 8 语言 README 按 SYNC_GUIDE §6.1 统一骨架渐进对齐 【P2】
+
+- **现状**：8 语言 README 行数 347~726、章节数 23~48，内容深度与组织顺序不同构；骨架标准已于 2026-08-23 落入 SYNC_GUIDE §6.1。
+- **做法**：不整篇重写；按「改哪个语言就顺手把该 README 对齐骨架」的搭车原则渐进迁移，新增/大改必须直接按骨架编写。全部对齐后本任务关闭。
+- **验收**：8 份 README 章节序列与 §6.1 骨架一致；L2 交叉验证不受影响。
+
+---
+
 ### T5 · Validation 分级演进 【P2·可选】
 
 - **现状**：`init_ex(verify_crc)` 已提供开关雏形；Strict/Normal/Fast 三级仅在出现真实启动耗时痛点时才有价值。

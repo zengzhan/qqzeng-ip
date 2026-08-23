@@ -194,3 +194,24 @@ git push origin main
 | 集成方式描述 | 根 README「集成方式」表：语言入口文件数与实际目录一致（Java/C# 为多文件包，Python/Node/PHP/C 为单/双文件） |
 
 **一致性检查项**（每次发布前人工过一遍）：8 语言 README 章节骨架同构；事实性数字（Header 大小、复杂度、缓冲容量）全仓只允许一处权威来源、他处引用；无 emoji 与营销化措辞（技术陈述以数据结构与实测指标为准）。
+
+### 6.1 语言 README 统一章节骨架（D1 标准）
+
+各语言 README 按以下顺序组织章节（可按语言特性增补子节，但顺序与命名保持一致）：
+
+```
+# <语言> SDK
+## 环境要求
+## 安装与集成
+## 快速开始            ← 可运行最小示例，含错误处理路径
+## 加载数据库          ← open / openBuffer / reload / close
+## 查询 API            ← find / findStr / findUint / findFields
+## 结果对象 GeoInfo    ← 字段访问与动态 get
+## 元数据访问器        ← dataMonth / scope / buildTime
+## 错误处理            ← 错误码/异常语义，fail-closed 示范
+## 批量与多库查询      ← BatchResult / ChainedReader / Registry
+## 并发与性能
+## 完整 API 参考       ← 表格形式签名全集
+```
+
+存量 README 尚未完全对齐该骨架的，按 T9（见 ROADMAP）渐进迁移；新增或大改某语言 README 时必须直接按此骨架编写。
