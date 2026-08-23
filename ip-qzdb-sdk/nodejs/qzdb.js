@@ -149,14 +149,36 @@ function _crc32Hex(buf) {
 }
 
 // ===========================================================================
-// 原生浮点格式化（§8.2：6 位小数；整数值无小数点；NaN/Inf → ''）
+// 原生浮点格式化（FORMAT §10.5 统一契约：整数值→精确十进制展开、非整数→固定
+// 6 位小数、NaN/Inf → ''）
 // ===========================================================================
 function _formatNativeFloat(fw, d, off) {
   const num = fw === 4 ? d.readFloatLE(off) : d.readDoubleLE(off);
-  if (num !== num) return '';          // NaN
+  if (num !== num) return '';           // NaN
   if (!Number.isFinite(num)) return ''; // Inf
-  if (num === Math.floor(num)) return String(Math.trunc(num));
+  if (num === Math.floor(num)) {
+    // 整数值须输出「精确十进制展开」。|v| < 2^53 时 String(trunc) 恰为精确值；
+    // 更大的整数 Number→String 改走最短 round-trip（如 9223372036854774784 →
+    // "9223372036854775000"），且 ≥1e21 变科学计数法（1e300 → "1e+300"），
+    // 均违反契约——须经 IEEE754 位解码转 BigInt 定点输出。
+    if (Math.abs(num) < 9007199254740992) return String(Math.trunc(num));
+    return _doubleToExactBigInt(num).toString();
+  }
   return num.toFixed(6);
+}
+
+// IEEE754 位解码：把整数数值的 finite double 精确转换为 BigInt（§10.5 大整值分支专用）
+function _doubleToExactBigInt(v) {
+  const b = Buffer.alloc(8);
+  b.writeDoubleLE(v, 0);
+  const bits = b.readBigUInt64LE(0);
+  const neg = ((bits >> 63n) & 1n) === 1n;
+  let exp = Number((bits >> 52n) & 0x7FFn);
+  const frac = bits & ((1n << 52n) - 1n);
+  let mant;
+  if (exp === 0) { mant = frac; exp = -1022; } else { mant = frac | (1n << 52n); exp -= 1075; }
+  const mag = exp >= 0 ? mant << BigInt(exp) : mant >> BigInt(-exp);
+  return neg ? -mag : mag;
 }
 
 // ===========================================================================
@@ -557,6 +579,8 @@ class QzdbReader {
     this._fieldNamesSource = FIELD_NAMES_SOURCE_SYNTHETIC;
     this._dataMonth = '';
     this._buildTimeStr = '';
+    this._metaDataMonth = ''; // Metadata TLV type=5（v2.4 权威）
+    this._scope = '';         // Metadata TLV type=6（v2.4 权威；无条目 ""）
 
     // 行 schema
     this._rowGeoWidth = 3;
@@ -945,6 +969,10 @@ class QzdbReader {
     const d = this._data;
     const offMeta = this._offMeta;
 
+    // load()/loadBuffer() 复用实例重载时先复位（§8.2：无条目即回落/""）
+    this._metaDataMonth = '';
+    this._scope = '';
+
     // --- Metadata TLV 遍历 ---------------------------------------------------
     let metaNames = null;
     if ((this._flags & 4) && offMeta > 0 && offMeta + 4 <= d.length) {
@@ -961,6 +989,8 @@ class QzdbReader {
         else if (t === 2) metaNames = val.split('|');
         else if (t === 3) this._description = val;
         else if (t === 4) this._primaryVersion = val;
+        else if (t === 5) this._metaDataMonth = val; // v2.4：数据期号（权威）
+        else if (t === 6) this._scope = val;         // v2.4：数据覆盖范围（权威）
         // 未知 type 按设计跳过（FORMAT §8.1）
         pos += 4 + length;
       }
@@ -1031,18 +1061,24 @@ class QzdbReader {
     }
     this._floatFlags = this._fieldNames.map((n) => GeoInfo.isNumericFieldName(n));
 
-    // 构建日期 → dataMonth / buildTime
+    // 数据期号 / 覆盖范围（FORMAT §8.2）：Metadata TLV type=5(data_month)、
+    // type=6(scope) 为权威来源；Header BuildDate 仅作回落，buildTimeStr 始终取自它。
     if (this._buildDate > 0) {
       const y = Math.floor(this._buildDate / 10000);
       const m = Math.floor(this._buildDate / 100) % 100;
       const dd = this._buildDate % 100;
       const mm = String(m).padStart(2, '0');
       const dds = String(dd).padStart(2, '0');
-      this._dataMonth = `${y}-${mm}`;
       this._buildTimeStr = `${y}-${mm}-${dds}`;
     } else {
-      this._dataMonth = '';
       this._buildTimeStr = '';
+    }
+    if (!this._metaDataMonth) {
+      this._dataMonth = this._buildDate > 0
+        ? `${Math.floor(this._buildDate / 10000)}-${String(Math.floor(this._buildDate / 100) % 100).padStart(2, '0')}`
+        : '';
+    } else {
+      this._dataMonth = this._metaDataMonth;
     }
   }
 
@@ -1718,7 +1754,8 @@ class QzdbReader {
   getEditionSource() { return this._editionSource; }
   /** 字段名来源：metadata / edition / synthetic。 */
   getFieldNamesSource() { return this._fieldNamesSource; }
-  getScope() { return ''; }
+  /** 数据覆盖范围：Metadata TLV type=6（v2.4 权威；无条目 ""，FORMAT §8.2）。 */
+  getScope() { return this._scope; }
   getBuildTime() { return this._buildTimeStr; }
   getDescription() { return this._description; }
   getFileHash() {
@@ -2068,3 +2105,5 @@ module.exports.EDITION_SOURCE_UNKNOWN = EDITION_SOURCE_UNKNOWN;
 module.exports.FIELD_NAMES_SOURCE_METADATA = FIELD_NAMES_SOURCE_METADATA;
 module.exports.FIELD_NAMES_SOURCE_EDITION = FIELD_NAMES_SOURCE_EDITION;
 module.exports.FIELD_NAMES_SOURCE_SYNTHETIC = FIELD_NAMES_SOURCE_SYNTHETIC;
+// 内部格式化器（FORMAT §10.5 统一契约）——导出仅供边界回归测试使用
+module.exports._formatNativeFloat = _formatNativeFloat;

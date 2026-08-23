@@ -93,7 +93,7 @@ $pipe = $reader->findStr('240e:390:1:1::1');
 $rowId = $reader->lookupRowId('8.8.8.8');
 ```
 
-> **⚠️ 查询语义约定（与 Java 不同，与 C# 一致）**
+> **注意：查询语义约定（与 Java 不同，与 C# 一致）**
 >
 > - `find*` 系列方法在 **IP 未命中** 或 **IP 格式非法** 时均返回 `null` / `0`，**不抛异常**（Fail-Soft 查询）。
 > - 只有**数据库文件损坏、格式不支持、CRC 校验失败等加载期错误**，`build()` / `load()` / `reload()` 才会抛出 `QzdbException`（见[第 12 节](#12-错误处理)）。
@@ -163,7 +163,7 @@ PHP SDK 会根据文件大小与 `memory_limit` 自动选择加载方式：
 $reader = new QzdbReader('qqzeng_ip_ult_global.qzdb');
 ```
 
-**⚠️ 性能提示**：流式模式下，Trie 遍历的**每一步子节点读取都对应一次 `fseek`+`fread` 系统调用**（IPv4 最多 16 步、IPv6 最多 `v6_jump_bits` 之后 128-N 步），相比缓冲模式（纯内存访问）会有**数量级级别**的延迟差距。
+**性能提示**：流式模式下，Trie 遍历的**每一步子节点读取都对应一次 `fseek`+`fread` 系统调用**（IPv4 最多 16 步、IPv6 最多 `v6_jump_bits` 之后 128-N 步），相比缓冲模式（纯内存访问）会有**数量级级别**的延迟差距。
 
 **生产环境建议**：
 1. 如果部署环境允许，优先调高 `memory_limit`，让常用数据库文件走缓冲模式；
@@ -428,7 +428,7 @@ try {
 
 ## 13. 性能说明
 
-本 SDK 在查询热路径上做了与 Java / .NET 实现同架构的极致优化：
+本 SDK 在查询热路径上采用与 Java/.NET 实现同架构的热路径优化：
 
 - **不可变快照架构**：查询只读快照引用指向的不可变状态，多请求零竞争；`reload` 重建全部状态后原子替换，旧快照在 GC 回收前继续服务。
 - **流式 / 缓冲自适应**：文件大小超过 `memory_limit * 0.5` 时自动走 `fopen` + `fseek/fread` 流式读取；否则 `file_get_contents` 缓冲。两种模式共用 `readBytes()` 单一读取入口，解析结果**逐字节一致**。
@@ -513,5 +513,3 @@ php csv_oracle_test.php                    # 独立真值校验（需源 CSV + �
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: php: ⚡ PHP 极速解析引擎 (高性能内存解析, 开箱即用) sync=1787422536 -->

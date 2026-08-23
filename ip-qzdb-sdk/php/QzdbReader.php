@@ -383,7 +383,8 @@ class GeoInfo implements \ArrayAccess
             // 严格错误处理下会升级为异常）。畸形文件里的 native float 字段
             // 完全可能是 1e140 这种值，所以先判范围：能装进 int64 就走整数
             // 字面量，否则用 %.0F 输出同样的整数位（与 Python int(fv) 一致）。
-            return (abs($val) <= 9.2233720368547758e18)
+            // 注意用严格小于：恰为 2^63 的浮点不可转 int，必须走 %.0F 分支。
+            return (abs($val) < 9223372036854775808)
                 ? (string)(int)$val
                 : sprintf('%.0F', $val);
         }
@@ -733,6 +734,9 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     private $description = '';
     private $edition = '';
     private $primaryVersion = '';
+    private $metaDataMonth = '';   // Metadata TLV type=5（v2.4 权威；BuildDate 仅回落）
+    private $scope = '';           // Metadata TLV type=6（v2.4 权威；无条目 ""）
+    private $metaFieldNames = null; // Metadata type=2 原始表（供逐组 dimensionMask 修复使用）
     private $versionMask = 0;
     private $editionSource = self::EDITION_SOURCE_UNKNOWN;
     private $fieldNamesSource = self::FIELD_NAMES_SOURCE_SYNTHETIC;
@@ -1168,6 +1172,8 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     public function getVersion(): string { return $this->versionName; }
     public function getDataMonth(): string
     {
+        // FORMAT §8.2：Metadata TLV type=5(data_month) 为权威；Header BuildDate 仅回落。
+        if ($this->metaDataMonth !== '') return $this->metaDataMonth;
         if ($this->buildDate <= 0) return '';
         $y = intdiv($this->buildDate, 10000);
         $m = intdiv($this->buildDate, 100) % 100;
@@ -1180,7 +1186,8 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     public function getEditionSource(): string { return $this->editionSource; }
     /** 字段名来源：metadata|edition|synthetic */
     public function getFieldNamesSource(): string { return $this->fieldNamesSource; }
-    public function getScope(): string { return ''; } // 当前格式无 scope 字段（契约 §5）
+    /** Metadata TLV type=6（v2.4 权威；无条目 ""，FORMAT §8.2） */
+    public function getScope(): string { return $this->scope; }
     public function getBuildTime(): string
     {
         if ($this->buildDate <= 0) return '';
@@ -1502,6 +1509,9 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $this->versionName = '';
         $this->description = '';
         $this->primaryVersion = '';
+        $this->metaDataMonth = '';
+        $this->scope = '';
+        $this->metaFieldNames = null;
 
         $gi = ($this->groupIndex >= 0 && $this->groupIndex < count($this->groupFieldCounts))
             ? $this->groupIndex : 0;
@@ -1526,10 +1536,15 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
                     $this->versionName = $val;
                 } elseif ($t === 2) {
                     $metaNames = explode('|', $val);
+                    $this->metaFieldNames = $metaNames;
                 } elseif ($t === 3) {
                     $this->description = $val;
                 } elseif ($t === 4) {
                     $this->primaryVersion = $val;
+                } elseif ($t === 5) {
+                    $this->metaDataMonth = $val; // v2.4：数据期号（权威，原样存储）
+                } elseif ($t === 6) {
+                    $this->scope = $val;         // v2.4：数据覆盖范围（权威，原样存储）
                 }
                 // 未知 type 按设计跳过（FORMAT §8.1）
                 $pos += 4 + $length;
@@ -1588,25 +1603,62 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     }
 
     /**
-     * dimensionMask 缺失时的重建：只看解析出来的字段名里有没有 asn。
-     * fieldId 只是槽位序号（0..N-1），不带任何跨档语义，绝不可用来判定维度。
+     * dimensionMask 缺失时的重建（FORMAT §6.2 / P0-1）：
+     * 每个 0 掩码组只看【该组自己】解析出来的字段名里有没有 asn——
+     * 绝不看 fieldId（槽位序号，无跨档语义）、绝不用其他组/当前组的名字顶替。
      */
     private function repairDimMasks(): void
     {
-        $hasAsn = false;
-        foreach ($this->fieldNames as $n) {
-            if (GeoInfo::normalizeKey($n) === 'asn') {
-                $hasAsn = true;
-                break;
-            }
-        }
         $n = count($this->groupDimMasks);
         for ($g = 0; $g < $n; $g++) {
             if ($this->groupDimMasks[$g] !== 0) {
                 continue;
             }
+            $hasAsn = false;
+            foreach ($this->resolveGroupNamesForRepair($g) as $nm) {
+                if (GeoInfo::normalizeKey($nm) === 'asn') {
+                    $hasAsn = true;
+                    break;
+                }
+            }
             $this->groupDimMasks[$g] = $hasAsn ? 0x02 : 0x01;
         }
+    }
+
+    /**
+     * 组 g 的字段名推导（与 resolveFieldNames 同一规则链，但面向任意组）：
+     * Metadata field_names（基数一致时）→ 该组掩码判定的档次规范表 → synthetic 占位符。
+     */
+    private function resolveGroupNamesForRepair(int $g): array
+    {
+        $numFields = $this->groupFieldCounts[$g];
+        if ($this->metaFieldNames !== null && count($this->metaFieldNames) === $numFields) {
+            return $this->metaFieldNames;
+        }
+        $mask = (isset($this->groupIds[$g]) && $this->groupIds[$g]) ? $this->groupIds[$g] : $this->versionMask;
+        $edition = self::editionFromMask($mask);
+        if ($edition === '') {
+            $edition = trim($this->primaryVersion);
+            if ($edition === '') {
+                $tokens = array_values(array_filter(array_map('trim', explode(',', $this->versionName)),
+                    static function ($s) { return $s !== ''; }));
+                if (count($tokens) === 1) {
+                    $edition = $tokens[0];
+                }
+            }
+        }
+        if ($edition === '') {
+            $edition = self::editionByFieldCount($numFields);
+        }
+        if ($edition !== '' && isset(self::EDITION_FIELD_NAMES[$edition])
+            && count(self::EDITION_FIELD_NAMES[$edition]) === $numFields) {
+            return self::EDITION_FIELD_NAMES[$edition];
+        }
+        $names = [];
+        for ($i = 0; $i < $numFields; $i++) {
+            $names[] = "field_{$i}";
+        }
+        return $names;
     }
 
     private function parseRowSchema(): void

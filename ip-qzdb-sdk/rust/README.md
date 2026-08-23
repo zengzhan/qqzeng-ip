@@ -415,7 +415,7 @@ match QzdbReader::from_file("ip_china.qzdb") {
 
 ## 13. 性能说明
 
-本 SDK 在查询热路径上做了极致优化：
+本 SDK 在查询热路径上做了深度优化：
 
 - **无锁快照架构**：查询只读 `ArcSwap` 快照引用，多线程零竞争；`reload` 用原子替换切换。
 - **只读 mmap 加载 + 懒解析**：文件路径加载（`from_file`/`reload`/`Builder::build(path)`）通过 `memmap2` 只读内存映射，可在多进程间共享物理页；unsafe 仅隔离在 `map_file()` 一处（配 SAFETY 注释说明不变式），crate 其余部分仍是安全代码。内存字节入口（`from_bytes`/`reload_bytes`）保持拷贝语义（`Vec<u8>`）。字段解析按需切片，不做整库反序列化。
@@ -492,4 +492,4 @@ cargo update -p qzdb_reader
 
 [MIT](https://opensource.org/licenses/MIT)
 
-<!-- commit: rust: ⚡ Rust 极速解析引擎 (内存安全 mmap 零拷贝, 微秒级响应) sync=1787422536 -->
+<!-- commit: rust: Rust 极速解析引擎 (mmap + 最小 unsafe surface, 6900 万+ QPS) -->

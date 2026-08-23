@@ -311,14 +311,21 @@ const char* qzdb_usage_type_description(const char* raw) {
 }
 
 /* ========================================================================
- * Float formatting — canonical cross-language (spec §8.2)
+ * Float formatting — canonical cross-language (spec §10.5)
+ * 整数值无小数点；非整数固定 6 位小数；NaN/Inf 为 ""。
  * ======================================================================== */
 static void format_float_value(double dv, char* buf, size_t buf_size) {
     if (isnan(dv) || isinf(dv)) { buf[0] = '\0'; return; }
-    if (dv == floor(dv) && dv >= -9007199254740992.0 && dv <= 9007199254740992.0)
-        snprintf(buf, buf_size, "%ld", (long)dv);
-    else
+    if (dv == floor(dv)) {
+        /* cast 到 long 前范围保护（|v| < 2^63）：超范围转换是 UB；
+         * 超范围整数走 %.0f 定点（无小数点、无科学计数法）。 */
+        if (dv >= -9223372036854775808.0 && dv < 9223372036854775808.0)
+            snprintf(buf, buf_size, "%ld", (long)dv);
+        else
+            snprintf(buf, buf_size, "%.0f", dv);
+    } else {
         snprintf(buf, buf_size, "%.6f", dv);
+    }
 }
 
 static void format_float32_value(float fv, char* buf, size_t buf_size) {
@@ -334,7 +341,7 @@ static int  read_ip_row(qzdb_reader_t* ctx, uint32_t row_id, uint32_t* geo_id,
 static int  get_geo_info(qzdb_reader_t* ctx, uint32_t entry_id, int group_index,
                          qzdb_geo_info_t* result);
 static int  get_geo_info_buf(qzdb_reader_t* ctx, uint32_t entry_id, int group_index,
-                             char** values, char (*bufs)[64], int buf_size, int* out_count);
+                             char** values, char (*bufs)[QZDB_VALUE_BUF_SIZE], int buf_size, int* out_count);
 static void geo_cache_init(qzdb_reader_t* ctx);
 static void geo_cache_free(qzdb_reader_t* ctx);
 static char** geo_cache_lookup(qzdb_reader_t* ctx, int group, uint32_t entry_id, int* out_count);
@@ -582,11 +589,11 @@ static void geo_cache_free(qzdb_reader_t* ctx) {
 
 /* Decode (group, entry_id) into a fresh heap array. No cache interaction. */
 static char** geo_cache_decode(qzdb_reader_t* ctx, int group, uint32_t entry_id, int* out_count) {
-    char bufs[QZDB_MAX_FIELDS][64];
+    char bufs[QZDB_MAX_FIELDS][QZDB_VALUE_BUF_SIZE];
     char* vals[QZDB_MAX_FIELDS];
     int cnt = 0;
     *out_count = 0;
-    if (get_geo_info_buf(ctx, entry_id, group, vals, bufs, 64, &cnt) != QZDB_OK) return NULL;
+    if (get_geo_info_buf(ctx, entry_id, group, vals, bufs, QZDB_VALUE_BUF_SIZE, &cnt) != QZDB_OK) return NULL;
     if (cnt <= 0) return NULL;
     char** pv = calloc((size_t)cnt, sizeof(char*));
     if (!pv) return NULL;
@@ -690,7 +697,7 @@ static int get_geo_info(qzdb_reader_t* ctx, uint32_t entry_id, int group_index, 
         int is_native = natives[i];
         if (is_native) {
             int t = nat_types[i];
-            char buf[64];
+            char buf[QZDB_VALUE_BUF_SIZE];
             if (t == 1) {
                 if (w == 4) {
                     uint32_t bits; if (safe_read_u32(ctx->data, ctx->data_size, fo, &bits) != QZDB_OK) { free_geo_info(result); return QZDB_ERR_BOUNDS; }
@@ -719,7 +726,7 @@ static int get_geo_info(qzdb_reader_t* ctx, uint32_t entry_id, int group_index, 
 }
 
 static int get_geo_info_buf(qzdb_reader_t* ctx, uint32_t entry_id, int group_index,
-                             char** values, char (*bufs)[64], int buf_size, int* out_count) {
+                             char** values, char (*bufs)[QZDB_VALUE_BUF_SIZE], int buf_size, int* out_count) {
     if (!ctx || !values || !bufs || !out_count) return QZDB_ERR_INVALID_PARAM;
     if (group_index < 0 || group_index >= ctx->actual_groups) return QZDB_ERR_INVALID_PARAM;
     if (entry_id >= ctx->group_entry_counts[group_index]) return QZDB_ERR_INVALID_PARAM;
@@ -828,7 +835,7 @@ static int resolve_row_id_cached(qzdb_reader_t* ctx, uint32_t row_id, int group_
  * Resolve row_id → caller-buffer (used by find_*_buf variants)
  * ======================================================================== */
 static int resolve_row_id_buf(qzdb_reader_t* ctx, uint32_t row_id, int group_index,
-                              char** values, char (*bufs)[64], int buf_size, int* out_count) {
+                              char** values, char (*bufs)[QZDB_VALUE_BUF_SIZE], int buf_size, int* out_count) {
     if (!ctx || !values || !bufs || !out_count) return QZDB_ERR_INVALID_PARAM;
     uint32_t geo_id, asn_id, usage_id;
     int err = read_ip_row(ctx, row_id, &geo_id, &asn_id, &usage_id);
@@ -906,7 +913,8 @@ const char* qzdb_get_edition_source(qzdb_reader_t* ctx) {
 const char* qzdb_get_field_names_source(qzdb_reader_t* ctx) {
     return ctx && ctx->field_names_source ? ctx->field_names_source : QZDB_FIELD_NAMES_SOURCE_SYNTHETIC;
 }
-const char* qzdb_get_scope(qzdb_reader_t* ctx) { (void)ctx; return ""; }
+/* Metadata TLV type=6（v2.4 权威；无条目 ""，FORMAT §8.2） */
+const char* qzdb_get_scope(qzdb_reader_t* ctx) { return ctx && ctx->scope ? ctx->scope : ""; }
 const char* qzdb_get_build_time(qzdb_reader_t* ctx) { return ctx && ctx->build_time_str ? ctx->build_time_str : ""; }
 const char* qzdb_get_description(qzdb_reader_t* ctx) { return ctx && ctx->description ? ctx->description : ""; }
 
@@ -1523,6 +1531,8 @@ static int init_from_buffer(qzdb_reader_t* ctx, int is_heap, int verify_crc) {
      * 调用方只需按 data_is_heap/borrowed 归还 data 缓冲本身。 */
     int ret = QZDB_ERR_CORRUPTED;
     char*  meta_primary    = NULL;
+    char*  meta_data_month = NULL; /* TLV type=5（v2.4 权威；BuildDate 仅回落） */
+    char*  meta_scope      = NULL; /* TLV type=6（v2.4 权威；无条目 ""） */
     char** meta_names      = NULL;
     int    meta_name_count = 0;
 
@@ -1752,6 +1762,8 @@ static int init_from_buffer(qzdb_reader_t* ctx, int is_heap, int verify_crc) {
             }
             else if (t == 3) { free(ctx->description); ctx->description = val; }
             else if (t == 4) { free(meta_primary); meta_primary = val; }
+            else if (t == 5) { free(meta_data_month); meta_data_month = val; } /* v2.4：数据期号（权威） */
+            else if (t == 6) { free(meta_scope); meta_scope = val; }           /* v2.4：覆盖范围（权威） */
             else free(val);
             pos += 4 + (uint64_t)length;
         }
@@ -1830,12 +1842,26 @@ static int init_from_buffer(qzdb_reader_t* ctx, int is_heap, int verify_crc) {
         ret = QZDB_ERR_OUT_OF_MEMORY; goto fail;
     }
 
+    /* 数据期号 / 覆盖范围（FORMAT §8.2）：TLV type=5/6 为权威，
+     * Header BuildDate（offset 32）仅作 data_month 回落；build_time_str 始终取自它。 */
     if (ctx->build_date > 0) {
         int y = ctx->build_date / 10000; int m = (ctx->build_date / 100) % 100; int dd = ctx->build_date % 100;
-        char b1[32], b2[32];
-        snprintf(b1, sizeof(b1), "%04d-%02d", y, m); snprintf(b2, sizeof(b2), "%04d-%02d-%02d", y, m, dd);
-        ctx->data_month = strdup(b1); ctx->build_time_str = strdup(b2);
-    } else { ctx->data_month = strdup(""); ctx->build_time_str = strdup(""); }
+        char b2[32];
+        snprintf(b2, sizeof(b2), "%04d-%02d-%02d", y, m, dd);
+        ctx->build_time_str = strdup(b2);
+    } else { ctx->build_time_str = strdup(""); }
+    if (meta_data_month) { free(ctx->data_month); ctx->data_month = meta_data_month; meta_data_month = NULL; }
+    else {
+        char b1[32];
+        if (ctx->build_date > 0) {
+            snprintf(b1, sizeof(b1), "%04d-%02d", ctx->build_date / 10000, (ctx->build_date / 100) % 100);
+            free(ctx->data_month); ctx->data_month = strdup(b1);
+        } else { free(ctx->data_month); ctx->data_month = strdup(""); }
+    }
+    /* 所有权转移：置 NULL 防止 fail 路径二次释放（与上方 meta_data_month 一致） */
+    if (meta_scope) { ctx->scope = meta_scope; meta_scope = NULL; }
+    else { ctx->scope = strdup(""); }
+    if (!ctx->scope || !ctx->build_time_str || !ctx->data_month) { ret = QZDB_ERR_OUT_OF_MEMORY; goto fail; }
 
     for (int g = 0; g < ctx->actual_groups; g++) {
         if (ctx->group_dim_masks[g] != 0) continue;
@@ -1864,6 +1890,7 @@ static int init_from_buffer(qzdb_reader_t* ctx, int is_heap, int verify_crc) {
 fail:
     for (int i = 0; i < meta_name_count; i++) free(meta_names[i]);
     free(meta_names); free(meta_primary);
+    free(meta_data_month); free(meta_scope);
     free_heap_state(ctx);
     return ret;
 }
@@ -1962,6 +1989,7 @@ static void free_heap_state(qzdb_reader_t* ctx) {
     free(ctx->edition); ctx->edition = NULL;
     free(ctx->data_month); ctx->data_month = NULL;
     free(ctx->build_time_str); ctx->build_time_str = NULL;
+    free(ctx->scope); ctx->scope = NULL;
     if (ctx->norm_field_names) { for (int i = 0; i < ctx->field_count; i++) free(ctx->norm_field_names[i]); free(ctx->norm_field_names); ctx->norm_field_names = NULL; }
     norm_map_free(ctx);
     geo_cache_free(ctx);
@@ -2131,7 +2159,7 @@ int qzdb_find_str(qzdb_reader_t* ctx, const char* ip_str, char* out, size_t out_
 }
 
 /* === Caller-buffer query variants === */
-int qzdb_find_uint_buf(qzdb_reader_t* ctx, uint32_t ip_int, char** values, char (*bufs)[64], int buf_size) {
+int qzdb_find_uint_buf(qzdb_reader_t* ctx, uint32_t ip_int, char** values, char (*bufs)[QZDB_VALUE_BUF_SIZE], int buf_size) {
     if (!ctx || !values || !bufs) return QZDB_ERR_INVALID_PARAM;
     if (!ctx->has_v4) return QZDB_ERR_NOT_FOUND;
     uint32_t row_id = trie_walk_v4(ctx, ip_int);
@@ -2141,7 +2169,7 @@ int qzdb_find_uint_buf(qzdb_reader_t* ctx, uint32_t ip_int, char** values, char 
     return rc == 0 ? count : QZDB_ERR_CORRUPTED;
 }
 
-int qzdb_find_v6_buf(qzdb_reader_t* ctx, const uint8_t* ip_bin, char** values, char (*bufs)[64], int buf_size) {
+int qzdb_find_v6_buf(qzdb_reader_t* ctx, const uint8_t* ip_bin, char** values, char (*bufs)[QZDB_VALUE_BUF_SIZE], int buf_size) {
     if (!ctx || !values || !bufs) return QZDB_ERR_INVALID_PARAM;
     if (!ctx->has_v6) return QZDB_ERR_NOT_FOUND;
     uint32_t row_id = trie_walk_v6(ctx, ip_bin);
@@ -2154,7 +2182,7 @@ int qzdb_find_v6_buf(qzdb_reader_t* ctx, const uint8_t* ip_bin, char** values, c
 /* === Field-projection with BUG-2 fix (entry_id==0 → NOT_FOUND) === */
 static int resolve_row_id_fields(qzdb_reader_t* ctx, uint32_t row_id, int group_index,
                                   const char** field_names, int field_count,
-                                  char** values, char (*bufs)[64], int buf_size) {
+                                  char** values, char (*bufs)[QZDB_VALUE_BUF_SIZE], int buf_size) {
     if (!ctx || !field_names || !values || !bufs) return QZDB_ERR_INVALID_PARAM;
     if (row_id <= 0 || row_id >= (uint32_t)ctx->row_count) return QZDB_ERR_INVALID_PARAM;
     uint32_t geo_id = 0, asn_id = 0, usage_id = 0;
@@ -2210,7 +2238,7 @@ static int resolve_row_id_fields(qzdb_reader_t* ctx, uint32_t row_id, int group_
 }
 
 int qzdb_find_fields_uint_buf(qzdb_reader_t* ctx, uint32_t ip_int,
-                               const char** field_names, char** values, char (*bufs)[64], int buf_size) {
+                               const char** field_names, char** values, char (*bufs)[QZDB_VALUE_BUF_SIZE], int buf_size) {
     if (!ctx || !values || !bufs) return QZDB_ERR_INVALID_PARAM;
     if (field_names == NULL) return qzdb_find_uint_buf(ctx, ip_int, values, bufs, buf_size);
     if (!ctx->has_v4) return QZDB_ERR_NOT_FOUND;
@@ -2221,7 +2249,7 @@ int qzdb_find_fields_uint_buf(qzdb_reader_t* ctx, uint32_t ip_int,
 
 /* BUG-1 fix: when field_names is NULL, fill caller buffers instead of just returning 1 */
 int qzdb_find_fields_buf(qzdb_reader_t* ctx, const char* ip_str,
-                          const char** field_names, char** values, char (*bufs)[64], int buf_size) {
+                          const char** field_names, char** values, char (*bufs)[QZDB_VALUE_BUF_SIZE], int buf_size) {
     if (!ctx || !ip_str || !values || !bufs) return QZDB_ERR_INVALID_PARAM;
     if (field_names == NULL || field_names[0] == NULL) {
         /* Equivalent to find_uint_buf / find_v6_buf — fill all fields */
@@ -2258,8 +2286,8 @@ int qzdb_find_fields_uint(qzdb_reader_t* ctx, uint32_t ip_int,
     if (mask & 0x02) entry_id = asn_id;
     else if (mask & 0x04) entry_id = usage_id;
     if (entry_id == 0) return QZDB_ERR_NOT_FOUND;
-    char bufs[QZDB_MAX_FIELDS][64]; char* vals[QZDB_MAX_FIELDS]; int cnt = 0;
-    if (get_geo_info_buf(ctx, entry_id, ctx->group_index, vals, bufs, 64, &cnt) != QZDB_OK) return QZDB_ERR_CORRUPTED;
+    char bufs[QZDB_MAX_FIELDS][QZDB_VALUE_BUF_SIZE]; char* vals[QZDB_MAX_FIELDS]; int cnt = 0;
+    if (get_geo_info_buf(ctx, entry_id, ctx->group_index, vals, bufs, QZDB_VALUE_BUF_SIZE, &cnt) != QZDB_OK) return QZDB_ERR_CORRUPTED;
     memset(result, 0, sizeof(*result));
     for (int i = 0; i < QZDB_MAX_FIELDS; i++) result->values[i] = "";
     for (int fi = 0; fields[fi] != NULL; fi++) {
@@ -2289,8 +2317,8 @@ int qzdb_find_fields(qzdb_reader_t* ctx, const char* ip_str,
     if (mask & 0x02) entry_id = asn_id;
     else if (mask & 0x04) entry_id = usage_id;
     if (entry_id == 0) return QZDB_ERR_NOT_FOUND;
-    char bufs[QZDB_MAX_FIELDS][64]; char* vals[QZDB_MAX_FIELDS]; int cnt = 0;
-    if (get_geo_info_buf(ctx, entry_id, ctx->group_index, vals, bufs, 64, &cnt) != QZDB_OK) return QZDB_ERR_CORRUPTED;
+    char bufs[QZDB_MAX_FIELDS][QZDB_VALUE_BUF_SIZE]; char* vals[QZDB_MAX_FIELDS]; int cnt = 0;
+    if (get_geo_info_buf(ctx, entry_id, ctx->group_index, vals, bufs, QZDB_VALUE_BUF_SIZE, &cnt) != QZDB_OK) return QZDB_ERR_CORRUPTED;
     memset(result, 0, sizeof(*result));
     for (int i = 0; i < QZDB_MAX_FIELDS; i++) result->values[i] = "";
     for (int fi = 0; fields[fi] != NULL; fi++) {

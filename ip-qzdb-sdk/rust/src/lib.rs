@@ -368,13 +368,19 @@ fn is_ipv4_mapped_v6(bytes: &[u8; 16]) -> bool {
     bytes[10] == 0xff && bytes[11] == 0xff && bytes[..10].iter().all(|&x| x == 0)
 }
 
-/// 原生浮点格式化（API_CONTRACT §8.2）：整数→无小数点，小数→6 位。
+/// 原生浮点格式化（FORMAT §10.5 统一契约）：整数值无小数点、非整数固定 6 位
+/// 小数、NaN/Inf 为 ""。cast 到 i64 前必须范围保护（|v| < 2^63）：Rust 的 `as`
+/// 转换是饱和语义，超范围会得到 MAX/MIN 而非正确整数；超范围走 {:.0} 定点。
 fn fmt_native_float(f: f64) -> String {
     if f.is_nan() || f.is_infinite() {
         return String::new();
     }
-    if f == f.trunc() && f.abs() < 1e16 {
-        format!("{}", f as i64)
+    if f == f.trunc() {
+        if f.abs() < 9.223_372_036_854_775_808e18 {
+            format!("{}", f as i64)
+        } else {
+            format!("{:.0}", f)
+        }
     } else {
         format!("{:.6}", f)
     }
@@ -894,6 +900,7 @@ pub struct SnapshotInner {
     description: String,
     data_month: String,
     build_time: String,
+    scope: String, // Metadata TLV type=6（v2.4 权威；无条目 ""）
     edition: String,
     version_mask: u16,
     edition_source: &'static str,
@@ -1392,7 +1399,9 @@ impl SnapshotInner {
         );
 
         // ---- 构建元数据字符串 ----
-        let (data_month, build_time) = if build_date > 0 {
+        // 数据期号 / 覆盖范围（FORMAT §8.2）：Metadata TLV type=5(data_month)、
+        // type=6(scope) 为权威来源；Header BuildDate 仅作回落，build_time 始终取自它。
+        let (fallback_month, build_time) = if build_date > 0 {
             let y = build_date / 10000;
             let m = (build_date / 100) % 100;
             let dd = build_date % 100;
@@ -1403,6 +1412,12 @@ impl SnapshotInner {
         } else {
             (String::new(), String::new())
         };
+        let data_month = if meta.data_month.is_empty() {
+            fallback_month
+        } else {
+            meta.data_month
+        };
+        let scope = meta.scope;
 
         // CRC 惰性化：仅 verify_crc 时同步计算（扫全文件）；关闭校验的加载/
         // 热更新不再无条件付 122MB≈120-250ms 的表驱动扫描。verify_crc()/
@@ -1470,6 +1485,7 @@ impl SnapshotInner {
             description,
             data_month,
             build_time,
+            scope,
             edition,
             version_mask,
             edition_source,
@@ -2003,6 +2019,10 @@ struct MetaInfo {
     description: String,
     /// type 4：primary_version（单一权威档次名）
     primary_version: String,
+    /// type 5：data_month 数据期号 yyyy-MM（v2.4 权威；BuildDate 仅回落）
+    data_month: String,
+    /// type 6：scope 数据覆盖范围（v2.4 权威；无条目 ""）
+    scope: String,
 }
 
 fn parse_metadata(d: &[u8], off_meta: u64) -> MetaInfo {
@@ -2028,6 +2048,8 @@ fn parse_metadata(d: &[u8], off_meta: u64) -> MetaInfo {
             2 => m.field_names = val.split('|').map(|s| s.to_string()).collect(),
             3 => m.description = val,
             4 => m.primary_version = val,
+            5 => m.data_month = val, // v2.4：数据期号（权威）
+            6 => m.scope = val,      // v2.4：数据覆盖范围（权威）
             // 未知 type 按设计跳过（FORMAT §8.1）
             _ => {}
         }
@@ -2685,9 +2707,9 @@ impl QzdbReader {
     pub fn get_field_names_source(&self) -> String {
         self.inner().field_names_source.to_string()
     }
-    /// scope 恒返回 ""（API_CONTRACT §5）。
+    /// 返回 Metadata 中的 scope；旧数据库没有该字段时为空字符串。
     pub fn get_scope(&self) -> String {
-        String::new()
+        self.inner().scope.clone()
     }
     pub fn get_build_time(&self) -> String {
         self.inner().build_time.clone()
@@ -2788,6 +2810,7 @@ fn empty_snapshot() -> SnapshotInner {
         description: String::new(),
         data_month: String::new(),
         build_time: String::new(),
+        scope: String::new(),
         edition: String::new(),
         version_mask: 0,
         edition_source: EDITION_SOURCE_UNKNOWN,
@@ -3068,5 +3091,29 @@ mod tests {
         assert_eq!(fmt_native_float(f64::NAN), "");
         assert_eq!(fmt_native_float(f64::INFINITY), "");
         assert_eq!(fmt_native_float(f64::NEG_INFINITY), "");
+    }
+
+    /// FORMAT §10.5 统一契约边界（P0-2）：与 python/test_native_float.py、
+    /// nodejs/native_float_test.js、go native_float_test.go 用例逐字同源。
+    #[test]
+    fn t_fmt_native_float_boundaries() {
+        // 负零归一
+        assert_eq!(fmt_native_float(-0.0), "0");
+        // 非整数固定 6 位（负数）
+        assert_eq!(fmt_native_float(-3.5), "-3.500000");
+        // 旧实现阈值 1e16 曾把 ≥1e16 的整值走 {:.6} 分支输出 ".000000"——回归守卫
+        assert_eq!(fmt_native_float(1e16), "10000000000000000");
+        assert_eq!(fmt_native_float(9.2e18), "9200000000000000000");
+        // < 2^63 的最大可表示偶数整值（仍走 i64 路径）
+        assert_eq!(fmt_native_float(9223372036854774784.0), "9223372036854774784");
+        // 恰为 ±2^63：i64 cast 饱和会得到错误结果，必须走 {:.0} 定点分支
+        assert_eq!(fmt_native_float(9223372036854775808.0), "9223372036854775808");
+        assert_eq!(fmt_native_float(-9223372036854775808.0), "-9223372036854775808");
+        // > 2^63 定点整数位
+        assert_eq!(fmt_native_float(1e20), "100000000000000000000");
+        // double(1e300) 精确十进制展开（str(int(1e300)) 导出，非被测函数生成）
+        const E300: &str = "1000000000000000052504760255204420248704468581108159154915854115511802457988908195786371375080447864043704443832883878176942523235360430575644792184786706982848387200926575803737830233794788090059368953234970799945081119038967640880074652742780142494579258788820056842838115669472196386865459400540160";
+        assert_eq!(fmt_native_float(1e300), E300);
+        assert_eq!(fmt_native_float(-1e300), format!("-{}", E300));
     }
 }

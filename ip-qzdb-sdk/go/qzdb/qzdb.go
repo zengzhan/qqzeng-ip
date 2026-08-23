@@ -592,6 +592,7 @@ func (s *Snapshot) parseGroups() error {
 func (s *Snapshot) parseMetadata() error {
 	d := s.data
 	var metaVersion, metaDesc, metaPrimary string
+	var metaDataMonth, metaScope string // v2.4：TLV type=5/6（FORMAT §8.2 权威）
 	var metaFields []string
 	if s.flags&4 != 0 && s.offMeta > 0 && s.offMeta+4 <= uint64(len(d)) {
 		cursor := s.offMeta
@@ -616,6 +617,10 @@ func (s *Snapshot) parseMetadata() error {
 				metaDesc = val
 			case 4:
 				metaPrimary = val
+			case 5:
+				metaDataMonth = val // v2.4：数据期号（权威）
+			case 6:
+				metaScope = val // v2.4：数据覆盖范围（权威）
 			}
 			cursor += 4 + length
 		}
@@ -700,16 +705,22 @@ func (s *Snapshot) parseMetadata() error {
 		}
 	}
 
-	// 构建日期（Header 偏移 32：yyyyMMdd）推算
+	// 数据期号 / 覆盖范围（FORMAT §8.2）：Metadata TLV type=5(data_month)、
+	// type=6(scope) 为权威来源；Header BuildDate（offset 32，yyyyMMdd）仅作回落，
+	// buildTimeStr 始终取自 BuildDate。
 	buildDate := safeReadU32(d, 32)
+	if metaDataMonth != "" {
+		s.dataMonth = metaDataMonth
+	} else if buildDate > 0 {
+		s.dataMonth = fmt.Sprintf("%04d-%02d", buildDate/10000, (buildDate/100)%100)
+	}
 	if buildDate > 0 {
 		y := buildDate / 10000
 		m := (buildDate / 100) % 100
 		dd := buildDate % 100
-		s.dataMonth = fmt.Sprintf("%04d-%02d", y, m)
 		s.buildTimeStr = fmt.Sprintf("%04d-%02d-%02d", y, m, dd)
 	}
-	s.scope = ""
+	s.scope = metaScope
 	return nil
 }
 
@@ -1111,13 +1122,19 @@ func (s *Snapshot) readNativeValue(off uint64, w int, nt int) string {
 	return strconv.FormatUint(uint64(valNum), 10)
 }
 
-// formatFloat6 原生浮点格式化：整数值无小数点；否则固定 6 位小数；NaN/Inf 返回 ""。
+// formatFloat6 原生浮点格式化（FORMAT §10.5 统一契约）：整数值无小数点；
+// 否则固定 6 位小数；NaN/Inf 返回 ""。
 func formatFloat6(f float64) string {
 	if math.IsNaN(f) || math.IsInf(f, 0) {
 		return ""
 	}
 	if f == math.Trunc(f) {
-		return strconv.FormatInt(int64(f), 10)
+		// int64 转换前必须范围保护（|v| < 2^63）：Go 规范规定超范围浮点→整数
+		// 转换为实现相关行为。超范围整数走 'f',0 定点（无小数点、无科学计数法）。
+		if f >= -9223372036854775808.0 && f < 9223372036854775808.0 {
+			return strconv.FormatInt(int64(f), 10)
+		}
+		return strconv.FormatFloat(f, 'f', 0, 64)
 	}
 	return strconv.FormatFloat(f, 'f', 6, 64)
 }
@@ -1419,8 +1436,14 @@ func (r *QzdbReader) GetFieldNamesSource() string {
 	return FieldNamesSourceSynthetic
 }
 
-// GetScope 始终返回 ""（当前格式 Header 尚无 scope 字段）。
-func (r *QzdbReader) GetScope() string { return "" }
+// GetScope 返回数据覆盖范围（FORMAT §8.2 Metadata TLV type=6，v2.4 权威来源；
+// 文件无该条目时返回 ""）。
+func (r *QzdbReader) GetScope() string {
+	if s := r.snapshot(); s != nil {
+		return s.scope
+	}
+	return ""
+}
 
 // GetBuildTime 返回构建日期 "yyyy-MM-dd"。
 func (r *QzdbReader) GetBuildTime() string {

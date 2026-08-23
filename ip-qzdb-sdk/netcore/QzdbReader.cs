@@ -1722,19 +1722,25 @@ public sealed class QzdbReader : IDisposable
     }
 
 
+    // §10.5 统一契约：整数值无小数点、非整数固定 6 位小数、NaN/Inf 为 ""。
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static string FormatFloat6(float v)
     {
-        if (float.IsNaN(v) || float.IsInfinity(v)) return "";
-        if (v == MathF.Truncate(v)) return ((long)v).ToString(System.Globalization.CultureInfo.InvariantCulture);
-        return v.ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
+        return FormatFloat6((double)v);   // float→double 拓宽无损，语义等价
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static string FormatFloat6(double v)
     {
         if (double.IsNaN(v) || double.IsInfinity(v)) return "";
-        if (v == Math.Truncate(v)) return ((long)v).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        if (v == Math.Truncate(v))
+        {
+            // cast 到 long 前必须范围保护（|v| < 2^63）：超范围转换在 .NET 是
+            // 未指定行为（x64 cvttsd2si 产生 0x8000...）。超范围整数走 F0 定点。
+            if (v >= -9223372036854775808.0 && v < 9223372036854775808.0)
+                return ((long)v).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            return v.ToString("F0", System.Globalization.CultureInfo.InvariantCulture);
+        }
         return v.ToString("F6", System.Globalization.CultureInfo.InvariantCulture);
     }
 

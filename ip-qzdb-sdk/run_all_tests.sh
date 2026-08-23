@@ -94,8 +94,14 @@ run_test "CSV Oracle" "$PYTHON_BIN test_csv_oracle.py" "python" "CSV_ORACLE_OK"
 # gracefully when the base DB is absent).
 run_test "Python-HostileVectors" "$PYTHON_BIN test_hostile_vectors.py" "python" "HOSTILE_VECTORS_OK"
 
+# FORMAT §10.5 原生浮点统一契约边界（P0-2，DB-free）
+run_test "Python-NativeFloat" "$PYTHON_BIN test_native_float.py" "python" "NATIVE_FLOAT_OK"
+
 # Node.js
 run_test "Node.js" "node test.js" "nodejs"
+
+# FORMAT §10.5 原生浮点统一契约边界（P0-2，DB-free）
+run_test "Node-NativeFloat" "node native_float_test.js" "nodejs" "NATIVE_FLOAT_OK"
 
 # PHP
 run_test "PHP" "php test.php" "php"
@@ -108,6 +114,8 @@ if command -v go &> /dev/null; then
     run_test "Go" "go run ./cmd/demo" "go"
     # Hostile-vector conformance (skips gracefully without base DB).
     run_test "Go-HostileVectors" "go test ./qzdb/ -run 'TestHostileVectors' -count=1 -v" "go" "HOSTILE_VECTORS_OK"
+    # FORMAT §10.5 原生浮点统一契约边界 + Metadata TLV type=5/6 权威（P0-2 / T7，DB-free）
+    run_test "Go-NativeFloat" "go test ./qzdb/ -run 'TestFormatFloat6Boundaries' -count=1 -v" "go" "--- PASS"
 fi
 
 # Rust
@@ -125,6 +133,22 @@ if command -v gcc &> /dev/null || command -v clang &> /dev/null; then
         TEST_PIDS+=(0)
     else
         run_test "C" "./qzdb_test" "c"
+    fi
+    # FORMAT §10.5 原生浮点统一契约边界（P0-2；include 源文件以触达静态格式化器）
+    if ! (cd c && $CC -O2 -o native_float_boundary_test native_float_boundary_test.c -lm); then
+        echo "✗ C-NativeFloat (compile failed)" > "$RESULTS_DIR/C-NativeFloat.result.status"
+        TEST_NAMES+=("C-NativeFloat")
+        TEST_PIDS+=(0)
+    else
+        run_test "C-NativeFloat" "./native_float_boundary_test" "c" "NATIVE_FLOAT_OK"
+    fi
+    # Metadata TLV type=5/6 权威语义 + scope 所有权（UAF 回归守卫；需真实库文件，缺失时自跳过）
+    if ! (cd c && $CC -O2 -o tlv_meta_test tlv_meta_test.c qzdb_reader.c -lm); then
+        echo "✗ C-TlvMeta (compile failed)" > "$RESULTS_DIR/C-TlvMeta.result.status"
+        TEST_NAMES+=("C-TlvMeta")
+        TEST_PIDS+=(0)
+    else
+        run_test "C-TlvMeta" "./tlv_meta_test" "c" "TLV_META_C_OK"
     fi
 fi
 

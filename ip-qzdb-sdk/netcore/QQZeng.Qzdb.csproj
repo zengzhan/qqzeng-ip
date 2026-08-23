@@ -17,7 +17,7 @@
     <RootNamespace>QQZeng.Qzdb</RootNamespace>
     <AssemblyName>QQZeng.Qzdb</AssemblyName>
     <Version>1.0.5</Version>
-    <PackageReleaseNotes>1.0.5: Major performance &amp; correctness upgrade — direct physical field projection in FindFields (80%+ allocation reduction); pre-bound standard field indices in GeoInfo (zero-allocation GetCountry/Isp/Asn/City/Province getters); epoch-based latest-wins reload protection; stackalloc IPAddress conversions; zero-delegate ChainedReader; pure integer IPv6 Find(ulong, ulong) achieving 7.6M+ QPS.</PackageReleaseNotes>
+    <PackageReleaseNotes>1.0.5: Metadata TLV type=5 (data_month) / type=6 (scope) consumed as authoritative with Header BuildDate fallback per FORMAT §8.2; native-float formatting aligned to FORMAT §10.5 exact-decimal contract; fail-closed hardened: miss returns NOT_FOUND in byte-buffer APIs, section bounds fully validated at parse time, trie walks bounded by derived IP-width caps; test harness streams multi-GB CSV ground truth (constant memory).</PackageReleaseNotes>
 
     <!-- 作者 / 公司 / 描述 -->
     <Authors>QQZeng</Authors>

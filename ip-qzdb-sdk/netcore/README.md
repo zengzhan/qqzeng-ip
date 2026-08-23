@@ -149,7 +149,7 @@ using var reader = QzdbReader.OpenBuffer(bytes);
 | 字符串查询 | `GeoInfo? Find(string ipStr)` / `Find(ReadOnlySpan<char> ipSpan)` | `GeoInfo?` | 按字符串/Span 查（IPv4 / IPv6 / IPv4 映射地址均可） |
 | 字节查询 | `GeoInfo? Find(ReadOnlySpan<byte> ipBytes)` / `FindBytes(byte[])` | `GeoInfo?` | 按 4 字节（IPv4）或 16 字节（IPv6）原始字节查，支持栈上 Span 零分配 |
 | 整数查询 (v4) | `GeoInfo? FindUint(uint ipInt)` | `GeoInfo?` | 按 IPv4 的 `uint` 整型查（主机序） |
-| 整数查询 (v6) | `GeoInfo? Find(ulong ipHigh, ulong ipLow)` | `GeoInfo?` | 按 IPv6 的高/低 64 位整数直接查，极速寄存器寻址（760万+ QPS） |
+| 整数查询 (v6) | `GeoInfo? Find(ulong ipHigh, ulong ipLow)` | `GeoInfo?` | 按 IPv6 的高/低 64 位整数直接查，寄存器直接寻址（实测 760 万+ QPS） |
 | IPAddress | `GeoInfo? Find(System.Net.IPAddress address)` | `GeoInfo?` | 内部栈分配零 GC 转换 |
 | 字段子集 | `GeoInfo? FindFields(string ipStr, string[]? fields)` | `GeoInfo?` | **物理按需直解**：只解析指定字段，减少 80%+ 字符串分配 |
 | 管道字符串 | `string FindStr(string ipStr)` / `FindStr(ReadOnlySpan<char>)` | `string` | 直接返回 `ToPipe()` 结果；未命中/非法返回 `""`（零异常） |
@@ -386,7 +386,7 @@ catch (QzdbException ex)
 
 ## 13. 性能说明
 
-本 SDK 在查询热路径上做了极致优化：
+本 SDK 在查询热路径上做了深度优化：
 
 - **无锁快照架构**：查询只读 `Volatile` 快照引用，多线程零竞争；`Reload` 用 `Interlocked.Exchange` 原子切换。
 - **零分配 trie 遍历**：核心 `TrieWalkV4/V6` 使用 `unsafe` + `fixed` 指针、绕过边界检查，单次查询不分配托管内存。
@@ -472,5 +472,3 @@ dotnet add package QQZeng.Qzdb --version x.y.z
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: netcore: ⚡ C# .NET 极速解析引擎 (内存映射优化, 高并发 760 万+ QPS 零分配) sync=1787422536 -->
