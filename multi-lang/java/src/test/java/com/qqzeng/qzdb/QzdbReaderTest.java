@@ -84,6 +84,13 @@ public class QzdbReaderTest {
     // 纯逻辑测试（不依赖数据库文件）
     // =========================================================================
 
+    /** double(1e300) 的精确十进制展开（str(int(1e300)) 一次性导出后固化，非被测路径生成）。 */
+    private static final String E300_LITERAL =
+            "10000000000000000525047602552044202487044685811081591549158541155118024579889"
+            + "08195786371375080447864043704443832883878176942523235360430575644792184786706"
+            + "98284838720092657580373783023379478809005936895323497079994508111903896764088"
+            + "0074652742780142494579258788820056842838115669472196386865459400540160";
+
     private static void runPureLogicTests() {
         test("P0-2. FORMAT §10.5 原生浮点统一契约边界", () -> {
             // 与 python/test_native_float.py、nodejs/native_float_test.js、
@@ -103,10 +110,15 @@ public class QzdbReaderTest {
             assertEquals("9223372036854774784", QzdbReader.formatNativeFloat(9223372036854774784.0),
                     "< 2^63 最大可表示偶数整值");
             assertEquals("9223372036854775808", QzdbReader.formatNativeFloat(9223372036854775808.0),
-                    "恰为 2^63 走 %.0f 定点分支");
+                    "恰为 2^63 走精确定点分支");
             assertEquals("-9223372036854775808", QzdbReader.formatNativeFloat(-9223372036854775808.0),
                     "恰为 -2^63");
             assertEquals("100000000000000000000", QzdbReader.formatNativeFloat(1e20), "> 2^63 定点整数位");
+            // 1e300 非精确可表示：契约要求输出该 double 的精确十进制展开。
+            // 该向量曾抓出 String.format("%.0f") 的最短 round-trip 补零缺陷
+            // （2^63 → "9223372036854776000"），现以 BigDecimal(v) 精确构造器实现。
+            assertEquals(E300_LITERAL, QzdbReader.formatNativeFloat(1e300), "1e300 定点展开精确值");
+            assertEquals("-" + E300_LITERAL, QzdbReader.formatNativeFloat(-1e300), "-1e300");
             assertEquals("116.400002", QzdbReader.formatNativeFloat(116.4f),
                     "f32 按精确 double 值舍入（float32 116.4 = 116.40000152587890625）");
             assertEquals("116", QzdbReader.formatNativeFloat(116.0f), "f32 整值无小数点");

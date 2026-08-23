@@ -56,10 +56,13 @@ public class QzdbReader implements AutoCloseable {
         if (Double.isNaN(v) || Double.isInfinite(v)) return "";
         if (v == Math.floor(v)) {
             // cast 到 long 前范围保护（|v| < 2^63）：Java 超范围转换饱和到
-            // Long.MAX/MIN，结果错误。超范围整数走 %.0f ROOT 定点。
+            // Long.MAX/MIN，结果错误。超范围整数走精确定点展开。
+            // 注意：不能用 String.format("%.0f") —— 它按最短 round-trip
+            // 数字补零而非精确二进制展开（2^63 → "9223372036854776000"、
+            // 1e300 尾数失真），违反 §10.5；BigDecimal(double) 构造器精确。
             if (v >= -9223372036854775808.0 && v < 9223372036854775808.0)
                 return Long.toString((long) v);
-            return String.format(Locale.ROOT, "%.0f", v);
+            return new java.math.BigDecimal(v).toPlainString();
         }
         return FLOAT6.get().format(v);
     }

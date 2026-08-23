@@ -781,9 +781,14 @@ for each versionGroup:
 
 - 整数判定统一为 `v == trunc(v)`（等价于 `floor` 对有符号数的判定）。
 - **cast 到 64 位整数前必须做范围保护**：仅 `\|v\| < 9223372036854775808.0`（2^63）允许
-  int64 转换；超范围的整数走无小数点的定点格式化（C# `"F0"` / Go `'f',0` /
-  Java `%.0f` ROOT / C `%.0f` / Rust `{:.0}` / PHP `%.0F`）。直接 cast 超范围值在
-  多数运行时是未定义或饱和行为（C# 未指定、Go 实现相关、Java 饱和到 MAX/MIN），禁止。
+  int64 转换；超范围的整数走无小数点的**精确十进制展开**（C# `"F0"` / Go `'f',0` /
+  Java `new BigDecimal(v).toPlainString()` / C `%.0f` / Rust `{:.0}` / PHP `%.0F`）。
+  直接 cast 超范围值在多数运行时是未定义或饱和行为（C# 未指定、Go 实现相关、
+  Java 饱和到 MAX/MIN），禁止。
+  ⚠ Java 例外说明：`String.format("%.0f")` **不满足本契约**——它按最短 round-trip
+  数字补零而非精确展开（恰为 2^63 时输出 `9223372036854776000`，1e300 尾数失真；
+  实测 JDK 21）。必须用 `BigDecimal(double)` 精确构造器。C/Rust/Go/PHP 的同名
+  定点格式化均为精确展开，已由 E300 同源向量验证。
 - 非整数分支用各语言 locale 无关的固定 6 位小数格式化（`F6` / `'f',6` / `%.6f` /
   `toFixed(6)` / `{:.6}` / `%.6F` / `{:.6f}`）。
 - 参考实现：C# `FormatFloat6`（canonical）、Go `formatFloat6`、C `format_float_value`、
