@@ -214,12 +214,12 @@ func TestChainMergeBatch(t *testing.T) {
 			t.Errorf("expected non-nil result for ip=%s", ips[i])
 		}
 	}
-	// 验证第三条（非法 IP）无结果也无错误
+	// 验证第三条（非法 IP）按统一三态契约标记 Error=INVALID_PARAM（与 QzdbReader.FindBatch 一致）
 	if results[2].GeoInfo != nil {
 		t.Error("expected nil result for invalid IP")
 	}
-	if results[2].Error != nil {
-		t.Error("expected nil error for invalid IP (Go returns nil, nil)")
+	if results[2].Error == nil {
+		t.Error("expected INVALID_PARAM error for invalid IP (unified three-state contract)")
 	}
 }
 
@@ -359,9 +359,9 @@ func TestChainFactoryFunctions(t *testing.T) {
 	defer r2.Close()
 
 	tests := []struct {
-		name   string
-		chain  *ChainedReader
-		mode   ChainMode
+		name  string
+		chain *ChainedReader
+		mode  ChainMode
 	}{
 		{"NewChainedReader", NewChainedReader(r1, r2), ModeFallback},
 		{"Chain", Chain(r1, r2), ModeFallback},

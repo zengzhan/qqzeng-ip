@@ -1,6 +1,7 @@
 package qzdb
 
 import (
+	"encoding/binary"
 	"strconv"
 	"strings"
 )
@@ -11,7 +12,8 @@ func (s *Snapshot) lookupV4PrefixLen(ip uint32) int {
 	if !s.hasV4 || s.offV4Jump <= 0 {
 		return -1
 	}
-	ptr := safeReadU32(s.data, s.offV4Jump+uint64((ip>>16&0xFFFF))*4)
+	// ip>>16 范围 [0, 2^16)，索引落在 parseHeader 已校验的 [offV4Jump, offV4Jump+65536*4) 内，直接寻址。
+	ptr := binary.LittleEndian.Uint32(s.data[s.offV4Jump+uint64((ip>>16&0xFFFF))*4:])
 	if ptr == 0 {
 		return -1
 	}
@@ -47,7 +49,8 @@ func (s *Snapshot) lookupV6PrefixLen(ip [16]byte) int {
 	if !s.hasV6 || s.offV6Jump <= 0 {
 		return -1
 	}
-	ptr := safeReadU32(s.data, s.offV6Jump+uint64(readV6Prefix(ip, s.v6JumpBits))*4)
+	// readV6Prefix 范围 [0, 2^v6JumpBits)，索引落在 parseHeader 已校验的 [offV6Jump, offV6Jump+(1<<bits)*4) 内，直接寻址。
+	ptr := binary.LittleEndian.Uint32(s.data[s.offV6Jump+uint64(readV6Prefix(ip, s.v6JumpBits))*4:])
 	if ptr == 0 {
 		return -1
 	}
@@ -161,8 +164,6 @@ func (r *QzdbReader) LookupCidr(ipStr string) string {
 	if s == nil {
 		return ""
 	}
-	// 回归修复：三个 CIDR 入口此前漏了 release，每次查询净增 1 个引用计数，
-	// mmap 永不释放（频繁 Reload 的服务持续泄漏虚拟内存）。
 	res, ok := fastParseIp(ipStr)
 	if !ok {
 		return ""

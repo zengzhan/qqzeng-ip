@@ -9,8 +9,8 @@ package main
 
 import (
 	"fmt"
-	"os"
 	"github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go/qzdb"
+	"os"
 )
 
 func findDb() string {

@@ -81,7 +81,7 @@ func TestTier3ConcurrentSafety(t *testing.T) {
 	defer r.Close()
 
 	const (
-		numThreads = 16
+		numThreads       = 16
 		queriesPerThread = 100000
 	)
 
@@ -170,5 +170,3 @@ func TestTier3DualStackPerformance(t *testing.T) {
 	t.Logf("Tier3 single-thread IPv6: %.0f QPS (%d queries in %d ms)",
 		ipv6QPS, queries, ipv6Elapsed/1e6)
 }
-
-

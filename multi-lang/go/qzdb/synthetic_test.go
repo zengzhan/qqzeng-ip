@@ -49,9 +49,9 @@ func buildSyntheticDBWith(t *testing.T, asName string) []byte {
 	ipRows := []row{{0, 0}, {0, 1}, {0, 2}, {0, 3}, {0, 1}}
 
 	v4Ranges := []struct {
-		lo     string
-		hi     string
-		rowID  uint32
+		lo    string
+		hi    string
+		rowID uint32
 	}{
 		{"114.114.0.0", "114.114.255.255", 1},
 		{"223.5.0.0", "223.5.255.255", 2},
@@ -187,7 +187,7 @@ func buildSyntheticDBWith(t *testing.T, asName string) []byte {
 	// header
 	copy(blob[0:4], "QZDB")
 	blob[4] = 1
-	binary.LittleEndian.PutUint16(blob[6:], 2)  // version mask: asn=0x02 (NEW one-hot §3.1)
+	binary.LittleEndian.PutUint16(blob[6:], 2)    // version mask: asn=0x02 (NEW one-hot §3.1)
 	binary.LittleEndian.PutUint16(blob[8:], 0x37) // flags V4|V6|meta|v4node24|v6node24
 	blob[10] = 16
 	blob[11] = 16
@@ -248,7 +248,7 @@ func buildGroupSchemaGo(fields, entryCount int) []byte {
 	out = binary.LittleEndian.AppendUint32(out, uint32(fields*2)) // stride
 	out = binary.LittleEndian.AppendUint32(out, 0)                // flags
 	for i := 0; i < fields; i++ {
-		out = binary.LittleEndian.AppendUint16(out, uint16(i)) // fid
+		out = binary.LittleEndian.AppendUint16(out, uint16(i))   // fid
 		out = append(out, 2)                                     // width
 		out = append(out, 0)                                     // fieldFlags
 		out = binary.LittleEndian.AppendUint32(out, uint32(i*2)) // offset

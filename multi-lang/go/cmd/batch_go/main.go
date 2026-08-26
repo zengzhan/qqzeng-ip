@@ -5,10 +5,10 @@ package main
 
 import (
 	"fmt"
+	"github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go/qzdb"
 	"os"
 	"strconv"
 	"strings"
-	"github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go/qzdb"
 )
 
 // geoToPipe uses GeoInfo.ToPipe() so output byte-matches Python to_pipe()
@@ -45,7 +45,7 @@ func processFile(searcher *qzdb.QzdbReader, testPath, outPath string, isV6 bool)
 		return 0
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	
+
 	var results []string
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -86,7 +86,7 @@ func processFile(searcher *qzdb.QzdbReader, testPath, outPath string, isV6 bool)
 		}
 		results = append(results, fmt.Sprintf("%s|%s", line, pipeStr))
 	}
-	
+
 	os.WriteFile(outPath, []byte(strings.Join(results, "\n")+"\n"), 0644)
 	return len(results)
 }
@@ -96,25 +96,25 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Usage: %s <db_path> <v4_test> <v4_out> <v6_test> <v6_out>\n", os.Args[0])
 		os.Exit(1)
 	}
-	
+
 	dbPath := os.Args[1]
 	v4Test := os.Args[2]
 	v4Out := os.Args[3]
 	v6Test := os.Args[4]
 	v6Out := os.Args[5]
-	
+
 	searcher, err := qzdb.Open(dbPath, 0, false)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Go: Failed to load database: %v\n", err)
 		os.Exit(1)
 	}
 	defer searcher.Close()
-	
+
 	n4 := processFile(searcher, v4Test, v4Out, false)
 	fmt.Fprintf(os.Stderr, "  Go V4: %d queries\n", n4)
-	
+
 	n6 := processFile(searcher, v6Test, v6Out, true)
 	fmt.Fprintf(os.Stderr, "  Go V6: %d queries\n", n6)
-	
+
 	fmt.Fprintf(os.Stderr, "  Go DONE\n")
 }

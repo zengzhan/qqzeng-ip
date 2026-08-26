@@ -33,6 +33,18 @@ func isJsonNumber(val string) bool {
 }
 
 func escapeJson(s string) string {
+	// 快速路径：无字符需转义则零分配返回原串（绝大多数字段值无需转义）。
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c < 0x20 || c == '"' || c == '\\' {
+			return escapeJsonSlow(s)
+		}
+	}
+	return s
+}
+
+// escapeJsonSlow 处理含需转义字符的字符串（快速路径未命中时才调用）。
+func escapeJsonSlow(s string) string {
 	var sb strings.Builder
 	sb.Grow(len(s) + 8)
 	for i := 0; i < len(s); i++ {
@@ -74,12 +86,12 @@ func (g *GeoInfo) ToJson() string {
 		return "{}"
 	}
 	// 预分配容量：键 + 值 + 标点符号
-	var cap int
+	var total int
 	for i, v := range g.Values {
-		cap += len(g.FieldNames[i]) + len(v) + 10
+		total += len(g.FieldNames[i]) + len(v) + 10
 	}
 	var b strings.Builder
-	b.Grow(cap)
+	b.Grow(total)
 	b.WriteByte('{')
 	for i, name := range g.FieldNames {
 		if i > 0 {
@@ -118,14 +130,14 @@ func (g *GeoInfo) ToJson() string {
 
 // ---------- 语义化 Getter 全集（缺失返回 "" 或 nil） ----------
 
-func (g *GeoInfo) GetCidr() string          { return "" } // CIDR 不是数据库字段（契约 §6）
-func (g *GeoInfo) GetCountry() string       { return g.Get("country") }
-func (g *GeoInfo) GetCountryEn() string     { return g.Get("country_en") }
-func (g *GeoInfo) GetProvince() string      { return g.Get("province") }
-func (g *GeoInfo) GetProvinceEn() string    { return g.Get("province_en") }
-func (g *GeoInfo) GetCity() string          { return g.Get("city") }
-func (g *GeoInfo) GetCityEn() string        { return g.Get("city_en") }
-func (g *GeoInfo) GetDistrict() string      { return g.Get("district") }
+func (g *GeoInfo) GetCidr() string       { return "" } // CIDR 不是数据库字段（契约 §6）
+func (g *GeoInfo) GetCountry() string    { return g.Get("country") }
+func (g *GeoInfo) GetCountryEn() string  { return g.Get("country_en") }
+func (g *GeoInfo) GetProvince() string   { return g.Get("province") }
+func (g *GeoInfo) GetProvinceEn() string { return g.Get("province_en") }
+func (g *GeoInfo) GetCity() string       { return g.Get("city") }
+func (g *GeoInfo) GetCityEn() string     { return g.Get("city_en") }
+func (g *GeoInfo) GetDistrict() string   { return g.Get("district") }
 
 // GetGeoId 返回 geo_id（long）；缺失返回 nil。
 func (g *GeoInfo) GetGeoId() *int64 {
@@ -162,9 +174,9 @@ func (g *GeoInfo) GetLatitude() *float64 {
 	return &f
 }
 
-func (g *GeoInfo) GetTimezone() string    { return g.Get("timezone") }
-func (g *GeoInfo) GetIsp() string         { return g.Get("isp") }
-func (g *GeoInfo) GetIspEn() string       { return g.Get("isp_en") }
+func (g *GeoInfo) GetTimezone() string { return g.Get("timezone") }
+func (g *GeoInfo) GetIsp() string      { return g.Get("isp") }
+func (g *GeoInfo) GetIspEn() string    { return g.Get("isp_en") }
 
 // GetAsn 返回 asn（long）；缺失返回 nil。
 func (g *GeoInfo) GetAsn() *int64 {
@@ -175,8 +187,8 @@ func (g *GeoInfo) GetAsn() *int64 {
 	return &v
 }
 
-func (g *GeoInfo) GetAsName() string     { return g.Get("as_name") }
-func (g *GeoInfo) GetAsDomain() string   { return g.Get("as_domain") }
+func (g *GeoInfo) GetAsName() string   { return g.Get("as_name") }
+func (g *GeoInfo) GetAsDomain() string { return g.Get("as_domain") }
 
 // GetUsageType 返回 UsageType（21 语义 + 未知兜底）。
 func (g *GeoInfo) GetUsageType() UsageType {
@@ -192,6 +204,6 @@ func (g *GeoInfo) GetCurrencyName() string  { return g.Get("currency_name") }
 func (g *GeoInfo) GetPhonePrefix() string   { return g.Get("phone_prefix") }
 func (g *GeoInfo) GetEmojiFlag() string     { return g.Get("emoji_flag") }
 func (g *GeoInfo) GetLanguages() string     { return g.Get("languages") }
-func (g *GeoInfo) GetContinent() string    { return g.Get("continent") }
-func (g *GeoInfo) GetContinentEn() string  { return g.Get("continent_en") }
-func (g *GeoInfo) GetCountryCode() string  { return g.Get("country_code") }
+func (g *GeoInfo) GetContinent() string     { return g.Get("continent") }
+func (g *GeoInfo) GetContinentEn() string   { return g.Get("continent_en") }
+func (g *GeoInfo) GetCountryCode() string   { return g.Get("country_code") }

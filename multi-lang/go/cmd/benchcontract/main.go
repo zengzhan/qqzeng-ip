@@ -29,7 +29,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -305,7 +305,7 @@ func pct(v []int64, p float64) int64 {
 	if len(v) == 0 {
 		return 0
 	}
-	sort.Slice(v, func(i, j int) bool { return v[i] < v[j] })
+	slices.Sort(v)
 	idx := int(float64(len(v))*p+0.9999) - 1
 	if idx < 0 {
 		idx = 0

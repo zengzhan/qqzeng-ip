@@ -69,13 +69,13 @@ func newErr(code ErrorCode, msg string) *QzdbError {
 
 // 通用错误哨兵（保持与旧版 / cmd 兼容）。
 var (
-	ErrNotFound    = errors.New("not found")
-	ErrCorrupted   = errors.New("corrupted data")
-	ErrOutOfBounds = errors.New("out of bounds")
+	ErrNotFound     = errors.New("not found")
+	ErrCorrupted    = errors.New("corrupted data")
+	ErrOutOfBounds  = errors.New("out of bounds")
 	ErrInvalidParam = errors.New("invalid parameter")
-	ErrBadHeader   = errors.New("bad header")
-	ErrBadMagic    = errors.New("bad magic")
-	ErrUnsupported = errors.New("unsupported format")
+	ErrBadHeader    = errors.New("bad header")
+	ErrBadMagic     = errors.New("bad magic")
+	ErrUnsupported  = errors.New("unsupported format")
 	// ErrClosed 表示 Reader 已关闭。
 	ErrClosed = errors.New("qzdb reader is closed")
 )

@@ -210,7 +210,7 @@ func TestToPipeAndToJson(t *testing.T) {
 	}
 	// toJson 数值类型
 	js := g.ToJson()
-	var m map[string]interface{}
+	var m map[string]any
 	if err := json.Unmarshal([]byte(js), &m); err != nil {
 		t.Fatalf("json invalid: %v\n%s", err, js)
 	}

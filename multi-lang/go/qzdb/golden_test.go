@@ -43,8 +43,8 @@ func TestGoldenTier2(t *testing.T) {
 	}
 
 	type libSpec struct {
-		libKey  string
-		dbFile  string
+		libKey string
+		dbFile string
 	}
 	libs := []libSpec{
 		{"std_china", "qqzeng_ip_std_china.qzdb"},

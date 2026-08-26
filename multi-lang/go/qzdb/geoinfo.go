@@ -35,8 +35,8 @@ func normalizeKey(key string) string {
 	if !needsNormalize {
 		return key // 零分配快速路径
 	}
-	// 慢速路径：构建归一化字符串
-	var sb []byte
+	// 慢速路径：构建归一化字符串（预分配容量，避免 nil 切片追加增长）
+	sb := make([]byte, 0, len(key))
 	for i := 0; i < len(key); i++ {
 		c := key[i]
 		if c == '_' || c == '-' {

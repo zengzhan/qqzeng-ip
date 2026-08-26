@@ -47,11 +47,11 @@ func (r *QzdbReader) FindBatchFields(ips []string, fields []string) []BatchResul
 
 // GeoStream 流式惰性查询迭代器（内存恒定，不累积结果）。
 type GeoStream struct {
-	r       *QzdbReader
-	chain   *ChainedReader
-	ips     []string
-	idx     int
-	fields  []string
+	r      *QzdbReader
+	chain  *ChainedReader
+	ips    []string
+	idx    int
+	fields []string
 }
 
 // FindStream 返回流式迭代器，逐个惰性求值（ips 为 nil 返回空流）。

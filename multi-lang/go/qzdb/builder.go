@@ -91,7 +91,7 @@ func (b *Builder) Build() (*QzdbReader, error) {
 	if err != nil {
 		return nil, err
 	}
-    r := &QzdbReader{}
-    r.installSnapshot(s)
-    return r, nil
+	r := &QzdbReader{}
+	r.installSnapshot(s)
+	return r, nil
 }

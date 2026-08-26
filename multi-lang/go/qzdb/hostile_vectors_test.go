@@ -37,7 +37,7 @@ import (
 // JSON loading (UseNumber so 64-bit header values survive intact)
 // ---------------------------------------------------------------------------
 
-func loadHostileVector(t *testing.T) map[string]interface{} {
+func loadHostileVector(t *testing.T) map[string]any {
 	t.Helper()
 	candidates := []string{
 		filepath.Join("..", "..", "tools", "hostile_vectors.json"),
@@ -53,7 +53,7 @@ func loadHostileVector(t *testing.T) map[string]interface{} {
 		}
 		dec := json.NewDecoder(f)
 		dec.UseNumber()
-		var m map[string]interface{}
+		var m map[string]any
 		if err := dec.Decode(&m); err != nil {
 			f.Close()
 			lastErr = err
@@ -121,10 +121,10 @@ func hvWriteLE(b []byte, off int, width int, value uint64) {
 }
 
 // ---------------------------------------------------------------------------
-// JSON helpers (map[string]interface{} with json.Number)
+// JSON helpers (map[string]any with json.Number)
 // ---------------------------------------------------------------------------
 
-func hvAsString(m map[string]interface{}, key string) string {
+func hvAsString(m map[string]any, key string) string {
 	if v, ok := m[key]; ok {
 		if s, ok := v.(string); ok {
 			return s
@@ -132,7 +132,7 @@ func hvAsString(m map[string]interface{}, key string) string {
 	}
 	return ""
 }
-func hvAsInt(m map[string]interface{}, key string) int {
+func hvAsInt(m map[string]any, key string) int {
 	if v, ok := m[key]; ok {
 		switch n := v.(type) {
 		case json.Number:
@@ -145,7 +145,7 @@ func hvAsInt(m map[string]interface{}, key string) int {
 	}
 	return 0
 }
-func hvAsInt64(m map[string]interface{}, key string) int64 {
+func hvAsInt64(m map[string]any, key string) int64 {
 	if v, ok := m[key]; ok {
 		switch n := v.(type) {
 		case json.Number:
@@ -158,9 +158,9 @@ func hvAsInt64(m map[string]interface{}, key string) int64 {
 	}
 	return 0
 }
-func hvAsIntSlice(m map[string]interface{}, key string) []int {
+func hvAsIntSlice(m map[string]any, key string) []int {
 	if v, ok := m[key]; ok {
-		if arr, ok := v.([]interface{}); ok {
+		if arr, ok := v.([]any); ok {
 			out := make([]int, 0, len(arr))
 			for _, e := range arr {
 				switch n := e.(type) {
@@ -216,7 +216,7 @@ func hvCountField(anc hvAnchors, field string) uint32 {
 	return 0
 }
 
-func hvHeaderField(base []byte, mut map[string]interface{}, log *strings.Builder) []byte {
+func hvHeaderField(base []byte, mut map[string]any, log *strings.Builder) []byte {
 	off := hvAsInt(mut, "offset")
 	width := hvAsInt(mut, "width")
 	value := hvAsInt64(mut, "value")
@@ -307,7 +307,7 @@ func hvCraftInvalidEntryRow(base []byte, anc hvAnchors) []byte {
 	return cp
 }
 
-func hvApplyMutation(base []byte, mut map[string]interface{}, anc hvAnchors, log *strings.Builder) [][]byte {
+func hvApplyMutation(base []byte, mut map[string]any, anc hvAnchors, log *strings.Builder) [][]byte {
 	typ := hvAsString(mut, "type")
 	switch typ {
 	case "header_field":
@@ -513,17 +513,17 @@ func hvApplyMutation(base []byte, mut map[string]interface{}, anc hvAnchors, log
 	case "compound":
 		// group_index_invalid literal recipe is a byte-level no-op on std_china
 		// (current values already 1/3); craft the real query-time attack instead.
-		if steps, ok := mut["steps"].([]interface{}); ok && len(steps) == 2 {
-			if m0, ok := steps[0].(map[string]interface{}); ok {
+		if steps, ok := mut["steps"].([]any); ok && len(steps) == 2 {
+			if m0, ok := steps[0].(map[string]any); ok {
 				if hvAsInt(m0, "offset") == 164 && hvAsInt(m0, "value") == 1 {
 					return [][]byte{hvCraftInvalidEntryRow(base, anc)}
 				}
 			}
 		}
 		cur := hvClone(base)
-		if steps, ok := mut["steps"].([]interface{}); ok {
+		if steps, ok := mut["steps"].([]any); ok {
 			for _, st := range steps {
-				sm, ok := st.(map[string]interface{})
+				sm, ok := st.(map[string]any)
 				if !ok {
 					continue
 				}
@@ -621,8 +621,8 @@ func hvNormalize(s string) string {
 }
 
 type hvCaseAcc struct {
-	failClosed bool
-	obsCodes   map[string]bool
+	failClosed  bool
+	obsCodes    map[string]bool
 	sawGraceful bool
 	sawCorrect  bool
 	sawWrong    bool
@@ -692,7 +692,7 @@ func TestHostileVectors(t *testing.T) {
 		r.Close()
 	}
 
-	cases, ok := vec["cases"].([]interface{})
+	cases, ok := vec["cases"].([]any)
 	if !ok {
 		t.Fatal("malformed vector: cases missing")
 	}
@@ -702,15 +702,15 @@ func TestHostileVectors(t *testing.T) {
 	var anomalyNotes []string
 
 	for _, co := range cases {
-		c, ok := co.(map[string]interface{})
+		c, ok := co.(map[string]any)
 		if !ok {
 			t.Fatalf("malformed case entry")
 		}
 		id := hvAsString(c, "id")
-		mut, _ := c["mutation"].(map[string]interface{})
-		exp, _ := c["expected_outcome"].(map[string]interface{})
+		mut, _ := c["mutation"].(map[string]any)
+		exp, _ := c["expected_outcome"].(map[string]any)
 		expCodes := []string{}
-		if ea, ok := exp["error_code_any"].([]interface{}); ok {
+		if ea, ok := exp["error_code_any"].([]any); ok {
 			for _, e := range ea {
 				if s, ok := e.(string); ok {
 					expCodes = append(expCodes, s)

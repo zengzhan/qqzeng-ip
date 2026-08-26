@@ -1,5 +1,7 @@
 package qzdb
 
+import "strings"
+
 // hexLUT 用于快速十六进制数字判定。
 var hexLUT [128]byte
 
@@ -27,47 +29,39 @@ func v4FromMapped(b [16]byte) uint32 {
 }
 
 type parseResult struct {
-	v4    uint32
-	v6    [16]byte
-	isV4  bool
+	v4   uint32
+	v6   [16]byte
+	isV4 bool
 }
 
 // fastParseIp 严格解析 IPv4/IPv6 字符串（拒绝前导零、越界、缺段、超长、zone-id、非法分组）。
 // 对 IPv4-mapped IPv6 自动降级为 IPv4。空白字符一律拒绝（SSRF 安全）。
 func fastParseIp(s string) (*parseResult, bool) {
 	n := len(s)
-	for i := 0; i < n; i++ {
-		c := s[i]
-		if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f' {
-			return nil, false
-		}
+	// 空白字符一律拒绝（SSRF 安全）
+	if n > 0 && strings.IndexAny(s, " \t\n\r\v\f") >= 0 {
+		return nil, false
 	}
 	if n == 0 || n > 45 {
 		return nil, false
 	}
-	if !containsColon(s) {
+	if !strings.Contains(s, ":") {
 		v4, ok := fastParseIpv4(s)
 		if !ok {
 			return nil, false
 		}
 		return &parseResult{v4: v4, isV4: true}, true
 	}
-	if containsByte(s, '%') {
+	if strings.IndexByte(s, '%') >= 0 {
 		return nil, false // zone-id 不支持
 	}
-	dc := indexOf(s, "::")
-	var lft, rgt string
-	if dc >= 0 {
-		if indexOf(s[dc+2:], "::") >= 0 {
-			return nil, false // 多个 "::"
-		}
-		lft = s[:dc]
-		rgt = s[dc+2:]
-	} else {
-		lft = s
+	// 用 strings.Cut 处理 "::" 双冒号压缩；拒绝多个 "::"
+	lft, rgt, hasGap := strings.Cut(s, "::")
+	if hasGap && strings.Contains(rgt, "::") {
+		return nil, false // 多个 "::"
 	}
-	lg := splitColon(lft)
-	rg := splitColon(rgt)
+	lg := strings.Split(lft, ":")
+	rg := strings.Split(rgt, ":")
 	if lft == "" {
 		lg = nil
 	}
@@ -89,25 +83,33 @@ func fastParseIp(s string) (*parseResult, bool) {
 	allg = append(allg, rg...)
 	hasV4 := false
 	var v4Int uint32
-	if len(allg) > 0 && containsColon(allg[len(allg)-1]) == false && containsByte(allg[len(allg)-1], '.') {
-		v, ok := fastParseIpv4(allg[len(allg)-1])
-		if !ok {
-			return nil, false
+	if len(allg) > 0 {
+		last := allg[len(allg)-1]
+		if !strings.Contains(last, ":") && strings.IndexByte(last, '.') >= 0 {
+			v, ok := fastParseIpv4(last)
+			if !ok {
+				return nil, false
+			}
+			v4Int = v
+			hasV4 = true
+			allg = allg[:len(allg)-1]
 		}
-		v4Int = v
-		hasV4 = true
-		allg = allg[:len(allg)-1]
 	}
 	ng := len(allg)
 	v4Slots := 0
 	if hasV4 {
 		v4Slots = 2
 	}
-	if dc >= 0 {
+	if hasGap {
 		if ng+v4Slots > 7 {
 			return nil, false
 		}
 	} else if ng+v4Slots != 8 {
+		return nil, false
+	}
+	// 内嵌 IPv4 必须位于地址末尾（最后 32 位）。若带 "::" 压缩且 v4 落在 "::" 之前
+	// （rgt 为空，即 "a.b.c.d::" 形态），属于非法地址，netip 同样拒绝，这里显式拒绝。
+	if hasV4 && hasGap && len(rg) == 0 {
 		return nil, false
 	}
 	for _, g := range allg {
@@ -193,33 +195,6 @@ func fastParseIpv4(s string) (uint32, bool) {
 }
 
 // ---------- 小工具 ----------
-
-func containsColon(s string) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] == ':' {
-			return true
-		}
-	}
-	return false
-}
-
-func containsByte(s string, b byte) bool {
-	for i := 0; i < len(s); i++ {
-		if s[i] == b {
-			return true
-		}
-	}
-	return false
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
-}
 
 func splitColon(s string) []string {
 	if s == "" {

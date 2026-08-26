@@ -11,16 +11,16 @@ package qzdb
 
 import (
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"hash/crc32"
 	"math"
 	"math/bits"
 	"net/netip"
 	"os"
+	"runtime"
+	"slices"
 	"strconv"
 	"strings"
-	"runtime"
 	"sync"
 	"sync/atomic"
 )
@@ -116,54 +116,54 @@ type Snapshot struct {
 	groupIndex int
 
 	// Header
-	flags      uint16
-	hasV4      bool
-	hasV6      bool
-	v4Node24   bool
-	v6Node24   bool
-	v6JumpBits int
-	poolCount  int
-	poolIdxSize int
-	rowCount   int
-	v4NodeCount uint32
-	v6NodeCount uint32
-	ipRowSize  int
+	flags              uint16
+	hasV4              bool
+	hasV6              bool
+	v4Node24           bool
+	v6Node24           bool
+	v6JumpBits         int
+	poolCount          int
+	poolIdxSize        int
+	rowCount           int
+	v4NodeCount        uint32
+	v6NodeCount        uint32
+	ipRowSize          int
 	geoEntryGroupCount int
 
 	// Offsets
-	offV4Jump    uint64
-	offV4Nodes   uint64
-	offV6Jump    uint64
-	offV6Nodes   uint64
-	offIPRow     uint64
-	offGeoEntries uint64
-	offPools     uint64
-	offMeta      uint64
-	offRowSchema uint64
+	offV4Jump      uint64
+	offV4Nodes     uint64
+	offV6Jump      uint64
+	offV6Nodes     uint64
+	offIPRow       uint64
+	offGeoEntries  uint64
+	offPools       uint64
+	offMeta        uint64
+	offRowSchema   uint64
 	offGroupSchema uint64
 
-	rowGeoWidth  int
-	rowAsnWidth  int
+	rowGeoWidth   int
+	rowAsnWidth   int
 	rowUsageWidth int
 
 	// Group layout
-	actualGroups       int
-	groupFieldCounts   []int
-	groupEntryCounts   []uint32
-	groupDimMasks      []uint16
-	groupEntryOffsets  []uint64
-	groupStrides       []int
-	groupFieldWidths   [][]int
-	groupFieldOffsets  [][]int
-	groupFieldNative   [][]bool
+	actualGroups         int
+	groupFieldCounts     []int
+	groupEntryCounts     []uint32
+	groupDimMasks        []uint16
+	groupEntryOffsets    []uint64
+	groupStrides         []int
+	groupFieldWidths     [][]int
+	groupFieldOffsets    [][]int
+	groupFieldNative     [][]bool
 	groupFieldNativeType [][]int
-	groupFieldIds      [][]uint16
-	groupPools         [][][]string
+	groupFieldIds        [][]uint16
+	groupPools           [][][]string
 
 	// Field metadata
-	fieldNames   []string
+	fieldNames    []string
 	normalizedMap map[string]int
-	numericFlags []bool
+	numericFlags  []bool
 
 	// Meta accessors
 	version          string
@@ -177,9 +177,8 @@ type Snapshot struct {
 	buildTimeStr     string
 	scope            string
 
-	storedCrc   uint32
-	crcOnce     sync.Once
-	canonicalCrc uint32
+	storedCrc uint32
+	crcHash   func() uint32
 
 	geoCache *geoCache
 }
@@ -265,6 +264,9 @@ func buildSnapshot(data []byte, release func(), groupIndex int, verifyCrc bool) 
 		return nil, newErr(ErrCodeBadHeader, "file too small for QZDB header")
 	}
 	s := &Snapshot{data: data, release: release, groupIndex: groupIndex}
+	// crcHash 延迟到首次调用才计算（构造期单线程，OnceValue 安全）；
+	// 查询热路径无锁直接取用，避免每次 GetFileHash 重复算 CRC。
+	s.crcHash = sync.OnceValue(s.computeCanonicalCrc)
 
 	if err := s.parseHeader(); err != nil {
 		return nil, err
@@ -377,7 +379,7 @@ func (s *Snapshot) parseHeader() error {
 	}{
 		{s.offV4Jump, 65536 * 4, "off_v4_jump", false},
 		{s.offV4Nodes, uint64(s.v4NodeCount) * v4NodeSize, "off_v4_nodes", false},
-		{s.offV6Jump, uint64(1)<<uint(s.v6JumpBits) * 4, "off_v6_jump", false},
+		{s.offV6Jump, uint64(1) << uint(s.v6JumpBits) * 4, "off_v6_jump", false},
 		{s.offV6Nodes, uint64(s.v6NodeCount) * v6NodeSize, "off_v6_nodes", false},
 		{s.offIPRow, uint64(s.rowCount) * uint64(s.ipRowSize), "off_ip_row", false},
 		{s.offGeoEntries, 16, "off_geo_entries", true},
@@ -453,12 +455,8 @@ func (s *Snapshot) parseGroups() error {
 	tableGroups := int(d[gmOff])
 	gmOff++
 	groups := tableGroups
-	if s.geoEntryGroupCount < groups {
-		groups = s.geoEntryGroupCount
-	}
-	if groups > 4 {
-		groups = 4
-	}
+	groups = min(groups, s.geoEntryGroupCount)
+	groups = min(groups, 4)
 	if groups < 1 {
 		return newErr(ErrCodeCorrupted, "group metadata table groupCount is 0")
 	}
@@ -496,10 +494,7 @@ func (s *Snapshot) parseGroups() error {
 		sp := s.offGroupSchema
 		gsGroupCount := int(safeReadU16(d, sp))
 		sp += 2
-		maxGs := gsGroupCount
-		if groups < maxGs {
-			maxGs = groups
-		}
+		maxGs := min(gsGroupCount, groups)
 		for gi := 0; gi < maxGs; gi++ {
 			if sp+14 > uint64(len(d)) {
 				break
@@ -845,8 +840,7 @@ func (s *Snapshot) verifyCrcNow() bool {
 }
 
 func (s *Snapshot) fileHashHex() string {
-	s.crcOnce.Do(func() { s.canonicalCrc = s.computeCanonicalCrc() })
-	return fmt.Sprintf("%08x", s.canonicalCrc)
+	return fmt.Sprintf("%08x", s.crcHash())
 }
 
 // ---------- Trie 遍历（返回已剥离哨兵位的 row_id） ----------
@@ -860,8 +854,10 @@ func (s *Snapshot) readV4Child(idx uint32, bit uint32) uint32 {
 		off := s.offV4Nodes + uint64(idx)*6 + uint64(bit)*3
 		return uint32(d[off]) | uint32(d[off+1])<<8 | uint32(d[off+2])<<16
 	}
+	// 查询热路径：off 落在 parseHeader 已校验的 [offV4Nodes, offV4Nodes+v4NodeCount*8) 区间内，
+	// 直接无判界寻址（load-time 校验已覆盖边界，无需 safeRead 的 panic 哨兵）。
 	off := s.offV4Nodes + uint64(idx)*8 + uint64(bit)*4
-	return safeReadU32(d, off)
+	return binary.LittleEndian.Uint32(d[off:])
 }
 
 func (s *Snapshot) readV6Child(idx uint32, bit uint32) uint32 {
@@ -873,8 +869,10 @@ func (s *Snapshot) readV6Child(idx uint32, bit uint32) uint32 {
 		off := s.offV6Nodes + uint64(idx)*6 + uint64(bit)*3
 		return uint32(d[off]) | uint32(d[off+1])<<8 | uint32(d[off+2])<<16
 	}
+	// 查询热路径：off 落在 parseHeader 已校验的 [offV6Nodes, offV6Nodes+v6NodeCount*8) 区间内，
+	// 直接无判界寻址（load-time 校验已覆盖边界，无需 safeRead 的 panic 哨兵）。
 	off := s.offV6Nodes + uint64(idx)*8 + uint64(bit)*4
-	return safeReadU32(d, off)
+	return binary.LittleEndian.Uint32(d[off:])
 }
 
 // use24BitNode 判断当前 IP 版本是否使用 24 位紧凑节点。
@@ -910,7 +908,8 @@ func (s *Snapshot) trieWalkV4(ip uint32) (uint32, error) {
 	if !s.hasV4 || s.offV4Jump <= 0 {
 		return 0, nil
 	}
-	ptr := safeReadU32(s.data, s.offV4Jump+uint64(ip>>16)*4)
+	// ip>>16 范围 [0, 2^16)，索引落在 parseHeader 已校验的 [offV4Jump, offV4Jump+65536*4) 内，直接寻址。
+	ptr := binary.LittleEndian.Uint32(s.data[s.offV4Jump+uint64(ip>>16)*4:])
 	if ptr == 0 {
 		return 0, nil
 	}
@@ -938,7 +937,8 @@ func (s *Snapshot) trieWalkV6(ip [16]byte) (uint32, error) {
 	if !s.hasV6 || s.offV6Jump <= 0 {
 		return 0, nil
 	}
-	ptr := safeReadU32(s.data, s.offV6Jump+uint64(readV6Prefix(ip, s.v6JumpBits))*4)
+	// readV6Prefix 范围 [0, 2^v6JumpBits)，索引落在 parseHeader 已校验的 [offV6Jump, offV6Jump+(1<<bits)*4) 内，直接寻址。
+	ptr := binary.LittleEndian.Uint32(s.data[s.offV6Jump+uint64(readV6Prefix(ip, s.v6JumpBits))*4:])
 	if ptr == 0 {
 		return 0, nil
 	}
@@ -1072,9 +1072,31 @@ func (s *Snapshot) computeGeoInfo(rowID uint32) *GeoInfo {
 	if !ok {
 		return nil
 	}
+	// 把 per-group 切片提到循环外，避免每次字段读取都重复下标寻址 groupIndex。
+	gi := s.groupIndex
+	widths := s.groupFieldWidths[gi]
+	offsets := s.groupFieldOffsets[gi]
+	natives := s.groupFieldNative[gi]
+	natTypes := s.groupFieldNativeType[gi]
+	pools := s.groupPools[gi]
 	values := make([]string, fc)
 	for i := 0; i < fc; i++ {
-		values[i] = s.readFieldValue(entryOff, i)
+		fo := entryOff + uint64(offsets[i])
+		w := widths[i]
+		if natives != nil && i < len(natives) && natives[i] {
+			nt := 0
+			if natTypes != nil && i < len(natTypes) {
+				nt = natTypes[i]
+			}
+			values[i] = s.readNativeValue(fo, w, nt)
+			continue
+		}
+		idx := s.readUintWidth(fo, w)
+		if pools != nil && i < len(pools) && int(idx) < len(pools[i]) {
+			values[i] = pools[i][idx]
+			continue
+		}
+		values[i] = ""
 	}
 	return &GeoInfo{
 		FieldNames: s.fieldNames,
@@ -1383,7 +1405,7 @@ func (r *QzdbReader) LookupIds(rowID uint32) *RowIds {
 // GetVersion 返回 Metadata 版本；无则返回 ""。
 func (r *QzdbReader) GetVersion() string {
 	if s := r.snapshot(); s != nil {
-			return s.version
+		return s.version
 	}
 	return ""
 }
@@ -1394,7 +1416,7 @@ func (r *QzdbReader) Version() string { return r.GetVersion() }
 // GetDataMonth 返回数据期号 "yyyy-MM"。
 func (r *QzdbReader) GetDataMonth() string {
 	if s := r.snapshot(); s != nil {
-			return s.dataMonth
+		return s.dataMonth
 	}
 	return ""
 }
@@ -1402,7 +1424,7 @@ func (r *QzdbReader) GetDataMonth() string {
 // GetEdition 返回版本档次（std/pro/asn/max/ult）。
 func (r *QzdbReader) GetEdition() string {
 	if s := r.snapshot(); s != nil {
-			return s.edition
+		return s.edition
 	}
 	return ""
 }
@@ -1411,7 +1433,7 @@ func (r *QzdbReader) GetEdition() string {
 // bit0=std, bit1=asn, bit2=pro, bit3=max, bit4=ult（FORMAT §3.1）。
 func (r *QzdbReader) GetVersionMask() uint16 {
 	if s := r.snapshot(); s != nil {
-			return s.versionMask
+		return s.versionMask
 	}
 	return 0
 }
@@ -1420,7 +1442,7 @@ func (r *QzdbReader) GetVersionMask() uint16 {
 // version_mask | metadata | inferred | unknown。
 func (r *QzdbReader) GetEditionSource() string {
 	if s := r.snapshot(); s != nil {
-			return s.editionSource
+		return s.editionSource
 	}
 	return EditionSourceUnknown
 }
@@ -1431,7 +1453,7 @@ func (r *QzdbReader) GetEditionSource() string {
 // 档次补上规范表；synthetic 表示两者都没有，名字只是位置占位符，按名取值无意义。
 func (r *QzdbReader) GetFieldNamesSource() string {
 	if s := r.snapshot(); s != nil {
-			return s.fieldNamesSource
+		return s.fieldNamesSource
 	}
 	return FieldNamesSourceSynthetic
 }
@@ -1448,7 +1470,7 @@ func (r *QzdbReader) GetScope() string {
 // GetBuildTime 返回构建日期 "yyyy-MM-dd"。
 func (r *QzdbReader) GetBuildTime() string {
 	if s := r.snapshot(); s != nil {
-			return s.buildTimeStr
+		return s.buildTimeStr
 	}
 	return ""
 }
@@ -1456,7 +1478,7 @@ func (r *QzdbReader) GetBuildTime() string {
 // GetDescription 返回 Metadata 描述；无则返回 ""。
 func (r *QzdbReader) GetDescription() string {
 	if s := r.snapshot(); s != nil {
-			return s.description
+		return s.description
 	}
 	return ""
 }
@@ -1464,7 +1486,7 @@ func (r *QzdbReader) GetDescription() string {
 // GetFileHash 返回文件 CRC32 十六进制字符串（8 位小写）。
 func (r *QzdbReader) GetFileHash() string {
 	if s := r.snapshot(); s != nil {
-			return s.fileHashHex()
+		return s.fileHashHex()
 	}
 	return ""
 }
@@ -1472,9 +1494,7 @@ func (r *QzdbReader) GetFileHash() string {
 // GetFieldNames 返回当前版本组字段名。
 func (r *QzdbReader) GetFieldNames() []string {
 	if s := r.snapshot(); s != nil {
-			out := make([]string, len(s.fieldNames))
-		copy(out, s.fieldNames)
-		return out
+		return slices.Clone(s.fieldNames)
 	}
 	return nil
 }
@@ -1504,7 +1524,7 @@ func (r *QzdbReader) VerifyCRC() bool {
 // GetGroupCount 返回版本组数量。
 func (r *QzdbReader) GetGroupCount() int {
 	if s := r.snapshot(); s != nil {
-			return s.actualGroups
+		return s.actualGroups
 	}
 	return 0
 }
@@ -1512,7 +1532,7 @@ func (r *QzdbReader) GetGroupCount() int {
 // GetPoolCount 返回 Header poolCount。
 func (r *QzdbReader) GetPoolCount() int {
 	if s := r.snapshot(); s != nil {
-			return s.poolCount
+		return s.poolCount
 	}
 	return 0
 }
@@ -1523,7 +1543,7 @@ func (r *QzdbReader) PoolCount() int { return r.GetPoolCount() }
 // GetGroupIndex 返回当前版本组索引。
 func (r *QzdbReader) GetGroupIndex() int {
 	if s := r.snapshot(); s != nil {
-			return s.groupIndex
+		return s.groupIndex
 	}
 	return 0
 }
@@ -1615,6 +1635,3 @@ func buildSnapshotFromBytes(b []byte, groupIndex int, verifyCrc bool) (*Snapshot
 	copy(cp, b)
 	return buildSnapshot(cp, nil, groupIndex, verifyCrc)
 }
-
-// 确保 errors 被引用（兼容旧代码可能的用法）。
-var _ = errors.New
