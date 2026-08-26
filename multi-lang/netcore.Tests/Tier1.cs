@@ -16,6 +16,7 @@ class Program
         BP = LocateTestData();
         Console.WriteLine("=== QZDB C# SDK Full Test Suite (QZDB_TEST_SPECIFICATION.md) ===");
         RunTier1();
+        IpStrictnessRegression();
         RunTier2();
         RunTier3();
         GoldenTests.Run();
@@ -575,6 +576,32 @@ class Program
         catch (QzdbException e)
         {
             return e.ErrorCode == ErrorCode.InvalidIp;
+        }
+    }
+
+    // IP 解析严格性回归（缺陷类：嵌入 IPv4 点分四元组必须位于 '::' 右侧；
+    // "1.2.3.4::" / "2001:db8:1.2.3.4::" 这类 '::' 右侧为空的输入必须拒绝，
+    // 与 Go netip.ParseAddr 行为一致）。走生产解析路径 QzdbReader.ParseIp。
+    static void IpStrictnessRegression()
+    {
+        Console.WriteLine("\n--- IP strictness regression (10-row table) ---");
+        var cases = new (string ip, bool accept)[]
+        {
+            ("0.0.0.0::", false),
+            ("1.2.3.4::", false),
+            ("2001:db8:1.2.3.4::", false),
+            ("::1.2.3.4", true),
+            ("2001:db8::1.2.3.4", true),
+            ("1::2.3.4.5", true),
+            ("114.114.114.114", true),
+            ("::ffff:7272:7272", true),
+            ("fe80::1%eth0", false),
+            ("1::2::3", false),
+        };
+        foreach (var (ip, accept) in cases)
+        {
+            bool got = QzdbReader.ParseIp(ip, out _, out _, out _, out _);
+            T1(got == accept, $"IP strictness: {ip} => {(accept ? "ACCEPT" : "REJECT")}");
         }
     }
 }
