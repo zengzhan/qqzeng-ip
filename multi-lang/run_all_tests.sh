@@ -151,6 +151,14 @@ if command -v gcc &> /dev/null || command -v clang &> /dev/null; then
     else
         run_test "C-TlvMeta" "./tlv_meta_test" "c" "TLV_META_C_OK"
     fi
+    # IP 解析严格性契约（缺陷审计 + 回归守卫；include 源文件以触达静态 fast_parse_ip）
+    if ! (cd c && $CC -O2 -o ip_strict_test ip_strict_test.c -lm); then
+        echo "✗ C-IpStrict (compile failed)" > "$RESULTS_DIR/C-IpStrict.result.status"
+        TEST_NAMES+=("C-IpStrict")
+        TEST_PIDS+=(0)
+    else
+        run_test "C-IpStrict" "./ip_strict_test" "c" "IP_STRICT_OK"
+    fi
 fi
 
 # Java (v2.4 API: com.qqzeng.qzdb.QzdbReader + QzdbReaderTest)

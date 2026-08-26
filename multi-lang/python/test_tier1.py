@@ -165,6 +165,21 @@ if os.path.exists(STD):
     check(r.find('223.5.5.5') is None, 'query after close is safe (None)')
     r.close()  # idempotent
 
+# ── 10. Embedded-IPv4 strictness (port of Go netip reject rule) ────
+section('embedded-v4 strictness')
+# 内嵌 IPv4 必须位于地址末尾；"<groups>:<v4>::"（v4 落在 "::" 之前）属非法地址，须拒绝。
+_embed_reject = ['0.0.0.0::', '1.2.3.4::', '2001:db8:1.2.3.4::']
+for ip in _embed_reject:
+    check(qzdb._fast_parse_ip(ip) is None, f'embedded-v4-before-gap rejected: {ip!r}')
+# 合法形态仍须接受（v4 映射降级 / 普通 v4 / 普通 v6）
+_embed_accept = ['::1.2.3.4', '2001:db8::1.2.3.4', '1::2.3.4.5',
+                 '114.114.114.114', '::ffff:7272:7272']
+for ip in _embed_accept:
+    check(qzdb._fast_parse_ip(ip) is not None, f'valid form accepted: {ip!r}')
+# 其它既有拒绝项不受影响
+check(qzdb._fast_parse_ip('fe80::1%eth0') is None, 'zone-id still rejected')
+check(qzdb._fast_parse_ip('1::2::3') is None, 'double-gap still rejected')
+
 # ── extra: batch / stream / registry / chained ────────────────────
 section('batch / stream / registry / chained')
 if os.path.exists(STD):

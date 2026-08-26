@@ -258,6 +258,22 @@ public class QzdbReaderTest {
                     QzdbReader.parseIPv6Bytes("::ffff:102:304")), "dotted == hex tail");
         });
 
+        test("P12. IP 解析严格性回归（嵌入 IPv4 点分四元组必须位于 '::' 右侧）", () -> {
+            // 缺陷类：形如 "1.2.3.4::" / "2001:db8:1.2.3.4::" 的 '::' 右侧为空、
+            // 嵌入 IPv4 点分四元组落在左侧末组的输入必须拒绝（与 Go netip.ParseAddr 一致）。
+            // 同时守护既有合法形态：v4-mapped 降级、末尾嵌入 v4、纯 v4、zone/双冒号拒绝。
+            assertThrowsInvalidIp(() -> QzdbReader.parseIPv6Bytes("0.0.0.0::"), "0.0.0.0:: reject");
+            assertThrowsInvalidIp(() -> QzdbReader.parseIPv6Bytes("1.2.3.4::"), "1.2.3.4:: reject");
+            assertThrowsInvalidIp(() -> QzdbReader.parseIPv6Bytes("2001:db8:1.2.3.4::"), "2001:db8:1.2.3.4:: reject");
+            assertParseAccepts(() -> QzdbReader.parseIPv6Bytes("::1.2.3.4"), "::1.2.3.4 accept");
+            assertParseAccepts(() -> QzdbReader.parseIPv6Bytes("2001:db8::1.2.3.4"), "2001:db8::1.2.3.4 accept");
+            assertParseAccepts(() -> QzdbReader.parseIPv6Bytes("1::2.3.4.5"), "1::2.3.4.5 accept");
+            assertParseAccepts(() -> QzdbReader.parseIPv4Uint("114.114.114.114"), "114.114.114.114 accept");
+            assertParseAccepts(() -> QzdbReader.parseIPv6Bytes("::ffff:7272:7272"), "::ffff:7272:7272 accept");
+            assertThrowsInvalidIp(() -> QzdbReader.parseIPv6Bytes("fe80::1%eth0"), "fe80::1%eth0 reject");
+            assertThrowsInvalidIp(() -> QzdbReader.parseIPv6Bytes("1::2::3"), "1::2::3 reject");
+        });
+
         test("P11. GeoInfo 连字符/下划线归一化 + 空值安全（§2）", () -> {
             GeoInfo g = new GeoInfo(new String[]{"country_code"}, new String[]{"CN"});
             assertEquals("CN", g.get("country_code"), "underscore");
@@ -851,6 +867,16 @@ public class QzdbReaderTest {
             if (e.getErrorCode() != ErrorCode.INVALID_IP) {
                 throw new AssertionError("expected INVALID_IP but got " + e.getErrorCode() + ": " + msg);
             }
+        }
+    }
+
+    /** 断言生产解析路径接受该输入（不抛异常）。用于守护既有合法 IP 形态不被误伤。 */
+    private static void assertParseAccepts(Runnable r, String msg) {
+        assertions++;
+        try {
+            r.run();
+        } catch (Throwable t) {
+            throw new AssertionError("expected parse to accept but threw: " + msg + " -> " + t);
         }
     }
 

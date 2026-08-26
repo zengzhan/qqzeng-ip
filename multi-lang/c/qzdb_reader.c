@@ -1025,6 +1025,11 @@ static int fast_parse_ip(const char* s, parse_result_t* res) {
         for (int j = 0; allg[last][j]; j++) { if (allg[last][j] == '.') { has_dot = 1; break; } }
         if (has_dot) { if (!fast_parse_ipv4(allg[last], &v4_int)) return 0; has_v4 = 1; ng--; }
     }
+    /* 缺陷修复：嵌入 IPv4 落在左侧分组、右侧 `::` 后为空（如 `1.2.3.4::`、
+     * `0.0.0.0::`、`2001:db8:1.2.3.4::`）属非法形态，Go netip.ParseAddr 与
+     * Go SDK 均拒绝；此处等价拒绝。合法形态（如 `::1.2.3.4`、右侧分组含
+     * 嵌入 v4）不受影响，因为此时 rg_count > 0。 */
+    if (has_v4 && dc_ptr && rg_count == 0) return 0;
     int v4_slots = has_v4 ? 2 : 0;
     if (dc_ptr) { if (ng + v4_slots > 7) return 0; } else { if (ng + v4_slots != 8) return 0; }
     for (int i = 0; i < ng; i++) { int gl = 0; while (allg[i][gl]) gl++;

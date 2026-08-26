@@ -2285,6 +2285,13 @@ fn parse_ip(s: &str) -> Option<ParsedIp> {
             allg.pop();
         }
     }
+    // 缺陷修复：嵌入 IPv4 落在左侧分组、右侧 `::` 后为空（如 `1.2.3.4::`、
+    // `0.0.0.0::`、`2001:db8:1.2.3.4::`）属非法形态，Go netip.ParseAddr 与
+    // Go SDK 均拒绝；此处等价拒绝。合法形态（如 `::1.2.3.4`、右侧分组含
+    // 嵌入 v4）不受影响，因为此时 rg 非空。
+    if has_v4 && dc.is_some() && rg.is_empty() {
+        return None;
+    }
     let ng = allg.len();
     let v4_slots: usize = if has_v4 { 2 } else { 0 };
     if dc.is_some() {
@@ -3071,6 +3078,7 @@ fn merge_geo(base: &GeoInfo, overlay: &GeoInfo, mode: ChainMode) -> GeoInfo {
 #[cfg(test)]
 mod tests {
     use super::fmt_native_float;
+    use crate::parse_ip;
 
     #[test]
     fn t_fmt_native_float_whole_number() {
@@ -3115,5 +3123,33 @@ mod tests {
         const E300: &str = "1000000000000000052504760255204420248704468581108159154915854115511802457988908195786371375080447864043704443832883878176942523235360430575644792184786706982848387200926575803737830233794788090059368953234970799945081119038967640880074652742780142494579258788820056842838115669472196386865459400540160";
         assert_eq!(fmt_native_float(1e300), E300);
         assert_eq!(fmt_native_float(-1e300), format!("-{}", E300));
+    }
+
+    /// IP 解析严格性契约（缺陷审计 + 回归守卫）：
+    /// 行 1-3 为修复目标——嵌入 IPv4 落在左侧分组、`::` 右侧为空（如 `1.2.3.4::`、
+    /// `0.0.0.0::`、`2001:db8:1.2.3.4::`），Go netip.ParseAddr 与 Go SDK 均拒绝；
+    /// 行 4-10 为既有不变量，必须保持不变（v4-mapped 降级、zone、双 gap 等）。
+    #[test]
+    fn t_parse_ip_strictness_contract() {
+        let accept = [
+            "::1.2.3.4",
+            "2001:db8::1.2.3.4",
+            "1::2.3.4.5",
+            "114.114.114.114",
+            "::ffff:7272:7272",
+        ];
+        let reject = [
+            "0.0.0.0::",
+            "1.2.3.4::",
+            "2001:db8:1.2.3.4::",
+            "fe80::1%eth0",
+            "1::2::3",
+        ];
+        for s in accept {
+            assert!(parse_ip(s).is_some(), "expected ACCEPT: {}", s);
+        }
+        for s in reject {
+            assert!(parse_ip(s).is_none(), "expected REJECT: {}", s);
+        }
     }
 }

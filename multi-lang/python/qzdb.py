@@ -213,6 +213,8 @@ def _fast_parse_ipv6(s):
     allg = lg + rg
     has_v4 = False
     v4_int = 0
+    # 记录右段组数（v4 提取后会改动 rg/lg，故先留存原始长度）
+    rg_len = len(rg)
     if allg and '.' in allg[-1]:
         vr = _fast_parse_ipv4(allg[-1])
         if vr is None:
@@ -225,6 +227,10 @@ def _fast_parse_ipv6(s):
             rg.pop()
         else:
             lg.pop()
+    # 内嵌 IPv4 必须位于地址末尾（最后 32 位）。若带 "::" 压缩且 v4 落在 "::" 之前
+    # （rgt 为空，即 "a.b.c.d::" 形态），属于非法地址，netip 同样拒绝，这里显式拒绝。
+    if has_v4 and dc >= 0 and rg_len == 0:
+        return None
     ng = len(allg)
     v4_slots = 2 if has_v4 else 0
     if dc >= 0:

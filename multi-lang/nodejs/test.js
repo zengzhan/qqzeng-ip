@@ -52,4 +52,48 @@ function main() {
 }
 
 main();
+runEmbeddedV4StrictnessTest();
 console.log('TEST_PASS');
+
+// ── 内嵌 IPv4 严格性回归（对齐 Go netip 拒绝规则）──
+// 通过 vm 模块检查直接访问内部 fastParseIp（该符号未从模块导出）。
+function runEmbeddedV4StrictnessTest() {
+    const vm = require('vm');
+    const fs = require('fs');
+    const src = fs.readFileSync(path.join(__dirname, 'qzdb.js'), 'utf8');
+    const sandbox = {
+        require, module: { exports: {} }, exports: {}, console, Buffer,
+        process, __dirname, setTimeout, clearTimeout, TextDecoder, TextEncoder,
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(src, sandbox);
+    const fastParseIp = sandbox.fastParseIp;
+    if (typeof fastParseIp !== 'function') {
+        console.log('EMBEDDED_V4_TEST_SKIP: fastParseIp not inspectable');
+        return;
+    }
+    // 内嵌 IPv4 必须位于地址末尾；"<groups>:<v4>::"（v4 落在 "::" 之前）属非法地址，须拒绝。
+    const reject = ['0.0.0.0::', '1.2.3.4::', '2001:db8:1.2.3.4::'];
+    const accept = ['::1.2.3.4', '2001:db8::1.2.3.4', '1::2.3.4.5',
+                    '114.114.114.114', '::ffff:7272:7272'];
+    let fails = 0;
+    for (const ip of reject) {
+        if (fastParseIp(ip) !== null) {
+            console.log(`  FAIL: embedded-v4-before-gap should reject: ${ip}`);
+            fails++;
+        }
+    }
+    for (const ip of accept) {
+        if (fastParseIp(ip) === null) {
+            console.log(`  FAIL: valid form should accept: ${ip}`);
+            fails++;
+        }
+    }
+    if (fastParseIp('fe80::1%eth0') !== null) { console.log('  FAIL: zone-id should reject'); fails++; }
+    if (fastParseIp('1::2::3') !== null) { console.log('  FAIL: double-gap should reject'); fails++; }
+    if (fails > 0) {
+        console.log(`EMBEDDED_V4_TEST_FAIL: ${fails} failures`);
+        process.exit(1);
+    }
+    console.log('EMBEDDED_V4_TEST_PASS');
+}
