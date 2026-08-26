@@ -475,3 +475,5 @@ node tier3_concurrent.js        # 并发安全验证
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
+
+<!-- commit: nodejs: Node.js SDK（BigInt 偏移解析） sync=1787727713 -->
