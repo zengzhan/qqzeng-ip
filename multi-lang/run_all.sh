@@ -57,7 +57,9 @@ echo ""
 # which does not support associative arrays (bash 4+ only).
 LAYER_PIDS=()
 LAYER_NAMES=()
-TIMEOUT_SECS=120
+# L1 冒烟层并行编译 cargo/dotnet/java/go 多套工具链，冷缓存下合法耗时 >120s，
+# 120s 会把正常完成的层误杀为 FAIL；放宽到 300s。
+TIMEOUT_SECS=300
 FAILED_LAYERS=()
 
 run_layer() {

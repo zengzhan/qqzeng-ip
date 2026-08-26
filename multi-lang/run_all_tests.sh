@@ -66,7 +66,8 @@ run_test() {
             popd > /dev/null
         fi
         ok=1
-        if grep -q "$pass_pattern" "$result_file" 2>/dev/null; then ok=0; fi
+        # "--" 防止以 "-" 开头的通过标记（如 Go-NativeFloat 的 "--- PASS"）被 grep 当作选项
+        if grep -q -- "$pass_pattern" "$result_file" 2>/dev/null; then ok=0; fi
         # require_ec=0 时仍要求退出码为 0；require_ec=1 时仅看通过信号（容忍已知差异导致的非 0 退出）
         if [ "$require_ec" = "0" ] && [ "$ec" -ne 0 ]; then ok=1; fi
         if [ "$ok" -eq 0 ]; then

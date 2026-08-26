@@ -490,9 +490,11 @@ def main():
     total_failed = 0
     all_mismatches = []
 
-    # 测试所有数据库
+    # 测试所有正式数据库；跳过隐藏文件（tier1 敌对向量测试会在 data/ 落盘
+    # .tier1_bad*.qzdb 等故意损坏夹具，SDK 对其 Fail-Closed 拒载是预期行为，
+    # 不能因此中断整体分析）。
     for db_file in sorted(os.listdir(DATA_DIR)):
-        if not db_file.endswith('.qzdb'):
+        if not db_file.endswith('.qzdb') or db_file.startswith('.'):
             continue
         db_path = os.path.join(DATA_DIR, db_file)
         p, f, m = run_comprehensive_test(db_path)
