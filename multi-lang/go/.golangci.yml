@@ -1,25 +1,31 @@
+# qzdb Go SDK golangci-lint 配置
+# 目标状态：gofmt / govet / staticcheck 干净（与并发现代化后的代码库对齐）
+# 兼容 golangci-lint v1.6x
+# 说明：不启用 disable-all，保留默认 linter 集并追加下列项
+
 run:
-  go: "1.21"
-  timeout: 120s
+  timeout: 120s        # 单次扫描超时上限
+  go: "1.21"           # 目标 Go 版本
 
 linters:
+  # 在默认启用的 linter 基础上追加以下项
   enable:
     - gofmt
     - goimports
-    - golint
+    - govet
     - staticcheck
-    - gosimple
     - unused
     - ineffassign
-    - govet
-  disable-all: false
+    - errcheck
+    - revive
 
 linters-settings:
   gofmt:
-    simplify: true
-  golint:
-    min-confidence: 0
+    simplify: true     # 启用简化（如冗余类型转换、冗余括号）
+  revive:
+    # 仅设置最小严重级别，不自定义规则集（沿用 revive 默认规则）
+    severity: warning
 
 issues:
-  exclude-useful: false
-  max-issues-per-linter: 50
+  max-issues-per-linter: 50   # 单个 linter 最多报告 50 条
+  max-same-issues: 0          # 同一问题重复次数不限制（0 = 不限制）
