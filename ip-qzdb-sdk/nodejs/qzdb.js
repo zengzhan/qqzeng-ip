@@ -1894,6 +1894,9 @@ function fastParseIp(ip) {
     hasV4 = true;
     allg.length = last;
   }
+  // 内嵌 IPv4 必须位于地址末尾（最后 32 位）。若带 "::" 压缩且 v4 落在 "::" 之前
+  // （rgt 为空，即 "a.b.c.d::" 形态），属于非法地址，netip 同样拒绝，这里显式拒绝。
+  if (hasV4 && dc >= 0 && rg.length === 0) return null;
   const ng = allg.length;
   const v4Slots = hasV4 ? 2 : 0;
   if (dc >= 0) {

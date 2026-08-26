@@ -1,15 +1,18 @@
 package qzdb
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // UsageType 表示 IP 网络使用场景类型。
 // 包含官方 21 个已知场景；未知场景安全兜底（不崩溃）。
 type UsageType struct {
-	raw        string
-	displayZh  string
-	displayEn  string
+	raw         string
+	displayZh   string
+	displayEn   string
 	description string
-	known      bool
+	known       bool
 }
 
 // RawValue 原始编码字符串（如 "Broadband"、"Cloud"）。
@@ -85,7 +88,5 @@ func ParseUsageType(raw string) UsageType {
 
 // KnownUsageTypes 返回全部 21 个官方已知场景（只读）。
 func KnownUsageTypes() []UsageType {
-	out := make([]UsageType, len(knownUsageTypes))
-	copy(out, knownUsageTypes)
-	return out
+	return slices.Clone(knownUsageTypes)
 }

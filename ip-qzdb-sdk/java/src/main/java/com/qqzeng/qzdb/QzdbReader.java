@@ -1652,6 +1652,13 @@ public class QzdbReader implements AutoCloseable {
             else lg = java.util.Arrays.copyOf(lg, lg.length - 1);
         }
 
+        // 缺陷修复：嵌入 IPv4 点分四元组必须位于 '::' 压缩缺口的右侧（地址末尾）。
+        // 若 '::' 存在且右侧为空，则 v4 只能落在左侧末组，形如 "1.2.3.4::" / "2001:db8:1.2.3.4::"，
+        // 这类输入非法（Go netip.ParseAddr 同样拒绝），必须拒绝。
+        if (hasV4 && dc >= 0 && right.isEmpty()) {
+            throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv6 format: " + s);
+        }
+
         int ng = lg.length + rg.length;
         int v4Slots = hasV4 ? 2 : 0;
         for (String g : lg) validateHexGroup(g, s);

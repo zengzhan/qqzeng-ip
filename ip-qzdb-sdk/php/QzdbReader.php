@@ -2493,6 +2493,9 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             $hasV4 = true;
             array_pop($allg);
         }
+        // 内嵌 IPv4 必须位于地址末尾（最后 32 位）。若带 "::" 压缩且 v4 落在 "::" 之前
+        // （rgt 为空，即 "a.b.c.d::" 形态），属于非法地址，netip 同样拒绝，这里显式拒绝。
+        if ($hasV4 && $dc !== false && count($rg) === 0) return null;
         $ng = count($allg);
         $v4Slots = $hasV4 ? 2 : 0;
         if ($dc !== false) {

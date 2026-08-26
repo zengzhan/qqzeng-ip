@@ -373,6 +373,8 @@ if qe, ok := err.(*qzdb.QzdbError); ok {
 - **per-snapshot 有界无锁缓存**：以 `row_id` 为键、开放寻址的 `GeoInfo` 缓存（默认 2^18 槽，有界内存）。缓存命中趋近 **零分配**；碰撞只重算、**绝不返回错值**。
 - **归一化索引加载期构建一次**：字段名 → 索引的归一化映射在加载期完成，查询期仅 O(1) 哈希。
 - **零拷贝解析**：优先 `mmap` 只读映射；原生浮点字段在解码时即格式化为 6 位小数字符串，`ToPipe()` 直接拼接，避免查询期重复解析与分配。
+- **Trie 热路径直接小端加载**：检索热路径对节点字段执行直接小端（little-endian）读取，不再做逐节点边界检查；安全性由加载期的段范围（section-extent）校验保证，Header 的 Fail-Closed 检查仍为权威防线。
+- **`escapeJson` 零分配快路径**：对纯文本值（不含需转义字符）新增零分配快速分支，避免不必要的缓冲分配。
 
 > 基准示例见 `cmd/bench`；典型单线程查询可达百万级 QPS，16 线程并发无锁线性扩展、race-free。
 
@@ -394,12 +396,24 @@ cd go
 go test ./...                 # 全量：Tier1 + Tier2(golden) + Tier3(并发/性能) + chain_merge + README API
 go test -run TestCSVOracle ./qzdb/...   # Tier0 独立真值校验（对源 CSV）
 go vet ./...                 # 静态检查
+go test -run '^$' -fuzz FuzzFastParseIp -fuzztime 30s ./qzdb/   # IP 解析器模糊测试，netip 差分对拍
+go test -bench . -benchmem ./qzdb/   # 包内基准测试（含内存分配统计）
+go test -race ./qzdb/   # 竞态检测（并发查询 / 热更新无撕裂读）
 ```
 
 - **Tier0（CSV 真值）**：`csv_oracle_test.go` 以 `.qzdb` 的源数据 `test_data_202608/{std,ult}/china/*_range.csv`（带 `start_ip_num/end_ip_num` + 地理字段）为独立裁判，全局随机 + 区间内随机共约 18000 样本比对 `country/province/city/isp`，**0 失配**。注意：`TestGoldenTier2` 的向量由被测代码自身生成，只证确定性 / 跨语言一致；本测试证明"返回正确答案"。源 CSV 缺失时优雅跳过。
 - **Tier1**：严格 IP 解析（含 SSRF 防护）、Mapped 降级、字段归一化、UsageType 21 + 未知兜底、损坏文件 Fail-Closed、CRC 强制、无锁 Reload、CIDR 反查、资源释放、Find 语义、浮点 6 位格式、字段投影。
 - **Tier2**：加载 `qqzeng_ip_std_china.qzdb` 与 `qqzeng_ip_ult_china.qzdb`，对 `golden_vectors.json` 断言 `Find(ip).ToPipe() == expected`，**必须 0 失败**。
 - **Tier3**：`TestTier3ConcurrentSafety`（多 goroutine 查询 + 热更新无撕裂读）、`TestTier3DualStackPerformance`（双栈吞吐基准）。
+
+---
+
+## 代码风格
+
+- **强制 `gofmt`**：所有提交须通过 `gofmt -l` 零差异；导入分组与排序由 `goimports` 统一。
+- **遵循 JetBrains go-modern-guidelines 的 Go 1.21 子集**：优先使用内置 `min`/`max`、`slices`/`maps`/`cmp`、`strings.Cut`、`sync.OnceValue`、`any` 等现代标准库能力，避免手写样板。
+- **静态检查以仓库内 `.golangci.yml` 为准**：以 `staticcheck` + `revive` 为权威门禁，不另行引入自定义规则集。
+- **Fail-Closed 优先**：边界与错误路径一律失败即报错，绝不返回可能错误的数据。
 
 ---
 
@@ -422,5 +436,3 @@ go/
 │   ├── *_test.go      # Tier1 单测 + Tier2 黄金校验 + Tier0 CSV 真值 + Tier3 并发/性能
 └── cmd/               # demo / batch / bench / dump / regress 等示例
 ```
-
-<!-- commit: go: Go SDK（跨平台 mmap，无锁并发查询） sync=1787464212 -->

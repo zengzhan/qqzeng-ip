@@ -2,6 +2,7 @@ package qzdb
 
 import (
 	"net/netip"
+	"slices"
 	"sync"
 )
 
@@ -70,9 +71,7 @@ func (c *ChainedReader) Add(r *QzdbReader) {
 func (c *ChainedReader) Readers() []*QzdbReader {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	out := make([]*QzdbReader, len(c.readers))
-	copy(out, c.readers)
-	return out
+	return slices.Clone(c.readers)
 }
 
 // Editions 返回每个成员库各自的 edition（按注册顺序）。
@@ -312,6 +311,7 @@ func (c *ChainedReader) FindFields(ip string, fields []string) (*GeoInfo, error)
 }
 
 // FindBatch 顺序批量查询（保留三态语义，内部不起线程池）。
+// 通过 batchEntry 收敛：非法 IP 标记 Error=INVALID_PARAM，与 QzdbReader.FindBatch 一致。
 func (c *ChainedReader) FindBatch(ips []string) []BatchResult {
 	if ips == nil {
 		return nil
@@ -319,7 +319,7 @@ func (c *ChainedReader) FindBatch(ips []string) []BatchResult {
 	out := make([]BatchResult, 0, len(ips))
 	for _, ip := range ips {
 		g, err := c.Find(ip)
-		out = append(out, BatchResult{IP: ip, GeoInfo: g, Error: err})
+		out = append(out, batchEntry(ip, g, err))
 	}
 	return out
 }
@@ -332,7 +332,7 @@ func (c *ChainedReader) FindBatchFields(ips []string, fields []string) []BatchRe
 	out := make([]BatchResult, 0, len(ips))
 	for _, ip := range ips {
 		g, err := c.FindFields(ip, fields)
-		out = append(out, BatchResult{IP: ip, GeoInfo: g, Error: err})
+		out = append(out, batchEntry(ip, g, err))
 	}
 	return out
 }
@@ -381,11 +381,8 @@ func (reg *QzdbRegistry) Register(name string, r *QzdbReader) {
 	reg.mu.Lock()
 	defer reg.mu.Unlock()
 	if old, exists := reg.readers[name]; exists {
-		for i, cur := range reg.order {
-			if cur == old {
-				reg.order[i] = r
-				break
-			}
+		if i := slices.Index(reg.order, old); i >= 0 {
+			reg.order[i] = r
 		}
 		reg.retireLocked(old)
 	} else {
@@ -405,17 +402,11 @@ func (reg *QzdbRegistry) Unregister(name string) {
 		return
 	}
 	delete(reg.readers, name)
-	for i, n := range reg.names {
-		if n == name {
-			reg.names = append(reg.names[:i], reg.names[i+1:]...)
-			break
-		}
+	if i := slices.Index(reg.names, name); i >= 0 {
+		reg.names = slices.Delete(reg.names, i, i+1)
 	}
-	for i, cur := range reg.order {
-		if cur == old {
-			reg.order = append(reg.order[:i], reg.order[i+1:]...)
-			break
-		}
+	if i := slices.Index(reg.order, old); i >= 0 {
+		reg.order = slices.Delete(reg.order, i, i+1)
 	}
 	reg.retireLocked(old)
 }
@@ -470,9 +461,7 @@ func (reg *QzdbRegistry) Get(name string) *QzdbReader {
 func (reg *QzdbRegistry) Names() []string {
 	reg.mu.RLock()
 	defer reg.mu.RUnlock()
-	out := make([]string, len(reg.names))
-	copy(out, reg.names)
-	return out
+	return slices.Clone(reg.names)
 }
 
 // Find 按注册顺序查询，返回首个非空的 GeoInfo；全未命中返回 (nil, nil)。

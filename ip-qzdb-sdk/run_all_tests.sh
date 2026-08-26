@@ -66,7 +66,8 @@ run_test() {
             popd > /dev/null
         fi
         ok=1
-        if grep -q "$pass_pattern" "$result_file" 2>/dev/null; then ok=0; fi
+        # "--" 防止以 "-" 开头的通过标记（如 Go-NativeFloat 的 "--- PASS"）被 grep 当作选项
+        if grep -q -- "$pass_pattern" "$result_file" 2>/dev/null; then ok=0; fi
         # require_ec=0 时仍要求退出码为 0；require_ec=1 时仅看通过信号（容忍已知差异导致的非 0 退出）
         if [ "$require_ec" = "0" ] && [ "$ec" -ne 0 ]; then ok=1; fi
         if [ "$ok" -eq 0 ]; then
@@ -149,6 +150,14 @@ if command -v gcc &> /dev/null || command -v clang &> /dev/null; then
         TEST_PIDS+=(0)
     else
         run_test "C-TlvMeta" "./tlv_meta_test" "c" "TLV_META_C_OK"
+    fi
+    # IP 解析严格性契约（缺陷审计 + 回归守卫；include 源文件以触达静态 fast_parse_ip）
+    if ! (cd c && $CC -O2 -o ip_strict_test ip_strict_test.c -lm); then
+        echo "✗ C-IpStrict (compile failed)" > "$RESULTS_DIR/C-IpStrict.result.status"
+        TEST_NAMES+=("C-IpStrict")
+        TEST_PIDS+=(0)
+    else
+        run_test "C-IpStrict" "./ip_strict_test" "c" "IP_STRICT_OK"
     fi
 fi
 
