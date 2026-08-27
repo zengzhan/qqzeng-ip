@@ -1,12 +1,23 @@
 namespace QQZeng.Qzdb;
 
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 
+/// <summary>Combines multiple <see cref="QzdbReader"/> instances into one logical query surface, with Fallback / Merge / MergeOverride strategies.</summary>
 public sealed class ChainedReader : IDisposable
 {
-    public enum Mode { Fallback, Merge, MergeOverride }
+    /// <summary>Strategy used to combine results from the chained readers.</summary>
+    public enum Mode
+    {
+        /// <summary>Returns the first reader's hit, in order; later readers are consulted only on a miss.</summary>
+        Fallback,
+        /// <summary>Merges all hits; a later reader fills only fields left empty by earlier readers (earlier wins).</summary>
+        Merge,
+        /// <summary>Merges all hits; a later reader's value overrides an earlier reader's value (later wins).</summary>
+        MergeOverride
+    }
 
-    private readonly IReadOnlyList<QzdbReader> _readers;
+    private readonly ReadOnlyCollection<QzdbReader> _readers;
     private readonly Mode _mode;
 
     private ChainedReader(QzdbReader[] readers, Mode mode)
@@ -17,12 +28,17 @@ public sealed class ChainedReader : IDisposable
         _mode = mode;
     }
 
+    /// <summary>Creates a Fallback-mode chained reader over the given readers.</summary>
     public static ChainedReader Chain(params QzdbReader[] readers) => new(readers, Mode.Fallback);
+    /// <summary>Creates a Merge-mode chained reader over the given readers.</summary>
     public static ChainedReader ChainMerge(params QzdbReader[] readers) => new(readers, Mode.Merge);
+    /// <summary>Creates a MergeOverride-mode chained reader over the given readers.</summary>
     public static ChainedReader ChainMergeOverride(params QzdbReader[] readers) => new(readers, Mode.MergeOverride);
 
+    /// <summary>Queries the chain for an IP string (per-mode semantics; see <see cref="QzdbReader.Find(string)"/>).</summary>
     public GeoInfo? Find(string ipStr) => Find(ipStr.AsSpan());
 
+    /// <summary>Queries the chain for an IP character span (per-mode semantics).</summary>
     public GeoInfo? Find(ReadOnlySpan<char> ipSpan)
     {
         if (_mode == Mode.Fallback)
@@ -48,6 +64,7 @@ public sealed class ChainedReader : IDisposable
         return new GeoInfo(nameArray, values.ToArray(), GeoInfo.BuildNormalizedMap(nameArray), null, takeOwnership: true);
     }
 
+    /// <summary>Queries the chain for a System.Net.IPAddress (per-mode semantics).</summary>
     public GeoInfo? Find(System.Net.IPAddress address)
     {
         ArgumentNullException.ThrowIfNull(address);
@@ -59,6 +76,7 @@ public sealed class ChainedReader : IDisposable
         return null;
     }
 
+    /// <summary>Queries the chain for raw IP bytes (4 or 16); per-mode semantics.</summary>
     public GeoInfo? Find(ReadOnlySpan<byte> ipBytes)
     {
         if (_mode == Mode.Fallback)
@@ -84,6 +102,7 @@ public sealed class ChainedReader : IDisposable
         return new GeoInfo(nameArray, values.ToArray(), GeoInfo.BuildNormalizedMap(nameArray), null, takeOwnership: true);
     }
 
+    /// <summary>Queries the chain for an IPv4 uint (per-mode semantics).</summary>
     public GeoInfo? FindUint(uint ipInt)
     {
         if (_mode == Mode.Fallback)
@@ -109,14 +128,17 @@ public sealed class ChainedReader : IDisposable
         return new GeoInfo(nameArray, values.ToArray(), GeoInfo.BuildNormalizedMap(nameArray), null, takeOwnership: true);
     }
 
+    /// <summary>Queries the chain for IP bytes; a null argument throws QzdbException(InvalidIp).</summary>
     public GeoInfo? FindBytes(byte[]? ipBytes)
     {
         if (ipBytes == null) throw new QzdbException(ErrorCode.InvalidIp, "IP bytes cannot be null");
         return Find(ipBytes.AsSpan());
     }
 
+    /// <summary>Queries the chain for selected fields of an IP string (per-mode semantics).</summary>
     public GeoInfo? FindFields(string ipStr, string[]? fields) => FindFields(ipStr.AsSpan(), fields);
 
+    /// <summary>Queries the chain for selected fields of an IP span (per-mode semantics).</summary>
     public GeoInfo? FindFields(ReadOnlySpan<char> ipSpan, string[]? fields)
     {
         if (_mode == Mode.Fallback)
@@ -142,6 +164,7 @@ public sealed class ChainedReader : IDisposable
         return new GeoInfo(nameArray, values.ToArray(), GeoInfo.BuildNormalizedMap(nameArray), null, takeOwnership: true);
     }
 
+    /// <summary>Batch query over IP strings; each result carries its three-state semantics.</summary>
     public BatchResult[] FindBatch(string[] ipStrs)
     {
         ArgumentNullException.ThrowIfNull(ipStrs);
@@ -150,8 +173,10 @@ public sealed class ChainedReader : IDisposable
         return result;
     }
 
+    /// <summary>Batch query over an enumerable of IP strings.</summary>
     public BatchResult[] FindBatch(IEnumerable<string> ipStrs) => FindBatch(ipStrs?.ToArray() ?? throw new ArgumentNullException(nameof(ipStrs)));
 
+    /// <summary>Batch query over IP strings, resolving only the given fields.</summary>
     public BatchResult[] FindBatchFields(string[] ipStrs, string[]? fields)
     {
         ArgumentNullException.ThrowIfNull(ipStrs);
@@ -160,9 +185,11 @@ public sealed class ChainedReader : IDisposable
         return result;
     }
 
+    /// <summary>Batch query over enumerables of IP strings and fields.</summary>
     public BatchResult[] FindBatchFields(IEnumerable<string> ipStrs, IEnumerable<string>? fields) =>
         FindBatchFields(ipStrs?.ToArray() ?? throw new ArgumentNullException(nameof(ipStrs)), fields?.ToArray());
 
+    /// <summary>Lazily streams batch results for an enumerable of IP strings.</summary>
     public IEnumerable<BatchResult> FindStream(IEnumerable<string> ipStrs)
     {
         if (ipStrs == null) yield break;
@@ -207,13 +234,20 @@ public sealed class ChainedReader : IDisposable
         }
     }
 
+    /// <summary>Editions of the underlying readers, in chain order.</summary>
     public string[] Editions => _readers.Select(r => r.Edition).ToArray();
+    /// <summary>Scopes of the underlying readers, in chain order.</summary>
     public string[] Scopes => _readers.Select(r => r.Scope).ToArray();
+    /// <summary>Data months of the underlying readers, in chain order.</summary>
     public string[] DataMonths => _readers.Select(r => r.DataMonth).ToArray();
+    /// <summary>Defensive copy of the underlying readers, in chain order.</summary>
     public QzdbReader[] Readers => _readers.ToArray();
 
+    /// <summary>Returns <see cref="Editions"/>.</summary>
     public string[] GetEditions() => Editions;
+    /// <summary>Returns <see cref="Scopes"/>.</summary>
     public string[] GetScopes() => Scopes;
+    /// <summary>Returns <see cref="DataMonths"/>.</summary>
     public string[] GetDataMonths() => DataMonths;
 
     /// <summary>Releases only the aggregation state; does NOT close the underlying readers (per API spec §9.4).</summary>
