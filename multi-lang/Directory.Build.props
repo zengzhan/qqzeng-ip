@@ -1,0 +1,11 @@
+<Project>
+  <PropertyGroup>
+    <!-- 共享编译选项：本文件作用于 multi-lang/ 下所有 .NET 项目（netcore / netcore.Tests / netcore.bench / netcore.samples）。
+         四个项目均声明 Nullable=enable（库与测试各自显式声明，bench/samples 原显式声明、现由本文件统一提供），
+         故 Nullable 作为共享项安全。 -->
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+</Project>

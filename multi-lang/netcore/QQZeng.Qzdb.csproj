@@ -5,18 +5,35 @@
     <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
     <OutputType>Library</OutputType>
 
-    <!-- 语言/编译选项 -->
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- 语言/编译选项（Nullable/ImplicitUsings/LangVersion/InvariantGlobalization 由 ../Directory.Build.props 统一提供） -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-    <LangVersion>latest</LangVersion>
-    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- 静态分析：显式开启最严格档位（此前仅 release notes 声称 AnalysisMode=All，实际为默认 8.0 档）。
+         AnalysisMode=All + TreatWarningsAsErrors 保证每个 CA 规则告警都必须被显式处理（修复或带理由抑制），
+         防止分析器档位在无人注意时悄悄回退。配套的逐规则开关/抑制见 netcore/.editorconfig。
+         注意：刻意【不】开启 EnforceCodeStyleInBuild —— 它会在被不同目录 ProjectReference 消费时抛出
+         大量预存的 IDE 风格规则（IDE0008/IDE0055/IDE0058/IDE0046…，均为库既有 K&R 风格），
+         且行为依赖构建目录、不可移植。风格规则按 .editorconfig 保持 suggestion（仅 IDE 提示）、
+         真正把关的是上述 CA 规则。 -->
+    <AnalysisLevel>latest</AnalysisLevel>
+    <AnalysisMode>All</AnalysisMode>
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
 
     <!-- 包、程序集与规范命名空间统一：QQZeng.Qzdb -->
     <PackageId>QQZeng.Qzdb</PackageId>
     <RootNamespace>QQZeng.Qzdb</RootNamespace>
     <AssemblyName>QQZeng.Qzdb</AssemblyName>
     <Version>1.0.6</Version>
+
+    <!--
+        SDK 内建包验证（无需额外 NuGet 包）：EnablePackageValidation + PackageValidationBaselineVersion
+        使 dotnet pack 在打包后自动运行 Microsoft.DotNet.ApiCompat 校验，把当前程序集公开 API 与
+        上一已发布基线包 1.0.5 对比——任何删除/改名/改签名的破坏性变更都会让 pack 失败。
+        基线包从 NuGet 还原（qqzeng.qzdb/1.0.5 已发布于 nuget.org）。
+    -->
+    <EnablePackageValidation>true</EnablePackageValidation>
+    <PackageValidationBaselineVersion>1.0.5</PackageValidationBaselineVersion>
     <PackageReleaseNotes>1.0.6: Flagship robustness and API consistency upgrade:
 - API consistency: Aligned LookupRowIdUint/LookupRowIdBytes with Lookup* family soft-fail convention (returns 0 after Dispose, eliminating unreachable dead-code branch).
 - Resource leak prevention: Hardened FromPath mmap lifecycle with nested try/catch layers to guarantee deterministic disposal of FileStream/MemoryMappedFile on empty (0-byte) or corrupted files (closing CA2000 leak windows).
@@ -44,6 +61,15 @@
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
     <EmbedUntrackedSources>true</EmbedUntrackedSources>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+        net8.0/net9.0 对 SDK 10 包验证工具已属"不再受支持"的框架，跨 TFM 与基线比对会产生 PKV006 噪音。
+        忽略这两个基线框架，仅对 net10.0 与基线 1.0.5 做真实 API 兼容校验。
+    -->
+    <PackageValidationBaselineFrameworkToIgnore Include="net8.0" />
+    <PackageValidationBaselineFrameworkToIgnore Include="net9.0" />
+  </ItemGroup>
 
   <ItemGroup>
     <None Include="README.md" Pack="true" PackagePath="\" />
