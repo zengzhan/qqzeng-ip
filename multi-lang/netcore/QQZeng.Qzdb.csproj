@@ -24,21 +24,21 @@
     <PackageId>QQZeng.Qzdb</PackageId>
     <RootNamespace>QQZeng.Qzdb</RootNamespace>
     <AssemblyName>QQZeng.Qzdb</AssemblyName>
-    <Version>1.0.6</Version>
+    <Version>1.0.7</Version>
 
     <!--
         SDK 内建包验证（无需额外 NuGet 包）：EnablePackageValidation + PackageValidationBaselineVersion
         使 dotnet pack 在打包后自动运行 Microsoft.DotNet.ApiCompat 校验，把当前程序集公开 API 与
-        上一已发布基线包 1.0.5 对比——任何删除/改名/改签名的破坏性变更都会让 pack 失败。
-        基线包从 NuGet 还原（qqzeng.qzdb/1.0.5 已发布于 nuget.org）。
+        上一已发布基线包 1.0.6 对比——任何删除/改名/改签名的破坏性变更都会让 pack 失败。
+        基线包从 NuGet 还原（qqzeng.qzdb/1.0.6 已发布于 nuget.org）。
     -->
     <EnablePackageValidation>true</EnablePackageValidation>
-    <PackageValidationBaselineVersion>1.0.5</PackageValidationBaselineVersion>
-    <PackageReleaseNotes>1.0.6: Flagship robustness and API consistency upgrade:
-- API consistency: Aligned LookupRowIdUint/LookupRowIdBytes with Lookup* family soft-fail convention (returns 0 after Dispose, eliminating unreachable dead-code branch).
-- Resource leak prevention: Hardened FromPath mmap lifecycle with nested try/catch layers to guarantee deterministic disposal of FileStream/MemoryMappedFile on empty (0-byte) or corrupted files (closing CA2000 leak windows).
-- Early validation: Added explicit zero-byte empty file check with descriptive QzdbException.
-- Code quality: Clean Roslyn analysis under strictest AnalysisMode=All with documented suppressions for safe deferred-disposal patterns; modernized RequireSnapshot using ObjectDisposedException.ThrowIf.</PackageReleaseNotes>
+    <PackageValidationBaselineVersion>1.0.6</PackageValidationBaselineVersion>
+    <PackageReleaseNotes>1.0.7: Add .NET 11 (net11.0) target framework support and full public API documentation:
+- net11.0: Added as a fourth target framework (net8.0;net9.0;net10.0;net11.0); System.IO.Hashing referenced explicitly (net11 targeting pack does not expose Crc32 built-in).
+- Analytics: Enabled strictest AnalysisMode=All + TreatWarningsAsErrors with documented .editorconfig suppressions; real code fixes for CA1032 (QzdbException ctors), CA1062 (GeoInfo null guard), CA1859 (ChainedReader ReadOnlyCollection); EnforceCodeStyleInBuild intentionally not enabled (non-portable under ProjectReference).
+- Package validation: baseline moved to 1.0.6; ApiCompat confirmed no breaking API change.
+- Documentation: Full XML docs for all public API members (CS1591 clean, 13KB→56KB XML).</PackageReleaseNotes>
 
     <!-- 作者 / 公司 / 描述 -->
     <Authors>QQZeng</Authors>

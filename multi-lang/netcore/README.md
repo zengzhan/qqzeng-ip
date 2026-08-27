@@ -54,7 +54,7 @@ dotnet add package QQZeng.Qzdb
 或在 `.csproj` 中直接引用：
 
 ```xml
-<PackageReference Include="QQZeng.Qzdb" Version="1.0.5" />
+<PackageReference Include="QQZeng.Qzdb" Version="1.0.7" />
 ```
 
 C# 代码统一使用命名空间：

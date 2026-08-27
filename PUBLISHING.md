@@ -4,7 +4,7 @@
 
 | 语言 | 包坐标 | 注册中心 | 包 ID |
 |------|--------|----------|-------|
-| .NET / C# | `QQZeng.Qzdb` 1.0.3 | NuGet (`nuget.org`) | `QQZeng.Qzdb` |
+| .NET / C# | `QQZeng.Qzdb` 1.0.7 | NuGet (`nuget.org`) | `QQZeng.Qzdb` |
 | Java | `com.qqzeng:qzdb` 1.0.1 | Maven Central (`repo1.maven.org`) | `com.qqzeng:qzdb` |
 
 > 包版本独立于 QZDB 数据格式版本（数据格式见 `API_CONTRACT.md`）。
@@ -13,7 +13,7 @@
 
 ## 1. .NET / NuGet 包（`QQZeng.Qzdb`）
 
-- 工程：`multi-lang/netcore/QQZeng.Qzdb.csproj`（**net8.0;net9.0;net10.0 多目标**）
+- 工程：`multi-lang/netcore/QQZeng.Qzdb.csproj`（**net8.0;net9.0;net10.0;net11.0 多目标**）
 - 包元数据：`PackageProjectUrl` / `RepositoryUrl` 指向 `https://github.com/zengzhan/qqzeng-ip`
 
 ### 1.1 本地打包
@@ -100,13 +100,13 @@ implementation 'com.qqzeng:qzdb:1.0.1'
 
 ## 3. 一致性约定
 
-- **版本**：.NET = `1.0.3`（net8.0;net9.0;net10.0 多目标），Java = `1.0.1`；升级时分别同步 `csproj` 的 `<Version>` 与 `pom.xml` 的 `<version>`。
+- **版本**：.NET = `1.0.7`（net8.0;net9.0;net10.0;net11.0 多目标），Java = `1.0.1`；升级时分别同步 `csproj` 的 `<Version>` 与 `pom.xml` 的 `<version>`。
 - **命名空间/包标识**：.NET 包 ID = `QQZeng.Qzdb`、程序集与命名空间均为 `QQZeng.Qzdb`；Java 使用 `com.qqzeng.qzdb`；作者/公司品牌统一为 `QQZeng`。
 - **NEVER push 自动执行**：以上发布步骤涉及远端写操作（NuGet push / Maven Central deploy / 打 tag），
   均需在确认凭据与仓库存在后由人工触发，CI 仅在你主动打 tag 时运行。
 
-## 4. 当前状态（2026-08-07）
+## 4. 当前状态（2026-08-28）
 
-- .NET：`QQZeng.Qzdb` `1.0.3` 首发包尚未发布，当前为 net8.0;net9.0;net10.0 多目标；发布前需完成 NuGet 包名可用性、包内容和安装验证。
+- .NET：`QQZeng.Qzdb` 已发布 1.0.0/1.0.1/1.0.2/1.0.4/1.0.5/1.0.6（nuget.org）。**待发布 1.0.7**（新增 net11.0 目标 + 严格静态分析 + 全量公开 API 文档），产物在 `multi-lang/netcore/nupkgs/QQZeng.Qzdb.1.0.7.{nupkg,snupkg}`，由人工 `dotnet nuget push` 上传。
 - Java：发布配置已就绪（`pom.xml` + workflow 已提交），待用户提供 Central token + GPG 私钥并打 `v1.0.1` tag 触发首次发布。
 - 本机无 JDK / Maven，Java 包的首次真实 `mvn` 校验留待 CI 执行。
