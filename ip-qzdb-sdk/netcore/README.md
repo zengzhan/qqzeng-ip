@@ -472,3 +472,5 @@ dotnet add package QQZeng.Qzdb --version x.y.z
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
+
+<!-- commit: netcore: C# .NET SDK（内存映射与高并发查询） sync=1787821329 -->
