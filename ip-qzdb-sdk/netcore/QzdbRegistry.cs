@@ -94,9 +94,14 @@ public sealed class QzdbRegistry
 
     public void Unregister(string name)
     {
+        // CA2000 false positive: Roslyn can't track Retire()'s custom ownership transfer
+        // (enqueue for deferred disposal / evict-oldest-and-dispose). Synchronous Dispose(old)
+        // here would reintroduce the use-after-free race documented in the class header.
+#pragma warning disable CA2000
         QzdbReader? old = null;
         lock (_gate) { _map.TryRemove(name, out old); }
         Retire(old);
+#pragma warning restore CA2000
     }
 
     /// <summary>

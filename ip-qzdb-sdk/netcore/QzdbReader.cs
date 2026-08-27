@@ -157,8 +157,8 @@ public sealed class QzdbReader : IDisposable
     private Snapshot RequireSnapshot()
     {
         var s = Volatile.Read(ref _activeSnapshot);
-        if (s == null) throw new ObjectDisposedException(nameof(QzdbReader));
-        return s;
+        ObjectDisposedException.ThrowIf(s is null, this);
+        return s!;
     }
 
     #region Builder
@@ -267,36 +267,67 @@ public sealed class QzdbReader : IDisposable
             }
         }
 
+        // CA2000: Roslyn loses track of disposal across 3-level nested try/catch + rethrow.
+        // Every exception path below has a matching Dispose (fs's own catch, or once ownership
+        // transfers to mmf/view they cascade-dispose fs). This is a known analyzer limitation.
+#pragma warning disable CA2000
         public static unsafe Snapshot FromPath(string path, int groupIndex, bool verifyCrc)
         {
             // mmap 加载：122MB 库不再整块进 LOH（GC.AllocateUninitializedArray + ReadExactly
             // 的整文件读取与拷贝一并消除），且多进程可共享物理页。
             // FromBuffer 保留 byte[] 拷贝语义（契约要求）。
+            //
+            // 资源获取顺序必须是逐层 try/catch，而不是一次性把 fs/mmf/view
+            // 都建好之后再统一 try：CreateFromFile(fs, ...) 对 0 字节文件会抛 ArgumentException，
+            // 这时 fs 的所有权还没转移给 mmf（leaveOpen:false 只在构造成功后才生效），如果不单独
+            // 包一层就会直接泄漏文件句柄；同理 CreateViewAccessor 抛异常时，mmf 已经成功持有
+            // fs 的所有权，如果 mmf 在 try 块之外创建，mmf 本身（连带它托管的 fs）也会泄漏。
             var fs = File.OpenRead(path);
-            if (fs.Length > int.MaxValue)
-            {
-                fs.Dispose();
-                throw new QzdbException(ErrorCode.Corrupted, "QZDB file is too large");
-            }
-            var len = (int)fs.Length;
-            var mmf = MemoryMappedFile.CreateFromFile(fs, null, 0, MemoryMappedFileAccess.Read,
-                HandleInheritability.None, leaveOpen: false);
-            var view = mmf.CreateViewAccessor(0, len, MemoryMappedFileAccess.Read);
-            byte* ptr = null;
             try
             {
-                view.SafeMemoryMappedViewHandle.AcquirePointer(ref ptr);
-                var manager = new MmapManager(mmf, view, ptr, len);
-                return new Snapshot(manager.Memory, manager.Pointer, manager, groupIndex, verifyCrc);
+                if (fs.Length > int.MaxValue)
+                    throw new QzdbException(ErrorCode.Corrupted, "QZDB file is too large");
+                if (fs.Length == 0)
+                    throw new QzdbException(ErrorCode.Corrupted, "QZDB file is empty");
+                var len = (int)fs.Length;
+
+                var mmf = MemoryMappedFile.CreateFromFile(fs, null, 0, MemoryMappedFileAccess.Read,
+                    HandleInheritability.None, leaveOpen: false);
+                // fs ownership transferred to mmf (leaveOpen:false). From here on,
+                // mmf.Dispose() cascades to fs; no separate fs.Dispose() needed.
+                try
+                {
+                    var view = mmf.CreateViewAccessor(0, len, MemoryMappedFileAccess.Read);
+                    byte* ptr = null;
+                    try
+                    {
+                        view.SafeMemoryMappedViewHandle.AcquirePointer(ref ptr);
+                        var manager = new MmapManager(mmf, view, ptr, len);
+                        return new Snapshot(manager.Memory, manager.Pointer, manager, groupIndex, verifyCrc);
+                    }
+                    catch
+                    {
+                        if (ptr != null) { try { view.SafeMemoryMappedViewHandle.ReleasePointer(); } catch { /* best effort */ } }
+                        view.Dispose();
+                        mmf.Dispose();
+                        throw;
+                    }
+                }
+                catch
+                {
+                    mmf.Dispose(); // cascades to fs
+                    throw;
+                }
             }
             catch
             {
-                if (ptr != null) { try { view.SafeMemoryMappedViewHandle.ReleasePointer(); } catch { /* best effort */ } }
-                view.Dispose();
-                mmf.Dispose();
+                fs.Dispose(); // covers paths where ownership never transferred to mmf;
+                              // if mmf was constructed, inner catch already disposed mmf+fs,
+                              // double-Dispose is idempotent and safe.
                 throw;
             }
         }
+#pragma warning restore CA2000
 
         /// <summary>mmap 视图的 MemoryManager：内存由 OS 映射保持稳定（天然 pinned），
         /// 句柄释放走 SafeHandle 终结器（读者不再持 Span 后由 GC 兜底，与 Go 侧
@@ -1089,7 +1120,9 @@ public sealed class QzdbReader : IDisposable
 
     public uint LookupRowIdUint(uint ipInt)
     {
-        var snap = RequireSnapshot();
+        // Lookup* family convention: soft-fail (return 0) after Dispose,
+        // not throw like Find* family. Use _activeSnapshot directly.
+        var snap = _activeSnapshot;
         return snap == null ? 0u : TrieWalkV4(snap, ipInt);
     }
 
@@ -1102,7 +1135,8 @@ public sealed class QzdbReader : IDisposable
     public uint LookupRowIdBytes(byte[]? ipBytes)
     {
         if (ipBytes == null) return 0;
-        var snap = RequireSnapshot();
+        // Same: LookupRowIdBytes belongs to the Lookup* soft-fail family.
+        var snap = _activeSnapshot;
         if (snap == null) return 0;
 
         if (ipBytes.Length == 16)
@@ -2051,7 +2085,7 @@ public sealed class QzdbReader : IDisposable
 
     #region Lifecycle
 
-    private long _reloadEpoch = 0;
+    private long _reloadEpoch;
 
     /// <summary>
     /// mmap-backed snapshot retired by the previous Reload/dispose cycle, held one
