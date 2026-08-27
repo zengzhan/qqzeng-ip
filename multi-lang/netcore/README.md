@@ -7,7 +7,7 @@
 - **规范版本**：QZDB API v2.4
 - **定位**：离线解析 `.qzdb` 二进制数据库文件，不依赖任何外部网络请求
 - **架构**：无锁快照（lock-free snapshot）——并发查询互不阻塞，`Reload` 原子切换（`Interlocked.Exchange`）
-- **目标框架**：`net8.0` / `net9.0` / `net10.0`
+- **目标框架**：`net8.0` / `net9.0` / `net10.0` / `net11.0`
 - **许可**：MIT
 
 ---
@@ -36,7 +36,7 @@
 
 | 项 | 要求 |
 |----|------|
-| .NET 运行时 | `.NET 8.0+`（.NET 8 LTS / .NET 9 / .NET 10） |
+| .NET 运行时 | `.NET 8.0+`（.NET 8 LTS / .NET 9 / .NET 10 / .NET 11） |
 | 操作系统 | Windows / Linux / macOS 均可 |
 | 数据库文件 | `.qzdb` 格式（由官方数据构建工具生成，含所需分组的二进制数据） |
 | 依赖 | 无第三方运行时依赖（零依赖） |
@@ -438,7 +438,7 @@ dotnet add package QQZeng.Qzdb --version x.y.z
 ### 13.4 兼容性注意
 
 - NuGet 包、程序集和 C# 命名空间统一为 `QQZeng.Qzdb`。
-- 目标框架支持 `net8.0` / `net9.0` / `net10.0`。
+- 目标框架支持 `net8.0` / `net9.0` / `net10.0` / `net11.0`。
 
 ---
 
@@ -457,7 +457,7 @@ dotnet add package QQZeng.Qzdb --version x.y.z
 | `RowIds.cs` | 历史兼容的行号反查结构；规范 API 使用命名 tuple |
 | `UsageType.cs` | 用途分类枚举与中英映射 |
 | `QzdbException.cs` | 异常类型与 `ErrorCode` 枚举 |
-| `QQZeng.Qzdb.csproj` | SDK 风格项目文件（net10.0 + NuGet 元数据） |
+| `QQZeng.Qzdb.csproj` | SDK 风格项目文件（多目标 net8.0/net9.0/net10.0/net11.0 + NuGet 元数据） |
 
 相邻项目（同 `multi-lang/` 下）：
 

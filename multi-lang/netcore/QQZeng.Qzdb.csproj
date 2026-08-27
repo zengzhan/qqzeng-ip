@@ -1,8 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <!-- 目标框架：多框架支持 net8.0 (LTS), net9.0, net10.0 -->
-    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+    <!-- 目标框架：多框架支持 net8.0 (LTS), net9.0, net10.0, net11.0 -->
+    <TargetFrameworks>net8.0;net9.0;net10.0;net11.0</TargetFrameworks>
     <OutputType>Library</OutputType>
 
     <!-- 语言/编译选项（Nullable/ImplicitUsings/LangVersion/InvariantGlobalization 由 ../Directory.Build.props 统一提供） -->
@@ -79,10 +79,10 @@
     <PackageReference Include="System.IO.Hashing" Version="8.0.0" />
   </ItemGroup>
 
-  <!-- net9.0/net10.0: System.IO.Hashing is expected to be built into the shared
-       framework, but this build environment's targeting packs do not expose it,
-       so the package is referenced explicitly to keep all 3 TFMs compiling. -->
-  <ItemGroup Condition="'$(TargetFramework)' == 'net9.0' or '$(TargetFramework)' == 'net10.0'">
+  <!-- net9.0/net10.0/net11.0: System.IO.Hashing is expected to be built into the shared
+       framework, but the targeting packs for these TFMs do not expose it,
+       so the package is referenced explicitly to keep all 4 TFMs compiling. -->
+  <ItemGroup Condition="'$(TargetFramework)' == 'net9.0' or '$(TargetFramework)' == 'net10.0' or '$(TargetFramework)' == 'net11.0'">
     <PackageReference Include="System.IO.Hashing" Version="8.0.0" />
   </ItemGroup>
 
