@@ -4,11 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>QQZeng.Qzdb.Bench</RootNamespace>
     <AssemblyName>QQZeng.Qzdb.Bench</AssemblyName>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <LangVersion>latest</LangVersion>
     <Optimize>true</Optimize>
-    <InvariantGlobalization>true</InvariantGlobalization>
     <ServerGarbageCollection>true</ServerGarbageCollection>
     <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
     <IsPackable>false</IsPackable>
