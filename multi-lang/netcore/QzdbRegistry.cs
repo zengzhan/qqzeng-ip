@@ -129,7 +129,6 @@ public sealed class QzdbRegistry
     /// Anything still sitting in the hot-swap quarantine from earlier
     /// Register/Unregister calls is flushed at the same time.
     /// </summary>
-    /// <summary>Disposes and removes every registered reader immediately (terminal shutdown).</summary>
     public void Clear()
     {
         QzdbReader[] readers;
