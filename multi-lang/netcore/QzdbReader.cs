@@ -163,6 +163,7 @@ public sealed class QzdbReader : IDisposable
 
     #region Builder
 
+    /// <summary>Fluent builder for constructing a <see cref="QzdbReader"/> from a file path or byte buffer, with optional groupIndex / verifyCrc.</summary>
     public sealed class Builder
     {
         internal string? _path;
@@ -170,11 +171,16 @@ public sealed class QzdbReader : IDisposable
         internal int _groupIndex;
         internal bool _verifyCrc = true;
 
+        /// <summary>Creates a builder that loads from the given file path.</summary>
         public Builder(string path) { _path = path ?? throw new ArgumentNullException(nameof(path)); }
+        /// <summary>Creates a builder that loads from the given byte buffer.</summary>
         public Builder(byte[] buffer) { _buffer = buffer ?? throw new ArgumentNullException(nameof(buffer)); }
+        /// <summary>Sets the group index to expose; returns this for chaining.</summary>
         public Builder GroupIndex(int idx) { _groupIndex = idx; return this; }
+        /// <summary>Enables or disables CRC32 verification at open; returns this for chaining.</summary>
         public Builder VerifyCrc(bool enabled) { _verifyCrc = enabled; return this; }
 
+        /// <summary>Builds and returns the configured <see cref="QzdbReader"/>.</summary>
         public QzdbReader Build()
         {
             if (_path != null)
@@ -890,8 +896,10 @@ public sealed class QzdbReader : IDisposable
 
     #region Public query API (lock-free, no contention)
 
+    /// <summary>Resolves an IP string to a GeoInfo. Returns null on miss; throws QzdbException(InvalidIp) on malformed input.</summary>
     public GeoInfo? Find(string ipStr) => Find(ipStr.AsSpan());
 
+    /// <summary>Resolves an IP character span to a GeoInfo. Returns null on miss; throws QzdbException(InvalidIp) on malformed input.</summary>
     public GeoInfo? Find(ReadOnlySpan<char> ipSpan)
     {
         var snap = RequireSnapshot();
@@ -910,6 +918,7 @@ public sealed class QzdbReader : IDisposable
         }
     }
 
+    /// <summary>Resolves a System.Net.IPAddress to a GeoInfo. Returns null on miss; throws QzdbException(InvalidIp) on malformed input.</summary>
     public GeoInfo? Find(System.Net.IPAddress address)
     {
         ArgumentNullException.ThrowIfNull(address);
@@ -921,6 +930,7 @@ public sealed class QzdbReader : IDisposable
         return null;
     }
 
+    /// <summary>Resolves raw IP bytes (4 or 16) to a GeoInfo. Returns null on miss; throws QzdbException(InvalidIp) for a wrong length.</summary>
     public GeoInfo? Find(ReadOnlySpan<byte> ipBytes)
     {
         var snap = RequireSnapshot();
@@ -950,8 +960,10 @@ public sealed class QzdbReader : IDisposable
         return rowId > 0 ? ResolveRowId(snap, rowId) : null;
     }
 
+    /// <summary>Attempts to resolve an IP string; returns false on miss or malformed input (no exception).</summary>
     public bool TryFind(string ipStr, out GeoInfo? info) => TryFind(ipStr.AsSpan(), out info);
 
+    /// <summary>Attempts to resolve an IP span; returns false on miss or malformed input (no exception).</summary>
     public bool TryFind(ReadOnlySpan<char> ipSpan, out GeoInfo? info)
     {
         var snap = _activeSnapshot;
@@ -972,6 +984,7 @@ public sealed class QzdbReader : IDisposable
         return info != null;
     }
 
+    /// <summary>Attempts to resolve IP bytes; returns false on miss or wrong length (no exception).</summary>
     public bool TryFind(ReadOnlySpan<byte> ipBytes, out GeoInfo? info)
     {
         var snap = _activeSnapshot;
@@ -1011,6 +1024,7 @@ public sealed class QzdbReader : IDisposable
         return info != null;
     }
 
+    /// <summary>Resolves IP bytes to a GeoInfo; a null argument throws QzdbException(InvalidIp). Returns null on miss.</summary>
     public GeoInfo? FindBytes(byte[]? ipBytes)
     {
         if (ipBytes == null)
@@ -1018,8 +1032,10 @@ public sealed class QzdbReader : IDisposable
         return Find(ipBytes.AsSpan());
     }
 
+    /// <summary>Returns the pipe-delimited result for an IP string; "" on miss or malformed input.</summary>
     public string FindStr(string ipStr) => FindStr(ipStr.AsSpan());
 
+    /// <summary>Returns the pipe-delimited result for an IP span; "" on miss or malformed input.</summary>
     public string FindStr(ReadOnlySpan<char> ipSpan)
     {
         var snap = _activeSnapshot;
@@ -1033,6 +1049,7 @@ public sealed class QzdbReader : IDisposable
         return info == null ? string.Empty : info.ToPipe();
     }
 
+    /// <summary>Returns the pipe-delimited result for IP bytes; "" on miss or wrong length.</summary>
     public string FindStr(ReadOnlySpan<byte> ipBytes)
     {
         var snap = _activeSnapshot;
@@ -1064,8 +1081,10 @@ public sealed class QzdbReader : IDisposable
         return info == null ? string.Empty : info.ToPipe();
     }
 
+    /// <summary>Returns the internal row id for an IP string; 0 on miss or malformed input.</summary>
     public uint LookupRowId(string ipStr) => LookupRowId(ipStr.AsSpan());
 
+    /// <summary>Returns the internal row id for an IP span; 0 on miss or malformed input.</summary>
     public uint LookupRowId(ReadOnlySpan<char> ipSpan)
     {
         if (ipSpan.IsEmpty) return 0;
@@ -1075,6 +1094,7 @@ public sealed class QzdbReader : IDisposable
         return isV4 ? TrieWalkV4(snap, v4) : TrieWalkV6(snap, v6High, v6Low);
     }
 
+    /// <summary>Returns the internal row id for IP bytes; 0 on miss or wrong length.</summary>
     public uint LookupRowId(ReadOnlySpan<byte> ipBytes)
     {
         if (ipBytes.Length != 4 && ipBytes.Length != 16) return 0;
@@ -1104,6 +1124,7 @@ public sealed class QzdbReader : IDisposable
         return TryParseIp(ipSpan, out v4, out v6High, out v6Low, out isV4);
     }
 
+    /// <summary>Resolves an IPv4 uint (host order) to a GeoInfo. Returns null on miss; throws if the reader is disposed.</summary>
     public GeoInfo? FindUint(uint ipInt)
     {
         var snap = RequireSnapshot();
@@ -1111,6 +1132,7 @@ public sealed class QzdbReader : IDisposable
         return rowId > 0 ? ResolveRowId(snap, rowId) : null;
     }
 
+    /// <summary>Resolves an IPv6 address from its high/low 64-bit integers to a GeoInfo. Returns null on miss.</summary>
     public GeoInfo? Find(ulong ipHigh, ulong ipLow)
     {
         var snap = RequireSnapshot();
@@ -1118,6 +1140,7 @@ public sealed class QzdbReader : IDisposable
         return rowId > 0 ? ResolveRowId(snap, rowId) : null;
     }
 
+    /// <summary>Returns the internal row id for an IPv4 uint; 0 after Dispose (soft-fail).</summary>
     public uint LookupRowIdUint(uint ipInt)
     {
         // Lookup* family convention: soft-fail (return 0) after Dispose,
@@ -1126,12 +1149,14 @@ public sealed class QzdbReader : IDisposable
         return snap == null ? 0u : TrieWalkV4(snap, ipInt);
     }
 
+    /// <summary>Returns the internal row id for an IPv6 address; 0 after Dispose (soft-fail).</summary>
     public uint LookupRowId(ulong ipHigh, ulong ipLow)
     {
         var snap = _activeSnapshot;
         return snap == null ? 0u : TrieWalkV6(snap, ipHigh, ipLow);
     }
 
+    /// <summary>Returns the internal row id for IP bytes; 0 on null, miss, or wrong length.</summary>
     public uint LookupRowIdBytes(byte[]? ipBytes)
     {
         if (ipBytes == null) return 0;
@@ -1153,6 +1178,7 @@ public sealed class QzdbReader : IDisposable
         return 0;
     }
 
+    /// <summary>Returns the CIDR of the most specific network containing the IP; "" on miss or malformed input.</summary>
     public string LookupCidr(string ipStr)
     {
         if (string.IsNullOrEmpty(ipStr)) return "";
@@ -1170,6 +1196,7 @@ public sealed class QzdbReader : IDisposable
         return n6 < 0 ? "" : FormatV6Cidr(v6High, v6Low, n6);
     }
 
+    /// <summary>Returns the CIDR for an IPv4 uint; "" on miss.</summary>
     public string LookupCidrUint(uint ipInt)
     {
         var snap = Volatile.Read(ref _activeSnapshot);
@@ -1178,6 +1205,7 @@ public sealed class QzdbReader : IDisposable
         return n < 0 ? "" : FormatV4Cidr(ipInt, n);
     }
 
+    /// <summary>Returns the CIDR for IP bytes (4 or 16, IPv4-mapped downgraded); "" on null, miss, or wrong length.</summary>
     public string LookupCidrBytes(byte[]? ipBytes)
     {
         if (ipBytes == null) return "";
@@ -1205,6 +1233,7 @@ public sealed class QzdbReader : IDisposable
         return "";
     }
 
+    /// <summary>Returns the (Geo, Asn, Usage) pool indices for a row id; default when rowId is out of range.</summary>
     public (uint Geo, uint Asn, uint Usage) LookupIds(uint rowId)
     {
         var snap = RequireSnapshot();
@@ -1220,8 +1249,10 @@ public sealed class QzdbReader : IDisposable
         return (geoId, asnId, usageId);
     }
 
+    /// <summary>Resolves an IP string, materializing only the requested fields. Returns null on miss; throws QzdbException(InvalidIp) on malformed input.</summary>
     public GeoInfo? FindFields(string ipStr, string[]? fields) => FindFields(ipStr.AsSpan(), fields);
 
+    /// <summary>Resolves an IP span, materializing only the requested fields. Returns null on miss; throws QzdbException(InvalidIp) on malformed input.</summary>
     public GeoInfo? FindFields(ReadOnlySpan<char> ipSpan, string[]? fields)
     {
         var snap = RequireSnapshot();
@@ -1237,6 +1268,7 @@ public sealed class QzdbReader : IDisposable
         return ResolveRowIdFields(snap, rowId, fields);
     }
 
+    /// <summary>Batch query over IP strings; each result carries its three-state semantics.</summary>
     public BatchResult[] FindBatch(string[] ipStrs)
     {
         ArgumentNullException.ThrowIfNull(ipStrs);
@@ -1245,8 +1277,10 @@ public sealed class QzdbReader : IDisposable
         return results;
     }
 
+    /// <summary>Batch query over an enumerable of IP strings.</summary>
     public BatchResult[] FindBatch(IEnumerable<string> ipStrs) => FindBatch(ipStrs?.ToArray() ?? throw new ArgumentNullException(nameof(ipStrs)));
 
+    /// <summary>Batch query over IP strings, resolving only the given fields.</summary>
     public BatchResult[] FindBatchFields(string[] ipStrs, string[]? fields)
     {
         ArgumentNullException.ThrowIfNull(ipStrs);
@@ -1263,9 +1297,11 @@ public sealed class QzdbReader : IDisposable
         return results;
     }
 
+    /// <summary>Batch query over enumerables of IP strings and fields.</summary>
     public BatchResult[] FindBatchFields(IEnumerable<string> ipStrs, IEnumerable<string>? fields) =>
         FindBatchFields(ipStrs?.ToArray() ?? throw new ArgumentNullException(nameof(ipStrs)), fields?.ToArray());
 
+    /// <summary>Lazily streams batch results for an enumerable of IP strings.</summary>
     public IEnumerable<BatchResult> FindStream(IEnumerable<string> ipStrs)
     {
         if (ipStrs == null) yield break;
@@ -2036,7 +2072,9 @@ public sealed class QzdbReader : IDisposable
 
     #region Public Properties
 
+    /// <summary>Database version string (from Metadata).</summary>
     public string Version => RequireSnapshot()._version;
+    /// <summary>Data month of the loaded database (for example "2026-08").</summary>
     public string DataMonth => RequireSnapshot()._dataMonth;
     /// <summary>
     /// Edition name ("std"|"pro"|"asn"|"max"|"ult"), or "" when undeterminable (never invented).
@@ -2057,9 +2095,13 @@ public sealed class QzdbReader : IDisposable
     /// <summary>Where <see cref="FieldNames"/> came from: metadata | edition | synthetic.</summary>
     public string FieldNamesSource => RequireSnapshot()._fieldNamesSource;
 
+    /// <summary>Scope of the loaded database (from Metadata, v2.4).</summary>
     public string Scope => RequireSnapshot()._scope;
+    /// <summary>Build date/time string of the loaded database.</summary>
     public string BuildTime => RequireSnapshot()._buildTimeStr;
+    /// <summary>Human-readable description of the loaded database.</summary>
     public string Description => RequireSnapshot()._description;
+    /// <summary>Canonical CRC32 of the file as an 8-digit lowercase hex string.</summary>
     public string FileHash
     {
         get
@@ -2068,17 +2110,23 @@ public sealed class QzdbReader : IDisposable
             return (snapshot._canonicalCrc ?? ComputeCanonicalCrc(snapshot)).ToString("x8");
         }
     }
+    /// <summary>Field names of the active group (defensive clone; safe to retain).</summary>
     public string[] FieldNames => (string[])RequireSnapshot()._fieldNames.Clone();
+    /// <summary>Number of groups present in the file.</summary>
     public int GroupCount => RequireSnapshot()._actualGroups;
+    /// <summary>Number of string pools declared in the file header.</summary>
     public int PoolCount => RequireSnapshot()._poolCount;
 
+    /// <summary>Returns true when the active group contains a field with the given (normalized) name.</summary>
     public bool HasField(string name) => RequireSnapshot()._normMap.ContainsKey(GeoInfo.NormalizeKey(name));
+    /// <summary>Recomputes and compares the canonical CRC32; returns true when it matches the stored value.</summary>
     public bool VerifyCrc()
     {
         var s = RequireSnapshot();
         return ComputeCanonicalCrc(s) == s._storedCrc;
     }
 
+    /// <summary>Alias of <see cref="VerifyCrc"/> (legacy casing).</summary>
     public bool VerifyCRC() => VerifyCrc();
 
     #endregion
@@ -2135,6 +2183,7 @@ public sealed class QzdbReader : IDisposable
         PublishSnapshot(snap, epoch);
     }
 
+    /// <summary>Releases the reader's snapshot and mmap resources; further queries throw ObjectDisposedException.</summary>
     public void Dispose()
     {
         lock (_lifecycleGate)
