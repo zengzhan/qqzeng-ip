@@ -12,6 +12,18 @@
 
 - 8 语言 IP 解析器严格性对齐：拒绝 `"a.b.c.d::"` 形态（嵌入 IPv4 点分四元组落在 `::` 压缩缺口左侧且右侧为空，如 `0.0.0.0::`、`1.2.3.4::`、`2001:db8:1.2.3.4::`）。此前 Python/Node/PHP/C/Rust/Java 六语言错误接受（Node 对 `1.2.3.4::` 还会产出错乱字节），与 Go SDK 及 Go 标准库 `netip.ParseAddr` 行为不一致；C# 经审计本就正确。十行行为契约表已作为永久回归落至各语言测试套件（Go fuzz 差分对拍发现，netip 为裁判）。
 
+## [1.0.6] - 2026-08-27
+
+### Fixed
+
+- .NET / C# `LookupRowIdUint` / `LookupRowIdBytes`：修正原代码中误用 `RequireSnapshot()` 导致 Dispose 之后抛出 `ObjectDisposedException` 的行为不一致瑕疵，改为使用 `_activeSnapshot` 直接读取，统一遵循 `Lookup*` 家族在 Dispose 后的**软失败返回 0** 契约（同时消除了原代码中永远无法命中的死代码分支）。
+- .NET / C# `Snapshot.FromPath`：重构文件及内存映射资源生命周期为嵌套 `try/catch` 模式，修复 0 字节空文件或异常畸形文件在 `CreateFromFile` / `CreateViewAccessor` 异常时导致的 2 处潜在文件句柄/映射未及时释放的泄漏窗口（通过 Roslyn `AnalysisMode=All` 严苛审计与 12000 次压力测试验证零泄漏）。
+- .NET / C# 异常提早校验：`FromPath` 针对 0 字节空文件增加显式拦截，抛出规范的 `"QZDB file is empty"` 异常。
+
+### Changed
+
+- .NET / C# 代码现代化：`RequireSnapshot()` 采用 `ObjectDisposedException.ThrowIf`；`QzdbRegistry.Unregister` 针对跨方法延迟安全释放队列补充有理有据的显式抑制与规范注释；消除冗余字段初始化赋值。
+
 ## [1.0.5] - 2026-08-23
 
 ### Added

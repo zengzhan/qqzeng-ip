@@ -16,8 +16,12 @@
     <PackageId>QQZeng.Qzdb</PackageId>
     <RootNamespace>QQZeng.Qzdb</RootNamespace>
     <AssemblyName>QQZeng.Qzdb</AssemblyName>
-    <Version>1.0.5</Version>
-    <PackageReleaseNotes>1.0.5: Metadata TLV type=5 (data_month) / type=6 (scope) consumed as authoritative with Header BuildDate fallback per FORMAT §8.2; native-float formatting aligned to FORMAT §10.5 exact-decimal contract; fail-closed hardened: miss returns NOT_FOUND in byte-buffer APIs, section bounds fully validated at parse time, trie walks bounded by derived IP-width caps; test harness streams multi-GB CSV ground truth (constant memory).</PackageReleaseNotes>
+    <Version>1.0.6</Version>
+    <PackageReleaseNotes>1.0.6: Flagship robustness and API consistency upgrade:
+- API consistency: Aligned LookupRowIdUint/LookupRowIdBytes with Lookup* family soft-fail convention (returns 0 after Dispose, eliminating unreachable dead-code branch).
+- Resource leak prevention: Hardened FromPath mmap lifecycle with nested try/catch layers to guarantee deterministic disposal of FileStream/MemoryMappedFile on empty (0-byte) or corrupted files (closing CA2000 leak windows).
+- Early validation: Added explicit zero-byte empty file check with descriptive QzdbException.
+- Code quality: Clean Roslyn analysis under strictest AnalysisMode=All with documented suppressions for safe deferred-disposal patterns; modernized RequireSnapshot using ObjectDisposedException.ThrowIf.</PackageReleaseNotes>
 
     <!-- 作者 / 公司 / 描述 -->
     <Authors>QQZeng</Authors>
