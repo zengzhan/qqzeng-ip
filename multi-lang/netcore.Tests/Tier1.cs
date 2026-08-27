@@ -401,7 +401,7 @@ class Program
         using var r = new QzdbReader.Builder(dbPath).Build();
         string[] csvHeaders;
         var colMap = new System.Collections.Generic.Dictionary<string, int>();
-        string sampleLine;
+        string? sampleLine;
         using (var head = new System.IO.StreamReader(csvPath))
         {
             var h = head.ReadLine();
@@ -418,7 +418,7 @@ class Program
         using (var body = new System.IO.StreamReader(csvPath))
         {
             body.ReadLine();   // skip header
-            string line;
+            string? line;
             while ((line = body.ReadLine()) != null)
             {
                 var cols = ParseCsv(line);
