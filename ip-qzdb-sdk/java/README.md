@@ -521,3 +521,5 @@ String hash = reader.getFileHash();
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
+
+<!-- commit: java: Java SDK（堆外内存与 Builder API） sync=1787821329 -->
