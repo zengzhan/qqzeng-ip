@@ -1209,7 +1209,6 @@ class QzdbReader {
   }
 
   _trieWalkV4(ipInt) {
-    const d = this._data;
     const hi16 = (ipInt >>> 16) & 0xFFFF;
     const ptr = this.safeReadU32(this._offV4Jump + hi16 * 4);
     if (ptr === 0) return 0;
