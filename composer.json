@@ -1,0 +1,42 @@
+{
+    "name": "qqzeng/qzdb",
+    "description": "Offline, zero-dependency PHP reader for .qzdb IP geolocation databases (IPv4 / IPv6 dual-stack).",
+    "type": "library",
+    "keywords": [
+        "ip",
+        "ipv6",
+        "geolocation",
+        "ip-lookup",
+        "qzdb",
+        "offline"
+    ],
+    "homepage": "https://qqzeng.com",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "qqzeng",
+            "email": "qzdb@qqzeng.com",
+            "homepage": "https://qqzeng.com"
+        }
+    ],
+    "support": {
+        "issues": "https://github.com/zengzhan/qqzeng-ip/issues",
+        "source": "https://github.com/zengzhan/qqzeng-ip"
+    },
+    "require": {
+        "php": ">=8.1"
+    },
+    "autoload": {
+        "classmap": [
+            "ip-qzdb-sdk/php/QzdbReader.php"
+        ]
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "extra": {
+        "branch-alias": {
+            "dev-main": "1.0.x-dev"
+        }
+    }
+}
