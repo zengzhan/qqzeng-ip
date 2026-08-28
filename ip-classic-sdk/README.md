@@ -18,4 +18,4 @@
 
 <!-- commit description sync 1787122549 -->
 
-<!-- commit: ip-classic-sdk: 经典版 IP 数据库 SDK（6.0 .db 与 2.0 .dat 多语言源码） sync=1787946209 -->
+<!-- commit: ip-classic-sdk: 经典版 IP 数据库 SDK（6.0 .db 与 2.0 .dat 多语言源码） sync=1787947601 -->
