@@ -1,0 +1,38 @@
+name: Publish Java SDK to Maven Central
+
+# 在打 tag（v*）时自动构建 + GPG 签名 + 发布到 Maven Central。
+# 需要先在仓库 Settings → Secrets and variables → Actions 配置：
+#   CENTRAL_TOKEN      —— 从 https://central.sonatype.com 账号的 "Publish" 页生成的 token
+#   GPG_PRIVATE_KEY    —— ASCII-armored 私钥（gpg --armor --export-secret-keys <id> 的输出）
+#   GPG_PASSPHRASE     —— 该 GPG 私钥的口令（本仓库密钥无口令可留空）
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Import GPG private key
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+        run: |
+          printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
+
+      - name: Publish to Maven Central
+        working-directory: ip-qzdb-sdk/java
+        env:
+          CENTRAL_TOKEN: ${{ secrets.CENTRAL_TOKEN }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: mvn -B -Ppublish-central -Dgpg.passphrase="$GPG_PASSPHRASE" deploy
