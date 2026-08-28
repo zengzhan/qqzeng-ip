@@ -3,6 +3,7 @@ package qzdb
 import (
 	"encoding/binary"
 	"hash/crc32"
+	"strings"
 	"testing"
 )
 
@@ -80,7 +81,7 @@ func buildSyntheticDBWith(t *testing.T, asName string) []byte {
 		var full [8]uint16
 		head, tail := splitHeadTail(ip)
 		hi := 0
-		for _, part := range splitColon(head) {
+		for _, part := range strings.Split(head, ":") {
 			if part == "" {
 				continue
 			}
@@ -89,7 +90,7 @@ func buildSyntheticDBWith(t *testing.T, asName string) []byte {
 		}
 		missing := 8 - hi
 		if tail != "" {
-			tailParts := splitColon(tail)
+			tailParts := strings.Split(tail, ":")
 			for _, part := range tailParts {
 				full[hi] = parseHexGroup(part)
 				hi++
