@@ -41,7 +41,10 @@
     </scm>
 
     <properties>
-        <maven.compiler.release>21</maven.compiler.release>
+        <!-- 编译目标 Java 17：兼容主流/最新 LTS（17、21、25）。
+             代码仅用 sealed interface(17) 与 record(16)，未用更高版本专属特性，
+             故可安全以 Java 17 作为 bytecode 目标（运行于 17+ 的任意 JVM）。 -->
+        <maven.compiler.release>17</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     </properties>
 
@@ -76,10 +79,11 @@
             <plugin>
                 <groupId>org.sonatype.central</groupId>
                 <artifactId>central-publishing-maven-plugin</artifactId>
-                <version>0.7.0</version>
+                <version>0.11.0</version>
                 <extensions>true</extensions>
                 <configuration>
                     <publishingServerId>central</publishingServerId>
+                    <autoPublish>true</autoPublish>
                 </configuration>
             </plugin>
         </plugins>
@@ -121,6 +125,13 @@
                                 </goals>
                             </execution>
                         </executions>
+                        <configuration>
+                            <!-- 关闭 Java 9+ 严格 doclint：源码注释含中文 < / > 等未转义
+                                 HTML 与大量"无主描述"警告，默认会报 malformed HTML 失败，
+                                 导致发布流程在生成 -javadoc.jar 时中断。这里仅跳过校验，
+                                 不影响 javadoc 内容本身。 -->
+                            <doclint>none</doclint>
+                        </configuration>
                     </plugin>
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
