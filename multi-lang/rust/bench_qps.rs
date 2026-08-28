@@ -10,7 +10,7 @@
 //
 // Env overrides:  BENCH_OPS=200000   BENCH_EDITIONS=std_china
 
-use qzdb_reader::QzdbReader;
+use qzdb::QzdbReader;
 use serde_json::{json, Value};
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -637,7 +637,7 @@ fn main() {
         let report = json!({
             "contract": "QZDB_BENCH_CONTRACT v1.0",
             "language": "rust",
-            "sdk_version": "multi-lang/rust (crate qzdb_reader)",
+            "sdk_version": "multi-lang/rust (crate qzdb)",
             "timestamp": ts,
             "seed": MASTER_SEED,
             "db": {"path": db, "edition": edition, "bytes": bytes, "hash": "crc32:n/a"},

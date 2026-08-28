@@ -7,7 +7,7 @@
 //!
 //! 解析器逐字段处理双引号与内嵌逗号（ult 的 languages 字段即 `"a,b,c"`）。
 
-use qzdb_reader::QzdbReader;
+use qzdb::QzdbReader;
 use std::collections::HashMap;
 use std::path::PathBuf;
 

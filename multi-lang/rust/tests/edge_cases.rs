@@ -1,7 +1,7 @@
 //! Edge case tests for float formatting, JSON serialization, cache behavior,
 //! and boundary conditions.
 
-use qzdb_reader::{QzdbReader, UsageType};
+use qzdb::{QzdbReader, UsageType};
 
 fn data_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../data")
@@ -305,7 +305,7 @@ fn test_stream_empty() {
 
 #[test]
 fn test_chained_empty() {
-    use qzdb_reader::ChainedReader;
+    use qzdb::ChainedReader;
     let chain = ChainedReader::new();
     assert!(chain.find("119.51.194.142").is_none());
     assert_eq!(chain.find_str("119.51.194.142"), "");
@@ -313,7 +313,7 @@ fn test_chained_empty() {
 
 #[test]
 fn test_chained_single_reader() {
-    use qzdb_reader::ChainedReader;
+    use qzdb::ChainedReader;
     let r = load_std();
     let mut chain = ChainedReader::new();
     chain.push(r);
@@ -325,14 +325,14 @@ fn test_chained_single_reader() {
 
 #[test]
 fn test_registry_get_nonexistent() {
-    use qzdb_reader::QzdbRegistry;
+    use qzdb::QzdbRegistry;
     let reg = QzdbRegistry::new();
     assert!(reg.get("nonexistent").is_none());
 }
 
 #[test]
 fn test_registry_overwrite() {
-    use qzdb_reader::QzdbRegistry;
+    use qzdb::QzdbRegistry;
     let r1 = load_std();
     let r2 = load_ult();
     let mut reg = QzdbRegistry::new();

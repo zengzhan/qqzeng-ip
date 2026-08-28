@@ -6,7 +6,7 @@
 //! 3. Miri 游泳池（Swimming Pool）模式：多线程复用 reader，验证 Drop 正确
 //! 4. 验证 Arc<QzdbReader> 共享模式下查询安全
 
-use qzdb_reader::QzdbReader;
+use qzdb::QzdbReader;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};

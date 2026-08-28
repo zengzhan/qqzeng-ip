@@ -87,6 +87,9 @@ multi-lang/php/.tier1_synthetic.qzdb*
 # Language specific
 node_modules/
 vendor/
+# PHP 包的 lock 文件不入库（composer.json 是库定义，锁文件属于消费方应用）；
+# 注意 vendor/ 已忽略，但 composer.lock 需要单独排除，否则本地验证时会误提交。
+/composer.lock
 target/
 build/
 *.class

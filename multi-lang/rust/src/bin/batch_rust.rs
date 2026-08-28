@@ -17,7 +17,7 @@ use std::fs;
 use std::io::Write;
 use std::process;
 
-use qzdb_reader::QzdbReader;
+use qzdb::QzdbReader;
 
 /// `high:low`（十进制）→ 16 字节大端 IPv6 地址
 fn parse_v6_key(line: &str) -> Option<[u8; 16]> {

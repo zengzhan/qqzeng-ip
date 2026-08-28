@@ -17,7 +17,7 @@
 use std::panic;
 use std::path::PathBuf;
 
-use qzdb_reader::QzdbReader;
+use qzdb::QzdbReader;
 
 fn data_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../data")

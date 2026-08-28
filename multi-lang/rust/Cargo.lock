@@ -88,7 +88,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "qzdb_reader"
+name = "qzdb"
 version = "1.0.5"
 dependencies = [
  "arc-swap",

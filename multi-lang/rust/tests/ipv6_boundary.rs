@@ -8,7 +8,7 @@
 //! 4. 验证 CIDR 反查对命中地址返回合法 CIDR（RFC 5952 压缩格式）
 //! 5. 验证 V6 uint128 入口与字符串入口一致
 
-use qzdb_reader::QzdbReader;
+use qzdb::QzdbReader;
 use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {

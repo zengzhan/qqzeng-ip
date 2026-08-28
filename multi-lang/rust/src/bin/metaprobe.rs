@@ -3,7 +3,7 @@
 //! serde_json 只是 dev-dependency，这里手写最小 JSON 序列化，避免为一个
 //! 诊断工具给发布产物引入运行时依赖。
 
-use qzdb_reader::QzdbReader;
+use qzdb::QzdbReader;
 
 fn esc(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);

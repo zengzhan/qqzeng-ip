@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 
-use qzdb_reader::{
+use qzdb::{
     ErrorCode, GeoInfo, KnownUsage, QzdbReader, RowIds, UsageType,
 };
 
@@ -440,7 +440,7 @@ fn t1_batch_and_stream() {
 
 #[test]
 fn t1_registry_and_chained() {
-    use qzdb_reader::{ChainedReader, QzdbRegistry};
+    use qzdb::{ChainedReader, QzdbRegistry};
     let r = load("qqzeng_ip_std_china.qzdb");
     let mut reg = QzdbRegistry::new();
     reg.register("std", r);

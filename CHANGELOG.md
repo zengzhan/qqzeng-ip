@@ -4,9 +4,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- Rust SDK 具备 crates.io 发布条件：crate 名 `qzdb_reader` → **`qzdb`**（与 PyPI 的 `qzdb` 对齐；C 语言的 `qzdb_reader_t` / `qzdb_reader.h` 不受影响）；`Cargo.toml` 补全 crates.io 必需的 `description` / `license` / `repository` / `homepage` / `documentation` / `keywords` / `categories` / `rust-version=1.74`；新增 `multi-lang/rust/LICENSE`；新增 `.github/workflows/publish-crates.yml`（tag `v-rust-*` 触发，先 dry-run 后 publish）。
+- PHP SDK 具备 Packagist 发布条件：仓库根新增 `composer.json`（包 **`qqzeng/qzdb`**，classmap 指向 `multi-lang/php/QzdbReader.php`）。因 Packagist 只认仓库根的 `composer.json`，同时新增根 `.gitattributes`，用 `export-ignore` 把 dist 裁剪到 5 个文件 / 160 KB（否则用户 `composer require` 会连带下载另外 7 种语言源码与 4.3 MB demo 数据库）。
+- 多语言 monorepo 的 git tag 发布约定（`v<ver>` 全平台 / `v-python-*` / `v-java-*` / `v-rust-*` 单平台），见 `PUBLISHING.md` §0。
+
 ### Changed
 
 - Node.js `QzdbRegistry`：`register()`/`registerBuffer()`/`unregister()` 对被替换/移除的 reader 改为进入容量 8 的退休队列延迟关闭（对齐 Go/Java/netcore），消除 await 让出期间并发热更新导致在途调用静默返回 null 的隐蔽问题；`clear()` 语义不变（立即关闭并冲刷退休队列）。附 7 条行为回归断言。
+- Rust `serde_json` 由 `[dependencies]` 移入 `[dev-dependencies]`：lib 不使用该依赖，此前会无谓地进入下游依赖树。
+- Rust 发行包范围收紧：`src/bin/*`、`src/main.rs`、`tests/*`、`bench_qps.rs` 经 `exclude` 排除。其中 `src/bin/metaprobe.rs` 依赖 dev-only 的 `serde_json`，若随包发布会导致下游 `cargo install qzdb` 编译失败；`tests/*` 依赖未随包发布的 `.qzdb` 数据。`cargo package` 时打印的 16 行 `ignoring ...` warning 属预期。
+
+### Fixed
+
+- 发布 workflow 的 tag 过滤器过宽：`publish-pypi.yml` 与 `publish-maven-central.yml` 原本都是 `tags: ['v*']`，在多语言 monorepo 下会误匹配 `v-rust-*` / `v-java-*`，造成单语言发版时**连带触发其它平台的发布**。现均收紧为 `v[0-9]*`（纯版本号，全平台）+ 各自语言前缀。
 
 ### Fixed
 

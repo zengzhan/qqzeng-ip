@@ -8,7 +8,7 @@
 //! 3. CIDR 反查对命中地址返回合法 CIDR
 //! 4. to_pipe() 输出格式一致（包含 | 分隔符或为空串）
 
-use qzdb_reader::QzdbReader;
+use qzdb::QzdbReader;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 

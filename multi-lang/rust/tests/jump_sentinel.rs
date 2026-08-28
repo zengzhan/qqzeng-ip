@@ -9,7 +9,7 @@
 
 use std::sync::Arc;
 
-use qzdb_reader::QzdbReader;
+use qzdb::QzdbReader;
 
 fn data_dir() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../data")

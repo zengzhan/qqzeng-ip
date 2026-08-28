@@ -1,5 +1,5 @@
 //! Fail-Closed 验证：畸形 / 截断 / 位翻转的 .qzdb 必须返回 Err，绝不 panic。
-use qzdb_reader::QzdbReader;
+use qzdb::QzdbReader;
 
 fn probe(label: &str, bytes: &[u8]) {
     let r = std::panic::catch_unwind(|| QzdbReader::from_bytes(bytes, 0, false));

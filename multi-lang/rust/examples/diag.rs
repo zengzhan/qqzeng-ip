@@ -1,4 +1,4 @@
-use qzdb_reader::QzdbReader;
+use qzdb::QzdbReader;
 use std::path::PathBuf;
 fn main() {
     let p = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../data/qqzeng_ip_std_china.qzdb");

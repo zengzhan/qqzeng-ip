@@ -1,4 +1,4 @@
-use qzdb_reader::QzdbReader;
+use qzdb::QzdbReader;
 use std::io::{BufRead, BufReader};
 use std::fs::File;
 

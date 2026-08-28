@@ -1,14 +1,18 @@
 name: Publish to Maven Central
 
-# 在打 tag（v*）时自动构建 + GPG 签名 + 发布到 Maven Central。
+# 在打 tag（v1.0.x 或 v-java-*）时自动构建 + GPG 签名 + 发布到 Maven Central。
 # 需要先在仓库 Settings → Secrets and variables → Actions 配置：
 #   CENTRAL_TOKEN      —— 从 https://central.sonatype.com 账号的 "Publish" 页生成的 token
 #   GPG_PRIVATE_KEY    —— ASCII-armored 私钥（gpg --armor --export-secret-keys <id> 的输出）
 #   GPG_PASSPHRASE     —— 该 GPG 私钥的口令
+#
+# tag 过滤器从原来的 'v*' 收紧为下面两条：仓库是多语言 monorepo，'v*' 会连
+# v-rust-* / v-python-* 一起匹配，导致发 Rust 版时误触发 Maven Central 发布。
 on:
   push:
     tags:
-      - 'v*'
+      - 'v[0-9]*'      # 纯版本号：全平台统一发版
+      - 'v-java-*'     # 仅发布 Java
 
 jobs:
   publish:

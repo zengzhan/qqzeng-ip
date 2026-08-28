@@ -1,14 +1,18 @@
 name: Publish Python to PyPI
 
-# 打 v-python-* 或 v* tag 时，自动构建 + 发布 Python SDK 到 PyPI。
+# 打 v-python-* tag 或纯版本号 tag（v1.0.x）时，自动构建 + 发布 Python SDK 到 PyPI。
 # 需要先在仓库 Settings → Secrets and variables → Actions 配置：
 #   PYPI_API_TOKEN —— PyPI 的 API token（https://pypi.org/manage/account/token/ 创建，
 #                     作用域限定项目 qzdb；以 pypi- 开头）
 # 发布产物：qzdb-<ver>.tar.gz (sdist) + qzdb-<ver>-py3-none-any.whl (wheel)
+#
+# tag 过滤器从原来的 'v*' 收紧为下面两条：仓库是多语言 monorepo，'v*' 会连
+# v-rust-* / v-java-* 一起匹配，导致发 Rust 版时误触发 PyPI 发布。
 on:
   push:
     tags:
-      - 'v*'
+      - 'v[0-9]*'      # 纯版本号：全平台统一发版
+      - 'v-python-*'   # 仅发布 Python
 
 jobs:
   publish:

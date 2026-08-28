@@ -11,7 +11,7 @@
 //! 4. 独立计算：网络地址 = IP & (0xFFFFFFFF << (32 - prefixLen))
 //! 5. 断言反查结果的网络地址与前缀长度都正确
 
-use qzdb_reader::QzdbReader;
+use qzdb::QzdbReader;
 use std::path::PathBuf;
 
 fn data_dir() -> PathBuf {

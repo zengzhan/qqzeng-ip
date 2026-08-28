@@ -44,7 +44,26 @@
 
 ## 2. 安装
 
-本 SDK 以**单文件**形式提供（所有类都位于 `QzdbReader.php` 内，命名空间 `Qqzeng\Ip`）。无需 Composer，直接 `require` 即可：
+### 方式 A：Composer（推荐）
+
+```bash
+composer require qqzeng/qzdb
+```
+
+然后由 Composer 自动加载接管，无需手工 `require`：
+
+```php
+require_once __DIR__ . '/vendor/autoload.php';
+use Qqzeng\Ip\QzdbBuilder;
+use Qqzeng\Ip\QzdbReader;
+```
+
+> 包坐标 `qqzeng/qzdb`（Packagist）。dist 已用 `.gitattributes` 的 `export-ignore` 裁剪，
+> 只含 `QzdbReader.php` 与本文档（约 100 KB），不会下载仓库里其它 7 种语言的源码。
+
+### 方式 B：拷贝单文件（无需 Composer）
+
+本 SDK 以**单文件**形式提供（所有类都位于 `QzdbReader.php` 内，命名空间 `Qqzeng\Ip`）。直接 `require` 即可：
 
 ```php
 require_once '/path/to/QzdbReader.php';
@@ -52,7 +71,7 @@ use Qqzeng\Ip\QzdbReader;
 use Qqzeng\Ip\QzdbBuilder;
 ```
 
-若你希望接入 Composer 自动加载，可在 `composer.json` 中声明 PSR-4 映射（SDK 本身无 `composer.json` 依赖）：
+若你的项目已有 Composer 但不想引入本包（例如从仓库直接取文件），可自行声明 PSR-4 映射：
 
 ```json
 {

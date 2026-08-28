@@ -19,7 +19,7 @@ fn main() {
         println!("Database file not found");
         std::process::exit(1);
     }
-    let searcher = match qzdb_reader::QzdbReader::from_file(&db) {
+    let searcher = match qzdb::QzdbReader::from_file(&db) {
         Ok(s) => s,
         Err(e) => {
             println!("Failed to load database: {:?}", e);

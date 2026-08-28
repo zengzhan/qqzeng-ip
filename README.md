@@ -35,12 +35,13 @@ print(loc.country, loc.city)                # 中国 南京
 | **Python** | `qzdb`（PyPI） | `pip install qzdb` | [python](multi-lang/python/README.md) |
 | **Node.js** | `@qqzengip/qzdb`（npm） | `npm install @qqzengip/qzdb` | [nodejs](multi-lang/nodejs/README.md) |
 | Go | go module | `go get github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go` | [go](multi-lang/go/README.md) |
-| Rust | `qzdb`（crates.io） | `cargo add qzdb` | [rust](multi-lang/rust/README.md) |
-| PHP | `zengzhan/qzdb`（Packagist） | `composer require zengzhan/qzdb` | [php](multi-lang/php/README.md) |
+| **Rust** | `qzdb`（crates.io） | `cargo add qzdb` | [rust](multi-lang/rust/README.md) |
+| **PHP** | `qqzeng/qzdb`（Packagist） | `composer require qqzeng/qzdb` | [php](multi-lang/php/README.md) |
 
-> ✅ **已发布可用**：Java（Maven Central `1.0.6`，支持 Java 17+）、C#（NuGet，支持 net8.0+）、Python（PyPI，`pip install qzdb` 可直接装）、Node.js（npm，`npm install @qqzengip/qzdb` 可直接装）、Go（Go Module，`go get github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go` 可直接拉取）。
-> ⏳ **待发布**：Rust、PHP 已规划，发布后即以上述命令引入。
-> 包名需在各自仓库确认唯一；未发布前请走下方"拷贝源码"方式。
+> ✅ **已发布可用**：Java（Maven Central `1.0.6`）、C#（NuGet）、Python（PyPI `1.0.5`）、Node.js（npm `1.0.5`）、Go（`go get github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go`）。
+> ⏳ **待首次发布**：Rust（`qzdb` @ crates.io）、PHP（`qqzeng/qzdb` @ Packagist）。两个包名均已确认未被占用，
+> 仓库内配置与自动发布 workflow 已就绪，需人工完成注册中心授权后打 tag 触发，步骤见 [PUBLISHING.md](PUBLISHING.md)。
+> 在此之前请走下方「拷贝源码」方式。
 
 ### 拷贝源码（适用于未发布 / 离线 / 自定义改造）
 

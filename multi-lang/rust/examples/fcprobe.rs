@@ -6,7 +6,7 @@ use std::panic;
 
 fn probe(buf: &[u8]) -> bool {
     let r = panic::catch_unwind(|| {
-        if let Ok(rd) = qzdb_reader::QzdbReader::from_bytes(buf, 0, false) {
+        if let Ok(rd) = qzdb::QzdbReader::from_bytes(buf, 0, false) {
             let _ = rd.find("114.114.114.114");
             let _ = rd.find("8.8.8.8");
             let _ = rd.find("2400:3200::1");

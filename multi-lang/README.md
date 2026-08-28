@@ -78,7 +78,7 @@ try (QzdbReader reader = new QzdbReader.Builder(new File("qqzeng_ip_ult_china.qz
 
 ### Rust
 ```rust
-use qzdb_reader::{from_file, QzdbReader};
+use qzdb::{from_file, QzdbReader};
 
 // from_file 返回 Result<QzdbReader, QzdbError>
 let searcher = from_file("qqzeng_ip_ult_china.qzdb").expect("open qzdb failed");
