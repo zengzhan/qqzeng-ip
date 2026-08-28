@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text;
 
+/// <summary>Immutable result object returned by the QZDB query API. Exposes fields by name (case/underscore/hyphen-insensitive), strongly-typed getters, and serialization helpers (pipe / JSON / map).</summary>
 public sealed class GeoInfo
 {
     private readonly string[] _fieldNames;
@@ -34,6 +35,7 @@ public sealed class GeoInfo
     private readonly int _idxAsDomain = -1;
     private readonly int _idxUsageType = -1;
 
+    /// <summary>Constructs a GeoInfo from parallel field-name and value arrays. Arrays are cloned defensively; a null normMap or numericFlags is derived from the field names.</summary>
     public GeoInfo(string[] fieldNames, string[] values, Dictionary<string, int>? normMap, bool[]? numericFlags)
     {
         ArgumentNullException.ThrowIfNull(fieldNames);
@@ -93,7 +95,9 @@ public sealed class GeoInfo
         map.TryGetValue("usagetype", out usageType);
     }
 
+    /// <summary>Field names in file order (defensive clone; safe to retain).</summary>
     public string[] FieldNames => (string[])_fieldNames.Clone();
+    /// <summary>Field values in file order (defensive clone; safe to retain).</summary>
     public string[] Values => (string[])_values.Clone();
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -106,6 +110,7 @@ public sealed class GeoInfo
         return "";
     }
 
+    /// <summary>Returns the value for the given field name. Matching is case-, underscore- and hyphen-insensitive; returns "" when not found or the name is empty.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public string Get(string? name)
     {
@@ -115,6 +120,7 @@ public sealed class GeoInfo
         return v ?? "";
     }
 
+    /// <summary>Normalizes a field key by lowercasing ASCII letters and stripping underscores/hyphens; used for case-insensitive lookups.</summary>
     public static string NormalizeKey(string? key)
     {
         if (string.IsNullOrEmpty(key)) return "";
@@ -139,8 +145,10 @@ public sealed class GeoInfo
         return sb.ToString();
     }
 
+    /// <summary>Builds a normalized-key to index map for the given field names.</summary>
     public static Dictionary<string, int> BuildNormalizedMap(string[] fields)
     {
+        ArgumentNullException.ThrowIfNull(fields);
         var map = new Dictionary<string, int>(fields.Length * 2);
         for (int i = 0; i < fields.Length; i++)
         {
@@ -153,6 +161,7 @@ public sealed class GeoInfo
         return map;
     }
 
+    /// <summary>Returns true for fields whose values are numeric (asn, geoid, latitude, longitude).</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool IsNumericFieldName(string? name)
     {
@@ -160,6 +169,7 @@ public sealed class GeoInfo
         return NormalizeKey(name) is "asn" or "geoid" or "latitude" or "longitude";
     }
 
+    /// <summary>Returns all values joined by '|' (memoized; empty string when there are no values).</summary>
     public string ToPipe()
     {
         if (_values.Length == 0) return "";
@@ -175,6 +185,7 @@ public sealed class GeoInfo
         return _pipe;
     }
 
+    /// <summary>Returns a Dictionary mapping each field name to its value.</summary>
     public Dictionary<string, string> ToMap()
     {
         var map = new Dictionary<string, string>(_fieldNames.Length * 2);
@@ -186,6 +197,7 @@ public sealed class GeoInfo
         return map;
     }
 
+    /// <summary>Returns a compact JSON object; numeric fields are emitted as numbers or null.</summary>
     public string ToJson()
     {
         var sb = new StringBuilder(256);
@@ -276,44 +288,81 @@ public sealed class GeoInfo
         return sb.ToString();
     }
 
+    /// <summary>CIDR of the network containing this entry, or "" when unavailable.</summary>
     public string Cidr => GetCidr();
+    /// <summary>Country name (localized).</summary>
     public string Country => GetCountry();
+    /// <summary>Country name in English.</summary>
     public string CountryEn => GetCountryEn();
+    /// <summary>Province / state name.</summary>
     public string Province => GetProvince();
+    /// <summary>Province / state name in English.</summary>
     public string ProvinceEn => GetProvinceEn();
+    /// <summary>City name.</summary>
     public string City => GetCity();
+    /// <summary>City name in English.</summary>
     public string CityEn => GetCityEn();
+    /// <summary>District / county name.</summary>
     public string District => GetDistrict();
+    /// <summary>Geographic ID, or null when absent.</summary>
     public uint? GeoId => GetGeoId();
+    /// <summary>Longitude as a double, or null when absent/invalid.</summary>
     public double? Longitude => GetLongitude();
+    /// <summary>Latitude as a double, or null when absent/invalid.</summary>
     public double? Latitude => GetLatitude();
+    /// <summary>IANA-style timezone string.</summary>
     public string Timezone => GetTimezone();
+    /// <summary>ISP / operator name.</summary>
     public string Isp => GetIsp();
+    /// <summary>ISP / operator name in English.</summary>
     public string IspEn => GetIspEn();
+    /// <summary>Autonomous System Number, or null when absent.</summary>
     public uint? Asn => GetAsn();
+    /// <summary>AS name.</summary>
     public string AsName => GetAsName();
+    /// <summary>AS domain.</summary>
     public string AsDomain => GetAsDomain();
+    /// <summary>Resolved usage-type classification (see <see cref="QQZeng.Qzdb.UsageType"/>).</summary>
     public UsageType UsageType => GetUsageType();
+    /// <summary>ISO 3166-1 alpha-2 country code (redirects to country_code).</summary>
     public string CountryAlpha2 => GetCountryAlpha2();
+    /// <summary>ISO 3166-1 alpha-3 country code.</summary>
     public string CountryAlpha3 => GetCountryAlpha3();
+    /// <summary>Currency code.</summary>
     public string CurrencyCode => GetCurrencyCode();
+    /// <summary>Currency name.</summary>
     public string CurrencyName => GetCurrencyName();
+    /// <summary>Telephone country calling code.</summary>
     public string PhonePrefix => GetPhonePrefix();
+    /// <summary>Country flag emoji.</summary>
     public string EmojiFlag => GetEmojiFlag();
+    /// <summary>Comma-separated list of languages.</summary>
     public string Languages => GetLanguages();
+    /// <summary>Continent name.</summary>
     public string Continent => GetContinent();
+    /// <summary>Continent name in English.</summary>
     public string ContinentEn => GetContinentEn();
+    /// <summary>ISO 3166-1 alpha-2 country code.</summary>
     public string CountryCode => GetCountryCode();
 
+    /// <summary>Returns the CIDR of the network containing this entry (see <see cref="Cidr"/>).</summary>
     public string GetCidr() => Get("cidr");
+    /// <summary>Returns the country name (see <see cref="Country"/>).</summary>
     public string GetCountry() => _idxCountry >= 0 ? GetFast(_idxCountry) : Get("country");
+    /// <summary>Returns the country name in English.</summary>
     public string GetCountryEn() => _idxCountryEn >= 0 ? GetFast(_idxCountryEn) : Get("country_en");
+    /// <summary>Returns the province / state name.</summary>
     public string GetProvince() => _idxProvince >= 0 ? GetFast(_idxProvince) : Get("province");
+    /// <summary>Returns the province / state name in English.</summary>
     public string GetProvinceEn() => _idxProvinceEn >= 0 ? GetFast(_idxProvinceEn) : Get("province_en");
+    /// <summary>Returns the city name.</summary>
     public string GetCity() => _idxCity >= 0 ? GetFast(_idxCity) : Get("city");
+    /// <summary>Returns the city name in English.</summary>
     public string GetCityEn() => _idxCityEn >= 0 ? GetFast(_idxCityEn) : Get("city_en");
+    /// <summary>Returns the district / county name.</summary>
     public string GetDistrict() => _idxDistrict >= 0 ? GetFast(_idxDistrict) : Get("district");
 
+    /// <summary>Returns the geographic ID, or null when absent/invalid.</summary>
     public uint? GetGeoId()
     {
         var v = _idxGeoId >= 0 ? GetFast(_idxGeoId) : Get("geo_id");
@@ -321,6 +370,7 @@ public sealed class GeoInfo
         return uint.TryParse(v, out var r) ? r : null;
     }
 
+    /// <summary>Returns the longitude, or null when absent/invalid.</summary>
     public double? GetLongitude()
     {
         var v = _idxLongitude >= 0 ? GetFast(_idxLongitude) : Get("longitude");
@@ -328,6 +378,7 @@ public sealed class GeoInfo
         return double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var r) ? r : null;
     }
 
+    /// <summary>Returns the latitude, or null when absent/invalid.</summary>
     public double? GetLatitude()
     {
         var v = _idxLatitude >= 0 ? GetFast(_idxLatitude) : Get("latitude");
@@ -335,10 +386,14 @@ public sealed class GeoInfo
         return double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var r) ? r : null;
     }
 
+    /// <summary>Returns the timezone string.</summary>
     public string GetTimezone() => _idxTimezone >= 0 ? GetFast(_idxTimezone) : Get("timezone");
+    /// <summary>Returns the ISP / operator name.</summary>
     public string GetIsp() => _idxIsp >= 0 ? GetFast(_idxIsp) : Get("isp");
+    /// <summary>Returns the ISP / operator name in English.</summary>
     public string GetIspEn() => _idxIspEn >= 0 ? GetFast(_idxIspEn) : Get("isp_en");
 
+    /// <summary>Returns the ASN, or null when absent/invalid.</summary>
     public uint? GetAsn()
     {
         var v = _idxAsn >= 0 ? GetFast(_idxAsn) : Get("asn");
@@ -346,23 +401,37 @@ public sealed class GeoInfo
         return uint.TryParse(v, out var r) ? r : null;
     }
 
+    /// <summary>Returns the AS name.</summary>
     public string GetAsName() => _idxAsName >= 0 ? GetFast(_idxAsName) : Get("as_name");
+    /// <summary>Returns the AS domain.</summary>
     public string GetAsDomain() => _idxAsDomain >= 0 ? GetFast(_idxAsDomain) : Get("as_domain");
 
+    /// <summary>Returns the resolved usage-type classification.</summary>
     public UsageType GetUsageType() => UsageType.Parse(_idxUsageType >= 0 ? GetFast(_idxUsageType) : Get("usage_type"));
 
     // 数据集以 country_code 存储 ISO 3166-1 alpha-2（如 "CN"），并不存在 country_alpha2 字段；
     // GetCountryAlpha2 重定向到 country_code 以返回真实二字码（历史返回 "" 为字段名笔误 bug）。
+    /// <summary>Returns the ISO 3166-1 alpha-2 country code.</summary>
     public string GetCountryAlpha2() => Get("country_code");
+    /// <summary>Returns the ISO 3166-1 alpha-3 country code.</summary>
     public string GetCountryAlpha3() => Get("country_alpha3");
+    /// <summary>Returns the continent name.</summary>
     public string GetContinent() => _idxContinent >= 0 ? GetFast(_idxContinent) : Get("continent");
+    /// <summary>Returns the continent name in English.</summary>
     public string GetContinentEn() => _idxContinentEn >= 0 ? GetFast(_idxContinentEn) : Get("continent_en");
+    /// <summary>Returns the ISO 3166-1 alpha-2 country code.</summary>
     public string GetCountryCode() => _idxCountryCode >= 0 ? GetFast(_idxCountryCode) : Get("country_code");
+    /// <summary>Returns the currency code.</summary>
     public string GetCurrencyCode() => Get("currency_code");
+    /// <summary>Returns the currency name.</summary>
     public string GetCurrencyName() => Get("currency_name");
+    /// <summary>Returns the telephone country calling code.</summary>
     public string GetPhonePrefix() => Get("phone_prefix");
+    /// <summary>Returns the country flag emoji.</summary>
     public string GetEmojiFlag() => Get("emoji_flag");
+    /// <summary>Returns the comma-separated language list.</summary>
     public string GetLanguages() => Get("languages");
 
+    /// <summary>Returns the pipe-delimited representation (same as <see cref="ToPipe"/>).</summary>
     public override string ToString() => ToPipe();
 }
