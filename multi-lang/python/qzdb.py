@@ -303,7 +303,7 @@ class QzdbError(Exception):
 
 
 class GeoInfo:
-    __slots__ = ('_values', '_field_names', '_float_indices', '_name_idx', '_norm_idx', '_pipe')
+    __slots__ = ('_field_names', '_float_indices', '_name_idx', '_norm_idx', '_pipe', '_values')
 
     def __init__(self, values=None, field_names=None, float_indices=None, name_idx=None):
         self._values = values or []
@@ -813,19 +813,21 @@ class QzdbReader:
         except OSError as exc:
             raise QzdbError(f'Failed to read database file: {exc}', QzdbError.CORRUPTED) from exc
 
-        try:
-            fsize = os.fstat(f.fileno()).st_size
-            if fsize >= 1024 * 1024:  # 1MB threshold → mmap for lazy loading
-                data = mmap.mmap(f.fileno(), fsize, access=mmap.ACCESS_READ)
-                is_mmap = True
-            else:
-                data = f.read()
-                is_mmap = False
-        except OSError as exc:
-            f.close()
-            raise QzdbError(f'Failed to memory-map database: {exc}', QzdbError.CORRUPTED) from exc
-        finally:
-            f.close()
+        # `with f:` 保证 f 在这个块的任何退出路径（正常返回或异常）都恰好关闭一次；
+        # 之前手写 except 分支里关一次、外层 finally 又关一次的写法虽然安全
+        # （Python 文件对象的 close() 是幂等的，重复调用不会出错），但属于多余的
+        # 双重关闭。改用 with 是 Python 官方推荐的资源管理写法（PEP 8 / ruff SIM115）。
+        with f:
+            try:
+                fsize = os.fstat(f.fileno()).st_size
+                if fsize >= 1024 * 1024:  # 1MB threshold → mmap for lazy loading
+                    data = mmap.mmap(f.fileno(), fsize, access=mmap.ACCESS_READ)
+                    is_mmap = True
+                else:
+                    data = f.read()
+                    is_mmap = False
+            except OSError as exc:
+                raise QzdbError(f'Failed to memory-map database: {exc}', QzdbError.CORRUPTED) from exc
 
         shadow = self._build_shadow(data, is_mmap)
         self._publish(shadow)
@@ -900,20 +902,18 @@ class QzdbReader:
         except OSError as exc:
             self._verify_crc = saved_verify
             raise QzdbError(f'Failed to read reload file: {path}', QzdbError.CORRUPTED) from exc
-        try:
-            fsize = os.fstat(f.fileno()).st_size
-            if fsize >= 1024 * 1024:
-                data = mmap.mmap(f.fileno(), fsize, access=mmap.ACCESS_READ)
-                is_mmap = True
-            else:
-                data = f.read()
-                is_mmap = False
-        except OSError as exc:
-            f.close()
-            self._verify_crc = saved_verify
-            raise QzdbError(f'Failed to memory-map reload file: {exc}', QzdbError.CORRUPTED) from exc
-        finally:
-            f.close()
+        with f:
+            try:
+                fsize = os.fstat(f.fileno()).st_size
+                if fsize >= 1024 * 1024:
+                    data = mmap.mmap(f.fileno(), fsize, access=mmap.ACCESS_READ)
+                    is_mmap = True
+                else:
+                    data = f.read()
+                    is_mmap = False
+            except OSError as exc:
+                self._verify_crc = saved_verify
+                raise QzdbError(f'Failed to memory-map reload file: {exc}', QzdbError.CORRUPTED) from exc
         shadow = self._build_shadow(data, is_mmap)
         self._verify_crc = saved_verify
         self._publish(shadow)
@@ -1023,7 +1023,11 @@ class QzdbReader:
                 fv = struct.unpack_from('<f', d, fo)[0] if w == 4 else struct.unpack_from('<d', d, fo)[0]
             except (struct.error, IndexError, OverflowError, TypeError, ValueError):
                 self._oob(fo, 4 if w == 4 else 8)
-            if fv != fv or fv in (float('inf'), float('-inf')):
+            # `fv != fv` 是 IEEE 754 NaN 检测的经典写法（NaN 是唯一"不等于自身"的浮点值）。
+            # ruff 的 PLR0124（"自己和自己比较"）在这里是误报：这不是笔误，是刻意选择——
+            # 单条浮点比较字节码，比 math.isnan(fv) 多一次函数调用/属性查找要快，
+            # 而这里是逐条查询都会走到的解码热路径。
+            if fv != fv or fv in (float('inf'), float('-inf')):  # noqa: PLR0124
                 return ''
             if fv == int(fv):
                 return str(int(fv))
@@ -1195,8 +1199,7 @@ class QzdbReader:
         gm_off += 1
 
         actual_groups = min(group_count, max(1, self._geo_entry_group_count))
-        if actual_groups > 4:
-            actual_groups = 4
+        actual_groups = min(actual_groups, 4)
         # A file with zero groups carries no queryable dimension at all; reject
         # it rather than building an empty reader that would IndexError later
         # (same contract as the Rust/Go readers).
@@ -1742,7 +1745,6 @@ class QzdbReader:
         group_entry_start = self._off_geo_entries + self._group_entry_offsets[group_index]
         stride = self._group_strides[group_index]
         entry_offset = group_entry_start + entry_id * stride
-        d = self._data
 
         widths = self._group_field_widths[group_index]
         base_offsets = self._group_field_offsets[group_index]
@@ -1872,12 +1874,11 @@ class QzdbReader:
             return None
         if not self._has_v6:
             return None
-        if len(ip_bytes) == 16 and ip_bytes[10] == 0xFF and ip_bytes[11] == 0xFF:
-            # Check that bytes 0..9 are all zero → genuine v4-mapped address.
-            if ip_bytes[:10] == b'\x00' * 10:
-                v4 = ((ip_bytes[12] & 0xFF) << 24 | (ip_bytes[13] & 0xFF) << 16
-                      | (ip_bytes[14] & 0xFF) << 8 | (ip_bytes[15] & 0xFF))
-                return self.find_uint(v4)
+        if len(ip_bytes) == 16 and ip_bytes[10] == 0xFF and ip_bytes[11] == 0xFF and ip_bytes[:10] == b'\x00' * 10:
+            # 前两个魔数字节匹配 + 前 10 字节全零，才是真正的 v4-mapped 地址。
+            v4 = ((ip_bytes[12] & 0xFF) << 24 | (ip_bytes[13] & 0xFF) << 16
+                  | (ip_bytes[14] & 0xFF) << 8 | (ip_bytes[15] & 0xFF))
+            return self.find_uint(v4)
         row_id = self._trie_walk_v6_bytes(ip_bytes)
         if row_id == 0:
             return None
@@ -1935,7 +1936,6 @@ class QzdbReader:
         group_entry_start = self._off_geo_entries + self._group_entry_offsets[group_index]
         stride = self._group_strides[group_index]
         entry_offset = group_entry_start + entry_id * stride
-        d = self._data
         widths = self._group_field_widths[group_index]
         base_offsets = self._group_field_offsets[group_index]
         natives = self._group_field_native[group_index]
@@ -2390,7 +2390,7 @@ class BatchResult:
         error: a ``QzdbError`` if the lookup raised, else ``None``.
     """
 
-    __slots__ = ('ip', 'geo_info', 'error')
+    __slots__ = ('error', 'geo_info', 'ip')
 
     def __init__(self, ip, geo_info=None, error=None):
         self.ip = ip

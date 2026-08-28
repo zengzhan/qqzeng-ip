@@ -12,30 +12,40 @@ serde_json = "1"
 serde_json = "1"
 rayon = "1"
 
-[[bin]]
-name = "bench_qps"
-path = "bench_qps.rs"
-
-[[bin]]
-name = "batch_rust"
-path = "src/bin/batch_rust.rs"
-
-[[bin]]
-name = "main"
-path = "src/main.rs"
-
-[[bin]]
-name = "demo"
-path = "src/bin/demo.rs"
-
-[[bin]]
-name = "dump_rust"
-path = "src/bin/dump_rust.rs"
-
-[[bin]]
-name = "regress_rust"
-path = "src/bin/regress_rust.rs"
-
-[[bin]]
-name = "metaprobe"
-path = "src/bin/metaprobe.rs"
+# 注意：原先这里声明了 7 个 [[bin]] target（bench_qps / batch_rust / main / demo /
+# dump_rust / regress_rust / metaprobe），但仓库里除了 src/lib.rs 之外，这些 bin
+# 对应的源文件全部不存在（无 .gitignore 排除，git 历史里也没有）。这意味着任何人
+# `git clone` 本仓库后执行 `cargo build`（不带 --lib）都会在第一步就失败：
+#   error: couldn't read src/bin/batch_rust.rs: No such file or directory
+# 这是本次审查里唯一一个"开箱即崩"级别的问题——不需要任何特殊场景就能 100% 复现。
+# 这些声明目前只保留为占位注释：如果以后要把对应的 bench/demo/工具二进制补回仓库，
+# 把下面对应的 [[bin]] 块取消注释、并把源文件一并提交即可；在文件补齐之前，
+# 保留这些声明只会持续阻塞每一个消费者的 `cargo build`/`cargo test`/`cargo publish`。
+#
+# [[bin]]
+# name = "bench_qps"
+# path = "bench_qps.rs"
+#
+# [[bin]]
+# name = "batch_rust"
+# path = "src/bin/batch_rust.rs"
+#
+# [[bin]]
+# name = "main"
+# path = "src/main.rs"
+#
+# [[bin]]
+# name = "demo"
+# path = "src/bin/demo.rs"
+#
+# [[bin]]
+# name = "dump_rust"
+# path = "src/bin/dump_rust.rs"
+#
+# [[bin]]
+# name = "regress_rust"
+# path = "src/bin/regress_rust.rs"
+#
+# [[bin]]
+# name = "metaprobe"
+# path = "src/bin/metaprobe.rs"
