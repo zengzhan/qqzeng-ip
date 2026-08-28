@@ -376,7 +376,7 @@ fn fmt_native_float(f: f64) -> String {
         return String::new();
     }
     if f == f.trunc() {
-        if f.abs() < 9.223_372_036_854_775_808e18 {
+        if f.abs() < 9.223_372_036_854_776e18 {
             format!("{}", f as i64)
         } else {
             format!("{:.0}", f)
@@ -2247,7 +2247,7 @@ fn parse_ip(s: &str) -> Option<ParsedIp> {
     }
     let dc = s.find("::");
     if let Some(dc) = dc {
-        if s[dc + 2..].find("::").is_some() {
+        if s[dc + 2..].contains("::") {
             return None;
         }
     }
@@ -2410,8 +2410,8 @@ impl QzdbReader {
     fn find_parsed(&self, parsed: &ParsedIp) -> Option<GeoInfo> {
         let snap = self.snap.load();
         match parsed {
-            ParsedIp::V4(v4) => self.find_uint_inner(&*snap, *v4),
-            ParsedIp::V6(b) => self.find_v6_bytes_inner(&*snap, b),
+            ParsedIp::V4(v4) => self.find_uint_inner(&snap, *v4),
+            ParsedIp::V6(b) => self.find_v6_bytes_inner(&snap, b),
         }
     }
 
@@ -2431,7 +2431,7 @@ impl QzdbReader {
 
     pub fn find_uint(&self, ip: u32) -> Option<GeoInfo> {
         let snap = self.snap.load();
-        self.find_uint_inner(&*snap, ip)
+        self.find_uint_inner(&snap, ip)
     }
 
     fn find_v6_bytes_inner(&self, snap: &SnapshotInner, bytes: &[u8; 16]) -> Option<GeoInfo> {
@@ -2454,7 +2454,7 @@ impl QzdbReader {
             return None;
         }
         let b = ip.to_be_bytes();
-        self.find_v6_bytes_inner(&*snap, &b)
+        self.find_v6_bytes_inner(&snap, &b)
     }
 
     /// 从 4/16 字节查询（16 字节含 IPv4-Mapped 降级）。长度非 4/16 返回 None。
@@ -2466,14 +2466,14 @@ impl QzdbReader {
                 b.copy_from_slice(ip_bytes);
                 if is_ipv4_mapped_v6(&b) {
                     let v4 = u32::from_be_bytes([b[12], b[13], b[14], b[15]]);
-                    self.find_uint_inner(&*snap, v4)
+                    self.find_uint_inner(&snap, v4)
                 } else {
-                    self.find_v6_bytes_inner(&*snap, &b)
+                    self.find_v6_bytes_inner(&snap, &b)
                 }
             }
             4 => {
                 let v4 = u32::from_be_bytes([ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]]);
-                self.find_uint_inner(&*snap, v4)
+                self.find_uint_inner(&snap, v4)
             }
             _ => None,
         }
@@ -2487,15 +2487,15 @@ impl QzdbReader {
         let parsed = parse_ip(ip_str)?;
         let snap = self.snap.load();
         match &parsed {
-            ParsedIp::V4(v4) => self.find_uint_shared_inner(&*snap, *v4),
-            ParsedIp::V6(b) => self.find_v6_bytes_shared_inner(&*snap, b),
+            ParsedIp::V4(v4) => self.find_uint_shared_inner(&snap, *v4),
+            ParsedIp::V6(b) => self.find_v6_bytes_shared_inner(&snap, b),
         }
     }
 
     /// `find_shared` 的 uint32 直入版本。
     pub fn find_uint_shared(&self, ip: u32) -> Option<Arc<GeoInfo>> {
         let snap = self.snap.load();
-        self.find_uint_shared_inner(&*snap, ip)
+        self.find_uint_shared_inner(&snap, ip)
     }
 
     /// `find_shared` 的 16 字节 IPv6 直入版本。
@@ -2505,7 +2505,7 @@ impl QzdbReader {
             return None;
         }
         let b = ip.to_be_bytes();
-        self.find_v6_bytes_shared_inner(&*snap, &b)
+        self.find_v6_bytes_shared_inner(&snap, &b)
     }
 
     /// 字段投影查询；fields 为空等价于 find。
