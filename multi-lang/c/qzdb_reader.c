@@ -43,20 +43,21 @@ const char* qzdb_strerror(int error_code) {
  * CRC32
  * ======================================================================== */
 static uint32_t crc32_table[256];
-static int crc32_ready = 0;
+static pthread_once_t crc32_once = PTHREAD_ONCE_INIT;
 
-static void crc32_init(void) {
+static void crc32_init_once(void) {
     for (uint32_t i = 0; i < 256; i++) {
         uint32_t c = i;
         for (int j = 0; j < 8; j++)
             c = (c & 1) ? (c >> 1) ^ 0xEDB88320 : c >> 1;
         crc32_table[i] = c;
     }
-    crc32_ready = 1;
 }
 
 static uint32_t crc32_update(uint32_t crc, const uint8_t* buf, size_t len) {
-    if (!crc32_ready) crc32_init();
+    /* pthread_once makes the lazy lookup table initialization race-free while
+     * keeping the hot path read-only after the first call. */
+    (void)pthread_once(&crc32_once, crc32_init_once);
     for (size_t i = 0; i < len; i++)
         crc = crc32_table[(crc ^ buf[i]) & 0xFF] ^ (crc >> 8);
     return crc;
@@ -76,25 +77,25 @@ static uint32_t crc32_compute_file(const uint8_t* d, size_t size) {
  * Safe read helpers with bounds checking
  * ======================================================================== */
 static int safe_read_u16(const uint8_t* data, size_t data_size, uint64_t off, uint16_t* out) {
-    if (off + 2 > data_size) return QZDB_ERR_BOUNDS;
+    if (off > (uint64_t)data_size || (uint64_t)data_size - off < 2) return QZDB_ERR_BOUNDS;
     *out = (uint16_t)data[off] | ((uint16_t)data[off+1] << 8);
     return QZDB_OK;
 }
 
 static int safe_read_u24(const uint8_t* data, size_t data_size, uint64_t off, uint32_t* out) {
-    if (off + 3 > data_size) return QZDB_ERR_BOUNDS;
+    if (off > (uint64_t)data_size || (uint64_t)data_size - off < 3) return QZDB_ERR_BOUNDS;
     *out = (uint32_t)data[off] | ((uint32_t)data[off+1] << 8) | ((uint32_t)data[off+2] << 16);
     return QZDB_OK;
 }
 
 static int safe_read_u32(const uint8_t* data, size_t data_size, uint64_t off, uint32_t* out) {
-    if (off + 4 > data_size) return QZDB_ERR_BOUNDS;
+    if (off > (uint64_t)data_size || (uint64_t)data_size - off < 4) return QZDB_ERR_BOUNDS;
     *out = (uint32_t)data[off] | ((uint32_t)data[off+1] << 8) | ((uint32_t)data[off+2] << 16) | ((uint32_t)data[off+3] << 24);
     return QZDB_OK;
 }
 
 static int safe_read_u64(const uint8_t* data, size_t data_size, uint64_t off, uint64_t* out) {
-    if (off + 8 > data_size) return QZDB_ERR_BOUNDS;
+    if (off > (uint64_t)data_size || (uint64_t)data_size - off < 8) return QZDB_ERR_BOUNDS;
     uint32_t lo, hi;
     if (safe_read_u32(data, data_size, off, &lo) != QZDB_OK) return QZDB_ERR_BOUNDS;
     if (safe_read_u32(data, data_size, off+4, &hi) != QZDB_OK) return QZDB_ERR_BOUNDS;

@@ -387,30 +387,43 @@ public class QzdbReader implements AutoCloseable {
 
         private void parseRowSchema() throws QzdbException {
             int geoW = 3, asnW = 3, usageW = 0;
-            if (offRowSchema > 0 && offRowSchema + 4 <= dataLen) {
+            if (offRowSchema > 0) {
+                if (offRowSchema > Integer.MAX_VALUE || offRowSchema > dataLen || dataLen - offRowSchema < 4) {
+                    throw new QzdbException(ErrorCode.CORRUPTED, "RowSchema header out of bounds");
+                }
                 int sp = (int) offRowSchema;
                 int fCount = data.get(sp) & 0xFF;
                 int stride = data.get(sp + 1) & 0xFF;
-                if (fCount >= 1 && fCount <= 8 && sp + 4 + (long) fCount * 4 <= dataLen && stride == ipRowSize) {
-                    int g2 = 0, a2 = 0, u2 = 0, total = 0;
-                    boolean ok = true;
-                    int wpos = sp + 4;
-                    for (int i = 0; i < fCount; i++) {
-                        int fid = data.get(wpos) & 0xFF;
-                        int w = data.get(wpos + 1) & 0xFF;
-                        if (w < 1 || w > 4) ok = false;
-                        if (fid == 0) g2 = w;
-                        else if (fid == 1) a2 = w;
-                        else if (fid == 2) u2 = w;
-                        wpos += 4;
-                        total += w;
-                    }
-                    if (ok && total == ipRowSize) {
-                        geoW = g2;
-                        asnW = a2;
-                        usageW = u2;
-                    }
+                if (fCount < 1 || fCount > 8) {
+                    throw new QzdbException(ErrorCode.CORRUPTED, "Invalid RowSchema field count: " + fCount);
                 }
+                if (stride != ipRowSize) {
+                    throw new QzdbException(ErrorCode.CORRUPTED, "RowSchema stride mismatch: " + stride + " != " + ipRowSize);
+                }
+                long required = 4L + (long) fCount * 4L;
+                if (required > dataLen - offRowSchema) {
+                    throw new QzdbException(ErrorCode.CORRUPTED, "RowSchema fields truncated");
+                }
+                int g2 = 0, a2 = 0, u2 = 0, total = 0;
+                int wpos = sp + 4;
+                for (int i = 0; i < fCount; i++) {
+                    int fid = data.get(wpos) & 0xFF;
+                    int w = data.get(wpos + 1) & 0xFF;
+                    if (w < 1 || w > 4) {
+                        throw new QzdbException(ErrorCode.CORRUPTED, "Invalid RowSchema field width: " + w);
+                    }
+                    if (fid == 0) g2 = w;
+                    else if (fid == 1) a2 = w;
+                    else if (fid == 2) u2 = w;
+                    wpos += 4;
+                    total += w;
+                }
+                if (total != ipRowSize) {
+                    throw new QzdbException(ErrorCode.CORRUPTED, "RowSchema widths do not match ipRowSize");
+                }
+                geoW = g2;
+                asnW = a2;
+                usageW = u2;
             }
             rowGeoWidth = geoW;
             rowAsnWidth = asnW;

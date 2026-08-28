@@ -131,7 +131,6 @@ class KnownUsageType extends UsageType
         $map = [];
         foreach ($defs as $d) {
             $inst = new KnownUsageType($d[0], $d[1], $d[2], $d[3]);
-            $name = strtoupper(str_replace(['-', ' '], '_', $d[0]));
             // 用稳定属性名映射（与上面声明的静态属性一一对应）
             switch ($d[0]) {
                 case 'AICrawler': self::$AI_CRAWLER = $inst; break;
