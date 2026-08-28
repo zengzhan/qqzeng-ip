@@ -35,6 +35,34 @@ python3 tools/sync_to_github.py --push
 4. **描述刷新**：严格按**“8个子语言 ➔ ip-qzdb-sdk ➔ 其他顶级目录”**的顺序为每个目录追加带有时间戳的注释并独立 Commit；
 5. **远程推送**：安全推送到 GitHub `origin/main`。
 
+### 3. 根级发布元数据（Packagist 专用，最易踩坑）
+
+`tools/publish_meta/` 下的文件由脚本 `sync_publish_meta()` 拷到**发布仓库根目录**：
+
+| 文件 | 作用 | 为什么必须单独维护 |
+|:---|:---|:---|
+| `composer.json` | Packagist 包定义（包 `qqzeng/qzdb`） | Packagist **只认仓库根**的 composer.json，不支持子目录 |
+| `.gitattributes` | `export-ignore` 裁剪 dist | 只对 GitHub 生成的归档生效 |
+| `LICENSE`（取自开发仓库根） | 包内许可证文件 | Packagist / crates.io 均要求包内带许可证 |
+
+> ⚠️ **路径语境陷阱（实际踩过）**
+> 这两个文件的内容必须按**发布仓库**语境书写——SDK 在 `ip-qzdb-sdk/`，而开发仓库是 `multi-lang/`。
+> 曾把开发仓库语境的 `multi-lang/php/...` 路径直接拷到发布仓库，结果 `export-ignore` 规则
+> **全部静默失效**（git 不报错，只是不匹配、不裁剪），dist 从 160 KB 膨胀到 2.5 MB，
+> 把 `database-sql/`、`ip-classic-sdk/`、`ip-history-sdk/`、`phone-location-sdk/`
+> 四条不相干的产品线全打进了 PHP 包。
+>
+> **规矩**：改这两个文件只能改 `tools/publish_meta/` 里的源头，然后跑同步脚本；
+> **不要在发布仓库里直接改**，下次同步会被覆盖。
+
+改完后必须重新验证（在发布仓库副本里跑）：
+
+```bash
+git add -A && TREE=$(git write-tree) && git archive "$TREE" | tar -t | sort
+# 期望只有 5 项：.gitignore、LICENSE、composer.json、
+#                ip-qzdb-sdk/php/QzdbReader.php、ip-qzdb-sdk/php/README.md
+```
+
 ---
 
 ## 三、手动标准化同步流程（若不使用脚本）
@@ -155,6 +183,9 @@ git push origin main
 2. ❌ **严禁上传内部开发/审计文档**：`CODE_AUDIT_REPORT.md`, `RELEASE_READINESS_REPORT.md` 等内部文件仅保留在本地 dev 仓库；
 3. ❌ **严禁使用 `rsync --delete` 直接覆盖 GitHub 根目录**：会导致 GitHub 根目录专属的 `README.md`, `database-sql/`, `phone-location-sdk/` 等独立仓库文件被误删；
 4. ⚠️ **必须使用拓扑顺序 Commit**：如果修改了 `ip-qzdb-sdk` 顶级目录的内容，必须重新执行 Step 3 刷一遍子目录和顶级目录的 Commit，否则 GitHub 网页右侧会回退显示为旧的通用 Commit Message。
+5. ⚠️ **发布仓库根级元数据必须走 `tools/publish_meta/`**：`composer.json` 与 `.gitattributes`
+   的路径按**发布仓库**语境（`ip-qzdb-sdk/`）书写，与开发仓库的 `multi-lang/` 不同。
+   直接把开发仓库语境的版本拷过去会导致裁剪规则静默失效（详见 §二.3）。
 
 ---
 

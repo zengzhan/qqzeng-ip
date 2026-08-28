@@ -28,7 +28,7 @@
     },
     "autoload": {
         "classmap": [
-            "multi-lang/php/QzdbReader.php"
+            "ip-qzdb-sdk/php/QzdbReader.php"
         ]
     },
     "config": {

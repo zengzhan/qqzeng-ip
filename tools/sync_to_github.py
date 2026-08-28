@@ -5,9 +5,12 @@ QZDB 官方一键同步脚本 (Dev -> GitHub)
 =====================================
 功能：
 1. 精准同步 multi-lang 下各语言 SDK 源码到 GitHub 仓库 (ip-qzdb-sdk)
-2. 自动过滤所有测试文件、基准测试、二进制 *.qzdb 库文件与内部配置
-3. 严格按照拓扑顺序（先子目录、再顶级目录）逐一提交专属 Commit 描述
-4. 自动推送到远程 GitHub 仓库
+2. 同步「发布仓库根级元数据」(tools/publish_meta/ -> 发布仓库根)：composer.json /
+   .gitattributes / LICENSE。这些文件活在**发布仓库根目录**，其路径语境是
+   `ip-qzdb-sdk/`，与开发仓库的 `multi-lang/` 不同，因此单独放在 publish_meta/ 下维护
+3. 自动过滤所有测试文件、基准测试、二进制 *.qzdb 库文件与内部配置
+4. 严格按照拓扑顺序（先子目录、再顶级目录）逐一提交专属 Commit 描述
+5. 自动推送到远程 GitHub 仓库
 
 用法：
     python3 tools/sync_to_github.py [--push]
@@ -109,6 +112,10 @@ def sync_sdk_files():
     # 8. Rust
     shutil.copy2(os.path.join(DEV_DIR, "rust", "Cargo.toml"), os.path.join(GITHUB_SDK, "rust"))
     shutil.copy2(os.path.join(DEV_DIR, "rust", "README.md"), os.path.join(GITHUB_SDK, "rust"))
+    # LICENSE 必须随 crate 走：cargo 只打包 package 目录内的 LICENSE，不会向上查找仓库根，
+    # 缺它 crates.io 页面会显示无许可证文件
+    if os.path.exists(os.path.join(DEV_DIR, "rust", "LICENSE")):
+        shutil.copy2(os.path.join(DEV_DIR, "rust", "LICENSE"), os.path.join(GITHUB_SDK, "rust"))
     rust_target = os.path.join(GITHUB_SDK, "rust", "src")
     os.makedirs(rust_target, exist_ok=True)
     shutil.copy2(os.path.join(DEV_DIR, "rust", "src", "lib.rs"), rust_target)
@@ -119,6 +126,34 @@ def sync_sdk_files():
     shutil.copy2(os.path.join(DEV_DIR, "API_CONTRACT.md"), GITHUB_SDK)
     shutil.copy2(os.path.join(DEV_ROOT, "CHANGELOG.md"), GITHUB_SDK)
     print("✅ 源码与文档同步拷贝完成。")
+
+def sync_publish_meta():
+    """同步「发布仓库根级元数据」。
+
+    这些文件不属于任何单一语言 SDK，而是整个 GitHub 发布仓库的根级配置：
+      - composer.json   Packagist 只认仓库根的 composer.json（不支持子目录），
+                        classmap 指向 `ip-qzdb-sdk/php/QzdbReader.php`
+      - .gitattributes  export-ignore 裁剪 dist，路径同样是 `ip-qzdb-sdk/`
+      - LICENSE         Packagist / crates.io 都要求包内带许可证文件
+
+    关键坑：两个仓库目录结构不同（开发 `multi-lang/` vs 发布 `ip-qzdb-sdk/`），
+    所以这些文件的内容**必须按发布仓库语境书写**。放在 tools/publish_meta/ 下
+    作为单一事实来源，由此函数拷到发布仓库根；在发布仓库里直接改会被下次同步覆盖。
+    """
+    print("\n📋 Step 1b: 同步发布仓库根级元数据 (composer.json / .gitattributes / LICENSE)...")
+    meta_dir = os.path.join(DEV_ROOT, "tools", "publish_meta")
+    if not os.path.isdir(meta_dir):
+        print(f"  ⚠️ 跳过：{meta_dir} 不存在")
+        return
+    for name in ("composer.json", ".gitattributes"):
+        src = os.path.join(meta_dir, name)
+        if os.path.exists(src):
+            shutil.copy2(src, os.path.join(GITHUB_REPO, name))
+            print(f"  ✅ {name} -> 发布仓库根")
+    lic = os.path.join(DEV_ROOT, "LICENSE")
+    if os.path.exists(lic):
+        shutil.copy2(lic, os.path.join(GITHUB_REPO, "LICENSE"))
+        print("  ✅ LICENSE -> 发布仓库根")
 
 def clean_and_verify():
     print("\n🧹 Step 2: 严格清理多余临时文件与测试用例...")
@@ -163,5 +198,6 @@ def refresh_descriptions_and_commit(do_push=False):
 if __name__ == "__main__":
     should_push = "--push" in sys.argv
     sync_sdk_files()
+    sync_publish_meta()
     clean_and_verify()
     refresh_descriptions_and_commit(do_push=should_push)
