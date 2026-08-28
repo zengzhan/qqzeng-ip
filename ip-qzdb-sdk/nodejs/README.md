@@ -2,7 +2,7 @@
 
 > 纯离线、零第三方依赖的 **QZDB IP 地理定位数据库**官方 Node.js SDK（支持 IPv4 / IPv6 双栈）。
 
-- **模块名**：`qzdb`（单文件 `qzdb.js`，`module.exports = QzdbReader`）
+- **包名 / 模块名**：npm 包 `@qqzengip/qzdb`（1.0.5 已发布，Public）；核心单文件 `qzdb.js`，`module.exports = QzdbReader`
 - **定位**：离线解析 `.qzdb` 二进制数据库文件，不依赖任何外部网络请求
 - **架构**：不可变快照（immutable snapshot）+ 有界 `GeoInfo` 解码缓存，并发查询互不阻塞；`reload` 原子替换
 - **运行要求**：Node.js **14+**（使用了 `Buffer`、`class`、Generator 等特性；建议 18+）
@@ -43,7 +43,27 @@
 
 ## 2. 安装
 
-本 SDK 以**单文件**形式提供（`qzdb.js`）。无需 npm 安装，直接 `require` 即可：
+两种方式任选其一：**npm 安装（推荐，已发布）** 或 **拷贝单文件（离线 / 自定义改造）**。
+
+### 2.1 npm 安装（推荐）
+
+包已发布到 npm（`@qqzengip/qzdb@1.0.5`，Public）：
+
+```bash
+npm install @qqzengip/qzdb
+# 或
+npm i @qqzengip/qzdb
+```
+
+引入：
+
+```js
+const QzdbReader = require('@qqzengip/qzdb');
+```
+
+### 2.2 拷贝单文件（离线 / 自定义改造）
+
+本 SDK 以**单文件**形式提供（`qzdb.js`），无需 npm 安装，拷贝到项目里直接 `require` 即可：
 
 ```js
 const QzdbReader = require('./qzdb');
@@ -56,7 +76,7 @@ const QzdbReader = require('./qzdb');
 //   QzdbReader.GeoInfo / UsageType / RowIds / BatchResult
 ```
 
-> 说明：`module.exports = QzdbReader`，`QzdbReader` 是主读取类；其余类型一律以**静态属性**形式挂在它下面，保持一致命名空间。
+> 说明：`module.exports = QzdbReader`，`QzdbReader` 是主读取类；其余类型一律以**静态属性**形式挂在它下面，保持一致命名空间。无论用 npm 安装还是拷贝单文件，API 完全一致；下文示例统一用 `require('./qzdb')` 指代（npm 方式请替换为 `require('@qqzengip/qzdb')`）。
 
 ---
 
@@ -441,7 +461,10 @@ const hash = reader.getFileHash();
 
 ### 14.3 升级 SDK
 
-本 SDK 单文件发布，升级即替换 `qzdb.js`。版本遵循 **SemVer**。
+版本遵循 **SemVer**。
+
+- **npm 安装方式**：`npm update @qqzengip/qzdb`（或 `npm install @qqzengip/qzdb@latest`）即可升级到最新版。
+- **单文件方式**：替换 `qzdb.js` 即可。
 
 ---
 
@@ -475,5 +498,3 @@ node tier3_concurrent.js        # 并发安全验证
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: nodejs: Node.js SDK（BigInt 偏移解析） sync=1787918400 -->

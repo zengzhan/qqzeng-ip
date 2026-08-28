@@ -5,7 +5,7 @@
 - **官方坐标**：`com.qqzeng:qzdb`（已发布至 Maven Central）；Java 包名即 `com.qqzeng.qzdb`
 - **定位**：离线解析 `.qzdb` 二进制数据库文件，不依赖任何外部网络请求
 - **架构**：无锁快照（lock-free snapshot）——并发查询互不阻塞，`reload` 原子切换（原子引用替换）
-- **运行要求**：JDK 21+（编译目标 `maven.compiler.release=21`）
+- **运行要求**：JDK 17+（编译目标 `maven.compiler.release=17`，产物 bytecode 为 Java 17，兼容 17/21/25/26）
 - **许可**：MIT
 
 ---
@@ -34,7 +34,7 @@
 
 | 项 | 要求 |
 |----|------|
-| JDK | **21 或更高**（SDK 使用了 `record`、`sealed interface`、`switch` 表达式、`Stream` 等特性） |
+| JDK | **17 或更高**（SDK 编译目标 `release=17`，使用了 `record`、`sealed interface`、`switch` 表达式、`Stream` 等 Java 17 特性） |
 | 构建工具 | Maven 3.6+（也可直接用 `javac` 编译 `src/main/java`） |
 | 操作系统 | Windows / Linux / macOS 均可 |
 | 数据库文件 | `.qzdb` 格式（由官方数据构建工具生成，含所需分组的二进制数据） |
@@ -46,25 +46,25 @@
 
 ### 2.1 Maven / Gradle 坐标
 
-已发布至 **Maven Central**，构建工具会自动拉取 `qzdb-1.0.0.jar` 及其 `-sources.jar` / `-javadoc.jar`，**无需克隆本仓库源码**。
+已发布至 **Maven Central**，构建工具会自动拉取 `qzdb-1.0.6.jar` 及其 `-sources.jar` / `-javadoc.jar`，**无需克隆本仓库源码**。
 
 ```xml
 <!-- Maven -->
 <dependency>
     <groupId>com.qqzeng</groupId>
     <artifactId>qzdb</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.6</version>
 </dependency>
 ```
 
 ```groovy
 // Gradle (Groovy DSL)
-implementation 'com.qqzeng:qzdb:1.0.0'
+implementation 'com.qqzeng:qzdb:1.0.6'
 ```
 
 ```kotlin
 // Gradle (Kotlin DSL)
-implementation("com.qqzeng:qzdb:1.0.0")
+implementation("com.qqzeng:qzdb:1.0.6")
 ```
 
 > 若需本地构建：在 `multi-lang/java/` 执行 `mvn install` 安装到本地仓库；或直接把 `src/main/java/com/qqzeng/qzdb/` 目录加入你的源码树编译。
@@ -488,7 +488,7 @@ String hash = reader.getFileHash();
 ### 14.4 兼容性注意
 
 - Java 包名与 Maven `artifactId` 一致（`com.qqzeng.qzdb` / `qzdb`），升级不会造成包名漂移。
-- 编译目标 JDK 21：引用方 JDK 至少需 21。
+- 编译目标 JDK 17：引用方 JDK 至少需 17（产物为 Java 17 bytecode，17/21/25/26 均可运行）。
 
 ---
 
@@ -506,7 +506,7 @@ String hash = reader.getFileHash();
 | `src/main/java/com/qqzeng/qzdb/RowIds.java` | 行号反查 `record`（`geoId` / `asnId` / `usageId`） |
 | `src/main/java/com/qqzeng/qzdb/UsageType.java` + `KnownUsageType.java` + `UnknownUsageType.java` | 用途分类密封接口与中英映射、未知兜底 |
 | `src/main/java/com/qqzeng/qzdb/QzdbException.java` | 异常类型与 `ErrorCode` 枚举 |
-| `pom.xml` | Maven 项目文件（JDK 21 编译目标 + 元数据） |
+| `pom.xml` | Maven 项目文件（JDK 17 编译目标 + 元数据） |
 
 测试 / 基准（同 `src/test/java`，依赖外部 `test_data_202608/` 数据，已跳过 surefire 自动执行）：
 
@@ -521,5 +521,3 @@ String hash = reader.getFileHash();
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: java: Java SDK（堆外内存与 Builder API） sync=1787918400 -->
