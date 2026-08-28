@@ -43,18 +43,10 @@
 
 ## 2. 安装
 
-`go.mod` 中引用（模块名统一为 `qzdb_reader`）：
+包已发布到 Go Module（`github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go`）。在你的模块中直接引入即可：
 
-```go
-require qzdb_reader v0.0.0
-```
-
-若使用本地路径或 `replace`：
-
-```go
-require qzdb_reader v0.0.0
-
-replace qzdb_reader => ../path/to/multi-lang/go
+```bash
+go get github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go@latest
 ```
 
 代码中导入：
@@ -62,6 +54,13 @@ replace qzdb_reader => ../path/to/multi-lang/go
 ```go
 import "github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go/qzdb"
 ```
+
+> 本地开发 / 自定义改造可用 `replace` 指向本地目录：
+> ```go
+> require github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go v0.0.0
+>
+> replace github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go => ../path/to/qzdb/multi-lang/go
+> ```
 
 ---
 
@@ -421,7 +420,7 @@ go test -race ./qzdb/   # 竞态检测（并发查询 / 热更新无撕裂读）
 
 ```
 go/
-├── go.mod            # module qzdb_reader
+├── go.mod            # module github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go
 ├── qzdb/
 │   ├── qzdb.go        # Snapshot / QzdbReader / Trie / 解析 / 加载 / 热更新 / 元信息
 │   ├── geoinfo.go     # GeoInfo / 归一化 / 无锁缓存 / 字段投影
@@ -436,5 +435,3 @@ go/
 │   ├── *_test.go      # Tier1 单测 + Tier2 黄金校验 + Tier0 CSV 真值 + Tier3 并发/性能
 └── cmd/               # demo / batch / bench / dump / regress 等示例
 ```
-
-<!-- commit: go: Go SDK（跨平台 mmap，无锁并发查询） sync=1787945119 -->
