@@ -1,17 +1,18 @@
-name: Publish Java SDK to Maven Central
+name: Publish to Maven Central
 
-# 在打 tag（v*）时自动构建 + GPG 签名 + 发布到 Maven Central。
-# central-publishing-maven-plugin 从 settings.xml 的 serverId=central 读取凭证，
-# 由 actions/setup-java 的 server-username / server-password 自动生成该文件。
-# 需要先在仓库 Settings → Secrets and variables → Actions 配置 4 个 secret：
-#   CENTRAL_USERNAME  —— Sonatype User Token 的 username
-#   CENTRAL_TOKEN     —— Sonatype User Token 的 password
-#   GPG_PRIVATE_KEY   —— ASCII-armored 私钥（gpg --armor --export-secret-keys <id> 的输出）
-#   GPG_PASSPHRASE    —— 该 GPG 私钥的口令（本仓库密钥无口令可留空）
+# 在打 tag（v1.0.x 或 v-java-*）时自动构建 + GPG 签名 + 发布到 Maven Central。
+# 需要先在仓库 Settings → Secrets and variables → Actions 配置：
+#   CENTRAL_TOKEN      —— 从 https://central.sonatype.com 账号的 "Publish" 页生成的 token
+#   GPG_PRIVATE_KEY    —— ASCII-armored 私钥（gpg --armor --export-secret-keys <id> 的输出）
+#   GPG_PASSPHRASE     —— 该 GPG 私钥的口令
+#
+# tag 过滤器从原来的 'v*' 收紧为下面两条：仓库是多语言 monorepo，'v*' 会连
+# v-rust-* / v-python-* 一起匹配，导致发 Rust 版时误触发 Maven Central 发布。
 on:
   push:
     tags:
-      - 'v*'
+      - 'v[0-9]*'      # 纯版本号：全平台统一发版
+      - 'v-java-*'     # 仅发布 Java
 
 jobs:
   publish:
@@ -26,11 +27,6 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-          # 这两项会写入 ~/.m2/settings.xml，供 central-publishing-maven-plugin
-          # 通过 publishingServerId=central 读取进行认证。
-          server-id: central
-          server-username: CENTRAL_USERNAME
-          server-password: CENTRAL_TOKEN
 
       - name: Import GPG private key
         env:
@@ -39,9 +35,8 @@ jobs:
           printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
 
       - name: Publish to Maven Central
-        working-directory: ip-qzdb-sdk/java
+        working-directory: multi-lang/java
         env:
-          CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_TOKEN: ${{ secrets.CENTRAL_TOKEN }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: mvn -B -Ppublish-central -Dgpg.passphrase="$GPG_PASSPHRASE" deploy

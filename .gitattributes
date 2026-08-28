@@ -1,0 +1,67 @@
+# Composer / Packagist dist 裁剪
+#
+# Packagist 不直接读 git，而是下载 GitHub 生成的源码归档（zipball）；GitHub 生成归档时
+# 会应用 export-ignore 属性。本仓库是 8 语言 monorepo，若不裁剪，PHP 用户 `composer
+# require qqzeng/qzdb` 会连带下载 C/Go/Java/C#/Rust/Node/Python 全套源码与 4.3 MB 的
+# demo 数据库。裁剪后 dist 约 100 KB。
+#
+# 两条必须记住的 gitattributes 语义（踩过的坑，改动后务必重跑下面的验证命令）：
+#
+# 1. gitattributes **不支持** `!` 反选——git 2.40+ 会直接忽略该行并打印
+#    "Negative patterns are ignored in git attributes"。要覆盖前面的通配忽略，
+#    必须显式写 `-export-ignore`（unset），且放在被覆盖的规则**之后**。
+# 2. **目录**一旦被 export-ignore，git archive 就不再递归进入它——即使后面用
+#    `-export-ignore` 放行目录内的文件也不会生效。所以绝不能写
+#    `/multi-lang/** export-ignore`，必须逐项列出要忽略的目录。
+#
+# export-ignore 只作用于 `git archive` 与 GitHub 归档，不影响 git clone、本地开发与 CI
+# 检出——工作区内容完全不变。
+#
+# 验证方式：
+#   git add -A && TREE=$(git write-tree) && git archive "$TREE" | tar -t | sort
+# 期望只看到：.gitignore、LICENSE、composer.json、multi-lang/php/QzdbReader.php、
+#            multi-lang/php/README.md（外加若干空目录壳）
+
+# --- 顶层：非 PHP 资产 ---
+/.github/**               export-ignore
+/.claude/**               export-ignore
+/.gitattributes           export-ignore
+/cmd/**                   export-ignore
+/demo/**                  export-ignore
+/docs/**                  export-ignore
+/java/**                  export-ignore
+/sql/**                   export-ignore
+/tools/**                 export-ignore
+/CHANGELOG.md             export-ignore
+/CLAUDE.md                export-ignore
+/PUBLISHING.md            export-ignore
+/README.md                export-ignore
+/global.json              export-ignore
+/.black.toml              export-ignore
+/.pre-commit-config.yaml  export-ignore
+/.prettierrc              export-ignore
+/.ruff.toml               export-ignore
+
+# --- multi-lang：逐项忽略非 PHP 语言目录 ---
+/multi-lang/bench_reports/**    export-ignore
+/multi-lang/c/**                export-ignore
+/multi-lang/go/**               export-ignore
+/multi-lang/java/**             export-ignore
+/multi-lang/netcore/**          export-ignore
+/multi-lang/netcore.Tests/**    export-ignore
+/multi-lang/netcore.bench/**    export-ignore
+/multi-lang/netcore.samples/**  export-ignore
+/multi-lang/nodejs/**           export-ignore
+/multi-lang/python/**           export-ignore
+/multi-lang/rust/**             export-ignore
+/multi-lang/tools/**            export-ignore
+/multi-lang/*.md                export-ignore
+/multi-lang/*.py                export-ignore
+/multi-lang/*.sh                export-ignore
+/multi-lang/*.props             export-ignore
+
+# --- multi-lang/php：忽略内部测试脚本，只放行 SDK 入口 ---
+# （顺序不可调换：`-export-ignore` 必须位于通配规则之后才能覆盖它）
+/multi-lang/php/*               export-ignore
+/multi-lang/php/QzdbReader.php  -export-ignore
+/multi-lang/php/README.md       -export-ignore

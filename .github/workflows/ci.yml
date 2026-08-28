@@ -1,0 +1,142 @@
+name: QZDB CI Gate
+
+# Two-tier design (replaces the old verify.yml whose hard data-directory check
+# made it unpassable on hosted runners, since real .qzdb files are intentionally
+# gitignored):
+#
+#   Tier 1  compile-gate       Always runs. No proprietary data required.
+#                              Catches API/compile breaks across all 8 language
+#                              ports and runs the data-free ASan/UBSan hostile
+#                              harness recommended by c/fuzz/boundary_test.c.
+#
+#   Tier 2  full-verification  Cross-language oracle against the PUBLISHED demo
+#                              sample (demo/qqzeng-ip-ult.qzdb + its CSV ground
+#                              truth, tracked in this repo). Anchors Python SDK
+#                              field-by-field against the CSV and checks node/php
+#                              parity. No secrets, no downloads.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile-gate:
+    name: Compile gate (data-free)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Java — compile full source tree
+        working-directory: multi-lang/java
+        run: |
+          mkdir -p build
+          javac -encoding UTF-8 -d build $(find src -name '*.java')
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: C# — build SDK + test suite (harness command)
+        working-directory: multi-lang
+        run: >
+          dotnet build netcore.Tests/netcore.Tests.csproj -c Release
+          -p:TargetFramework=net10.0 -p:TargetFrameworks=net10.0 -v:q
+
+      - name: Set up Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+
+      - name: Rust — cargo check all targets
+        working-directory: multi-lang/rust
+        run: cargo check --all-targets
+
+      - name: Set up Go 1.22
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Go — build & vet
+        working-directory: multi-lang/go
+        run: |
+          go build ./...
+          go vet ./...
+
+      - name: Install PHP CLI and C toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y php-cli gcc
+
+      - name: C — build & run ASan/UBSan hostile harness (data-free)
+        working-directory: multi-lang/c/fuzz
+        run: |
+          cc -std=c11 -g -O1 -fsanitize=address,undefined \
+             ../qzdb_reader.c boundary_test.c -o /tmp/boundary_test -pthread -lm
+          /tmp/boundary_test
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Node.js — syntax check
+        run: |
+          node --check multi-lang/nodejs/qzdb.js
+          node --check multi-lang/nodejs/test_suite.js
+
+      - name: PHP — lint
+        run: php -l multi-lang/php/QzdbReader.php
+
+      - name: Python — byte-compile sources and tests
+        working-directory: multi-lang/python
+        run: |
+          python3 -m py_compile qzdb.py test_tier1.py test_golden.py \
+                                test_csv_oracle.py test_regression.py
+
+  full-verification:
+    name: Full verification (public demo sample)
+    needs: compile-gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install PHP CLI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y php-cli
+
+      - name: Cross-language demo-sample oracle (anchor + parity)
+        working-directory: multi-lang
+        run: |
+          python3 tools/demo_sample_check.py \
+            --db ../demo/qqzeng-ip-ult.qzdb \
+            --csv ../demo/qqzeng-ip-ult.csv \
+            --parity nodejs,php
