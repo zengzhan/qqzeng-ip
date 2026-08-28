@@ -94,6 +94,11 @@ def sync_sdk_files():
     for f in os.listdir(os.path.join(DEV_DIR, "netcore")):
         if f.endswith(".cs"):
             shutil.copy2(os.path.join(DEV_DIR, "netcore", f), os.path.join(GITHUB_SDK, "netcore"))
+    # .editorconfig 必须随 SDK 走：netcore 开了 AnalysisMode=All + TreatWarningsAsErrors，
+    # 每个 CA 告警都必须显式修复或带理由抑制，而这些抑制全写在 .editorconfig 里。
+    # 缺它时发布仓库的 C# SDK 会把 50 条已裁决的 CA 规则（如 CA1031）重新报成 error。
+    if os.path.exists(os.path.join(DEV_DIR, "netcore", ".editorconfig")):
+        shutil.copy2(os.path.join(DEV_DIR, "netcore", ".editorconfig"), os.path.join(GITHUB_SDK, "netcore"))
 
     # 5. Node.js
     shutil.copy2(os.path.join(DEV_DIR, "nodejs", "package.json"), os.path.join(GITHUB_SDK, "nodejs"))

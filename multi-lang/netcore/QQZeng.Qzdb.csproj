@@ -5,8 +5,21 @@
     <TargetFrameworks>net8.0;net9.0;net10.0;net11.0</TargetFrameworks>
     <OutputType>Library</OutputType>
 
-    <!-- 语言/编译选项（Nullable/ImplicitUsings/LangVersion/InvariantGlobalization 由 ../Directory.Build.props 统一提供） -->
+    <!-- 语言/编译选项 -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!--
+        Nullable / ImplicitUsings / LangVersion / InvariantGlobalization 原本由
+        ../Directory.Build.props 统一提供，但该文件不在 GitHub 发布仓库的同步清单内
+        （ip-qzdb-sdk/netcore/ 只发布 *.cs + csproj + README.md），导致发布仓库里的
+        C# SDK 脱离上层 props 后独立编译直接失败——缺 Nullable 触发 CS8632（121 处）、
+        缺 ImplicitUsings 导致 Span<> / Memory<> / ReadOnlySpan<> 找不到（CS0246）。
+        现改为在 csproj 内显式声明，使 SDK 自包含；取值与 Directory.Build.props 保持一致，
+        开发仓库侧行为不变（csproj 与 props 同值时以 csproj 为准，无冲突）。
+    -->
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <InvariantGlobalization>true</InvariantGlobalization>
 
     <!-- 静态分析：显式开启最严格档位（此前仅 release notes 声称 AnalysisMode=All，实际为默认 8.0 档）。
          AnalysisMode=All + TreatWarningsAsErrors 保证每个 CA 规则告警都必须被显式处理（修复或带理由抑制），
