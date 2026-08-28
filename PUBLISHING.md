@@ -15,6 +15,19 @@
 > 包版本独立于 QZDB 数据格式版本（数据格式见 `API_CONTRACT.md`）。
 > 两个待发布包名已于 2026-08-29 在各自注册中心确认**未被占用**。
 
+> ⚠️ **两个仓库，别搞混**（完整规范见 `docs/QZDB_SYNC_GUIDE.md`）
+>
+> | | 开发仓库（本文档所在） | 发布仓库 |
+> |---|---|---|
+> | 路径 | `/Users/zengxiangzhan/ZengData/IP数据库/qzdb` | `/Users/zengxiangzhan/ZengData/网站/GitHub/qqzeng-ip/qqzeng-ip` |
+> | SDK 位置 | `multi-lang/` | `ip-qzdb-sdk/` |
+> | 内容 | 源码 + 测试 + 内部文档 + 商业库 | 仅 SDK 源码与公开文档 |
+> | git 历史 | **与发布仓库无共同祖先**，永不 merge / 强推 | 同上 |
+>
+> 同步只走 `python3 tools/sync_to_github.py [--push]`（在开发仓库执行）。
+> 发布仓库根的 `composer.json` / `.gitattributes` 的源头在 `tools/publish_meta/`，
+> `.github/workflows/` 手工维护——两者都不在同步脚本的 SDK 清单内。
+
 ---
 
 ## 0. Git tag 约定（先读这一节）
@@ -119,6 +132,12 @@ mvn -Ppublish-central -Dgpg.passphrase=<GPG_PASSPHRASE> deploy
 
 - 工程：`multi-lang/rust/Cargo.toml`（crate 名 `qzdb`，edition 2021，MSRV 1.74）
 - 自动发布：`.github/workflows/publish-crates.yml`（tag `v-rust-*` 触发）
+
+> 📍 **注意两个仓库的路径语境不同**（详见 `docs/QZDB_SYNC_GUIDE.md`）：
+> - **开发仓库**（本仓库）：crate 在 `multi-lang/rust/`，含 tests/ 与内部 bin，适合做完整验证与手动发布。
+> - **发布仓库**（`ip-qzdb-sdk/rust/`）：只含 `Cargo.toml` + `README.md` + `src/lib.rs` + `LICENSE`，
+>   **GitHub Actions 的自动发布在这里执行**。两种路径都能产出同一个 crate，
+>   但下面的命令默认你在**开发仓库**根目录（那里才有完整测试可跑）。
 
 ### 3.1 发布前置条件（一次性）
 
