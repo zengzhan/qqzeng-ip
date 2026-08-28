@@ -24,16 +24,36 @@ print(loc.country, loc.city)                # 中国 南京
 
 ## 集成方式
 
-| 语言 | 入口 | 集成 | 语言文档 |
-|------|------|------|---------|
-| Python | `qzdb.py` | 拷贝单文件，`from qzdb import QzdbReader` | [python](multi-lang/python/README.md) |
-| Node.js | `qzdb.js` | 拷贝单文件，`require('./qzdb')` | [nodejs](multi-lang/nodejs/README.md) |
-| Go | `qzdb/` 包 | 拷贝 `go/qzdb/` 目录，`import` 该包 | [go](multi-lang/go/README.md) |
-| Java | `com.qqzeng.qzdb` 包 | 拷贝 `java/src/main/java/com/qqzeng/qzdb/` 整个包 | [java](multi-lang/java/README.md) |
-| C# | `QQZeng.Qzdb` | 拷贝 `netcore/*.cs` 实现文件集，`using QQZeng.Qzdb` | [netcore](multi-lang/netcore/README.md) |
-| PHP | `QzdbReader.php` | 拷贝单文件，`use Qqzeng\Ip\QzdbReader` | [php](multi-lang/php/README.md) |
-| Rust | `src/lib.rs` | 引入 `rust/` crate（核心为单文件 `lib.rs`） | [rust](multi-lang/rust/README.md) |
-| C | `qzdb_reader.c/.h` | 两个文件一起编译 | [c](multi-lang/c/README.md) |
+多数语言既可通过**包管理器一行引入**，也可拷贝源码文件。下表按推荐方式排列。
+
+### 包管理器直接引入（推荐）
+
+| 语言 | 坐标 / 包名 | 安装 | 语言文档 |
+|------|------------|------|---------|
+| **Java** | `com.qqzeng:qzdb`（Maven Central） | Gradle `implementation 'com.qqzeng:qzdb:1.0.6'`；Maven `<dependency>` | [java](multi-lang/java/README.md) |
+| **C#** | `QQZeng.Qzdb`（NuGet） | `dotnet add package QQZeng.Qzdb` | [netcore](multi-lang/netcore/README.md) |
+| **Python** | `qzdb`（PyPI） | `pip install qzdb` | [python](multi-lang/python/README.md) |
+| **Node.js** | `@qqzengip/qzdb`（npm） | `npm install @qqzengip/qzdb` | [nodejs](multi-lang/nodejs/README.md) |
+| Go | go module | `go get github.com/zengzhan/qqzeng-ip/go/qzdb` | [go](multi-lang/go/README.md) |
+| Rust | `qzdb`（crates.io） | `cargo add qzdb` | [rust](multi-lang/rust/README.md) |
+| PHP | `zengzhan/qzdb`（Packagist） | `composer require zengzhan/qzdb` | [php](multi-lang/php/README.md) |
+
+> ✅ **已发布可用**：Java（Maven Central `1.0.6`，支持 Java 17+）、C#（NuGet，支持 net8.0+）、Python（PyPI，`pip install qzdb` 可直接装）、Node.js（npm，`npm install @qqzengip/qzdb` 可直接装）。
+> ⏳ **待发布**：Go、Rust、PHP 已规划，发布后即以上述命令引入。
+> 包名需在各自仓库确认唯一；未发布前请走下方"拷贝源码"方式。
+
+### 拷贝源码（适用于未发布 / 离线 / 自定义改造）
+
+| 语言 | 入口 | 集成 |
+|------|------|------|
+| Python | `qzdb.py` | 拷贝单文件，`from qzdb import QzdbReader` |
+| Node.js | `qzdb.js` | 拷贝单文件，`require('./qzdb')` |
+| Go | `qzdb/` 包 | 拷贝 `go/qzdb/` 目录，`import` 该包 |
+| Java | `com.qqzeng.qzdb` 包 | 拷贝 `java/src/main/java/com/qqzeng/qzdb/` 整个包 |
+| C# | `QQZeng.Qzdb` | 拷贝 `netcore/*.cs` 实现文件集，`using QQZeng.Qzdb` |
+| PHP | `QzdbReader.php` | 拷贝单文件，`use Qqzeng\Ip\QzdbReader` |
+| Rust | `src/lib.rs` | 引入 `rust/` crate（核心为单文件 `lib.rs`） |
+| C | `qzdb_reader.c/.h` | 两个文件一起编译 |
 
 各语言统一的 API 语义（生命周期 / 查询 / GeoInfo / 批量 / 多库联合）见 [API 设计规范](docs/QZDB_SDK_API.md)；语言间差异见 [multi-lang/README.md](multi-lang/README.md)。
 
