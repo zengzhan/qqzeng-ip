@@ -38,8 +38,10 @@ type parseResult struct {
 // 对 IPv4-mapped IPv6 自动降级为 IPv4。空白字符一律拒绝（SSRF 安全）。
 func fastParseIp(s string) (*parseResult, bool) {
 	n := len(s)
-	// 空白字符一律拒绝（SSRF 安全）
-	if n > 0 && strings.IndexAny(s, " \t\n\r\v\f") >= 0 {
+	// 空白字符一律拒绝（SSRF 安全）。strings.ContainsAny 在标准库里就是
+	// IndexAny(s, chars) >= 0 的字面封装，行为与之前完全等价，只是更符合
+	// Go 官方惯用法（staticcheck S1003）。
+	if n > 0 && strings.ContainsAny(s, " \t\n\r\v\f") {
 		return nil, false
 	}
 	if n == 0 || n > 45 {
@@ -195,21 +197,6 @@ func fastParseIpv4(s string) (uint32, bool) {
 }
 
 // ---------- 小工具 ----------
-
-func splitColon(s string) []string {
-	if s == "" {
-		return nil
-	}
-	var parts []string
-	start := 0
-	for i := 0; i <= len(s); i++ {
-		if i == len(s) || s[i] == ':' {
-			parts = append(parts, s[start:i])
-			start = i + 1
-		}
-	}
-	return parts
-}
 
 func parseHexGroup(g string) uint16 {
 	var v uint16
