@@ -1,11 +1,11 @@
-# qzdb_reader
+# qzdb
 
 > 纯离线、零外部依赖、高性能的 **QZDB IP 地理定位数据库**官方 Rust SDK（支持 IPv4 / IPv6 双栈）。
 
-- **官方坐标**：crate 名 `qzdb_reader`（与库根模块名一致）
+- **官方坐标**：crates.io 的 `qzdb`（`cargo add qzdb`，crate 名与库根模块名一致）
 - **定位**：离线解析 `.qzdb` 二进制数据库文件，不依赖任何外部网络请求
 - **架构**：无锁快照（lock-free snapshot）——并发查询互不阻塞，`reload` 原子切换（`ArcSwap`）
-- **运行要求**：Rust 1.74+（仅依赖 `arc-swap`）
+- **运行要求**：Rust 1.74+（运行时依赖仅 `arc-swap` 与 `memmap2`）
 - **许可**：MIT
 
 ---
@@ -37,7 +37,7 @@
 | Rust 工具链 | `cargo` / `rustc` 1.74 或更高 |
 | 操作系统 | Windows / Linux / macOS 均可 |
 | 数据库文件 | `.qzdb` 格式（由官方数据构建工具生成，含所需分组的二进制数据） |
-| 运行时依赖 | 仅 `arc-swap`（无其它第三方依赖） |
+| 运行时依赖 | 仅 `arc-swap` 与 `memmap2`（无其它第三方依赖） |
 
 ---
 
@@ -47,19 +47,19 @@
 
 ```toml
 [dependencies]
-qzdb_reader = "0.1"
+qzdb = "1.0.5"
 ```
 
 或执行：
 
 ```bash
-cargo add qzdb_reader
+cargo add qzdb
 ```
 
 Rust 代码统一从 crate 根引入：
 
 ```rust
-use qzdb_reader::QzdbReader;
+use qzdb::QzdbReader;
 ```
 
 ---
@@ -67,7 +67,7 @@ use qzdb_reader::QzdbReader;
 ## 3. 快速开始
 
 ```rust
-use qzdb_reader::QzdbReader;
+use qzdb::QzdbReader;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 通过文件路径加载（默认：校验 CRC、加载第 0 个分组）
@@ -104,7 +104,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ### 4.1 从文件路径加载
 
 ```rust
-use qzdb_reader::{QzdbReader, Builder};
+use qzdb::{QzdbReader, Builder};
 
 // 最简：路径 + 默认第 0 分组 + 校验 CRC
 let reader = Builder::new("ip_china.qzdb").build()?;
@@ -309,7 +309,7 @@ pub struct BatchResult {
 当你有多个 `.qzdb`（例如"国内库 + 全球库"、"基础库 + 精细库"），可用 `ChainedReader` 把多个 `QzdbReader` 组合成一个逻辑查询器，按优先级串联、返回首个命中：
 
 ```rust
-use qzdb_reader::{QzdbReader, ChainedReader};
+use qzdb::{QzdbReader, ChainedReader};
 
 let china = QzdbReader::from_file("ip_china.qzdb")?;
 let global = QzdbReader::from_file("ip_global.qzdb")?;
@@ -335,7 +335,7 @@ if let Some(info) = chained.find("8.8.8.8") {
 用于按名字管理多个 reader（例如在不同模块间共享同一实例）：
 
 ```rust
-use qzdb_reader::{QzdbReader, QzdbRegistry};
+use qzdb::{QzdbReader, QzdbRegistry};
 
 let mut reg = QzdbRegistry::new();
 reg.register("china", QzdbReader::from_file("ip_china.qzdb")?);
@@ -392,7 +392,7 @@ reader.close();
 所有加载 / 解析期错误以 `QzdbError` 返回，携带 `ErrorCode` 枚举：
 
 ```rust
-use qzdb_reader::{QzdbReader, ErrorCode};
+use qzdb::{QzdbReader, ErrorCode};
 
 match QzdbReader::from_file("ip_china.qzdb") {
     Ok(reader) => { /* 使用 */ }
@@ -455,7 +455,7 @@ println!("crc_ok    = {}", reader.verify_crc());
 ### 14.3 升级 crate
 
 ```bash
-cargo update -p qzdb_reader
+cargo update -p qzdb
 ```
 
 版本遵循 **SemVer**：破坏性 API 变更升主版本；向后兼容功能新增升次版本；Bug 修复 / 性能优化升补丁版本。
@@ -492,4 +492,4 @@ cargo update -p qzdb_reader
 
 [MIT](https://opensource.org/licenses/MIT)
 
-<!-- commit: rust: Rust SDK（mmap 只读映射，内存安全） sync=1787946209 -->
+<!-- commit: rust: Rust 极速解析引擎 (mmap + 最小 unsafe surface, 6900 万+ QPS) -->
