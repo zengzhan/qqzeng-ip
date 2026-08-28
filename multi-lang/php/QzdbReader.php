@@ -249,14 +249,21 @@ class GeoInfo implements \ArrayAccess
 {
     private $values;
     private $fieldNames;
-    private $floatIndices;
     private $normalizedMap;
 
-    public function __construct(array $values = [], array $fieldNames = [], array $floatIndices = [], ?array $normalizedMap = null)
+    // 注：构造函数曾接受 $floatIndices 参数并做 array_flip() 存成 $this->floatIndices，
+    // 但全类没有任何方法读取过它——toJson() 实际走的是 isNumericFieldName() 这个固定
+    // 4 字段名白名单（契约 §6.2：longitude/latitude/asn/geo_id 输出 JSON 数字），从未
+    // 查过这个索引表。既然它彻底不被读取，PHPStan level 5 的
+    // `never read, only written` 检测就命中了这里。
+    // 已经删掉整条死链路：GeoInfo 每次构造（也就是每次 find() 查询）都要跑一次
+    // array_flip()，这是纯粹浪费在热路径上的 CPU；QzdbReader::$floatFieldIndices
+    // 那份"扫描全部字段名建索引表"的一次性构建（文件加载时跑一次，非热路径）也一并删除，
+    // 因为它唯一的消费者就是这个死掉的参数。
+    public function __construct(array $values = [], array $fieldNames = [], ?array $normalizedMap = null)
     {
         $this->values = $values;
         $this->fieldNames = $fieldNames;
-        $this->floatIndices = array_flip($floatIndices);
         $this->normalizedMap = $normalizedMap !== null ? $normalizedMap : self::buildNormalizedMap($fieldNames);
     }
 
@@ -728,7 +735,6 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
 
     // 元信息
     private $fieldNames = [];
-    private $floatFieldIndices = [];
     private $normalizedFieldMap = [];
     private $versionName = '';
     private $description = '';
@@ -1593,12 +1599,6 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
 
         $this->fieldNames = $names;
         $this->fieldNamesSource = $namesSource;
-        $this->floatFieldIndices = [];
-        foreach ($names as $n) {
-            if (isset(self::FLOAT_FIELDS[$n])) {
-                $this->floatFieldIndices[] = $n;
-            }
-        }
         $this->normalizedFieldMap = GeoInfo::buildNormalizedMap($names);
     }
 
@@ -2021,7 +2021,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             $values[] = $val;
         }
 
-        $info = new GeoInfo($values, $this->fieldNames, $this->floatFieldIndices, $this->normalizedFieldMap);
+        $info = new GeoInfo($values, $this->fieldNames, $this->normalizedFieldMap);
 
         // 写入有界缓存：直接映射，碰撞就覆盖这一个槽。
         // 表容量由 slot 下标本身封顶，无需容量计数器，更不需要整表清空。
