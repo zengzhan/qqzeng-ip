@@ -197,33 +197,33 @@ type boundsPanic struct{ msg string }
 func (e *boundsPanic) Error() string { return e.msg }
 
 func safeReadU16(b []byte, off uint64) uint16 {
-	if off+2 > uint64(len(b)) {
+	if off > uint64(len(b)) || uint64(len(b))-off < 2 {
 		panic(&boundsPanic{fmt.Sprintf("readU16 OOB: off=%d len=%d", off, len(b))})
 	}
 	return binary.LittleEndian.Uint16(b[off:])
 }
 func safeReadU32(b []byte, off uint64) uint32 {
-	if off+4 > uint64(len(b)) {
+	if off > uint64(len(b)) || uint64(len(b))-off < 4 {
 		panic(&boundsPanic{fmt.Sprintf("readU32 OOB: off=%d len=%d", off, len(b))})
 	}
 	return binary.LittleEndian.Uint32(b[off:])
 }
 func safeReadU64(b []byte, off uint64) uint64 {
-	if off+8 > uint64(len(b)) {
+	if off > uint64(len(b)) || uint64(len(b))-off < 8 {
 		panic(&boundsPanic{fmt.Sprintf("readU64 OOB: off=%d len=%d", off, len(b))})
 	}
 	return binary.LittleEndian.Uint64(b[off:])
 }
 
 func (s *Snapshot) readU24(off uint64) uint32 {
-	if off+3 > uint64(len(s.data)) {
+	if off > uint64(len(s.data)) || uint64(len(s.data))-off < 3 {
 		panic(&boundsPanic{fmt.Sprintf("readU24 OOB: off=%d len=%d", off, len(s.data))})
 	}
 	d := s.data
 	return uint32(d[off]) | uint32(d[off+1])<<8 | uint32(d[off+2])<<16
 }
 func (s *Snapshot) readU48(off uint64) uint64 {
-	if off+6 > uint64(len(s.data)) {
+	if off > uint64(len(s.data)) || uint64(len(s.data))-off < 6 {
 		panic(&boundsPanic{fmt.Sprintf("readU48 OOB: off=%d len=%d", off, len(s.data))})
 	}
 	d := s.data
@@ -405,20 +405,29 @@ func (s *Snapshot) parseRowSchema() error {
 	}
 	d := s.data
 	sp := s.offRowSchema
-	if sp+4+uint64(8)*4 > uint64(len(d)) {
-		return nil
+	if sp > uint64(len(d)) || uint64(len(d))-sp < 4 {
+		return newErr(ErrCodeOutOfBounds, "row_schema header out of bounds")
 	}
 	fCount := int(d[sp])
 	stride := int(d[sp+1])
-	if fCount < 1 || fCount > 8 || stride != s.ipRowSize {
-		return nil
+	if fCount < 1 || fCount > 8 {
+		return newErr(ErrCodeCorrupted, "invalid row_schema field count")
+	}
+	if stride != s.ipRowSize {
+		return newErr(ErrCodeCorrupted, "row_schema stride does not match ip_row_size")
+	}
+	need := uint64(fCount) * 4
+	if uint64(len(d))-sp < 4+need {
+		return newErr(ErrCodeOutOfBounds, "row_schema fields truncated")
 	}
 	geoW, asnW, usageW, total := 0, 0, 0, 0
-	ok := true
 	wpos := sp + 4
 	for i := 0; i < fCount; i++ {
 		fid := int(d[wpos])
 		w := int(d[wpos+1])
+		if w < 1 || w > 4 {
+			return newErr(ErrCodeCorrupted, "invalid row_schema field width")
+		}
 		switch fid {
 		case 0:
 			geoW = w
@@ -429,13 +438,11 @@ func (s *Snapshot) parseRowSchema() error {
 		}
 		wpos += 4
 		total += w
-		if w < 1 || w > 4 {
-			ok = false
-		}
 	}
-	if ok && total == s.ipRowSize {
-		s.rowGeoWidth, s.rowAsnWidth, s.rowUsageWidth = geoW, asnW, usageW
+	if total != s.ipRowSize {
+		return newErr(ErrCodeCorrupted, "row_schema widths do not match ip_row_size")
 	}
+	s.rowGeoWidth, s.rowAsnWidth, s.rowUsageWidth = geoW, asnW, usageW
 	return nil
 }
 

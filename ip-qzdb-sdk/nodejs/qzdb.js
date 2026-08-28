@@ -187,6 +187,7 @@ function _doubleToExactBigInt(v) {
 // 保留键，绝不覆盖（原型污染 / 方法遮蔽防护）
 const GEOINFO_RESERVED = new Set([
   '_vals', '_fieldNames', '_floatFlags', '_normMap',
+  '__proto__', 'constructor', 'prototype',
   'get', 'toPipe', 'toPipeString', 'toMap', 'toDict', 'toJson',
   'toString', 'valueOf', 'hasOwnProperty', 'fieldNames', 'values',
   'getCidr', 'getCountry', 'getCountryEn', 'getCountryAlpha2', 'getCountryAlpha3',
