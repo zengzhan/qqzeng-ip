@@ -35,7 +35,7 @@ jobs:
           printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
 
       - name: Publish to Maven Central
-        working-directory: multi-lang/java
+        working-directory: ip-qzdb-sdk/java
         env:
           CENTRAL_TOKEN: ${{ secrets.CENTRAL_TOKEN }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}

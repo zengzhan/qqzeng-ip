@@ -1,0 +1,72 @@
+# ============================================================================
+# QQZeng.Qzdb — 代码风格与静态分析规则
+# ----------------------------------------------------------------------------
+# 本文件与 QQZeng.Qzdb.csproj 中的 AnalysisMode=All + TreatWarningsAsErrors
+# 配套：除下方【显式豁免】区列出的规则外，所有 CA 规则告警都会被当作编译错误。
+# 豁免意味着"团队已审阅并接受该设计"，而非"暂时不想改"——每次改豁免都必须
+# 先读这里留下的理由，确认它仍然成立。
+# ============================================================================
+
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.cs]
+# ---- C# 代码风格（IDE 规则）----
+# 注意：本项目遵循既有 K&R 风格（CLAUDE.md），热路径大量使用无花括号单行 if。
+# 因此风格规则一律保持 silent（仅 IDE 建议、绝不使构建失败），
+# 避免 EnforceCodeStyleInBuild 与既有风格冲突。真正把关的是 CA 规则。
+dotnet_sort_system_directives_first = true:suggestion
+csharp_style_namespace_declarations = file_scoped:suggestion
+csharp_style_var_for_built_in_types = false:suggestion
+csharp_style_expression_bodied_methods = when_on_single_line:suggestion
+csharp_style_expression_bodied_properties = true:suggestion
+csharp_style_throw_expression = true:suggestion
+csharp_prefer_braces = when_multiline:silent
+csharp_preserve_single_line_blocks = true:suggestion
+
+# ============================================================================
+# 【显式豁免】——以下 CA 规则代表 QQZeng.Qzdb 的既定公开 API 设计契约，
+# 改变它们会破坏 NuGet 包已发布的二进制/源码兼容性，故按设计豁免。
+# ============================================================================
+
+# CA1708: VerifyCRC() 与 VerifyCrc() 大小写相近 —— 这是历史兼容别名。
+#   VerifyCrc() 是规范命名；VerifyCRC() 是早期发布版本保留的别名，
+#   删除会破坏已发布 1.0.x 消费者的二进制兼容。保留。
+dotnet_diagnostic.CA1708.severity = none
+
+# CA1700: KnownUsageType.Reserved 未被本实现读取 —— 它是公开枚举的合法成员，
+#   是数据驱动映射的约定值（见 RawToKnown），删除会破坏使用者按名引用。
+dotnet_diagnostic.CA1700.severity = none
+
+# CA1721: "属性 Xxx + 方法 GetXxx()" 并存 —— 这是 QZDB 8 种语言 SDK 的
+#   统一 API 设计约定（GeoInfo 每字段同时提供强类型属性与 Get 取值方法），
+#   跨语言一致性优先于单个命名规则，不能为某一种语言单独改名。
+dotnet_diagnostic.CA1721.severity = none
+
+# CA1819: 属性返回数组 —— FieldNames / Values / Readers / Editions 等属性
+#   返回的是【防御性克隆】（见实现），刻意避免把内部可变数组暴露给调用方。
+#   若改成 ReadOnlyCollection/Span 会破坏既有 API 签名。保留克隆语义。
+dotnet_diagnostic.CA1819.severity = none
+
+# CA1024: DisplayZh/DisplayEn/Description 为属性、GetXxx() 为方法 ——
+#   与其它强类型取值（GetCountry/GetCity…）保持同一套 Get* 方法风格，
+#   再额外提供属性方便直读。两种形态都被文档化为公开契约。
+dotnet_diagnostic.CA1024.severity = none
+
+# CA1815: UsageType 只读结构未重写 Equals/== —— 该类型刻意依赖默认的
+#   按成员值相等语义（值类型），且公开面不承诺相等性运算符。
+#   重写相等会扩大 API 面而几乎无收益。省略。
+dotnet_diagnostic.CA1815.severity = none
+
+# CA1031: FromPath/Dispose 中的裸 catch —— 这是"尽力而为的资源级联释放"
+#   路径（与已存在的 CA2000 抑制同一设计）：任何异常都必须沿 try/catch
+#   层级逐层 Dispose 已获取的 mmap 句柄，避免句柄泄漏，再原样重抛。
+#   捕获具体异常类型会遗漏边缘路径、造成文件/句柄泄漏。保留。
+dotnet_diagnostic.CA1031.severity = none

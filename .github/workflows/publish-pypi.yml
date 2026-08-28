@@ -32,15 +32,15 @@ jobs:
           pip install build twine
 
       - name: Build sdist and wheel
-        working-directory: multi-lang/python
+        working-directory: ip-qzdb-sdk/python
         run: python -m build
 
       - name: Verify package (twine check)
-        working-directory: multi-lang/python
+        working-directory: ip-qzdb-sdk/python
         run: twine check dist/*
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
-          packages-dir: multi-lang/python/dist/
+          packages-dir: ip-qzdb-sdk/python/dist/
