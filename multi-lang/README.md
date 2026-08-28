@@ -44,7 +44,7 @@ if loc:
 
 ### Go
 ```go
-import "qzdb_reader/qzdb"
+import "github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go/qzdb"
 
 // 创建并持有 QzdbReader 实例（无单例；跨版本/多文件可各持一个）
 searcher, err := qzdb.Open("qqzeng_ip_ult_china.qzdb", 0, true)
