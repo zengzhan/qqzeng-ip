@@ -93,6 +93,9 @@ build/
 *.pyc
 __pycache__/
 *.egg-info/
+# Python 构建产物（sdist / wheel / build）
+dist/
+build/python/
 
 # Analysis / optimization docs (not part of SDK)
 optimization_analysis.md
@@ -100,12 +103,21 @@ todo.md
 优化.md
 优化方案参考.html
 
+# SECRETS: Maven Central publish credentials (Sonatype token, GPG, SSH) - NEVER COMMIT
+docs/QZDB_MAVEN_CENTRAL_PUBLISH.md
+docs/QZDB_PUBLISH_CREDENTIALS.md
+gpg_private_armored.asc
+settings.xml
+ci_settings.xml
+
 # Compiled Go binary
 multi-lang/go/main
 
 # Temp
 tmp/
 *.tmp
+# Playwright MCP browser automation artifacts (page snapshots, screenshots)
+.playwright-mcp/
 
 # NuGet pack/publish artifacts (fully rebuildable from csproj)
 multi-lang/netcore/nupkgs/
