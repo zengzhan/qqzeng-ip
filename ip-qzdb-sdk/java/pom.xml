@@ -69,7 +69,8 @@
             <!--
               Central Publishing 插件（替代已退役的 OSSRH）。
               仅在 `mvn deploy` 时介入，将构件发布到 Maven Central。
-              凭证通过环境变量 CENTRAL_TOKEN 传入（CI 中来自仓库 Secret）。
+              凭证从 settings.xml 中 serverId=central 的项读取（CI 中由
+              actions/setup-java 的 server-username / server-password 生成），
               本地 `mvn package` / `mvn install` 不受影响。
             -->
             <plugin>
@@ -79,7 +80,6 @@
                 <extensions>true</extensions>
                 <configuration>
                     <publishingServerId>central</publishingServerId>
-                    <token>${env.CENTRAL_TOKEN}</token>
                 </configuration>
             </plugin>
         </plugins>
