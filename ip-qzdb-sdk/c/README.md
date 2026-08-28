@@ -724,3 +724,5 @@ typedef enum { QZDB_OK=0, QZDB_ERR_NOT_FOUND=-1, QZDB_ERR_CORRUPTED=-2,
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
+
+<!-- commit: c: C SDK（零拷贝 mmap 读取，单文件集成） sync=1787945119 -->
