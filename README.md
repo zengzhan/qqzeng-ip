@@ -34,12 +34,12 @@ print(loc.country, loc.city)                # 中国 南京
 | **C#** | `QQZeng.Qzdb`（NuGet） | `dotnet add package QQZeng.Qzdb` | [netcore](multi-lang/netcore/README.md) |
 | **Python** | `qzdb`（PyPI） | `pip install qzdb` | [python](multi-lang/python/README.md) |
 | **Node.js** | `@qqzengip/qzdb`（npm） | `npm install @qqzengip/qzdb` | [nodejs](multi-lang/nodejs/README.md) |
-| Go | go module | `go get github.com/zengzhan/qqzeng-ip/go/qzdb` | [go](multi-lang/go/README.md) |
+| Go | go module | `go get github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go` | [go](multi-lang/go/README.md) |
 | Rust | `qzdb`（crates.io） | `cargo add qzdb` | [rust](multi-lang/rust/README.md) |
 | PHP | `zengzhan/qzdb`（Packagist） | `composer require zengzhan/qzdb` | [php](multi-lang/php/README.md) |
 
-> ✅ **已发布可用**：Java（Maven Central `1.0.6`，支持 Java 17+）、C#（NuGet，支持 net8.0+）、Python（PyPI，`pip install qzdb` 可直接装）、Node.js（npm，`npm install @qqzengip/qzdb` 可直接装）。
-> ⏳ **待发布**：Go、Rust、PHP 已规划，发布后即以上述命令引入。
+> ✅ **已发布可用**：Java（Maven Central `1.0.6`，支持 Java 17+）、C#（NuGet，支持 net8.0+）、Python（PyPI，`pip install qzdb` 可直接装）、Node.js（npm，`npm install @qqzengip/qzdb` 可直接装）、Go（Go Module，`go get github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go` 可直接拉取）。
+> ⏳ **待发布**：Rust、PHP 已规划，发布后即以上述命令引入。
 > 包名需在各自仓库确认唯一；未发布前请走下方"拷贝源码"方式。
 
 ### 拷贝源码（适用于未发布 / 离线 / 自定义改造）
