@@ -21,25 +21,50 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 幂等保护：本仓库是多语言 monorepo，tag `v[0-9]*` 会同时触发 PyPI / Maven /
+      # crates.io 三个发布。一旦因补打 tag、重推 tag、workflow 重跑等原因再次触发，
+      # 上传同名版本会被 PyPI 拒绝（HTTP 400 file already exists）并把 workflow 打成红叉。
+      # 这里先查 PyPI 上该版本是否已存在，存在则整条链路跳过，保持 workflow 绿色。
+      - name: Check whether this version is already on PyPI
+        id: guard
+        working-directory: ip-qzdb-sdk/python
+        run: |
+          set -euo pipefail
+          NAME=$(python3 -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['name'])")
+          VER=$(python3 -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          if curl -fsS "https://pypi.org/pypi/$NAME/$VER/json" >/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$NAME $VER 已存在于 PyPI，跳过发布（幂等保护）"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$NAME $VER 尚未发布，继续"
+          fi
+
       - name: Set up Python
+        if: steps.guard.outputs.exists == 'false'
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
       - name: Install build tools
+        if: steps.guard.outputs.exists == 'false'
         run: |
           python -m pip install --upgrade pip
           pip install build twine
 
       - name: Build sdist and wheel
+        if: steps.guard.outputs.exists == 'false'
         working-directory: ip-qzdb-sdk/python
         run: python -m build
 
       - name: Verify package (twine check)
+        if: steps.guard.outputs.exists == 'false'
         working-directory: ip-qzdb-sdk/python
         run: twine check dist/*
 
       - name: Publish to PyPI
+        if: steps.guard.outputs.exists == 'false'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}

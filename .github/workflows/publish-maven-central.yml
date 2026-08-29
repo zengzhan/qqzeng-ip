@@ -21,7 +21,43 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # 幂等保护：本仓库是多语言 monorepo，tag `v[0-9]*` 会同时触发 PyPI / Maven /
+      # crates.io 三个发布。一旦因补打 tag、重推 tag、workflow 重跑等原因再次触发，
+      # Central Portal 会拒绝同版本重复部署（或在 Portal 里留下一条需要人工丢弃的
+      # VALIDATING 记录），并把 workflow 打成红叉。这里先查 Maven Central 上该版本
+      # 是否已存在，存在则整条链路跳过，保持 workflow 绿色。
+      #
+      # 注意：检测走 repo1.maven.org。Central Portal 发布后同步到 repo1 有延迟（官方
+      # 口径最长约 4 小时），所以本保护针对的是「几小时前/更早已发布过的版本被重复推」
+      # 这一类场景，正是实际会踩到的情况；发布后几分钟内重复推的极端场景不在覆盖范围内。
+      - name: Check whether this version is already on Maven Central
+        id: guard
+        working-directory: ip-qzdb-sdk/java
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' > /tmp/qzdb-mvn-coords.sh
+          import xml.etree.ElementTree as ET
+
+          NS = '{http://maven.apache.org/POM/4.0.0}'
+          root = ET.parse('pom.xml').getroot()
+          print(f"GID={root.findtext(NS + 'groupId')}")
+          print(f"AID={root.findtext(NS + 'artifactId')}")
+          print(f"VER={root.findtext(NS + 'version')}")
+          PY
+          . /tmp/qzdb-mvn-coords.sh
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          URL="https://repo1.maven.org/maven2/${GID//.//}/$AID/$VER/$AID-$VER.pom"
+          echo "checking $URL"
+          if curl -fsS -o /dev/null "$URL"; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$GID:$AID:$VER 已存在于 Maven Central，跳过发布（幂等保护）"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$GID:$AID:$VER 尚未发布，继续"
+          fi
+
       - name: Set up JDK 21
+        if: steps.guard.outputs.exists == 'false'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -29,12 +65,14 @@ jobs:
           cache: maven
 
       - name: Import GPG private key
+        if: steps.guard.outputs.exists == 'false'
         env:
           GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
         run: |
           printf '%s' "$GPG_PRIVATE_KEY" | gpg --batch --import
 
       - name: Publish to Maven Central
+        if: steps.guard.outputs.exists == 'false'
         working-directory: ip-qzdb-sdk/java
         env:
           CENTRAL_TOKEN: ${{ secrets.CENTRAL_TOKEN }}
