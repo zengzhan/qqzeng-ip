@@ -1,11 +1,23 @@
 # 👑 qqzeng-ip / QZDB 极速 IP 地理位置解析引擎
 
-<p kernel-align="center">
-  <a href="https://github.com/zengzhan/qqzeng-ip"><img src="https://img.shields.io/badge/Verification-100%25%20Passed-brightgreen.svg" alt="100% Passed"></a>
-  <a href="https://github.com/zengzhan/qqzeng-ip"><img src="https://img.shields.io/badge/Latency-%3C0.08%C2%B5s-purple.svg" alt="Sub-microsecond Latency"></a>
-  <a href="https://github.com/zengzhan/qqzeng-ip"><img src="https://img.shields.io/badge/Languages-Rust%20%7C%20C%20%7C%20Go%20%7C%20Java%20%7C%20C%23%20%7C%20Node%20%7C%20PHP%20%7C%20Python-blue.svg" alt="8 Languages"></a>
-  <a href="https://github.com/zengzhan/qqzeng-ip"><img src="https://img.shields.io/badge/License-MIT-orange.svg" alt="License MIT"></a>
-</p>
+<div align="center">
+
+[![Verification](https://img.shields.io/badge/Verification-100%25%20Passed-brightgreen.svg)](https://github.com/zengzhan/qqzeng-ip)
+[![Latency](https://img.shields.io/badge/Latency-%3C0.08%C2%B5s-purple.svg)](https://github.com/zengzhan/qqzeng-ip)
+[![Languages](https://img.shields.io/badge/Languages-Rust%20%7C%20C%20%7C%20Go%20%7C%20Java%20%7C%20C%23%20%7C%20Node%20%7C%20PHP%20%7C%20Python-blue.svg)](https://github.com/zengzhan/qqzeng-ip)
+[![License](https://img.shields.io/badge/License-MIT-orange.svg)](./LICENSE)
+
+**官方包已发布至各大平台，开箱即用 👇**
+
+[![Maven Central](https://img.shields.io/maven-central/v/com.qqzeng/qzdb?logo=apache-maven&label=Maven%20Central&color=C71A36)](https://central.sonatype.com/artifact/com.qqzeng/qzdb)
+[![NuGet](https://img.shields.io/nuget/v/QQZeng.Qzdb?logo=nuget&label=NuGet&color=004880)](https://www.nuget.org/packages/QQZeng.Qzdb)
+[![PyPI](https://img.shields.io/pypi/v/qzdb?logo=pypi&label=PyPI&color=3776AB)](https://pypi.org/project/qzdb/)
+[![npm](https://img.shields.io/npm/v/@qqzengip/qzdb?logo=npm&label=npm&color=CB3837)](https://www.npmjs.com/package/@qqzengip/qzdb)
+[![crates.io](https://img.shields.io/crates/v/qzdb?logo=rust&label=crates.io&color=DEA584)](https://crates.io/crates/qzdb)
+[![Packagist](https://img.shields.io/packagist/v/qqzeng/qzdb?logo=composer&label=Packagist&color=F28D1A)](https://packagist.org/packages/qqzeng/qzdb)
+[![Go Module](https://img.shields.io/badge/Go%20Module-v1.0.0-00ADD8?logo=go)](https://pkg.go.dev/github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go)
+
+</div>
 
 > **QZDB (qqzeng IP Database)** 是一款专为企业级高并发、云原生架构打造的下一代 IP 地理位置与号段归属地二进制搜索引擎。凭借**双阶段 Patricia Trie 树算法**、**`mmap` 零拷贝**以及**无锁并发设计**，提供单机微秒级响应与超高吞吐。
 
@@ -17,6 +29,22 @@
 > - 🛡️ **全量无抽样验证**：对全部 `959,162` 个 CIDR 区间的边界及中心 IP 进行了 **`2,877,486` 次无抽样全量核对**，通过率 **100.00%**。
 > - 📦 **高密存储**：Trie 树前缀压路机算法，千万级全球 IP/CIDR 细化网段体积压缩率高达 **95%+**（仅十余兆）。
 > - 🌐 **全语言原生 SDK**：官方提供 Rust, C/C++, Go, Java, C#, Node.js, PHP, Python 八种主流语言支持。
+
+---
+
+## 📑 目录 (Table of Contents)
+
+| 章节 | 你会看到什么 |
+| :--- | :--- |
+| [⚡ 30 秒快速集成](#-30-秒快速集成-quick-start) | 8 语言一键安装命令 + Hello World 示例（**新用户从这里开始**） |
+| [🧭 核心产品线一键直达](#-核心产品线一键直达-product-navigation) | IP / 号段 / 数据库 / 历史版本五大产品入口 |
+| [📊 多语言 SDK 性能榜单](#-多语言-sdk-性能横向评测榜单-sdk-benchmark) | 8 语言吞吐与延迟实测对比 |
+| [📐 算法架构与查询流程](#-qzdb-算法架构与查询流程-algorithm-architecture) | 双阶段 Patricia Trie + Jump Table 原理 |
+| [⚖️ 主流二进制格式对比](#️-主流二进制-ip-数据格式对比-format-comparison) | 与 `.mmdb` / `.xdb` / `.ipdb` 的客观选型对比 |
+| [📂 目录结构与数据规格](#-核心产品与目录结构-project-structure) | 仓库结构、文件体积、五个版本字段定义 |
+| [🗺️ 数据字段规范](#️-数据多维层级与字段规范-data-dimensions--schema) | 大洲/国家/省市/经纬度/时区/运营商字段标准 |
+| [🎯 典型应用场景](#-典型应用场景与用途-application-scenarios) | DNS 智能解析、CDN 调度、风控等落地场景 |
+| [📱 手机号段归属库](#-手机号段归属地数据库-phone-location-database) | 50 万+ 号段 DAT 与 Redis 方案 |
 
 ---
 
@@ -35,47 +63,214 @@
 
 ## 📊 多语言 SDK 性能横向评测榜单 (SDK Benchmark)
 
-| 排名 | 语言 | 查询模式 | 单线程吞吐量 (Ops/sec) | 平均查询延迟 | 性能评价 | 状态 | 快速入口 |
-| :---: | :--- | :--- | :--- | :--- | :--- | :---: | :---: |
-| **1** | **Rust** | Read-Only Mmap | **10.0 M+ ~ 18.0 M+** | **< 0.08 µs** | 🛡️ 极速安全 | ✅ 生产推荐 | [查看源码](./ip-qzdb-sdk/rust) |
-| **2** | **C / C++** | Read-Only Mmap | **10.0 M+ ~ 18.0 M+** | **< 0.08 µs** | 👑 极致轻量 | ✅ 生产推荐 | [查看源码](./ip-qzdb-sdk/c) |
-| **3** | **Go** | Read-Only Mmap | **8.0 M+ ~ 12.0 M+** | **< 0.10 µs** | ⚡ 高并发 | ✅ 生产推荐 | [查看源码](./ip-qzdb-sdk/go) |
-| **4** | **C#** | Eager-load Once | **6.0 M+ ~ 10.5 M+** | **< 0.15 µs** | 🚀 优秀 | ✅ 生产推荐 | [查看源码](./ip-qzdb-sdk/netcore) |
-| **5** | **Java** | Eager-load Once | **5.0 M+ ~ 8.0 M+** | **< 0.20 µs** | ☕ 稳健 | ✅ 生产推荐 | [查看源码](./ip-qzdb-sdk/java) |
-| **6** | **Node.js** | Eager-load Once | **3.0 M+ ~ 5.0 M+** | **< 0.33 µs** | 🔥 优异 | ✅ 生产推荐 | [查看源码](./ip-qzdb-sdk/nodejs) |
-| **7** | **PHP** | Dynamic Parsed | **100 K+ ~ 2.0 M+** | **< 0.90 µs** | 🐘 实用 | ✅ 生产推荐 | [查看源码](./ip-qzdb-sdk/php) |
-| **8** | **Python** | Dynamic Parsed | **100 K+ ~ 2.2 M+** | **< 0.90 µs** | 🐍 标准 | ✅ 生产推荐 | [查看源码](./ip-qzdb-sdk/python) |
+| 排名 | 语言 | 查询模式 | 单线程吞吐量 (Ops/sec) | 平均查询延迟 | 性能评价 | 获取方式 |
+| :---: | :--- | :--- | :--- | :--- | :--- | :--- |
+| **1** | **Rust** | Read-Only Mmap | **10.0 M+ ~ 18.0 M+** | **< 0.08 µs** | 🛡️ 极速安全 · 生产推荐 | [📦 crates.io](https://crates.io/crates/qzdb) · [源码](./ip-qzdb-sdk/rust) |
+| **2** | **C / C++** | Read-Only Mmap | **10.0 M+ ~ 18.0 M+** | **< 0.08 µs** | 👑 极致轻量 · 生产推荐 | [源码直编](./ip-qzdb-sdk/c) |
+| **3** | **Go** | Read-Only Mmap | **8.0 M+ ~ 12.0 M+** | **< 0.10 µs** | ⚡ 高并发 · 生产推荐 | [📦 pkg.go.dev](https://pkg.go.dev/github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go) · [源码](./ip-qzdb-sdk/go) |
+| **4** | **C#** | Eager-load Once | **6.0 M+ ~ 10.5 M+** | **< 0.15 µs** | 🚀 优秀 · 生产推荐 | [📦 NuGet](https://www.nuget.org/packages/QQZeng.Qzdb) · [源码](./ip-qzdb-sdk/netcore) |
+| **5** | **Java** | Eager-load Once | **5.0 M+ ~ 8.0 M+** | **< 0.20 µs** | ☕ 稳健 · 生产推荐 | [📦 Maven Central](https://central.sonatype.com/artifact/com.qqzeng/qzdb) · [源码](./ip-qzdb-sdk/java) |
+| **6** | **Node.js** | Eager-load Once | **3.0 M+ ~ 5.0 M+** | **< 0.33 µs** | 🔥 优异 · 生产推荐 | [📦 npm](https://www.npmjs.com/package/@qqzengip/qzdb) · [源码](./ip-qzdb-sdk/nodejs) |
+| **7** | **PHP** | Dynamic Parsed | **100 K+ ~ 2.0 M+** | **< 0.90 µs** | 🐘 实用 · 生产推荐 | [📦 Packagist](https://packagist.org/packages/qqzeng/qzdb) · [源码](./ip-qzdb-sdk/php) |
+| **8** | **Python** | Dynamic Parsed | **100 K+ ~ 2.2 M+** | **< 0.90 µs** | 🐍 标准 · 生产推荐 | [📦 PyPI](https://pypi.org/project/qzdb/) · [源码](./ip-qzdb-sdk/python) |
+
+> 除 C / C++ 走源码直编外，其余 7 种语言均可通过各自包管理器一条命令安装，**无需克隆本仓库**。
 
 *(注：基准测试基于普通 x86_64 / ARM64 处理器单线程单核内存检索测试，不同 CPU 频率及物理内存带宽下测试数值可能有所浮动，仅供技术选型参考)*
 
 ---
 
-## ⚡ 一行代码快速集成 (Quick Start)
+## ⚡ 30 秒快速集成 (Quick Start)
 
-> 更完整的 API 文档与多语言用例，请参见 **[QZDB 多语言 SDK 指南](./ip-qzdb-sdk/README_zh.md)**。
+**无需克隆源码**——QZDB SDK 已发布至各语言官方包仓库，一条命令即可接入。
 
-```go
-// 🐹 Go 示例 (mmap 零拷贝, 实例持有用法)
-searcher, err := qzdb.Open("qqzeng_ip_ult_china.qzdb", 0, true)
-info := searcher.Find("114.114.114.114")
-fmt.Println(info.Get("country"), info.Get("province"), info.Get("city"), info.Get("isp"))
+### 📦 官方包一键安装
+
+| 语言 | 包仓库 | 安装命令 |
+| :--- | :--- | :--- |
+| 🐍 **Python** | PyPI | `pip install qzdb` |
+| 🦀 **Rust** | crates.io | `cargo add qzdb` |
+| 🐹 **Go** | Go Module | `go get github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go` |
+| 🔷 **C#** | NuGet | `dotnet add package QQZeng.Qzdb` |
+| 🟢 **Node.js** | npm | `npm i @qqzengip/qzdb` |
+| 🐘 **PHP** | Packagist | `composer require qqzeng/qzdb` |
+| ☕ **Java** | Maven Central | 见下方依赖片段 |
+| ⚡ **C / C++** | 源码集成 | 下载 [`qzdb_reader.c`](./ip-qzdb-sdk/c/qzdb_reader.c) + [`qzdb_reader.h`](./ip-qzdb-sdk/c/qzdb_reader.h) 一起编译 |
+
+<details>
+<summary>☕ Java 的 Maven / Gradle 依赖片段</summary>
+
+Maven：
+
+```xml
+<dependency>
+    <groupId>com.qqzeng</groupId>
+    <artifactId>qzdb</artifactId>
+    <version>1.0.6</version>
+</dependency>
 ```
+
+Gradle：
+
+```groovy
+implementation 'com.qqzeng:qzdb:1.0.6'
+```
+
+</details>
+
+### 🚀 Hello World（8 语言）
+
+八种语言的 API 设计保持一致：**一次加载、长期持有实例、无锁并发查询**。
+
+<details open>
+<summary>🐍 Python</summary>
 
 ```python
-# 🐍 Python 示例 (按需实例化)
 from qzdb import QzdbReader
+
 searcher = QzdbReader("qqzeng_ip_ult_china.qzdb")
-print(searcher.find_str("114.114.114.114")) # 亚洲|CN|中国|江苏|南京|中国电信
+
+# 返回竖线分隔字符串
+print(searcher.find_str("114.114.114.114"))
+# 亚洲|CN|中国|江苏|南京|中国电信
+
+# 返回结构化 GeoInfo
+loc = searcher.find("114.114.114.114")
+if loc:
+    print(loc.country, loc.province, loc.city, loc.isp)
 ```
 
+</details>
+
+<details>
+<summary>🦀 Rust</summary>
+
 ```rust
-// 🦀 Rust 示例 (零分配 Zero-Copy 检索)
-use qzdb::{from_file, QzdbReader};
-let searcher = from_file("qqzeng_ip_ult_china.qzdb");
-if let Some(info) = searcher.find("114.114.114.114") {
-    println!("{} {} {}", info.country(), info.province(), info.city());
+use qzdb::QzdbReader;
+
+// from_file 走只读 mmap，返回 Result —— 请在启动期用 ? / match 处理
+let searcher = QzdbReader::from_file("qqzeng_ip_ult_china.qzdb")?;
+
+if let Some(loc) = searcher.find("114.114.114.114") {
+    // 类型化字段访问（O(1)，零分配）
+    println!("Country: {}, City: {}", loc.country(), loc.city());
+    // 动态字段访问
+    println!("ISP: {}", loc.get("isp"));
 }
 ```
+
+</details>
+
+<details>
+<summary>🐹 Go</summary>
+
+```go
+import (
+    "fmt"
+    "log"
+
+    "github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go/qzdb"
+)
+
+// 创建并持有 QzdbReader 实例（mmap 零拷贝，全局复用）
+searcher, err := qzdb.Open("qqzeng_ip_ult_china.qzdb", 0, true)
+if err != nil {
+    log.Fatal(err)
+}
+defer searcher.Close()
+
+// 返回竖线分隔字符串
+fmt.Println(searcher.FindStr("114.114.114.114"))
+
+// 返回结构化 GeoInfo
+info, err := searcher.Find("114.114.114.114")
+if err == nil && info != nil {
+    fmt.Println(info.GetCountry(), info.GetProvince(), info.GetCity())
+}
+```
+
+</details>
+
+<details>
+<summary>☕ Java</summary>
+
+```java
+import com.qqzeng.qzdb.QzdbReader;
+import com.qqzeng.qzdb.GeoInfo;
+
+// Builder 模式，支持 groupIndex / verifyCrc
+try (QzdbReader reader = new QzdbReader.Builder(new File("qqzeng_ip_ult_china.qzdb")).build()) {
+    GeoInfo loc = reader.find("114.114.114.114").orElse(null);
+    if (loc != null) {
+        System.out.println(loc.getCountry() + " " + loc.getProvince() + " " + loc.getCity());
+    }
+    System.out.println(reader.findStr("114.114.114.114"));
+}
+```
+
+</details>
+
+<details>
+<summary>🔷 C# (.NET)</summary>
+
+```csharp
+using QQZeng.Qzdb;
+
+using var reader = QzdbReader.Open("qqzeng_ip_ult_china.qzdb");
+GeoInfo loc = reader.Find("114.114.114.114");
+if (loc != null) {
+    // 类型化取值
+    Console.WriteLine("Province: " + loc.GetProvince());
+    // 动态字段访问
+    Console.WriteLine("ISP: " + loc.Get("isp"));
+}
+```
+
+</details>
+
+<details>
+<summary>🟢 Node.js</summary>
+
+```javascript
+const QzdbReader = require('@qqzengip/qzdb');
+
+const reader = new QzdbReader.Builder("qqzeng_ip_ult_china.qzdb").build();
+const loc = reader.find("114.114.114.114");
+console.log(loc.get("country"), loc.get("city"));
+```
+
+</details>
+
+<details>
+<summary>🐘 PHP</summary>
+
+```php
+require_once __DIR__ . '/vendor/autoload.php';
+use Qqzeng\Ip\QzdbReader;
+
+$reader = new QzdbReader("qqzeng_ip_ult_china.qzdb");
+$loc = $reader->find("114.114.114.114");
+echo $loc->get('country') . ' ' . $loc->get('city');
+```
+
+</details>
+
+<details>
+<summary>⚡ C / C++</summary>
+
+```c
+#include "qzdb_reader.h"
+
+qzdb_reader_t searcher;
+qzdb_init(&searcher, "qqzeng_ip_ult_china.qzdb");   // 栈上持有实例
+char buf[256];
+qzdb_find_str(&searcher, "114.114.114.114", buf, sizeof(buf));
+printf("Result: %s\n", buf);
+```
+
+</details>
+
+> 更完整的 API 文档、错误处理与多语言用例，请参见 **[QZDB 多语言 SDK 指南](./ip-qzdb-sdk/README_zh.md)**。
 
 ---
 

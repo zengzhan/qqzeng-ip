@@ -47,18 +47,27 @@ if loc:
 
 ### 🐹 Go
 ```go
-import "qzdb/qzdb"
+import (
+    "fmt"
+    "log"
+
+    "github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go/qzdb"
+)
 
 // 创建并持有 QzdbReader 实例
 searcher, err := qzdb.Open("qqzeng_ip_ult_china.qzdb", 0, true)
+if err != nil {
+    log.Fatal(err)
+}
+defer searcher.Close()
 
 // 查询 Pipe 字符串
-res := searcher.FindStr("114.114.114.114")
+fmt.Println(searcher.FindStr("114.114.114.114"))
 
 // 查询结构化 GeoInfo
-info := searcher.Find("114.114.114.114")
-if info != nil {
-    println(info.Get("country"), info.Get("city"))
+info, err := searcher.Find("114.114.114.114")
+if err == nil && info != nil {
+    fmt.Println(info.GetCountry(), info.GetCity())
 }
 ```
 
@@ -81,9 +90,10 @@ try (QzdbReader reader = new QzdbReader.Builder(new File("qqzeng_ip_ult_china.qz
 
 ### 🦀 Rust
 ```rust
-use qzdb::{from_file, QzdbReader};
+use qzdb::QzdbReader;
 
-let searcher = from_file("qqzeng_ip_ult_china.qzdb");
+// from_file 走只读 mmap，返回 Result —— 请在启动期用 ? / match 处理
+let searcher = QzdbReader::from_file("qqzeng_ip_ult_china.qzdb")?;
 if let Some(loc) = searcher.find("114.114.114.114") {
     // 直接字段访问 (O(1))
     println!("Country: {}, City: {}", loc.country(), loc.city());
@@ -116,7 +126,7 @@ printf("Result: %s\n", buf);
 
 ### 🟢 Node.js
 ```javascript
-const QzdbReader = require('./qzdb');
+const QzdbReader = require('@qqzengip/qzdb');
 
 const reader = new QzdbReader.Builder("qqzeng_ip_ult_china.qzdb").build();
 const loc = reader.find("114.114.114.114");
@@ -125,6 +135,8 @@ console.log(loc.get("country"), loc.get("city"));
 
 ### 🐘 PHP
 ```php
+require_once __DIR__ . '/vendor/autoload.php';
+
 use Qqzeng\Ip\QzdbReader;
 
 $reader = new QzdbReader("qqzeng_ip_ult_china.qzdb");
