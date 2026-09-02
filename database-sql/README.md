@@ -21,4 +21,4 @@
 
 <!-- commit description sync 1787122549 -->
 
-<!-- commit: database-sql: MySQL / PostgreSQL / SQL Server 建表与入库 DDL sync=1788317478 -->
+<!-- commit: database-sql: MySQL / PostgreSQL / SQL Server 建表与入库 DDL sync=1788318095 -->
