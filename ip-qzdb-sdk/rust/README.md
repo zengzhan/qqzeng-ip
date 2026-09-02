@@ -47,7 +47,7 @@
 
 ```toml
 [dependencies]
-qzdb = "1.0.5"
+qzdb = "1.0.6"
 ```
 
 或执行：
@@ -153,23 +153,43 @@ let reader = Builder::from_bytes(&bytes).build()?;
 
 | 方法 | 签名 | 返回 | 说明 |
 |------|------|------|------|
+| **零拷贝查询** | `find_ref(impl ToIp) -> Option<GeoInfoRef>` | `Option<GeoInfoRef>` | **推荐高性能查询**：直接借用快照数据，0 堆内存分配 |
 | 字符串查询 | `find(&str) -> Option<GeoInfo>` | `Option<GeoInfo>` | 按字符串查（IPv4 / IPv6 / IPv4 映射地址均可） |
+| 通用类型查询 | `find_ip(impl ToIp) -> Option<GeoInfo>` | `Option<GeoInfo>` | 支持 `IpAddr` / `Ipv4Addr` / `Ipv6Addr` / `u32` / `u128` / `&[u8]` 等 |
 | 字节查询 | `find_bytes(&[u8]) -> Option<GeoInfo>` | `Option<GeoInfo>` | 按 4 字节（IPv4）或 16 字节（IPv6）原始字节查 |
 | 整数查询 | `find_uint(u32) -> Option<GeoInfo>` | `Option<GeoInfo>` | 按 IPv4 的 `u32` 整型查（主机序） |
 | IPv6 整数 | `find_v6(u128) -> Option<GeoInfo>` | `Option<GeoInfo>` | 按 IPv6 的 `u128` 整型查（主机序） |
 | 字段子集 | `find_fields(&str, &[&str]) -> Option<GeoInfo>` | `Option<GeoInfo>` | 只解析指定字段，减少不必要的字符串分配 |
 | 管道字符串 | `find_str(&str) -> String` | `String` | 直接返回 `to_pipe()` 结果；未命中返回 `""` |
 | 行号查询 | `lookup_row_id(&str) -> u32` | `u32` | 仅返回内部行号（不含字段，最轻；未命中返回 `0`） |
+| 行号（类型） | `lookup_row_id_ip(impl ToIp) -> u32` | `u32` | 支持多种 IP 类型的行号查询 |
 | 行号（整数） | `lookup_row_id_uint(u32) -> u32` | `u32` | `find_uint` 的轻量版，只返回行号 |
 | 行号（IPv6） | `lookup_row_id_v6(u128) -> u32` | `u32` | `find_v6` 的轻量版，只返回行号 |
 | 行号（字节） | `lookup_row_id_bytes(&[u8]) -> u32` | `u32` | `find_bytes` 的轻量版，只返回行号 |
 | 反查 ID | `lookup_ids(u32) -> Option<RowIds>` | `Option<RowIds>` | 由行号反查 Geo / ASN / Usage 三类索引 ID |
 | CIDR 反查 | `lookup_cidr(&str) -> Option<String>` | `Option<String>` | 反查 IP 所属 CIDR 网段（如 `1.2.3.0/24`） |
+| CIDR（类型） | `lookup_cidr_ip(impl ToIp) -> Option<String>` | `Option<String>` | 支持多种 IP 类型的 CIDR 反查 |
 | 批量查询 | `find_batch(&[&str]) -> Vec<BatchResult>` | `Vec<BatchResult>` | 批量字符串查询，逐条容错 |
 | 批量字段 | `find_batch_fields(&[&str], &[&str]) -> Vec<BatchResult>` | `Vec<BatchResult>` | 批量 + 字段子集 |
 | 流式查询 | `find_stream(&[&str]) -> impl Iterator<Item = BatchResult>` | 迭代器 | 惰性流式逐条产出 |
+| 不可变快照 | `snapshot() -> Snapshot` | `Snapshot` | 获取快照句柄，在紧凑循环中完全消除引用计数开销 |
 
-### 5.1 IP 输入约定
+### 5.1 IP 输入与 `ToIp` Trait
+
+SDK 提供了通用的 `ToIp` trait，以下类型可直接作为参数传给 `find_ref`、`find_ip`、`lookup_row_id_ip`、`lookup_cidr_ip` 等方法：
+- `&str`、`String`、`&String`
+- `std::net::IpAddr`、`std::net::Ipv4Addr`、`std::net::Ipv6Addr`
+- `u32`（IPv4 主机序整数）、`u128`（IPv6 主机序整数）
+- `[u8; 4]`、`[u8; 16]`、`&[u8]`
+
+```rust
+use std::net::{IpAddr, Ipv4Addr};
+
+let v4 = Ipv4Addr::new(114, 114, 114, 114);
+if let Some(info_ref) = reader.find_ref(v4) {
+    println!("{}: {}", v4, info_ref.country());
+}
+```
 
 - **`find(&str)`**：接受点分十进制（`1.2.3.4`）与完整 / 压缩 IPv6（`2001:db8::1`）、IPv4 映射地址（`::ffff:1.2.3.4`）；非法格式直接返回 `None`。解析严格拒绝前导零、段数错误、CIDR 形式、zone-id、空白等。
 - **`find_uint(u32)`**：`ip` 应为 IPv4 地址的 **主机序 `u32`**（即 `(a<<24)|(b<<16)|(c<<8)|d`）。若你手上是网络序字节，请先转换或改用 `find_bytes`。
@@ -192,9 +212,13 @@ pub struct RowIds {
 
 ---
 
-## 6. 结果对象 `GeoInfo`
+## 6. 结果对象 `GeoInfo` 与 `GeoInfoRef`
 
-`find*` 系列返回 `Option<GeoInfo>`。它是**不可变**的结果对象，提供三种读取形态：
+`find*` 系列返回拥有所有权的 `Option<GeoInfo>`，而 `find_ref*` 系列返回零拷贝借用视图 `Option<GeoInfoRef<'a>>`。
+
+两者具备完全一致的语义化 Getter、字段访问与序列化方法：
+- **`GeoInfoRef<'a>`**（零拷贝视图）：字段直接借用底层快照内存或栈缓冲区，查询热路径 **0 堆内存分配**，可通过 `.to_geo_info()` 或 `.into()` 按需转换为 `GeoInfo`。
+- **`GeoInfo`**（拥有所有权实体）：完全独立的拥有型响应对象，适合需要长期跨线程存储或脱离 Reader 生命周期的场景。
 
 ### 6.1 通用取字段 `get(name)`
 
@@ -492,4 +516,4 @@ cargo update -p qzdb
 
 [MIT](https://opensource.org/licenses/MIT)
 
-<!-- commit: rust: Rust SDK（mmap 只读映射，内存安全） sync=1788318095 -->
+<!-- commit: rust: Rust 极速解析引擎 (mmap + 最小 unsafe surface, 6900 万+ QPS) -->

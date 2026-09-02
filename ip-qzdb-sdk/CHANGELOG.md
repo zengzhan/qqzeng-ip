@@ -2,6 +2,15 @@
 
 本文件记录 QZDB 多语言 SDK 的用户可见变更。格式参照 Keep a Changelog；语义化版本。
 
+## [1.0.6] - 2026-09-02
+
+### Added
+
+- Rust SDK 1.0.6：
+  - **零拷贝借用视图 `GeoInfoRef<'a>` 与 `find_ref` 系列 API**：引入零堆分配查询（Zero Allocation），字符串字段直接借用只读快照底层 `&'a str`，包含 `find_ref`、`find_ref_v4`、`find_ref_v6`、`find_ref_bytes`、`find_ref_ip`。
+  - **人体工程学强类型 IP 查询接口（`ToIp` Trait）**：支持 `std::net::IpAddr`、`Ipv4Addr`、`Ipv6Addr`、`&str`、`u32`、`[u8; 16]` 原生直接查询（`find_ip` / `find_ref_ip` / `lookup_row_id_ip`）。
+  - 106 项单元/对拍/Fuzz/并发回归测试与 0 warning clippy 审查保障。
+
 ## [Unreleased]
 
 ### Added

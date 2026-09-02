@@ -12,6 +12,7 @@
 
 use std::collections::HashMap;
 use std::fs::File;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::{Arc, OnceLock};
 
 use arc_swap::{ArcSwap, ArcSwapOption};
@@ -386,6 +387,45 @@ fn fmt_native_float(f: f64) -> String {
     }
 }
 
+/// 零分配栈缓冲区原生浮点格式化。
+fn fmt_native_float_buf(f: f64, buf: &mut [u8; 32]) -> usize {
+    use std::io::Write;
+    if f.is_nan() || f.is_infinite() {
+        return 0;
+    }
+    let mut cursor = std::io::Cursor::new(&mut buf[..]);
+    if f == f.trunc() {
+        if f.abs() < 9.223_372_036_854_776e18 {
+            let _ = write!(cursor, "{}", f as i64);
+        } else {
+            let _ = write!(cursor, "{:.0}", f);
+        }
+    } else {
+        let _ = write!(cursor, "{:.6}", f);
+    }
+    cursor.position() as usize
+}
+
+/// 零分配栈缓冲区无符号整数格式化。
+#[inline(always)]
+fn fmt_uint_buf(mut val: u32, buf: &mut [u8; 32]) -> usize {
+    if val == 0 {
+        buf[0] = b'0';
+        return 1;
+    }
+    let mut temp = [0u8; 10];
+    let mut i = 0;
+    while val > 0 {
+        temp[i] = b'0' + (val % 10) as u8;
+        val /= 10;
+        i += 1;
+    }
+    for j in 0..i {
+        buf[j] = temp[i - 1 - j];
+    }
+    i
+}
+
 // ---------------------------------------------------------------------------
 // 语义化用法类型（API_CONTRACT §6）
 // ---------------------------------------------------------------------------
@@ -754,6 +794,14 @@ impl std::fmt::Display for GeoInfo {
     }
 }
 
+impl PartialEq for GeoInfo {
+    fn eq(&self, other: &Self) -> bool {
+        *self.field_names == *other.field_names && self.values == other.values
+    }
+}
+
+impl Eq for GeoInfo {}
+
 fn escape_json(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     for c in s.chars() {
@@ -796,6 +844,307 @@ fn is_json_number(v: &str) -> bool {
         }
     }
     has_digit
+}
+
+// ---------------------------------------------------------------------------
+// GeoInfoRef 零拷贝借用响应实体
+// ---------------------------------------------------------------------------
+
+const MAX_GEO_FIELDS: usize = 64;
+
+/// 字段值借用或内联栈存储。
+#[derive(Clone, Copy, Debug)]
+pub enum FieldVal<'a> {
+    Borrowed(&'a str),
+    Inline([u8; 32], u8),
+}
+
+impl<'a> FieldVal<'a> {
+    pub const EMPTY: Self = FieldVal::Borrowed("");
+
+    #[inline(always)]
+    pub fn as_str(&self) -> &str {
+        match self {
+            FieldVal::Borrowed(s) => s,
+            FieldVal::Inline(buf, len) => unsafe {
+                std::str::from_utf8_unchecked(&buf[..*len as usize])
+            },
+        }
+    }
+}
+
+impl<'a> std::ops::Deref for FieldVal<'a> {
+    type Target = str;
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+/// 单条 IP 的地理信息响应借用视图（零拷贝，API_CONTRACT §6）。
+///
+/// 字段字符串直接借用自底层快照数据，热路径查询完全消除堆内存分配。
+#[derive(Clone)]
+pub struct GeoInfoRef<'a> {
+    pub(crate) _snap: Option<Arc<SnapshotInner>>,
+    pub(crate) field_names: &'a [String],
+    pub(crate) values: [FieldVal<'a>; MAX_GEO_FIELDS],
+    pub(crate) field_count: usize,
+    pub(crate) norm_map: &'a HashMap<String, usize>,
+    pub(crate) numeric_indices: &'a [usize],
+}
+
+impl<'a> std::fmt::Debug for GeoInfoRef<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut d = f.debug_struct("GeoInfoRef");
+        for (i, name) in self.field_names().iter().enumerate() {
+            d.field(name, &self.get_value_at(i));
+        }
+        d.finish()
+    }
+}
+
+impl<'a> GeoInfoRef<'a> {
+    /// 按字段名取值（大小写/下划线/连字符不敏感）。未匹配返回 ""，绝不 panic。
+    #[inline]
+    pub fn get(&self, name: &str) -> &str {
+        self.norm_map
+            .get(&normalize_key(name))
+            .copied()
+            .and_then(|i| if i < self.field_count { self.values.get(i).map(|v| v.as_str()) } else { None })
+            .unwrap_or("")
+    }
+
+    /// 获取指定索引处的字段值。
+    #[inline]
+    pub fn get_value_at(&self, idx: usize) -> &str {
+        if idx < self.field_count {
+            self.values.get(idx).map(|v| v.as_str()).unwrap_or("")
+        } else {
+            ""
+        }
+    }
+
+    /// 字段数量。
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.field_count
+    }
+
+    /// 是否为空。
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.field_count == 0
+    }
+
+    /// 字段名列表切片。
+    #[inline]
+    pub fn field_names(&self) -> &[String] {
+        let max_len = self.field_count.min(self.field_names.len());
+        &self.field_names[..max_len]
+    }
+
+    /// 全部字段以 `|` 拼接（直接拼接已解码字符串，禁止重新格式化浮点）。
+    pub fn to_pipe(&self) -> String {
+        let mut out = String::new();
+        for i in 0..self.field_count {
+            if i > 0 {
+                out.push('|');
+            }
+            out.push_str(self.get_value_at(i));
+        }
+        out
+    }
+
+    /// `to_pipe()` 的别名。
+    pub fn to_string_pipe(&self) -> String {
+        self.to_pipe()
+    }
+
+    /// 字段名 → 值（全 String）。
+    pub fn to_map(&self) -> HashMap<String, String> {
+        let mut m = HashMap::with_capacity(self.field_count);
+        for (i, name) in self.field_names().iter().enumerate() {
+            let v = self.get_value_at(i).to_string();
+            m.insert(name.clone(), v);
+        }
+        m
+    }
+
+    /// 手写 JSON 序列化（API_CONTRACT §6）：longitude/latitude/asn/geo_id 输出为数字，
+    /// 空值 → 数值字段 `null`、其余 `""`；无法解析为数字 → `null`。
+    pub fn to_json(&self) -> String {
+        let mut out = String::from("{");
+        let mut first = true;
+        let names = self.field_names();
+        for (i, name) in names.iter().enumerate() {
+            if name.is_empty() {
+                continue;
+            }
+            let val = self.get_value_at(i);
+            if !first {
+                out.push(',');
+            }
+            first = false;
+            out.push('"');
+            out.push_str(&escape_json(name));
+            out.push_str("\":");
+            let numeric = self.numeric_indices.contains(&i);
+            if val.is_empty() {
+                out.push_str(if numeric { "null" } else { "\"\"" });
+            } else if numeric {
+                if is_json_number(val) {
+                    out.push_str(val);
+                } else {
+                    out.push_str("null");
+                }
+            } else {
+                out.push('"');
+                out.push_str(&escape_json(val));
+                out.push('"');
+            }
+        }
+        out.push('}');
+        out
+    }
+
+    /// 转换为拥有所有权的 `GeoInfo` 实体。
+    pub fn to_geo_info(&self) -> GeoInfo {
+        let mut values = Vec::with_capacity(self.field_count);
+        for i in 0..self.field_count {
+            values.push(self.get_value_at(i).to_string());
+        }
+        let (names_arc, map_arc, num_arc) = if let Some(ref snap) = self._snap {
+            (
+                Arc::clone(&snap.field_names),
+                Arc::clone(&snap.norm_map),
+                Arc::clone(&snap.numeric_indices),
+            )
+        } else {
+            (
+                Arc::new(self.field_names.to_vec()),
+                Arc::new(self.norm_map.clone()),
+                Arc::new(self.numeric_indices.to_vec()),
+            )
+        };
+        GeoInfo {
+            field_names: names_arc,
+            values,
+            norm_map: map_arc,
+            numeric_indices: num_arc,
+        }
+    }
+
+    // ---- 语义化 Getter 全集（缺失返回 "" 或 None） ----
+
+    pub fn country(&self) -> &str { self.get("country") }
+    pub fn country_en(&self) -> &str { self.get("country_en") }
+    pub fn province(&self) -> &str { self.get("province") }
+    pub fn province_en(&self) -> &str { self.get("province_en") }
+    pub fn city(&self) -> &str { self.get("city") }
+    pub fn city_en(&self) -> &str { self.get("city_en") }
+    pub fn district(&self) -> &str { self.get("district") }
+
+    pub fn geo_id(&self) -> Option<u64> {
+        let v = self.get("geo_id");
+        if v.is_empty() {
+            None
+        } else {
+            v.parse::<u64>().ok()
+        }
+    }
+
+    pub fn longitude(&self) -> Option<f64> {
+        let v = self.get("longitude");
+        if v.is_empty() {
+            None
+        } else {
+            v.parse::<f64>().ok()
+        }
+    }
+
+    pub fn latitude(&self) -> Option<f64> {
+        let v = self.get("latitude");
+        if v.is_empty() {
+            None
+        } else {
+            v.parse::<f64>().ok()
+        }
+    }
+
+    pub fn timezone(&self) -> &str { self.get("timezone") }
+    pub fn isp(&self) -> &str { self.get("isp") }
+    pub fn isp_en(&self) -> &str { self.get("isp_en") }
+
+    pub fn asn(&self) -> Option<u64> {
+        let v = self.get("asn");
+        if v.is_empty() {
+            None
+        } else {
+            v.parse::<u64>().ok()
+        }
+    }
+
+    pub fn as_name(&self) -> &str { self.get("as_name") }
+    pub fn as_domain(&self) -> &str { self.get("as_domain") }
+
+    pub fn usage_type(&self) -> UsageType {
+        UsageType::from_raw(self.get("usage_type"))
+    }
+
+    pub fn country_alpha2(&self) -> &str { self.get("country_code") }
+    pub fn country_alpha3(&self) -> &str { self.get("country_alpha3") }
+    pub fn currency_code(&self) -> &str { self.get("currency_code") }
+    pub fn currency_name(&self) -> &str { self.get("currency_name") }
+    pub fn phone_prefix(&self) -> &str { self.get("phone_prefix") }
+    pub fn emoji_flag(&self) -> &str { self.get("emoji_flag") }
+    pub fn languages(&self) -> &str { self.get("languages") }
+    pub fn continent(&self) -> &str { self.get("continent") }
+    pub fn continent_en(&self) -> &str { self.get("continent_en") }
+    pub fn country_code(&self) -> &str { self.get("country_code") }
+    pub fn get_cidr(&self) -> &str { self.get("cidr") }
+}
+
+impl<'a> std::fmt::Display for GeoInfoRef<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.to_pipe())
+    }
+}
+
+impl<'a> From<GeoInfoRef<'a>> for GeoInfo {
+    fn from(r: GeoInfoRef<'a>) -> Self {
+        r.to_geo_info()
+    }
+}
+
+impl<'a> From<&'a GeoInfoRef<'a>> for GeoInfo {
+    fn from(r: &'a GeoInfoRef<'a>) -> Self {
+        r.to_geo_info()
+    }
+}
+
+impl<'a, 'b> PartialEq<GeoInfoRef<'b>> for GeoInfoRef<'a> {
+    fn eq(&self, other: &GeoInfoRef<'b>) -> bool {
+        self.field_names() == other.field_names()
+            && self.len() == other.len()
+            && (0..self.field_count).all(|i| self.get_value_at(i) == other.get_value_at(i))
+    }
+}
+
+impl<'a> Eq for GeoInfoRef<'a> {}
+
+impl<'a> PartialEq<GeoInfo> for GeoInfoRef<'a> {
+    fn eq(&self, other: &GeoInfo) -> bool {
+        self.field_names() == other.field_names.as_slice()
+            && self.len() == other.values.len()
+            && (0..self.field_count).all(|i| self.get_value_at(i) == other.values.get(i).map(|s| s.as_str()).unwrap_or(""))
+    }
+}
+
+impl<'a> PartialEq<GeoInfoRef<'a>> for GeoInfo {
+    fn eq(&self, other: &GeoInfoRef<'a>) -> bool {
+        other == self
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -909,6 +1258,16 @@ pub struct SnapshotInner {
 
     // per-snapshot 有界 GeoInfo 解码缓存（无锁：AtomicU32 + ArcSwapOption）
     geo_cache: Vec<CacheSlot>,
+}
+
+impl std::fmt::Debug for SnapshotInner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SnapshotInner")
+            .field("version", &self.version)
+            .field("edition", &self.edition)
+            .field("row_count", &self.row_count)
+            .finish()
+    }
 }
 
 impl SnapshotInner {
@@ -1777,12 +2136,16 @@ impl SnapshotInner {
         Some(Arc::clone(&node.val))
     }
 
-    fn build_geo(&self, entry_id: u32) -> Arc<GeoInfo> {
+    pub(crate) fn resolve_geo_ref<'a>(
+        &'a self,
+        entry_id: u32,
+        snap_arc: Option<Arc<SnapshotInner>>,
+    ) -> Option<GeoInfoRef<'a>> {
+        if entry_id == 0 || entry_id >= self.group_entry_counts[self.group_index] {
+            return None;
+        }
         let gi = self.group_index;
         let fc = self.group_field_counts[gi];
-        // 解析期已把 entry_count 收敛到文件放得下的范围，此处正常不会饱和；
-        // 用 saturating 是第二道防线：即便将来收口被改坏，也只会读到越界偏移
-        // 从而由 read_arr 的 checked_add 返回 None（降级为空串），绝不 panic。
         let entry_off = entry_off_of(
             self.off_geo_entries,
             self.group_entry_offsets[gi],
@@ -1796,6 +2159,65 @@ impl SnapshotInner {
         let nat_types = &self.group_field_native_type[gi];
         let pools = &self.pools[gi];
 
+        let mut values = [FieldVal::EMPTY; MAX_GEO_FIELDS];
+        let limit = fc.min(MAX_GEO_FIELDS);
+        for i in 0..limit {
+            let w = widths[i];
+            let fo = entry_off.saturating_add(offsets[i]);
+            if natives[i] {
+                let t = nat_types[i];
+                if t == 1 {
+                    let mut buf = [0u8; 32];
+                    let len = if w == 4 {
+                        let bits = safe_read_u32(d, fo).unwrap_or(0);
+                        fmt_native_float_buf(f32::from_bits(bits) as f64, &mut buf)
+                    } else {
+                        let bits = safe_read_u64(d, fo).unwrap_or(0);
+                        fmt_native_float_buf(f64::from_bits(bits), &mut buf)
+                    };
+                    values[i] = FieldVal::Inline(buf, len as u8);
+                } else {
+                    let mut buf = [0u8; 32];
+                    let val = self.read_uint_width(fo, w);
+                    let len = fmt_uint_buf(val, &mut buf);
+                    values[i] = FieldVal::Inline(buf, len as u8);
+                }
+            } else {
+                let idx = self.read_uint_width(fo, w) as usize;
+                let s = if i < pools.len() && idx < pools[i].len() {
+                    pools[i][idx].as_str()
+                } else {
+                    ""
+                };
+                values[i] = FieldVal::Borrowed(s);
+            }
+        }
+
+        Some(GeoInfoRef {
+            _snap: snap_arc,
+            field_names: &self.field_names,
+            values,
+            field_count: limit,
+            norm_map: &self.norm_map,
+            numeric_indices: &self.numeric_indices,
+        })
+    }
+
+    fn build_geo(&self, entry_id: u32) -> Arc<GeoInfo> {
+        let gi = self.group_index;
+        let fc = self.group_field_counts[gi];
+        let entry_off = entry_off_of(
+            self.off_geo_entries,
+            self.group_entry_offsets[gi],
+            entry_id,
+            self.group_strides[gi],
+        );
+        let d = self.data.as_slice();
+        let widths = &self.group_field_widths[gi];
+        let offsets = &self.group_field_offsets[gi];
+        let natives = &self.group_field_native[gi];
+        let nat_types = &self.group_field_native_type[gi];
+        let pools = &self.pools[gi];
         let mut values = Vec::with_capacity(fc);
         for i in 0..fc {
             let w = widths[i];
@@ -1823,13 +2245,159 @@ impl SnapshotInner {
             };
             values.push(val);
         }
-
         Arc::new(GeoInfo {
             field_names: Arc::clone(&self.field_names),
             values,
             norm_map: Arc::clone(&self.norm_map),
             numeric_indices: Arc::clone(&self.numeric_indices),
         })
+    }
+
+    /// 零拷贝查询：返回借用视图 `GeoInfoRef`。
+    pub fn find_ref<'a>(&'a self, ip: impl ToIp) -> Option<GeoInfoRef<'a>> {
+        let parsed = ip.to_parsed_ip()?;
+        match parsed {
+            ParsedIp::V4(v4) => self.find_uint_ref(v4),
+            ParsedIp::V6(b) => self.find_v6_bytes_ref(&b),
+        }
+    }
+
+    /// `find_ref` 的同义方法。
+    pub fn find_ref_ip<'a>(&'a self, ip: impl ToIp) -> Option<GeoInfoRef<'a>> {
+        self.find_ref(ip)
+    }
+
+    pub fn find_ref_v4<'a>(&'a self, ip: u32) -> Option<GeoInfoRef<'a>> {
+        self.find_uint_ref(ip)
+    }
+
+    pub fn find_ref_v6<'a>(&'a self, ip: u128) -> Option<GeoInfoRef<'a>> {
+        if !self.has_v6 {
+            return None;
+        }
+        let b = ip.to_be_bytes();
+        self.find_v6_bytes_ref(&b)
+    }
+
+    pub fn find_ref_bytes<'a>(&'a self, ip_bytes: &[u8]) -> Option<GeoInfoRef<'a>> {
+        match ip_bytes.len() {
+            16 => {
+                let mut b = [0u8; 16];
+                b.copy_from_slice(ip_bytes);
+                if is_ipv4_mapped_v6(&b) {
+                    let v4 = u32::from_be_bytes([b[12], b[13], b[14], b[15]]);
+                    self.find_uint_ref(v4)
+                } else {
+                    self.find_v6_bytes_ref(&b)
+                }
+            }
+            4 => {
+                let v4 = u32::from_be_bytes([ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]]);
+                self.find_uint_ref(v4)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn find_ref_uint<'a>(&'a self, ip: u32) -> Option<GeoInfoRef<'a>> {
+        self.find_uint_ref(ip)
+    }
+
+    pub fn find_uint_ref<'a>(&'a self, ip: u32) -> Option<GeoInfoRef<'a>> {
+        if !self.has_v4 {
+            return None;
+        }
+        let rid = self.trie_row_v4(ip)?;
+        if rid == 0 {
+            return None;
+        }
+        let (geo_id, asn_id, usage_id) = self.read_ip_row(rid);
+        let mask = *self.group_dim_masks.get(self.group_index)?;
+        let entry_id = if mask & 0x02 != 0 {
+            asn_id
+        } else if mask & 0x04 != 0 {
+            usage_id
+        } else {
+            geo_id
+        };
+        self.resolve_geo_ref(entry_id, None)
+    }
+
+    pub fn find_v6_bytes_ref<'a>(&'a self, bytes: &[u8; 16]) -> Option<GeoInfoRef<'a>> {
+        if !self.has_v6 {
+            return None;
+        }
+        let rid = self.trie_row_v6(bytes)?;
+        if rid == 0 {
+            return None;
+        }
+        let (geo_id, asn_id, usage_id) = self.read_ip_row(rid);
+        let mask = *self.group_dim_masks.get(self.group_index)?;
+        let entry_id = if mask & 0x02 != 0 {
+            asn_id
+        } else if mask & 0x04 != 0 {
+            usage_id
+        } else {
+            geo_id
+        };
+        self.resolve_geo_ref(entry_id, None)
+    }
+
+    /// IP 查询（拥有所有权实体）。
+    pub fn find(&self, ip_str: &str) -> Option<GeoInfo> {
+        let parsed = parse_ip(ip_str)?;
+        match parsed {
+            ParsedIp::V4(v4) => self.find_uint_inner(v4),
+            ParsedIp::V6(b) => self.find_v6_bytes_inner(&b),
+        }
+    }
+
+    pub fn find_ip(&self, ip: impl ToIp) -> Option<GeoInfo> {
+        let parsed = ip.to_parsed_ip()?;
+        match parsed {
+            ParsedIp::V4(v4) => self.find_uint_inner(v4),
+            ParsedIp::V6(b) => self.find_v6_bytes_inner(&b),
+        }
+    }
+
+    pub fn find_uint(&self, ip: u32) -> Option<GeoInfo> {
+        self.find_uint_inner(ip)
+    }
+
+    pub fn find_v6(&self, ip: u128) -> Option<GeoInfo> {
+        if !self.has_v6 {
+            return None;
+        }
+        let b = ip.to_be_bytes();
+        self.find_v6_bytes_inner(&b)
+    }
+
+    pub fn find_bytes(&self, ip_bytes: &[u8]) -> Option<GeoInfo> {
+        match ip_bytes.len() {
+            16 => {
+                let mut b = [0u8; 16];
+                b.copy_from_slice(ip_bytes);
+                if is_ipv4_mapped_v6(&b) {
+                    let v4 = u32::from_be_bytes([b[12], b[13], b[14], b[15]]);
+                    self.find_uint_inner(v4)
+                } else {
+                    self.find_v6_bytes_inner(&b)
+                }
+            }
+            4 => {
+                let v4 = u32::from_be_bytes([ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]]);
+                self.find_uint_inner(v4)
+            }
+            _ => None,
+        }
+    }
+
+    fn find_uint_inner(&self, ip: u32) -> Option<GeoInfo> {
+        self.resolve_row_id(self.trie_row_v4(ip)?).map(|a| (*a).clone())
+    }
+
+    fn find_v6_bytes_inner(&self, bytes: &[u8; 16]) -> Option<GeoInfo> {
+        self.resolve_row_id(self.trie_row_v6(bytes)?).map(|a| (*a).clone())
     }
 
     fn resolve_fields(&self, row_id: u32, fields: &[&str]) -> Option<Arc<GeoInfo>> {
@@ -2002,6 +2570,140 @@ impl SnapshotInner {
         })
     }
 
+    pub fn lookup_row_id(&self, ip_str: &str) -> u32 {
+        let parsed = match parse_ip(ip_str) {
+            Some(p) => p,
+            None => return 0,
+        };
+        match parsed {
+            ParsedIp::V4(v4) => self.trie_row_v4(v4).unwrap_or(0),
+            ParsedIp::V6(b) => self.trie_row_v6(&b).unwrap_or(0),
+        }
+    }
+
+    pub fn lookup_row_id_ip(&self, ip: impl ToIp) -> u32 {
+        let parsed = match ip.to_parsed_ip() {
+            Some(p) => p,
+            None => return 0,
+        };
+        match parsed {
+            ParsedIp::V4(v4) => self.trie_row_v4(v4).unwrap_or(0),
+            ParsedIp::V6(b) => self.trie_row_v6(&b).unwrap_or(0),
+        }
+    }
+
+    pub fn lookup_row_id_uint(&self, ip: u32) -> u32 {
+        if !self.has_v4 {
+            return 0;
+        }
+        self.trie_row_v4(ip).unwrap_or(0)
+    }
+
+    pub fn lookup_row_id_v6(&self, ip: u128) -> u32 {
+        if !self.has_v6 {
+            return 0;
+        }
+        let b = ip.to_be_bytes();
+        self.trie_row_v6(&b).unwrap_or(0)
+    }
+
+    pub fn lookup_row_id_bytes(&self, ip_bytes: &[u8]) -> u32 {
+        match ip_bytes.len() {
+            16 => {
+                let mut b = [0u8; 16];
+                b.copy_from_slice(ip_bytes);
+                if is_ipv4_mapped_v6(&b) {
+                    let v4 = u32::from_be_bytes([b[12], b[13], b[14], b[15]]);
+                    if !self.has_v4 {
+                        return 0;
+                    }
+                    self.trie_row_v4(v4).unwrap_or(0)
+                } else {
+                    if !self.has_v6 {
+                        return 0;
+                    }
+                    self.trie_row_v6(&b).unwrap_or(0)
+                }
+            }
+            4 => {
+                let v4 = u32::from_be_bytes([ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]]);
+                if !self.has_v4 {
+                    return 0;
+                }
+                self.trie_row_v4(v4).unwrap_or(0)
+            }
+            _ => 0,
+        }
+    }
+
+    pub fn lookup_ids(&self, row_id: u32) -> Option<RowIds> {
+        if row_id == 0 || row_id >= self.row_count as u32 {
+            return None;
+        }
+        let (g, a, u) = self.read_ip_row(row_id);
+        Some(RowIds { geo_id: g, asn_id: a, usage_id: u })
+    }
+
+    pub fn lookup_cidr(&self, ip_str: &str) -> Option<String> {
+        let parsed = parse_ip(ip_str)?;
+        match parsed {
+            ParsedIp::V4(v4) => self.lookup_cidr_v4(v4),
+            ParsedIp::V6(b) => self.lookup_cidr_v6(&b),
+        }
+    }
+
+    pub fn lookup_cidr_ip(&self, ip: impl ToIp) -> Option<String> {
+        let parsed = ip.to_parsed_ip()?;
+        match parsed {
+            ParsedIp::V4(v4) => self.lookup_cidr_v4(v4),
+            ParsedIp::V6(b) => self.lookup_cidr_v6(&b),
+        }
+    }
+
+    pub fn lookup_cidr_uint(&self, ip: u32) -> Option<String> {
+        if !self.has_v4 {
+            return None;
+        }
+        self.lookup_cidr_v4(ip)
+    }
+
+    pub fn lookup_cidr_bytes(&self, ip_bytes: &[u8]) -> Option<String> {
+        match ip_bytes.len() {
+            16 => {
+                let mut b = [0u8; 16];
+                b.copy_from_slice(ip_bytes);
+                if is_ipv4_mapped_v6(&b) {
+                    let v4 = u32::from_be_bytes([b[12], b[13], b[14], b[15]]);
+                    if !self.has_v4 {
+                        return None;
+                    }
+                    self.lookup_cidr_v4(v4)
+                } else {
+                    if !self.has_v6 {
+                        return None;
+                    }
+                    self.lookup_cidr_v6(&b)
+                }
+            }
+            4 => {
+                let v4 = u32::from_be_bytes([ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]]);
+                if !self.has_v4 {
+                    return None;
+                }
+                self.lookup_cidr_v4(v4)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn find_str(&self, ip_str: &str) -> String {
+        self.find(ip_str).map(|g| g.to_pipe()).unwrap_or_default()
+    }
+
+    pub fn find_str_ip(&self, ip: impl ToIp) -> String {
+        self.find_ip(ip).map(|g| g.to_pipe()).unwrap_or_default()
+    }
+
     fn verify_crc_inner(&self) -> bool {
         let stored = safe_read_u32(self.data.as_slice(), 16).unwrap_or(0);
         stored == *self.canonical_crc.get_or_init(|| compute_canonical_crc(self.data.as_slice()))
@@ -2165,12 +2867,196 @@ fn parse_pools(
 }
 
 // ---------------------------------------------------------------------------
-// IP 解析
+// IP 解析与通用 ToIp Trait
 // ---------------------------------------------------------------------------
 
-enum ParsedIp {
+/// 解析后的 IP 格式内部表示。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParsedIp {
     V4(u32),
     V6([u8; 16]),
+}
+
+/// 支持查询的 IP 类型抽象。
+///
+/// 已实现该 trait 的类型：
+/// - `&str`、`str`、`String`、`&String`
+/// - `std::net::IpAddr`、`&std::net::IpAddr`
+/// - `std::net::Ipv4Addr`、`&std::net::Ipv4Addr`
+/// - `std::net::Ipv6Addr`、`&std::net::Ipv6Addr`
+/// - `u32` (IPv4 整数)
+/// - `u128` (IPv6 整数)
+/// - `[u8; 4]`、`&[u8; 4]`、`[u8; 16]`、`&[u8; 16]`、`&[u8]`
+pub trait ToIp {
+    fn to_parsed_ip(&self) -> Option<ParsedIp>;
+}
+
+impl<T: ToIp + ?Sized> ToIp for &T {
+    #[inline(always)]
+    fn to_parsed_ip(&self) -> Option<ParsedIp> {
+        (**self).to_parsed_ip()
+    }
+}
+
+impl ToIp for str {
+    #[inline(always)]
+    fn to_parsed_ip(&self) -> Option<ParsedIp> {
+        parse_ip(self)
+    }
+}
+
+impl ToIp for String {
+    #[inline(always)]
+    fn to_parsed_ip(&self) -> Option<ParsedIp> {
+        parse_ip(self.as_str())
+    }
+}
+
+impl<'a> ToIp for std::borrow::Cow<'a, str> {
+    #[inline(always)]
+    fn to_parsed_ip(&self) -> Option<ParsedIp> {
+        parse_ip(self.as_ref())
+    }
+}
+
+impl ToIp for Ipv4Addr {
+    #[inline(always)]
+    fn to_parsed_ip(&self) -> Option<ParsedIp> {
+        Some(ParsedIp::V4(u32::from_be_bytes(self.octets())))
+    }
+}
+
+impl ToIp for Ipv6Addr {
+    #[inline(always)]
+    fn to_parsed_ip(&self) -> Option<ParsedIp> {
+        let b = self.octets();
+        if is_ipv4_mapped_v6(&b) {
+            Some(ParsedIp::V4(u32::from_be_bytes([b[12], b[13], b[14], b[15]])))
+        } else {
+            Some(ParsedIp::V6(b))
+        }
+    }
+}
+
+impl ToIp for IpAddr {
+    #[inline(always)]
+    fn to_parsed_ip(&self) -> Option<ParsedIp> {
+        match self {
+            IpAddr::V4(v4) => v4.to_parsed_ip(),
+            IpAddr::V6(v6) => v6.to_parsed_ip(),
+        }
+    }
+}
+
+impl ToIp for u32 {
+    #[inline(always)]
+    fn to_parsed_ip(&self) -> Option<ParsedIp> {
+        Some(ParsedIp::V4(*self))
+    }
+}
+
+impl ToIp for u128 {
+    #[inline(always)]
+    fn to_parsed_ip(&self) -> Option<ParsedIp> {
+        let b = self.to_be_bytes();
+        if is_ipv4_mapped_v6(&b) {
+            Some(ParsedIp::V4(u32::from_be_bytes([b[12], b[13], b[14], b[15]])))
+        } else {
+            Some(ParsedIp::V6(b))
+        }
+    }
+}
+
+impl ToIp for [u8; 4] {
+    #[inline(always)]
+    fn to_parsed_ip(&self) -> Option<ParsedIp> {
+        Some(ParsedIp::V4(u32::from_be_bytes(*self)))
+    }
+}
+
+impl ToIp for [u8; 16] {
+    #[inline(always)]
+    fn to_parsed_ip(&self) -> Option<ParsedIp> {
+        if is_ipv4_mapped_v6(self) {
+            Some(ParsedIp::V4(u32::from_be_bytes([self[12], self[13], self[14], self[15]])))
+        } else {
+            Some(ParsedIp::V6(*self))
+        }
+    }
+}
+
+impl ToIp for [u8] {
+    #[inline(always)]
+    fn to_parsed_ip(&self) -> Option<ParsedIp> {
+        match self.len() {
+            4 => Some(ParsedIp::V4(u32::from_be_bytes([self[0], self[1], self[2], self[3]]))),
+            16 => {
+                let mut b = [0u8; 16];
+                b.copy_from_slice(self);
+                if is_ipv4_mapped_v6(&b) {
+                    Some(ParsedIp::V4(u32::from_be_bytes([b[12], b[13], b[14], b[15]])))
+                } else {
+                    Some(ParsedIp::V6(b))
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
+impl ToIp for Vec<u8> {
+    #[inline(always)]
+    fn to_parsed_ip(&self) -> Option<ParsedIp> {
+        self.as_slice().to_parsed_ip()
+    }
+}
+
+impl<'a> ToIp for std::borrow::Cow<'a, [u8]> {
+    #[inline(always)]
+    fn to_parsed_ip(&self) -> Option<ParsedIp> {
+        self.as_ref().to_parsed_ip()
+    }
+}
+
+impl ToIp for Box<str> {
+    #[inline(always)]
+    fn to_parsed_ip(&self) -> Option<ParsedIp> {
+        parse_ip(self.as_ref())
+    }
+}
+
+impl ToIp for std::sync::Arc<str> {
+    #[inline(always)]
+    fn to_parsed_ip(&self) -> Option<ParsedIp> {
+        parse_ip(self.as_ref())
+    }
+}
+
+impl ToIp for std::rc::Rc<str> {
+    #[inline(always)]
+    fn to_parsed_ip(&self) -> Option<ParsedIp> {
+        parse_ip(self.as_ref())
+    }
+}
+
+/// 不可变快照句柄，提供零拷贝零分配查询 API。
+#[derive(Clone)]
+pub struct Snapshot {
+    inner: Arc<SnapshotInner>,
+}
+
+impl std::ops::Deref for Snapshot {
+    type Target = SnapshotInner;
+    #[inline(always)]
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl std::fmt::Debug for Snapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Snapshot").finish()
+    }
 }
 
 static HEX: [u8; 128] = {
@@ -2395,6 +3281,15 @@ impl QzdbReader {
         Builder::new(path)
     }
 
+    /// 获取当前不可变快照句柄。
+    ///
+    /// 在批量循环或高频查询中，先获取 `Snapshot` 再调用 `find_ref` 可省去每次查询的
+    /// 原子引用计数操作，实现完全零开销遍历。
+    #[inline]
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot { inner: self.snap.load_full() }
+    }
+
     fn inner(&self) -> Arc<SnapshotInner> {
         self.snap.load_full()
     }
@@ -2405,6 +3300,131 @@ impl QzdbReader {
     pub fn find(&self, ip_str: &str) -> Option<GeoInfo> {
         let parsed = parse_ip(ip_str)?;
         self.find_parsed(&parsed)
+    }
+
+    /// 支持多种 IP 类型的拥有所有权查询（`&str`、`IpAddr`、`Ipv4Addr`、`Ipv6Addr`、`u32` 等）。
+    pub fn find_ip(&self, ip: impl ToIp) -> Option<GeoInfo> {
+        let parsed = ip.to_parsed_ip()?;
+        self.find_parsed(&parsed)
+    }
+
+    pub fn find_v4(&self, ip: Ipv4Addr) -> Option<GeoInfo> {
+        let snap = self.snap.load();
+        self.find_uint_inner(&snap, u32::from_be_bytes(ip.octets()))
+    }
+
+    /// 零拷贝查询：返回借用视图 `GeoInfoRef`，字段字符串直接借用自底层数据。
+    ///
+    /// 支持直接传入 `&str`、`IpAddr`、`Ipv4Addr`、`Ipv6Addr`、`u32` 等。
+    pub fn find_ref(&self, ip: impl ToIp) -> Option<GeoInfoRef<'_>> {
+        let snap = self.snap.load_full();
+        let parsed = ip.to_parsed_ip()?;
+        match parsed {
+            ParsedIp::V4(v4) => self.find_uint_ref_snap(snap, v4),
+            ParsedIp::V6(b) => self.find_v6_bytes_ref_snap(snap, &b),
+        }
+    }
+
+    /// `find_ref` 的同义方法。
+    pub fn find_ref_ip(&self, ip: impl ToIp) -> Option<GeoInfoRef<'_>> {
+        self.find_ref(ip)
+    }
+
+    pub fn find_ref_v4(&self, ip: u32) -> Option<GeoInfoRef<'_>> {
+        let snap = self.snap.load_full();
+        self.find_uint_ref_snap(snap, ip)
+    }
+
+    pub fn find_ref_v6(&self, ip: u128) -> Option<GeoInfoRef<'_>> {
+        let snap = self.snap.load_full();
+        if !snap.has_v6 {
+            return None;
+        }
+        let b = ip.to_be_bytes();
+        self.find_v6_bytes_ref_snap(snap, &b)
+    }
+
+    pub fn find_ref_bytes(&self, ip_bytes: &[u8]) -> Option<GeoInfoRef<'_>> {
+        let snap = self.snap.load_full();
+        match ip_bytes.len() {
+            16 => {
+                let mut b = [0u8; 16];
+                b.copy_from_slice(ip_bytes);
+                if is_ipv4_mapped_v6(&b) {
+                    let v4 = u32::from_be_bytes([b[12], b[13], b[14], b[15]]);
+                    self.find_uint_ref_snap(snap, v4)
+                } else {
+                    self.find_v6_bytes_ref_snap(snap, &b)
+                }
+            }
+            4 => {
+                let v4 = u32::from_be_bytes([ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]]);
+                self.find_uint_ref_snap(snap, v4)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn find_ref_uint(&self, ip: u32) -> Option<GeoInfoRef<'_>> {
+        self.find_ref_v4(ip)
+    }
+
+    pub fn find_uint_ref(&self, ip: u32) -> Option<GeoInfoRef<'_>> {
+        self.find_ref_v4(ip)
+    }
+
+    pub fn find_v6_bytes_ref(&self, bytes: &[u8; 16]) -> Option<GeoInfoRef<'_>> {
+        let snap = self.snap.load_full();
+        self.find_v6_bytes_ref_snap(snap, bytes)
+    }
+
+    /// 使用闭包借用视图，在闭包生命周期内直接访问 `GeoInfoRef`。
+    pub fn find_ref_with<R>(&self, ip: impl ToIp, f: impl FnOnce(Option<GeoInfoRef<'_>>) -> R) -> R {
+        let snap = self.snap.load();
+        let res = snap.find_ref(ip);
+        f(res)
+    }
+
+    fn find_uint_ref_snap(&self, snap: Arc<SnapshotInner>, ip: u32) -> Option<GeoInfoRef<'_>> {
+        if !snap.has_v4 {
+            return None;
+        }
+        let rid = snap.trie_row_v4(ip)?;
+        if rid == 0 {
+            return None;
+        }
+        let (geo_id, asn_id, usage_id) = snap.read_ip_row(rid);
+        let mask = *snap.group_dim_masks.get(snap.group_index)?;
+        let entry_id = if mask & 0x02 != 0 {
+            asn_id
+        } else if mask & 0x04 != 0 {
+            usage_id
+        } else {
+            geo_id
+        };
+        let snap_ptr: *const SnapshotInner = &*snap;
+        unsafe { (*snap_ptr).resolve_geo_ref(entry_id, Some(snap)) }
+    }
+
+    fn find_v6_bytes_ref_snap(&self, snap: Arc<SnapshotInner>, bytes: &[u8; 16]) -> Option<GeoInfoRef<'_>> {
+        if !snap.has_v6 {
+            return None;
+        }
+        let rid = snap.trie_row_v6(bytes)?;
+        if rid == 0 {
+            return None;
+        }
+        let (geo_id, asn_id, usage_id) = snap.read_ip_row(rid);
+        let mask = *snap.group_dim_masks.get(snap.group_index)?;
+        let entry_id = if mask & 0x02 != 0 {
+            asn_id
+        } else if mask & 0x04 != 0 {
+            usage_id
+        } else {
+            geo_id
+        };
+        let snap_ptr: *const SnapshotInner = &*snap;
+        unsafe { (*snap_ptr).resolve_geo_ref(entry_id, Some(snap)) }
     }
 
     fn find_parsed(&self, parsed: &ParsedIp) -> Option<GeoInfo> {
@@ -2492,6 +3512,16 @@ impl QzdbReader {
         }
     }
 
+    /// 支持多种 IP 类型的 `find_shared` 版本。
+    pub fn find_shared_ip(&self, ip: impl ToIp) -> Option<Arc<GeoInfo>> {
+        let parsed = ip.to_parsed_ip()?;
+        let snap = self.snap.load();
+        match parsed {
+            ParsedIp::V4(v4) => self.find_uint_shared_inner(&snap, v4),
+            ParsedIp::V6(b) => self.find_v6_bytes_shared_inner(&snap, &b),
+        }
+    }
+
     /// `find_shared` 的 uint32 直入版本。
     pub fn find_uint_shared(&self, ip: u32) -> Option<Arc<GeoInfo>> {
         let snap = self.snap.load();
@@ -2530,124 +3560,54 @@ impl QzdbReader {
         self.find(ip_str).map(|g| g.to_pipe()).unwrap_or_default()
     }
 
+    /// 支持多种 IP 类型的 `find_str`。
+    pub fn find_str_ip(&self, ip: impl ToIp) -> String {
+        self.find_ip(ip).map(|g| g.to_pipe()).unwrap_or_default()
+    }
+
     // ---- 低级行号 ----
 
     pub fn lookup_row_id(&self, ip_str: &str) -> u32 {
-        let parsed = match parse_ip(ip_str) {
-            Some(p) => p,
-            None => return 0,
-        };
-        let snap = self.snap.load();
-        match parsed {
-            ParsedIp::V4(v4) => snap.trie_row_v4(v4).unwrap_or(0),
-            ParsedIp::V6(b) => snap.trie_row_v6(&b).unwrap_or(0),
-        }
+        self.snap.load().lookup_row_id(ip_str)
+    }
+
+    pub fn lookup_row_id_ip(&self, ip: impl ToIp) -> u32 {
+        self.snap.load().lookup_row_id_ip(ip)
     }
 
     pub fn lookup_row_id_uint(&self, ip: u32) -> u32 {
-        let snap = self.snap.load();
-        if !snap.has_v4 {
-            return 0;
-        }
-        snap.trie_row_v4(ip).unwrap_or(0)
+        self.snap.load().lookup_row_id_uint(ip)
     }
 
     pub fn lookup_row_id_v6(&self, ip: u128) -> u32 {
-        let snap = self.snap.load();
-        if !snap.has_v6 {
-            return 0;
-        }
-        let b = ip.to_be_bytes();
-        snap.trie_row_v6(&b).unwrap_or(0)
+        self.snap.load().lookup_row_id_v6(ip)
     }
 
     pub fn lookup_row_id_bytes(&self, ip_bytes: &[u8]) -> u32 {
-        let snap = self.snap.load();
-        match ip_bytes.len() {
-            16 => {
-                let mut b = [0u8; 16];
-                b.copy_from_slice(ip_bytes);
-                if is_ipv4_mapped_v6(&b) {
-                    let v4 = u32::from_be_bytes([b[12], b[13], b[14], b[15]]);
-                    if !snap.has_v4 {
-                        return 0;
-                    }
-                    snap.trie_row_v4(v4).unwrap_or(0)
-                } else {
-                    if !snap.has_v6 {
-                        return 0;
-                    }
-                    snap.trie_row_v6(&b).unwrap_or(0)
-                }
-            }
-            4 => {
-                let v4 = u32::from_be_bytes([ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]]);
-                if !snap.has_v4 {
-                    return 0;
-                }
-                snap.trie_row_v4(v4).unwrap_or(0)
-            }
-            _ => 0,
-        }
+        self.snap.load().lookup_row_id_bytes(ip_bytes)
     }
 
     /// 返回 (geo_id, asn_id, usage_id)；越界返回 None。
     pub fn lookup_ids(&self, row_id: u32) -> Option<RowIds> {
-        let snap = self.snap.load();
-        if row_id == 0 || row_id >= snap.row_count as u32 {
-            return None;
-        }
-        let (g, a, u) = snap.read_ip_row(row_id);
-        Some(RowIds { geo_id: g, asn_id: a, usage_id: u })
+        self.snap.load().lookup_ids(row_id)
     }
 
     // ---- CIDR 反查 ----
 
     pub fn lookup_cidr(&self, ip_str: &str) -> Option<String> {
-        let parsed = parse_ip(ip_str)?;
-        let snap = self.snap.load();
-        match parsed {
-            ParsedIp::V4(v4) => snap.lookup_cidr_v4(v4),
-            ParsedIp::V6(b) => snap.lookup_cidr_v6(&b),
-        }
+        self.snap.load().lookup_cidr(ip_str)
+    }
+
+    pub fn lookup_cidr_ip(&self, ip: impl ToIp) -> Option<String> {
+        self.snap.load().lookup_cidr_ip(ip)
     }
 
     pub fn lookup_cidr_uint(&self, ip: u32) -> Option<String> {
-        let snap = self.snap.load();
-        if !snap.has_v4 {
-            return None;
-        }
-        snap.lookup_cidr_v4(ip)
+        self.snap.load().lookup_cidr_uint(ip)
     }
 
     pub fn lookup_cidr_bytes(&self, ip_bytes: &[u8]) -> Option<String> {
-        let snap = self.snap.load();
-        match ip_bytes.len() {
-            16 => {
-                let mut b = [0u8; 16];
-                b.copy_from_slice(ip_bytes);
-                if is_ipv4_mapped_v6(&b) {
-                    let v4 = u32::from_be_bytes([b[12], b[13], b[14], b[15]]);
-                    if !snap.has_v4 {
-                        return None;
-                    }
-                    snap.lookup_cidr_v4(v4)
-                } else {
-                    if !snap.has_v6 {
-                        return None;
-                    }
-                    snap.lookup_cidr_v6(&b)
-                }
-            }
-            4 => {
-                let v4 = u32::from_be_bytes([ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]]);
-                if !snap.has_v4 {
-                    return None;
-                }
-                snap.lookup_cidr_v4(v4)
-            }
-            _ => None,
-        }
+        self.snap.load().lookup_cidr_bytes(ip_bytes)
     }
 
     // ---- 批量 / 流式 ----
@@ -2930,8 +3890,43 @@ impl QzdbRegistry {
         None
     }
 
+    /// 支持多种 IP 类型的注册表查询。
+    pub fn find_ip(&self, ip: impl ToIp) -> Option<GeoInfo> {
+        let parsed = ip.to_parsed_ip()?;
+        for name in &self.order {
+            if let Some(r) = self.readers.get(name) {
+                if let Some(g) = r.find_parsed(&parsed) {
+                    return Some(g);
+                }
+            }
+        }
+        None
+    }
+
+    /// 零拷贝查询：按注册顺序返回首个命中的 `GeoInfoRef`。
+    pub fn find_ref(&self, ip: impl ToIp) -> Option<GeoInfoRef<'_>> {
+        let parsed = ip.to_parsed_ip()?;
+        for name in &self.order {
+            if let Some(r) = self.readers.get(name) {
+                let snap = r.snap.load_full();
+                let hit = match parsed {
+                    ParsedIp::V4(v4) => r.find_uint_ref_snap(snap, v4),
+                    ParsedIp::V6(b) => r.find_v6_bytes_ref_snap(snap, &b),
+                };
+                if hit.is_some() {
+                    return hit;
+                }
+            }
+        }
+        None
+    }
+
     pub fn find_str(&self, ip: &str) -> String {
         self.find(ip).map(|g| g.to_pipe()).unwrap_or_default()
+    }
+
+    pub fn find_str_ip(&self, ip: impl ToIp) -> String {
+        self.find_ip(ip).map(|g| g.to_pipe()).unwrap_or_default()
     }
 }
 
@@ -3005,8 +4000,57 @@ impl ChainedReader {
         }
     }
 
+    pub fn find_ip(&self, ip: impl ToIp) -> Option<GeoInfo> {
+        let parsed = ip.to_parsed_ip()?;
+        match self.mode {
+            ChainMode::Fallback => {
+                for r in &self.readers {
+                    if let Some(g) = r.find_parsed(&parsed) {
+                        return Some(g);
+                    }
+                }
+                None
+            }
+            ChainMode::Merge | ChainMode::MergeOverride => {
+                let mut merged: Option<GeoInfo> = None;
+                for r in &self.readers {
+                    if let Some(g) = r.find_parsed(&parsed) {
+                        merged = Some(match &merged {
+                            None => g,
+                            Some(base) => merge_geo(base, &g, self.mode),
+                        });
+                    }
+                }
+                merged
+            }
+        }
+    }
+
+    /// 零拷贝查询（仅支持 Fallback 模式返回首个命中的 `GeoInfoRef`，Merge 模式因跨库合并需所有权返回 None）。
+    pub fn find_ref(&self, ip: impl ToIp) -> Option<GeoInfoRef<'_>> {
+        if self.mode != ChainMode::Fallback {
+            return None;
+        }
+        let parsed = ip.to_parsed_ip()?;
+        for r in &self.readers {
+            let snap = r.snap.load_full();
+            let hit = match parsed {
+                ParsedIp::V4(v4) => r.find_uint_ref_snap(snap, v4),
+                ParsedIp::V6(b) => r.find_v6_bytes_ref_snap(snap, &b),
+            };
+            if hit.is_some() {
+                return hit;
+            }
+        }
+        None
+    }
+
     pub fn find_str(&self, ip: &str) -> String {
         self.find(ip).map(|g| g.to_pipe()).unwrap_or_default()
+    }
+
+    pub fn find_str_ip(&self, ip: impl ToIp) -> String {
+        self.find_ip(ip).map(|g| g.to_pipe()).unwrap_or_default()
     }
 }
 
