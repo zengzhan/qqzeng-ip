@@ -19,7 +19,7 @@ categories = ["network-programming", "database", "parser-implementations"]
 #                 直接编译失败（cargo publish 的 verify 不覆盖这条路径）。
 #   src/main.rs — 手工冒烟 CLI，不是面向用户的产品二进制。
 #   tests/*     — 依赖未随包发布的 .qzdb 数据文件，下游 `cargo test` 必然失败。
-#   bench_qps.rs— 内部基准（开发仓内部基准，不随包发布、不在发布仓声明）。
+#   bench_qps.rs— 内部基准（开发仓内部基准，不随包发布）。
 exclude = [
     "src/bin/*",
     "src/main.rs",
