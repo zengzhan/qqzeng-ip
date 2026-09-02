@@ -6,8 +6,8 @@
 
 ### Added
 
-- Rust SDK 具备 crates.io 发布条件：crate 名 `qzdb_reader` → **`qzdb`**（与 PyPI 的 `qzdb` 对齐；C 语言的 `qzdb_reader_t` / `qzdb_reader.h` 不受影响）；`Cargo.toml` 补全 crates.io 必需的 `description` / `license` / `repository` / `homepage` / `documentation` / `keywords` / `categories` / `rust-version=1.74`；新增 `multi-lang/rust/LICENSE`；新增 `.github/workflows/publish-crates.yml`（tag `v-rust-*` 触发，先 dry-run 后 publish）。
-- PHP SDK 具备 Packagist 发布条件：仓库根新增 `composer.json`（包 **`qqzeng/qzdb`**，classmap 指向 `multi-lang/php/QzdbReader.php`）。因 Packagist 只认仓库根的 `composer.json`，同时新增根 `.gitattributes`，用 `export-ignore` 把 dist 裁剪到 5 个文件 / 160 KB（否则用户 `composer require` 会连带下载另外 7 种语言源码与 4.3 MB demo 数据库）。
+- Rust SDK **已发布到 crates.io**：`cargo add qzdb`（1.0.5，2026-08-29 上线，<https://crates.io/crates/qzdb>）。crate 名 `qzdb_reader` → **`qzdb`**（与 PyPI 的 `qzdb` 对齐；C 语言的 `qzdb_reader_t` / `qzdb_reader.h` 不受影响）；`Cargo.toml` 补全 crates.io 必需的 `description` / `license` / `repository` / `homepage` / `documentation` / `keywords` / `categories` / `rust-version=1.74`；新增 `multi-lang/rust/LICENSE`；新增 `.github/workflows/publish-crates.yml`（tag `v-rust-*` 触发，先 dry-run 后 publish）。
+- PHP SDK 具备 Packagist 发布条件：发布仓库根新增 `composer.json`（包 **`qqzeng/qzdb`**，classmap 指向 `ip-qzdb-sdk/php/QzdbReader.php`，源头在 `tools/publish_meta/`）。因 Packagist 只认仓库根的 `composer.json`，同时新增根 `.gitattributes`，用 `export-ignore` 把 GitHub 归档裁剪到 5 个文件 / **44 KB**（未裁剪时 2.5 MB，会连带下载另外 7 种语言源码、4.3 MB demo 数据库与另外 3 条产品线）。包已建好、`v1.0.5` tag 已推送，`1.0.5` 正式版待在 Packagist 页面触发 Update 生成。
 - 多语言 monorepo 的 git tag 发布约定（`v<ver>` 全平台 / `v-python-*` / `v-java-*` / `v-rust-*` 单平台），见 `PUBLISHING.md` §0。
 
 ### Changed

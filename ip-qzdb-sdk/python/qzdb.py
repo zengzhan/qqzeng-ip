@@ -1,4 +1,5 @@
 import ipaddress
+import json
 import mmap
 import os
 import struct
@@ -335,6 +336,11 @@ class GeoInfo:
 
         Returns ``""`` when the field is absent — never raises (API contract §6).
         """
+        # Fast path: exact-match against original field names (common case)
+        i = self._name_idx.get(name)
+        if i is not None:
+            return self._values[i] if i < len(self._values) else ''
+        # Slow path: normalized lookup
         i = self._norm_idx.get(_norm_key(name))
         if i is not None:
             return self._values[i] if i < len(self._values) else ''
@@ -548,18 +554,17 @@ class GeoInfo:
         ``116.400000``, no ``float()`` re-serialization); ``null`` when empty
         or not a valid JSON number. All other fields are JSON strings.
         """
-        import json as _json
         out = []
         for i, fname in enumerate(self._field_names):
             val = self._values[i] if i < len(self._values) else ''
-            key = _json.dumps(fname, ensure_ascii=False)
+            key = json.dumps(fname, ensure_ascii=False)
             if fname in NUMERIC_FIELDS:
                 if val != '' and _is_json_number(val):
                     out.append(f'{key}:{val}')
                 else:
                     out.append(f'{key}:null')
             else:
-                out.append(f'{key}:{_json.dumps(val, ensure_ascii=False)}')
+                out.append(f'{key}:{json.dumps(val, ensure_ascii=False)}')
         return '{' + ','.join(out) + '}'
 
     def __repr__(self):
@@ -874,14 +879,15 @@ class QzdbReader:
     def _publish(self, shadow):
         """Atomically swap in a fully-built shadow snapshot (API contract §2/§3)."""
         old_data = self._data
-        # Do NOT alias the dict: sharing shadow.__dict__ lets shadow's
-        # __del__ -> close() wipe self._data to b'', breaking every find() call.
-        self.__dict__.clear()
-        self.__dict__.update(shadow.__dict__)
+        # Atomic swap: build the new dict first, then replace in one step.
+        # This avoids the window between clear() and update() where concurrent
+        # readers would see an empty __dict__ and raise AttributeError.
+        new_dict = dict(shadow.__dict__)
+        new_dict['_closed'] = False
+        self.__dict__ = new_dict
         # Disarm shadow so its destructor cannot close the mmap we took over.
         shadow._is_mmap = False
         shadow._data = b''
-        self._closed = False
         if hasattr(old_data, 'close'):
             try:
                 old_data.close()

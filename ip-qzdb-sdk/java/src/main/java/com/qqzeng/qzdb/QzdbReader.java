@@ -225,9 +225,8 @@ public class QzdbReader implements AutoCloseable {
 
         /**
          * Per-snapshot 有界、无锁 GeoInfo 解码缓存，direct-indexed by entryId
-         * （groupIndex 在单个 Snapshot 内固定，无需入 key，语义与 Go/C#/Node.js
-         * SDK 的等价缓存一致）。命中同一 slot 的不同 entryId 视为碰撞，直接
-         * 淘汰重算（解码是确定性、无副作用的，重算代价可接受）。
+         * （groupIndex 在单个 Snapshot 内固定，无需入 key）。命中同一 slot 的不同
+         * entryId 视为碰撞，直接淘汰重算（解码是确定性、无副作用的，重算代价可接受）。
          * <p>
          * 用 {@link AtomicReferenceArray} 发布不可变的 {@link CacheEntry}：单个
          * volatile 写发布 (key, value) 整体，读者要么看到旧条目、要么看到完整
@@ -829,7 +828,7 @@ public class QzdbReader implements AutoCloseable {
 
         /**
          * 按 entryId 解包一行 GeoEntry。fieldFilter 为 null 时返回全字段（共享快照级归一化索引，零额外哈希构建）。
-         * 全字段结果经 per-snapshot 无锁缓存复用；字段投影从缓存的全字段结果直接切片，不重新访问字符串池。
+         * 全字段结果经 per-snapshot 无锁缓存复用；字段投影从缓存的全字段结果直接提取，不重新访问字符串池。
          */
         GeoInfo extractGeoInfo(int entryId, String[] fieldFilter) {
             if (entryId <= 0 || entryId >= groupEntryCounts[groupIndex]) {
@@ -844,7 +843,7 @@ public class QzdbReader implements AutoCloseable {
                 return full;
             }
 
-            // 字段投影模式（§9.6：未知字段补空串，不抛异常）——从已解码的全字段结果切片
+            // 字段投影模式（§9.6：未知字段补空串，不抛异常）——从已解码的全字段结果提取
             String[] fullValues = full.values();
             String[] values = new String[fieldFilter.length];
             for (int i = 0; i < fieldFilter.length; i++) {

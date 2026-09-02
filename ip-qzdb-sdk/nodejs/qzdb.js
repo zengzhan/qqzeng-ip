@@ -360,7 +360,10 @@ class GeoInfo {
   getUsageType() { return UsageType.fromString(this.get('usage_type')); }
 }
 
+const _JSON_SAFE_RE = /^[^"\\\u0000-\u001f]*$/;
 function _escapeJson(str) {
+  // 快通道：无需转义字符时原样返回（绝大多数池字符串），toJson 密集场景 2-5×
+  if (_JSON_SAFE_RE.test(str)) return str;
   let out = '';
   for (let i = 0; i < str.length; i++) {
     const c = str.charCodeAt(i);
@@ -1217,9 +1220,8 @@ class QzdbReader {
 
     let idx = ptr;
     let suffix = (ipInt & 0xFFFF) << 16;
-    let steps = 0;
-    while (true) {
-      if (++steps >= MAX_TRIE_WALK_STEPS) return 0;
+    // 有界 for：jump 表命中内节点后最多再走 16 步（与 Java/Go 同构），免每步步数分支
+    for (let step = 0; step < 16; step++) {
       const bit = (suffix >>> 31) & 1;
       const child = this._getV4Child(idx, bit);
       if (child === 0) return 0;
@@ -1227,6 +1229,7 @@ class QzdbReader {
       idx = child;
       suffix <<= 1;
     }
+    return 0;
   }
 
   _trieWalkV6Buf(ipBuf) {

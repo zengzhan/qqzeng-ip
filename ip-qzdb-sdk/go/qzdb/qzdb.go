@@ -283,7 +283,7 @@ func buildSnapshot(data []byte, release func(), groupIndex int, verifyCrc bool) 
 	if verifyCrc {
 		if !s.verifyCrcNow() {
 			return nil, newErr(ErrCodeCorrupted,
-				fmt.Sprintf("crc32 checksum mismatch: stored=0x%08x calculated=0x%08x", s.storedCrc, s.computeCanonicalCrc()))
+				fmt.Sprintf("crc32 checksum mismatch: stored=0x%08x calculated=0x%08x", s.storedCrc, s.crcHash()))
 		}
 	}
 	if err := s.parsePools(); err != nil {
@@ -843,7 +843,9 @@ func (s *Snapshot) computeCanonicalCrc() uint32 {
 }
 
 func (s *Snapshot) verifyCrcNow() bool {
-	return s.computeCanonicalCrc() == s.storedCrc
+	// 经 crcHash 的 OnceValue 缓存：open(verifyCrc=true) 与 GetFileHash
+	// 共享同一次全文件 CRC 计算（数百 MB 库省一次数十至数百 ms 的重复扫描）。
+	return s.crcHash() == s.storedCrc
 }
 
 func (s *Snapshot) fileHashHex() string {
@@ -1300,12 +1302,12 @@ func (r *QzdbReader) FindStr(ipStr string) string {
 // FindFields 字段投影查询：只解析 fields 指定的字段（对标 Java §9.6 投影模式）。
 // fields 为空等价于 Find。只读取需要的字段，避免全字段解析的分配开销。
 func (r *QzdbReader) FindFields(ipStr string, fields []string) (*GeoInfo, error) {
+	if len(fields) == 0 {
+		return r.Find(ipStr) // 语义等价 find，勿先 acquire 再二次 acquire
+	}
 	s := r.snapshot()
 	if s == nil {
 		return nil, ErrClosed
-	}
-	if len(fields) == 0 {
-		return r.Find(ipStr)
 	}
 	if ipStr == "" {
 		return nil, nil

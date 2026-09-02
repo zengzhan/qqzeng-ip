@@ -54,6 +54,13 @@ static void crc32_init_once(void) {
     }
 }
 
+/* 分支预测提示：仅标注热循环中的罕见退出路径（GCC/Clang 扩展，其它编译器退化为普通 if） */
+#if defined(__GNUC__) || defined(__clang__)
+#define QZDB_UNLIKELY(x) (__builtin_expect(!!(x), 0))
+#else
+#define QZDB_UNLIKELY(x) (x)
+#endif
+
 static uint32_t crc32_update(uint32_t crc, const uint8_t* buf, size_t len) {
     /* pthread_once makes the lazy lookup table initialization race-free while
      * keeping the hot path read-only after the first call. */
@@ -500,10 +507,10 @@ static uint32_t trie_walk_v4(const qzdb_reader_t* ctx, uint32_t ip_int) {
     uint32_t suffix = (ip_int & 0xFFFF) << 16;
     uint32_t steps = 0;
     while (1) {
-        if (++steps >= QZDB_MAX_TRIE_WALK_STEPS_V4) return 0;
+        if (QZDB_UNLIKELY(++steps >= QZDB_MAX_TRIE_WALK_STEPS_V4)) return 0;
         uint32_t bit = (suffix >> 31) & 1;
         uint32_t child = get_v4_child(ctx, idx, bit);
-        if (child == 0) return 0;
+        if (QZDB_UNLIKELY(child == 0)) return 0;
         if (child & QZDB_SENTINEL) return child & QZDB_SENTINEL_MASK_31;
         idx = child;
         suffix <<= 1;
@@ -535,13 +542,13 @@ static uint32_t trie_walk_v6(const qzdb_reader_t* ctx, const uint8_t* ip_bin) {
     int depth = v6_jump_bits;
     int steps = 0;
     while (depth < 128) {
-        if (++steps >= QZDB_MAX_TRIE_WALK_STEPS_V6) return 0;
-        if (idx >= ctx->v6_node_count) return 0;
+        if (QZDB_UNLIKELY(++steps >= QZDB_MAX_TRIE_WALK_STEPS_V6)) return 0;
+        if (QZDB_UNLIKELY(idx >= ctx->v6_node_count)) return 0;
         int byte_idx = depth / 8;
         int bit_idx = 7 - (depth % 8);
         uint32_t bit = (ip_bin[byte_idx] >> bit_idx) & 1;
         uint32_t child = get_v6_child(ctx, idx, bit);
-        if (child == 0) return 0;
+        if (QZDB_UNLIKELY(child == 0)) return 0;
         if (child & QZDB_SENTINEL) return child & QZDB_SENTINEL_MASK_31;
         idx = child;
         depth++;
@@ -1599,6 +1606,11 @@ int qzdb_init(qzdb_reader_t* ctx, const char* db_path) {
  * is_heap indicates whether ctx->data needs free() (heap) vs munmap() (mmap). */
 static int init_from_buffer(qzdb_reader_t* ctx, int is_heap, int verify_crc) {
     (void)is_heap; /* retained for call-site symmetry; data_is_heap is set explicitly by callers */
+    /* %.6f 浮点格式化依赖 C locale（小数点必须是 '.'，契约 §8.2）。
+     * setlocale 是进程级全局操作：这里在 init 时设置一次以覆盖多线程
+     * 查询期（init 通常发生在单线程启动阶段）；宿主应用此后不得改写
+     * LC_NUMERIC，否则 pipe 输出的小数点会本地化（如 "116,400000"）。
+     * 完全免疫需手写定点格式化（见 RUNTIME_PROPOSAL 评估 A5）。 */
     setlocale(LC_NUMERIC, "C");
     /* 失败路径统一经 goto fail 收尾（meta 局部变量 + ctx 堆态），
      * 调用方只需按 data_is_heap/borrowed 归还 data 缓冲本身。 */
