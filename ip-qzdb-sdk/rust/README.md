@@ -492,4 +492,4 @@ cargo update -p qzdb
 
 [MIT](https://opensource.org/licenses/MIT)
 
-<!-- commit: rust: Rust 极速解析引擎 (mmap + 最小 unsafe surface, 6900 万+ QPS) -->
+<!-- commit: rust: Rust SDK（mmap 只读映射，内存安全） sync=1788317478 -->
