@@ -161,6 +161,17 @@ public sealed class QzdbReader : IDisposable
         return s!;
     }
 
+    /// <summary>
+    /// Soft-fail snapshot read for Try* APIs: same Volatile acquire discipline as
+    /// <see cref="RequireSnapshot"/> (ARM64 memory-model safety), returns null when
+    /// disposed. 统一普通读 → Volatile.Read，消除混合读取纪律。
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private Snapshot? TryGetSnapshot()
+    {
+        return Volatile.Read(ref _activeSnapshot);
+    }
+
     #region Builder
 
     /// <summary>Fluent builder for constructing a <see cref="QzdbReader"/> from a file path or byte buffer, with optional groupIndex / verifyCrc.</summary>
@@ -966,7 +977,7 @@ public sealed class QzdbReader : IDisposable
     /// <summary>Attempts to resolve an IP span; returns false on miss or malformed input (no exception).</summary>
     public bool TryFind(ReadOnlySpan<char> ipSpan, out GeoInfo? info)
     {
-        var snap = _activeSnapshot;
+        var snap = TryGetSnapshot();
         if (snap == null || ipSpan.IsEmpty || !TryParseIp(ipSpan, out var v4, out var v6High, out var v6Low, out var isV4))
         {
             info = null;
@@ -987,7 +998,7 @@ public sealed class QzdbReader : IDisposable
     /// <summary>Attempts to resolve IP bytes; returns false on miss or wrong length (no exception).</summary>
     public bool TryFind(ReadOnlySpan<byte> ipBytes, out GeoInfo? info)
     {
-        var snap = _activeSnapshot;
+        var snap = TryGetSnapshot();
         if (snap == null || (ipBytes.Length != 4 && ipBytes.Length != 16))
         {
             info = null;
@@ -1038,7 +1049,7 @@ public sealed class QzdbReader : IDisposable
     /// <summary>Returns the pipe-delimited result for an IP span; "" on miss or malformed input.</summary>
     public string FindStr(ReadOnlySpan<char> ipSpan)
     {
-        var snap = _activeSnapshot;
+        var snap = TryGetSnapshot();
         if (snap == null || ipSpan.IsEmpty || !TryParseIp(ipSpan, out var v4, out var v6High, out var v6Low, out var isV4))
             return string.Empty;
 
@@ -1052,7 +1063,7 @@ public sealed class QzdbReader : IDisposable
     /// <summary>Returns the pipe-delimited result for IP bytes; "" on miss or wrong length.</summary>
     public string FindStr(ReadOnlySpan<byte> ipBytes)
     {
-        var snap = _activeSnapshot;
+        var snap = TryGetSnapshot();
         if (snap == null || (ipBytes.Length != 4 && ipBytes.Length != 16))
             return string.Empty;
 
@@ -1089,7 +1100,7 @@ public sealed class QzdbReader : IDisposable
     {
         if (ipSpan.IsEmpty) return 0;
         if (!TryParseIp(ipSpan, out var v4, out var v6High, out var v6Low, out var isV4)) return 0;
-        var snap = _activeSnapshot;
+        var snap = TryGetSnapshot();
         if (snap == null) return 0;
         return isV4 ? TrieWalkV4(snap, v4) : TrieWalkV6(snap, v6High, v6Low);
     }
@@ -1098,7 +1109,7 @@ public sealed class QzdbReader : IDisposable
     public uint LookupRowId(ReadOnlySpan<byte> ipBytes)
     {
         if (ipBytes.Length != 4 && ipBytes.Length != 16) return 0;
-        var snap = _activeSnapshot;
+        var snap = TryGetSnapshot();
         if (snap == null) return 0;
 
         if (ipBytes.Length == 16)
@@ -1145,14 +1156,14 @@ public sealed class QzdbReader : IDisposable
     {
         // Lookup* family convention: soft-fail (return 0) after Dispose,
         // not throw like Find* family. Use _activeSnapshot directly.
-        var snap = _activeSnapshot;
+        var snap = TryGetSnapshot();
         return snap == null ? 0u : TrieWalkV4(snap, ipInt);
     }
 
     /// <summary>Returns the internal row id for an IPv6 address; 0 after Dispose (soft-fail).</summary>
     public uint LookupRowId(ulong ipHigh, ulong ipLow)
     {
-        var snap = _activeSnapshot;
+        var snap = TryGetSnapshot();
         return snap == null ? 0u : TrieWalkV6(snap, ipHigh, ipLow);
     }
 
@@ -1161,7 +1172,7 @@ public sealed class QzdbReader : IDisposable
     {
         if (ipBytes == null) return 0;
         // Same: LookupRowIdBytes belongs to the Lookup* soft-fail family.
-        var snap = _activeSnapshot;
+        var snap = TryGetSnapshot();
         if (snap == null) return 0;
 
         if (ipBytes.Length == 16)
@@ -1760,6 +1771,7 @@ public sealed class QzdbReader : IDisposable
         var groupPools = snap._pools[gi];
 
         var values = new string[fc];
+        double?[]? nativeFloats = null;
         for (int fi = 0; fi < fc; fi++)
         {
             int w = widths[fi];
@@ -1771,9 +1783,21 @@ public sealed class QzdbReader : IDisposable
                 if (nt == 1)
                 {
                      ref var r = ref Unsafe.Add(ref MemoryMarshal.GetReference(span), fo);
-                     values[fi] = w == 4
-                         ? FormatFloat6(Unsafe.ReadUnaligned<float>(ref r))
-                         : FormatFloat6(Unsafe.ReadUnaligned<double>(ref r));
+                     if (w == 4)
+                     {
+                         values[fi] = FormatFloat6(Unsafe.ReadUnaligned<float>(ref r));
+                     }
+                     else
+                     {
+                         double d = Unsafe.ReadUnaligned<double>(ref r);
+                         values[fi] = FormatFloat6(d);
+                         // 原生旁路：解码时同步保留 double，GetLongitude/Latitude 免二次解析。
+                         // NaN/Inf 不入旁路（其字符串形态 "" 的数值语义即 null，两路一致）。
+                         if (!double.IsNaN(d) && !double.IsInfinity(d))
+                         {
+                             (nativeFloats ??= new double?[fc])[fi] = d;
+                         }
+                     }
                 }
                 else
                 {
@@ -1788,7 +1812,7 @@ public sealed class QzdbReader : IDisposable
             }
         }
 
-        return new GeoInfo(snap._fieldNames, values, snap._normMap, snap._numericFlags, takeOwnership: true);
+        return new GeoInfo(snap._fieldNames, values, snap._normMap, snap._numericFlags, takeOwnership: true, nativeFloats);
     }
 
 
@@ -2135,33 +2159,12 @@ public sealed class QzdbReader : IDisposable
 
     private long _reloadEpoch;
 
-    /// <summary>
-    /// mmap-backed snapshot retired by the previous Reload/dispose cycle, held one
-    /// extra generation before its view/handle is actually released.
-    ///
-    /// WHY: queries never take a lock or increment a per-call refcount (that is the
-    /// whole point of the lock-free snapshot design), so at the instant a snapshot
-    /// is swapped out there is no cheap way to know whether some thread is still
-    /// mid-TrieWalk against its raw mmap pointer. Calling MmapManager.Dispose()
-    /// synchronously at swap time would unmap memory a concurrent reader could be
-    /// dereferencing that same instant -> AccessViolationException, not a benign
-    /// GC-timing issue. Waiting for GC finalization (the old behaviour) avoids that
-    /// crash but makes release non-deterministic: under frequent Reload() calls the
-    /// process can accumulate multiple open mmap handles, and on Windows an
-    /// unreleased mapping blocks deleting/replacing the underlying file.
-    ///
-    /// Fix: keep exactly one retired snapshot "in quarantine" instead of releasing
-    /// immediately. By the time a *second* Reload/Dispose happens, every query that
-    /// was in flight against the first-retired snapshot (a microsecond-scale
-    /// critical section) has long since returned — Reload/Dispose is an operational
-    /// action invoked at most every few minutes in realistic deployments, many
-    /// orders of magnitude longer than any in-flight query. This bounds the leak to
-    /// "at most one extra generation" with zero added per-query cost, instead of
-    /// "whenever GC next happens to run" with unbounded generations in flight.
-    /// Callers needing a hard synchronous guarantee (e.g. immediately deleting the
-    /// old file on Windows) should add their own drain delay before doing so.
-    /// </summary>
-    private Snapshot? _retiring;
+    // 退役快照不再主动释放（历史版本曾有一代隔离 _retiring 环）：
+    // 查询线程经 RequireSnapshot() 拿到的 Snapshot 引用会 root 在其调用栈上，
+    // GC 可达性即硬保证——Snapshot 不可达 ⇒ SafeMemoryMappedViewHandle 终结器
+    // 才会 unmap，绝不与裸指针遍历竞态（与 Go finalizer / Rust Arc 同模型）。
+    // 代价是 Windows 上旧文件的替换要等 GC（通常毫秒级）；需要确定性释放的
+    // 调用方请在 Dispose() 后（无并发查询契约）执行。
 
     /// <summary>Atomically swap in a freshly loaded snapshot from <paramref name="path"/> (CRC always enforced, latest-wins strategy).</summary>
     public void Reload(string path)
@@ -2195,8 +2198,9 @@ public sealed class QzdbReader : IDisposable
             // Dispose() is invoked (same expectation as FileStream/Socket), so an
             // eager, synchronous release is correct and appropriate here — this is
             // NOT the frequent-reload path, so no quarantine delay is needed.
+            // Dispose 是终结调用：调用方契约保证无并发查询（同 FileStream/Socket），
+            // 此处确定性释放是安全的。退役快照（若有）由 GC 兜底。
             last?.DisposeOwner();
-            Interlocked.Exchange(ref _retiring, null)?.DisposeOwner();
         }
     }
 
@@ -2215,11 +2219,10 @@ public sealed class QzdbReader : IDisposable
                 snapshot.DisposeOwner(); // this one was never published either — release now
                 return;
             }
-            var old = Interlocked.Exchange(ref _activeSnapshot, snapshot);
-            // Quarantine the just-retired snapshot for one more generation before
-            // releasing its mmap handle; release whatever finished quarantine.
-            var toRelease = Interlocked.Exchange(ref _retiring, old);
-            toRelease?.DisposeOwner();
+            // 旧快照仅被换下；其 mmap 的释放由 GC 可达性驱动（查询栈 root 住
+            // Snapshot 时绝不 unmap——见 _retiring 移除说明）。Reload 风暴下
+            // 不可达快照由 GC 稳定回收，无句柄无界累积。
+            Interlocked.Exchange(ref _activeSnapshot, snapshot);
         }
     }
 

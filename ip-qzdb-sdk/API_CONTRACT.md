@@ -1,4 +1,4 @@
-# QZDB Multi-Language SDK API 规范契约 (API Contract v2.4)
+# QZDB Multi-Language SDK API 规范契约 (API Contract v2.5)
 
 > 本契约是 **QZDB 全语言 SDK 行为一致性的唯一事实来源 (Single Source of Truth)**。  
 > 覆盖语言：C / Go / Java / .NET (C#) / Node.js / PHP / Python / Rust。
@@ -35,6 +35,20 @@
 2. **未命中 (Not Found)**：`geo_info == null`，`error == null`（合法公网/私网 IP 但库内无记录）
 3. **参数非法 (Invalid IP)**：`geo_info == null`，`error != null`（格式错误、含非法字符等）
 
+### 3. 字段投影语义（`find_fields` / `findFields`，v2.5 对齐 Java golden）
+以 Java 实现为认证参考，8 语言投影行为逐字一致：
+1. **字段顺序**：输出 GeoInfo 的字段名与顺序 = 调用方输入原样（含重复字段、未知字段）。
+2. **未知字段**：在该位置补空串 `""`，**不跳过、不报错**。
+3. **重复字段**：保留重复项，不去重。
+4. **全部未知**：仍返回非空 GeoInfo（字段值全为 `""`），不得返回 `null`/`None`。
+5. **数据来源**：优先从解码缓存的全字段结果切片（骑缓存，勿绕过）。
+6. **IP 语义**：未命中/非法 IP 的返回与 `find` 完全一致（各语言沿用自身单条口径）。
+
+### 4. 零拷贝共享查询（语言扩展层，非强制）
+- **Rust**：`find_shared() -> Option<Arc<GeoInfo>>`（缓存命中零堆分配）、`find_ref() -> Option<GeoInfoRef>`（借用视图，字段串直接指向快照池；`_snap` Arc 保活，reader reload 不影响已返回引用）与 `ToIp` 惯用入参族（`Ipv4Addr`/`Ipv6Addr`/`IpAddr`/`u32`/`u128`/`str`）。
+- **强制约束**：扩展 API 的 `to_pipe()` / `to_json()` 输出必须与 owned `find()` 结果**逐字节一致**（由 `tests/zero_copy_ref.rs` parity 断言背书）。
+- **ChainedReader::find_ref**：仅 Fallback 模式可用；Merge/MergeOverride 模式因跨库合并需所有权拼接，不支持零拷贝视图（计划 v1.0.7 起改为显式 panic，避免与"未命中"混淆）。
+
 ---
 
 ## 三、 字段归一化与数据规范
@@ -64,3 +78,19 @@
    - 依赖 `mmap` 的语言（C / Go / Java / .NET / Rust）由操作系统维护物理页映射。
    - **严禁在线上直接原地覆写（In-place Overwrite）或截断正在被进程打开的 `.qzdb` 数据库文件**，否则会导致总线错误（SIGBUS）或段错误（SIGSEGV）。
    - **正确热更流程**：先写入临时文件（如 `qqzeng_ip_new.qzdb.tmp`）并校验完整性，再通过原子重命名（`rename`）覆盖目标文件，最后触发 SDK 的 `reload()` 方法。
+
+---
+
+## 五、已裁决行为口径登记（Divergence Register，v2.5）
+
+以下分歧已裁决并冻结；任何语言改动这些行为前必须先修订本表并同步 8 语言：
+
+| # | 口径 | 裁决 | 依据 |
+|---|------|------|------|
+| 1 | **跳表哨兵语义** | 跳表条目带 SENTINEL = 终止叶子，`find`/`lookup_row_id` 直接返回低 31 位 row_id；CIDR 反查需前缀长度，从根重走是合法实现 | FORMAT §4 SearchV4/V6 + C/Java/C#/Node/Python 多数派（2026-09-02 裁决，Rust/PHP 已对齐；回归测试 `jump_sentinel_test*`） |
+| 2 | **IP 前后空白字符** | Java `trim()` 接受 `" 1.2.3.4 "`；Go/Node 显式拒绝。**保留现状**，Java 为 golden；Go/Node 的严格口径为 SSRF 防护场景的推荐实现 | 2026-09-02 审查登记 |
+| 3 | **IP 字符串解析口径** | 非法 IP：托管语言（Java/C#）抛 `InvalidIp`；Go/Node/PHP/Rust 返回 null/零值。单条口径随语言，**批量路径三态为强制**（§二.3） | 契约 §二 |
+| 4 | **`getScope()` / `scope`** | 当前格式无 scope 字段，8 语言一律返回 `""`。`"cn"\|"global"` 为格式迁移后的目标契约（见 QZDB_SDK_API.md 前置依赖注记） | 2026-09-02 裁决 |
+| 5 | **dimensionMask 双位置位**（畸形文件） | 按 `0x02(asn) → 0x04(usage) → 0x01(geo)` 优先级链选维（Java 语义）；Go 已对齐计划中，合法文件不受影响 | 2026-09-02 审查登记 |
+| 6 | **快照生命周期（Go）** | refCount 引用计数已由 `runtime.SetFinalizer` + GC 可达性托管：读者持引用即免 munmap，查询路径仅一次 atomic Load | 2026-09 实现（`-race` 全绿背书） |
+| 7 | **性能基线** | CI `perf-gate` job 以绝对下限（floors）拦截数量级回退；细粒度回归由本地 `tools/perf_gate.py --baseline --tol 0.25` 承担 | BENCH_CONTRACT §门禁 |

@@ -537,6 +537,20 @@ func (s *Snapshot) parseGroups() error {
 				sp += 4
 				sp += 4 // poolSectionId
 			}
+			// 安全校验（对齐 C# QzdbReader.cs）：每个字段偏移必须满足
+			// offsets[fi] + width <= stride，否则畸形文件的超大偏移会把
+			// 查询期的 fo = entryOff + offsets[i] 推出文件，触发查询路径
+			// 无法 recover 的 boundsPanic。越界即整组弃用 schema 布局，
+			// 回退到下方 poolIdxSize 默认布局（fail-closed 同效）。
+			bad := stride <= 0
+			for fi := 0; fi < fldCount && !bad; fi++ {
+				if offsets[fi] < 0 || widths[fi] <= 0 || offsets[fi]+widths[fi] > stride {
+					bad = true
+				}
+			}
+			if bad {
+				continue
+			}
 			s.groupFieldWidths[gi] = widths
 			s.groupFieldOffsets[gi] = offsets
 			s.groupFieldNative[gi] = natives
@@ -1016,16 +1030,23 @@ func (s *Snapshot) readIPRow(rowID uint32) (uint32, uint32, uint32) {
 }
 
 // extractGeoInfo 解包一行 GeoEntry（全集），含 per-snapshot 无锁缓存。
+// extractGeoInfo 以 entryId 为解码缓存键（与 Java/C#/Node 语义一致）：
+// 同一 GeoEntry 被 N 个相邻 CIDR row 共享是常态，rowID 键会把同一 entry
+// 重复解码 N 次占 N 个槽；entryId 键只解码一次占一个槽，命中率更高。
 func (s *Snapshot) extractGeoInfo(rowID uint32) *GeoInfo {
 	if rowID == 0 {
 		return nil
 	}
-	if g := s.geoCache.get(rowID); g != nil {
+	entryID, entryOff, fc, ok := s.resolveEntry(rowID)
+	if !ok {
+		return nil
+	}
+	if g := s.geoCache.get(entryID); g != nil {
 		return g
 	}
-	g := s.computeGeoInfo(rowID)
+	g := s.computeGeoInfoEntry(entryID, entryOff, fc)
 	if g != nil {
-		s.geoCache.put(rowID, g)
+		s.geoCache.put(entryID, g)
 	}
 	return g
 }
@@ -1037,12 +1058,14 @@ func (s *Snapshot) resolveEntry(rowID uint32) (entryID uint32, entryOff uint64, 
 	}
 	geoID, asnID, usageID := s.readIPRow(rowID)
 	gi := s.groupIndex
-	switch s.groupDimMasks[gi] & 0x06 {
-	case 0x02:
+	// 优先级链与 Java/C# 对齐（API_CONTRACT §五.5）：双位置位的畸形文件
+	// 按 asn > usage > geo 取维，不得走 switch default 静默选 geo。
+	mask := s.groupDimMasks[gi] & 0x06
+	if mask&0x02 != 0 {
 		entryID = asnID
-	case 0x04:
+	} else if mask&0x04 != 0 {
 		entryID = usageID
-	default:
+	} else {
 		entryID = geoID
 	}
 	if entryID == 0 || entryID >= s.groupEntryCounts[gi] {
@@ -1077,10 +1100,16 @@ func (s *Snapshot) readFieldValue(entryOff uint64, fi int) string {
 }
 
 func (s *Snapshot) computeGeoInfo(rowID uint32) *GeoInfo {
-	_, entryOff, fc, ok := s.resolveEntry(rowID)
+	entryID, entryOff, fc, ok := s.resolveEntry(rowID)
 	if !ok {
 		return nil
 	}
+	return s.computeGeoInfoEntry(entryID, entryOff, fc)
+}
+
+// computeGeoInfoEntry 按 entryId + 预解析偏移直接解码全字段。
+func (s *Snapshot) computeGeoInfoEntry(entryID uint32, entryOff uint64, fc int) *GeoInfo {
+	_ = entryID
 	// 把 per-group 切片提到循环外，避免每次字段读取都重复下标寻址 groupIndex。
 	gi := s.groupIndex
 	widths := s.groupFieldWidths[gi]
@@ -1129,10 +1158,17 @@ func (s *Snapshot) computeGeoInfoProjected(rowID uint32, fields []string) *GeoIn
 		}
 		values[i] = s.readFieldValue(entryOff, origIdx)
 	}
+	// 投影结果同样要带 numeric 标记（契约 §6.2）：否则 ToJson 会把
+	// longitude/latitude/asn/geo_id 输出为字符串，与 C#/PHP 分叉。
+	numeric := make([]bool, len(fields))
+	for i, f := range fields {
+		numeric[i] = isNumericFieldName(f)
+	}
 	return &GeoInfo{
 		FieldNames: fields,
 		Values:     values,
 		normMap:    buildNormalizedMap(fields),
+		numeric:    numeric,
 	}
 }
 

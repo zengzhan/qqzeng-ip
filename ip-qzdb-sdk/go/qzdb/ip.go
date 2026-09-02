@@ -35,32 +35,33 @@ type parseResult struct {
 }
 
 // fastParseIp 严格解析 IPv4/IPv6 字符串（拒绝前导零、越界、缺段、超长、zone-id、非法分组）。
+// 值返回：21 字节结构体走寄存器/栈，热路径零堆分配。
 // 对 IPv4-mapped IPv6 自动降级为 IPv4。空白字符一律拒绝（SSRF 安全）。
-func fastParseIp(s string) (*parseResult, bool) {
+func fastParseIp(s string) (parseResult, bool) {
 	n := len(s)
 	// 空白字符一律拒绝（SSRF 安全）。strings.ContainsAny 在标准库里就是
 	// IndexAny(s, chars) >= 0 的字面封装，行为与之前完全等价，只是更符合
 	// Go 官方惯用法（staticcheck S1003）。
 	if n > 0 && strings.ContainsAny(s, " \t\n\r\v\f") {
-		return nil, false
+		return parseResult{}, false
 	}
 	if n == 0 || n > 45 {
-		return nil, false
+		return parseResult{}, false
 	}
 	if !strings.Contains(s, ":") {
 		v4, ok := fastParseIpv4(s)
 		if !ok {
-			return nil, false
+			return parseResult{}, false
 		}
-		return &parseResult{v4: v4, isV4: true}, true
+		return parseResult{v4: v4, isV4: true}, true
 	}
 	if strings.IndexByte(s, '%') >= 0 {
-		return nil, false // zone-id 不支持
+		return parseResult{}, false // zone-id 不支持
 	}
 	// 用 strings.Cut 处理 "::" 双冒号压缩；拒绝多个 "::"
 	lft, rgt, hasGap := strings.Cut(s, "::")
 	if hasGap && strings.Contains(rgt, "::") {
-		return nil, false // 多个 "::"
+		return parseResult{}, false // 多个 "::"
 	}
 	lg := strings.Split(lft, ":")
 	rg := strings.Split(rgt, ":")
@@ -72,12 +73,12 @@ func fastParseIp(s string) (*parseResult, bool) {
 	}
 	for _, g := range lg {
 		if g == "" {
-			return nil, false
+			return parseResult{}, false
 		}
 	}
 	for _, g := range rg {
 		if g == "" {
-			return nil, false
+			return parseResult{}, false
 		}
 	}
 	allg := make([]string, 0, len(lg)+len(rg))
@@ -90,7 +91,7 @@ func fastParseIp(s string) (*parseResult, bool) {
 		if !strings.Contains(last, ":") && strings.IndexByte(last, '.') >= 0 {
 			v, ok := fastParseIpv4(last)
 			if !ok {
-				return nil, false
+				return parseResult{}, false
 			}
 			v4Int = v
 			hasV4 = true
@@ -104,25 +105,25 @@ func fastParseIp(s string) (*parseResult, bool) {
 	}
 	if hasGap {
 		if ng+v4Slots > 7 {
-			return nil, false
+			return parseResult{}, false
 		}
 	} else if ng+v4Slots != 8 {
-		return nil, false
+		return parseResult{}, false
 	}
 	// 内嵌 IPv4 必须位于地址末尾（最后 32 位）。若带 "::" 压缩且 v4 落在 "::" 之前
 	// （rgt 为空，即 "a.b.c.d::" 形态），属于非法地址，netip 同样拒绝，这里显式拒绝。
 	if hasV4 && hasGap && len(rg) == 0 {
-		return nil, false
+		return parseResult{}, false
 	}
 	for _, g := range allg {
 		gl := len(g)
 		if gl == 0 || gl > 4 {
-			return nil, false
+			return parseResult{}, false
 		}
 		for j := 0; j < gl; j++ {
 			cc := g[j]
 			if cc >= 128 || (hexLUT[cc] == 0 && cc != '0') {
-				return nil, false
+				return parseResult{}, false
 			}
 		}
 	}
@@ -149,9 +150,9 @@ func fastParseIp(s string) (*parseResult, bool) {
 		buf[15] = byte(v4Int)
 	}
 	if isV4Mapped(buf) {
-		return &parseResult{v4: v4FromMapped(buf), isV4: true}, true
+		return parseResult{v4: v4FromMapped(buf), isV4: true}, true
 	}
-	return &parseResult{v6: buf}, true
+	return parseResult{v6: buf}, true
 }
 
 func fastParseIpv4(s string) (uint32, bool) {

@@ -6,7 +6,8 @@
 //! - 浮点字段在解码期格式化为 6 位小数（NaN/Inf → ""）；`to_pipe` 直接拼接已解码字符串。
 //! - SENTINEL 哨兵位在 Trie 返回 row_id 时即剥离。
 
-// mmap 的底层构造需要一次受控 unsafe；它被封装在 map_file() 中，
+// unsafe 仅存在于两处：map_file()（mmap 底层构造）与 find_*_ref_snap()（零拷贝借用寿命解绑，
+//!   SAFETY 论证见函数文档；两者均不改变对外 API 的安全暴露面；它被封装在 map_file() 中，
 // 对外仍提供完全安全的读取 API。
 #![deny(unsafe_op_in_unsafe_fn)]
 
@@ -343,6 +344,33 @@ fn synthetic_field_names(count: usize) -> Vec<String> {
 // ---------------------------------------------------------------------------
 // 字段名归一化（转小写 + 去除 `_` 与 `-`，API_CONTRACT §6）
 // ---------------------------------------------------------------------------
+
+/// 由数值字段索引列表构建位掩码（索引 < 32 才置位；MAX_GEO_FIELDS=25 恒满足）。
+fn build_numeric_mask(indices: &[usize]) -> u32 {
+    indices.iter().fold(0u32, |m, &i| if i < 32 { m | (1 << i) } else { m })
+}
+
+/// 栈缓冲版 normalize_key：语义与 normalize_key 逐字一致（跳过 '_'/'-'，
+/// ASCII 小写，其余字符透传）。超长（>48 字节归一化结果）返回 None，调用方按 "" 处理。
+fn norm_key_buf(name: &str) -> Option<std::borrow::Cow<'_, str>> {
+    if !name.bytes().any(|b| b == b'_' || b == b'-' || b.is_ascii_uppercase()) {
+        // 快路径：已是归一化形态，直接借用原串
+        return Some(std::borrow::Cow::Borrowed(name));
+    }
+    let mut buf = [0u8; 48];
+    let mut n = 0usize;
+    for &b in name.as_bytes() {
+        if b == b'_' || b == b'-' {
+            continue;
+        }
+        if n == buf.len() {
+            return None;
+        }
+        buf[n] = b.to_ascii_lowercase();
+        n += 1;
+    }
+    Some(std::borrow::Cow::Owned(String::from_utf8_lossy(&buf[..n]).into_owned()))
+}
 
 fn normalize_key(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -891,7 +919,8 @@ pub struct GeoInfoRef<'a> {
     pub(crate) values: [FieldVal<'a>; MAX_GEO_FIELDS],
     pub(crate) field_count: usize,
     pub(crate) norm_map: &'a HashMap<String, usize>,
-    pub(crate) numeric_indices: &'a [usize],
+    /// 数值字段位掩码（bit i = 第 i 字段为数值）——to_json 热路径 O(1) 位测。
+    pub(crate) numeric_mask: u32,
 }
 
 impl<'a> std::fmt::Debug for GeoInfoRef<'a> {
@@ -906,10 +935,16 @@ impl<'a> std::fmt::Debug for GeoInfoRef<'a> {
 
 impl<'a> GeoInfoRef<'a> {
     /// 按字段名取值（大小写/下划线/连字符不敏感）。未匹配返回 ""，绝不 panic。
+    ///
+    /// 归一化在 48 字节栈缓冲完成，零堆分配（字段名上界 32 字节）。
     #[inline]
     pub fn get(&self, name: &str) -> &str {
+        let key = match norm_key_buf(name) {
+            Some(k) => k,
+            None => return "",
+        };
         self.norm_map
-            .get(&normalize_key(name))
+            .get(key.as_ref())
             .copied()
             .and_then(|i| if i < self.field_count { self.values.get(i).map(|v| v.as_str()) } else { None })
             .unwrap_or("")
@@ -989,7 +1024,7 @@ impl<'a> GeoInfoRef<'a> {
             out.push('"');
             out.push_str(&escape_json(name));
             out.push_str("\":");
-            let numeric = self.numeric_indices.contains(&i);
+            let numeric = i < 32 && (self.numeric_mask >> i) & 1 != 0;
             if val.is_empty() {
                 out.push_str(if numeric { "null" } else { "\"\"" });
             } else if numeric {
@@ -1021,10 +1056,14 @@ impl<'a> GeoInfoRef<'a> {
                 Arc::clone(&snap.numeric_indices),
             )
         } else {
+            // 无快照引用（合成实例）：从掩码重建索引列表
+            let idxs: Vec<usize> = (0..self.field_count)
+                .filter(|&i| i < 32 && (self.numeric_mask >> i) & 1 != 0)
+                .collect();
             (
                 Arc::new(self.field_names.to_vec()),
                 Arc::new(self.norm_map.clone()),
-                Arc::new(self.numeric_indices.to_vec()),
+                Arc::new(idxs),
             )
         };
         GeoInfo {
@@ -2146,6 +2185,9 @@ impl SnapshotInner {
         }
         let gi = self.group_index;
         let fc = self.group_field_counts[gi];
+        // 借用视图的内联/借用槽位上限：超限即静默截断会破坏与 owned GeoInfo
+        // 的逐字对称性（to_pipe/PartialEq 分叉），在此 fail-loud。
+        debug_assert!(fc <= MAX_GEO_FIELDS, "group field count {} exceeds MAX_GEO_FIELDS {}", fc, MAX_GEO_FIELDS);
         let entry_off = entry_off_of(
             self.off_geo_entries,
             self.group_entry_offsets[gi],
@@ -2193,13 +2235,22 @@ impl SnapshotInner {
             }
         }
 
+        // SAFETY 关联不变量（见 find_uint_ref_snap 的论证）：snap_arc 为 Some 时
+        // 必须就是 &self 所属的那个 Arc（返回引用的存活由该 Arc 保活）；
+        // None 仅允许守卫借用路径（寿命由调用方 &self 锚定，编译期约束）。
+        if let Some(a) = snap_arc.as_deref() {
+            debug_assert!(
+                std::ptr::eq(a, self),
+                "resolve_geo_ref: Some(snap) must be the Arc that owns &self"
+            );
+        }
         Some(GeoInfoRef {
             _snap: snap_arc,
             field_names: &self.field_names,
             values,
             field_count: limit,
             norm_map: &self.norm_map,
-            numeric_indices: &self.numeric_indices,
+            numeric_mask: build_numeric_mask(&self.numeric_indices),
         })
     }
 
@@ -3402,6 +3453,12 @@ impl QzdbReader {
         } else {
             geo_id
         };
+        // SAFETY（零拷贝借用寿命解绑；全 crate 仅 map_file 与两处 find_*_ref_snap
+        // 含 unsafe）：raw pointer 用于把返回寿命从本函数局部的 Arc 借用解绑到
+        // 签名约束的 '&self'。健全性 = ① Arc 被移入返回值 _snap 字段，借用所指
+        // 内存随 Arc 保活；② 被借用字段（pools/field_names/norm_map/numeric_indices）
+        // 在 from_bytes 构造期后绝无写点（不可变快照）；③ reader reload 后旧数据
+        // 仍由 _snap 持有。debug_assert 拦截字段数超 MAX_GEO_FIELDS 的静默截断。
         let snap_ptr: *const SnapshotInner = &*snap;
         unsafe { (*snap_ptr).resolve_geo_ref(entry_id, Some(snap)) }
     }
@@ -3423,6 +3480,8 @@ impl QzdbReader {
         } else {
             geo_id
         };
+        // SAFETY: 同 find_uint_ref_snap 内的论证（Arc 保活 + 不可变快照 +
+        // 寿命锚定 &self）。
         let snap_ptr: *const SnapshotInner = &*snap;
         unsafe { (*snap_ptr).resolve_geo_ref(entry_id, Some(snap)) }
     }
@@ -4026,11 +4085,18 @@ impl ChainedReader {
         }
     }
 
-    /// 零拷贝查询（仅支持 Fallback 模式返回首个命中的 `GeoInfoRef`，Merge 模式因跨库合并需所有权返回 None）。
+    /// 零拷贝查询（仅 Fallback 模式）。
+    ///
+    /// # Panics
+    /// Merge / MergeOverride 模式下调用即 panic：跨库合并需要所有权拼接，
+    /// 无法零拷贝；静默返回 `None` 会被调用方误判为"IP 未命中"
+    /// （API_CONTRACT §二.4）。请改用 `find()`。
     pub fn find_ref(&self, ip: impl ToIp) -> Option<GeoInfoRef<'_>> {
-        if self.mode != ChainMode::Fallback {
-            return None;
-        }
+        assert!(
+            self.mode == ChainMode::Fallback,
+            "ChainedReader::find_ref is only supported in Fallback mode (got {:?}); use find() instead",
+            self.mode
+        );
         let parsed = ip.to_parsed_ip()?;
         for r in &self.readers {
             let snap = r.snap.load_full();

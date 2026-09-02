@@ -1727,6 +1727,16 @@ static int init_from_buffer(qzdb_reader_t* ctx, int is_heap, int verify_crc) {
     for (int i = 0; i < 4; i++) ctx->group_entry_offsets[i] = READ_LE48(d + 168 + i * 6);
 
     uint64_t gm_off = ctx->off_geo_entries;
+    /* 安全校验：组元数据表实际读取 1 + groups*7 字节（1B groupCount + 每组
+     * 1B fieldCount + 4B entryCount + 2B dimensionMask）。此前仅校验段头
+     * 16 字节，group_count ≥ 4 且表贴近文件尾时，mmap 路径可越页 → SIGBUS。 */
+    if (ctx->data_size - gm_off < 1) { return QZDB_ERR_BOUNDS; }
+    {
+        int gc_probe = d[gm_off];
+        if (gc_probe < 1) gc_probe = 1;
+        if (gc_probe > 4) gc_probe = 4;
+        if ((uint64_t)gm_off + 1 + (uint64_t)gc_probe * 7 > ctx->data_size) { return QZDB_ERR_BOUNDS; }
+    }
     int group_count = d[gm_off]; gm_off++;
     ctx->actual_groups = group_count < 1 ? 1 : group_count;
     if (ctx->geo_entry_group_count > 0 && ctx->geo_entry_group_count < ctx->actual_groups) ctx->actual_groups = ctx->geo_entry_group_count;

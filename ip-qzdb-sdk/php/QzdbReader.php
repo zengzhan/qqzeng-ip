@@ -2182,6 +2182,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         if ($len <= 0) return '';
         if ($this->stream !== null) {
             if ($off < 0) return '';
+            if ($off < 0) return '';
             // 分块缓存避免 Trie 热路径中每次节点读取都触发 fseek/fread。
             // 大于一页的请求（例如 CRC）仍按页拼接，保证 O(1) 峰值额外内存。
             $out = '';

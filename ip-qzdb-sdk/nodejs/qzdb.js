@@ -1220,7 +1220,7 @@ class QzdbReader {
 
     let idx = ptr;
     let suffix = (ipInt & 0xFFFF) << 16;
-    // 有界 for：jump 表命中内节点后最多再走 16 步（与 Java/Go 同构），免每步步数分支
+    // 有界 for：jump 表命中内节点后最多再走 16 步（16 位 jump + 16 位后缀；Java 同构，Go 为等价步数上界），免每步步数分支
     for (let step = 0; step < 16; step++) {
       const bit = (suffix >>> 31) & 1;
       const child = this._getV4Child(idx, bit);

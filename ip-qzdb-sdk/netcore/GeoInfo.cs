@@ -12,6 +12,10 @@ public sealed class GeoInfo
     private readonly Dictionary<string, int>? _normMap;
     private readonly bool[]? _numericFlags;
     private string? _pipe; // lazily memoized ToPipe() result (immutable per instance)
+    /// <summary>原生浮点旁路（索引对齐 _values；非浮点槽位 null）。BuildGeo 解码时同步
+    /// 填入，GetLongitude/GetLatitude 免去 "116.400000" → TryParse 往返；仅加速旁路，
+    /// to_pipe/to_json 字符串形态（契约 §8.2）不受影响。</summary>
+    private readonly double?[]? _nativeFloats;
 
     // Pre-bound standard field indices (avoids NormalizeKey and Dictionary lookup in hot-path getters)
     private readonly int _idxCountry = -1;
@@ -51,12 +55,13 @@ public sealed class GeoInfo
     }
 
     internal GeoInfo(string[] fieldNames, string[] values, Dictionary<string, int>? normMap,
-        bool[]? numericFlags, bool takeOwnership)
+        bool[]? numericFlags, bool takeOwnership, double?[]? nativeFloats = null)
     {
         _fieldNames = fieldNames;
         _values = values;
         _normMap = normMap;
         _numericFlags = numericFlags;
+        _nativeFloats = nativeFloats != null && nativeFloats.Length == values.Length ? nativeFloats : null;
         if (_normMap != null)
         {
             BindStandardIndices(_normMap, out _idxCountry, out _idxCountryEn, out _idxProvince, out _idxProvinceEn,
@@ -373,6 +378,11 @@ public sealed class GeoInfo
     /// <summary>Returns the longitude, or null when absent/invalid.</summary>
     public double? GetLongitude()
     {
+        if (_nativeFloats != null && _idxLongitude >= 0 && _idxLongitude < _nativeFloats.Length)
+        {
+            var nf = _nativeFloats[_idxLongitude];
+            if (nf.HasValue) return nf;
+        }
         var v = _idxLongitude >= 0 ? GetFast(_idxLongitude) : Get("longitude");
         if (string.IsNullOrEmpty(v)) return null;
         return double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var r) ? r : null;
@@ -381,6 +391,11 @@ public sealed class GeoInfo
     /// <summary>Returns the latitude, or null when absent/invalid.</summary>
     public double? GetLatitude()
     {
+        if (_nativeFloats != null && _idxLatitude >= 0 && _idxLatitude < _nativeFloats.Length)
+        {
+            var nf = _nativeFloats[_idxLatitude];
+            if (nf.HasValue) return nf;
+        }
         var v = _idxLatitude >= 0 ? GetFast(_idxLatitude) : Get("latitude");
         if (string.IsNullOrEmpty(v)) return null;
         return double.TryParse(v, NumberStyles.Float, CultureInfo.InvariantCulture, out var r) ? r : null;
