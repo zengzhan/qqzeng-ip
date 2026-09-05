@@ -19,7 +19,7 @@
 
 </div>
 
-> **QZDB (qqzeng IP Database)** 是一款专为企业级高并发、云原生架构打造的下一代 IP 地理位置与号段归属地二进制搜索引擎。凭借**双阶段 Patricia Trie 树算法**、**`mmap` 零拷贝**以及**无锁并发设计**，提供单机微秒级响应与超高吞吐。
+> **QZDB (qqzeng IP Database)** 是一款专为企业级高并发、云原生架构打造的下一代 IP 地理位置与号段归属地二进制搜索引擎。凭借**双阶段 Patricia Trie 树算法**、**`mmap` 零拷贝**以及**无锁并发设计**，编译语言单次检索延迟低至纳秒级、单机吞吐达亿级 QPS（口径与复现见 docs/PERFORMANCE.md）。
 
 ---
 
@@ -52,7 +52,7 @@
 
 | 产品线 | 说明与核心亮点 | 包含内容 / 支持语言 | 快速入口 |
 | :--- | :--- | :--- | :---: |
-| 🚀 **IP 旗舰 QZDB 解析 SDK** | **下一代旗舰**：双阶段 Trie 树 + `mmap` 零分配，微秒级响应，支持 IPv4/IPv6 全字段与风控 | 🦀 Rust · 🐹 Go · ☕ Java · ⚡ C/C++ <br> 🔷 C# · 🟩 Node · 🐍 Python · 🐘 PHP | 👉 [**`ip-qzdb-sdk/`**](./ip-qzdb-sdk) |
+| 🚀 **IP 旗舰 QZDB 解析 SDK** | **下一代旗舰**：双阶段 Trie 树 + `mmap` 零分配，纳秒级检索，支持 IPv4/IPv6 全字段与风控 | 🦀 Rust · 🐹 Go · ☕ Java · ⚡ C/C++ <br> 🔷 C# · 🟩 Node · 🐍 Python · 🐘 PHP | 👉 [**`ip-qzdb-sdk/`**](./ip-qzdb-sdk) |
 | 📦 **IP 经典版解析 SDK** | **经典在用**：6.0 经典 `.db` 与 2.0 早期 `.dat` 格式多语言解析 SDK 与源码 | v6.0 (.db) SDK · v2.0 (.dat) SDK | 👉 [**`ip-classic-sdk/`**](./ip-classic-sdk) |
 | 📱 **手机号段归属地 SDK** | **50万+ 全号段**：压缩率 95.7%+ 的二进制 DAT 解析及 Redis 高并发缓存方案 | v2.0 ~ v6.0 DAT SDK · Redis 导入 | 👉 [**`phone-location-sdk/`**](./phone-location-sdk) |
 | 🗄️ **关系型数据库脚本** | **海量入库 DDL**：针对 IP 网段与号段优化的建表、前缀索引与批量高速入库脚本 | 🐬 MySQL · 🐘 PostgreSQL · 🪟 SQL Server | 👉 [**`database-sql/`**](./database-sql) |
@@ -63,20 +63,28 @@
 
 ## 📊 多语言 SDK 性能横向评测榜单 (SDK Benchmark)
 
-| 排名 | 语言 | 查询模式 | 单线程吞吐量 (Ops/sec) | 平均查询延迟 | 性能评价 | 获取方式 |
-| :---: | :--- | :--- | :--- | :--- | :--- | :--- |
-| **1** | **Rust** | Read-Only Mmap | **10.0 M+ ~ 18.0 M+** | **< 0.08 µs** | 🛡️ 极速安全 · 生产推荐 | [📦 crates.io](https://crates.io/crates/qzdb) · [源码](./ip-qzdb-sdk/rust) |
-| **2** | **C / C++** | Read-Only Mmap | **10.0 M+ ~ 18.0 M+** | **< 0.08 µs** | 👑 极致轻量 · 生产推荐 | [源码直编](./ip-qzdb-sdk/c) |
-| **3** | **Go** | Read-Only Mmap | **8.0 M+ ~ 12.0 M+** | **< 0.10 µs** | ⚡ 高并发 · 生产推荐 | [📦 pkg.go.dev](https://pkg.go.dev/github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go) · [源码](./ip-qzdb-sdk/go) |
-| **4** | **C#** | Eager-load Once | **6.0 M+ ~ 10.5 M+** | **< 0.15 µs** | 🚀 优秀 · 生产推荐 | [📦 NuGet](https://www.nuget.org/packages/QQZeng.Qzdb) · [源码](./ip-qzdb-sdk/netcore) |
-| **5** | **Java** | Eager-load Once | **5.0 M+ ~ 8.0 M+** | **< 0.20 µs** | ☕ 稳健 · 生产推荐 | [📦 Maven Central](https://central.sonatype.com/artifact/com.qqzeng/qzdb) · [源码](./ip-qzdb-sdk/java) |
-| **6** | **Node.js** | Eager-load Once | **3.0 M+ ~ 5.0 M+** | **< 0.33 µs** | 🔥 优异 · 生产推荐 | [📦 npm](https://www.npmjs.com/package/@qqzengip/qzdb) · [源码](./ip-qzdb-sdk/nodejs) |
-| **7** | **PHP** | Dynamic Parsed | **100 K+ ~ 2.0 M+** | **< 0.90 µs** | 🐘 实用 · 生产推荐 | [📦 Packagist](https://packagist.org/packages/qqzeng/qzdb) · [源码](./ip-qzdb-sdk/php) |
-| **8** | **Python** | Dynamic Parsed | **100 K+ ~ 2.2 M+** | **< 0.90 µs** | 🐍 标准 · 生产推荐 | [📦 PyPI](https://pypi.org/project/qzdb/) · [源码](./ip-qzdb-sdk/python) |
+**口径说明**（统一标准见 [docs/PERFORMANCE.md](./docs/PERFORMANCE.md)，数字由 CI 性能门禁 8 语言守护）：
+
+- **口径 A｜整型随机（缓存最不利）**：整型输入、50 万随机散布 IP、省级 8.6MB 库、单线程 —— 容量规划用的保守承诺值；
+- **口径 C｜字符串 find_str**：字符串输入（含 IP 解析）、demo 样本库 —— 与 CI 门禁同口径，跨语言可比。
+- 环境：Apple M4 Max（14 核）单线程 best-of-3；x86 平台通常低 2~4 倍；122MB 全球库的 A 口径约为省级库的 1/3。
+
+| 排名 | 语言 | 口径 A：整型随机（Ops/sec） | 口径 C：字符串 find_str | 单次检索延迟（口径 A） | 性能评价 | 获取方式 |
+| :---: | :--- | :---: | :---: | :---: | :--- | :--- |
+| **1** | **Node.js**¹ | **99.4 M** | 5.5 M | ≈10 ns | 🔥 JS 生态最快档 · 生产推荐 | [📦 npm](https://www.npmjs.com/package/@qqzengip/qzdb) · [源码](./ip-qzdb-sdk/nodejs) |
+| **2** | **C / C++** | **96.5 M** | 10.8 M | ≈10 ns | 👑 极致轻量 · 生产推荐 | [源码直编](./ip-qzdb-sdk/c) |
+| **3** | **Go** | **74.7 M** | 9.2 M | ≈13 ns | ⚡ 高并发 · 生产推荐 | [📦 pkg.go.dev](https://pkg.go.dev/github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go) · [源码](./ip-qzdb-sdk/go) |
+| **4** | **Java**¹ | **74.9 M** | 11.9 M | ≈13 ns | ☕ 稳健 · 生产推荐 | [📦 Maven Central](https://central.sonatype.com/artifact/com.qqzeng/qzdb) · [源码](./ip-qzdb-sdk/java) |
+| **5** | **Rust** | **43.3 M** | 8.4 M | ≈23 ns | 🛡️ 极速安全 · 生产推荐 | [📦 crates.io](https://crates.io/crates/qzdb) · [源码](./ip-qzdb-sdk/rust) |
+| **6** | **C#** | **33.1 M** | 11.0 M | ≈30 ns | 🚀 优秀 · 生产推荐 | [📦 NuGet](https://www.nuget.org/packages/QQZeng.Qzdb) · [源码](./ip-qzdb-sdk/netcore) |
+| **7** | **PHP**¹ | **5.67 M** | 429 K | ≈176 ns | 🐘 实用 · 生产推荐 | [📦 Packagist](https://packagist.org/packages/qqzeng/qzdb) · [源码](./ip-qzdb-sdk/php) |
+| **8** | **Python** | **0.97 M** | 273 K | ≈1.0 µs | 🐍 标准 · 一致性优先 | [📦 PyPI](https://pypi.org/project/qzdb/) · [源码](./ip-qzdb-sdk/python) |
 
 > 除 C / C++ 走源码直编外，其余 7 种语言均可通过各自包管理器一条命令安装，**无需克隆本仓库**。
-
-*(注：基准测试基于普通 x86_64 / ARM64 处理器单线程单核内存检索测试，不同 CPU 频率及物理内存带宽下测试数值可能有所浮动，仅供技术选型参考)*
+>
+> ¹ Node / Java / PHP 的口径 A 数字来自与 contract 基准同场景的对等直测探针（其余为 BENCH_CONTRACT 契约基准）；
+> 热点缓存（同 IP 重复查询）理想情形下编译语言可达 4600 万 ~ 1 亿 QPS（口径 B，详见 docs/PERFORMANCE.md）。
+> 所有数字可用仓库内基准一键复现，仅供技术选型参考，非 SLA。
 
 ---
 
