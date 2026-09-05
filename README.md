@@ -63,28 +63,32 @@
 
 ## 📊 多语言 SDK 性能横向评测榜单 (SDK Benchmark)
 
-**口径说明**（统一标准见 [docs/PERFORMANCE.md](./docs/PERFORMANCE.md)，数字由 CI 性能门禁 8 语言守护）：
+整型随机（缓存最不利）与字符串 find_str 双口径，数字由 CI 性能门禁 8 语言守护；
+完整定义、环境声明与复现方式见下放折叠区与 [docs/PERFORMANCE.md](./docs/PERFORMANCE.md)。
 
-- **口径 A｜整型随机（缓存最不利）**：整型输入、50 万随机散布 IP、省级 8.6MB 库、单线程 —— 容量规划用的保守承诺值；
-- **口径 C｜字符串 find_str**：字符串输入（含 IP 解析）、demo 样本库 —— 与 CI 门禁同口径，跨语言可比。
-- 环境：Apple M4 Max（14 核）单线程 best-of-3；x86 平台通常低 2~4 倍；122MB 全球库的 A 口径约为省级库的 1/3。
+| 语言（点击进入源码） | 整型查询¹<br>**口径 A · 缓存最不利** | 字符串查询<br>**口径 C · 含 IP 解析** | 特点 |
+| :--- | ---: | ---: | :--- |
+| 🔥 [Node.js](./ip-qzdb-sdk/nodejs) | **99.4 M/s** | 5.5 M/s | JS 生态最快档 |
+| 👑 [C / C++](./ip-qzdb-sdk/c) | **96.5 M/s** | 10.8 M/s | 极致轻量 · 零依赖 |
+| ⚡ [Go](./ip-qzdb-sdk/go) | **74.7 M/s** | 9.2 M/s | 高并发 · 单文件部署 |
+| ☕ [Java](./ip-qzdb-sdk/java) | **74.9 M/s** | 11.9 M/s | 字符串查询最快 |
+| 🛡️ [Rust](./ip-qzdb-sdk/rust) | **43.3 M/s** | 8.4 M/s | 内存安全 · 零开销 |
+| 🚀 [C#](./ip-qzdb-sdk/netcore) | **33.1 M/s** | 11.0 M/s | 原生浮点零解析 |
+| 🐘 [PHP](./ip-qzdb-sdk/php) | **5.67 M/s** | 429 K/s | 零扩展 · 纯 PHP |
+| 🐍 [Python](./ip-qzdb-sdk/python) | **0.97 M/s** | 273 K/s | 一致性优先 · 零依赖 |
 
-| 排名 | 语言 | 口径 A：整型随机（Ops/sec） | 口径 C：字符串 find_str | 单次检索延迟（口径 A） | 性能评价 | 获取方式 |
-| :---: | :--- | :---: | :---: | :---: | :--- | :--- |
-| **1** | **Node.js**¹ | **99.4 M** | 5.5 M | ≈10 ns | 🔥 JS 生态最快档 · 生产推荐 | [📦 npm](https://www.npmjs.com/package/@qqzengip/qzdb) · [源码](./ip-qzdb-sdk/nodejs) |
-| **2** | **C / C++** | **96.5 M** | 10.8 M | ≈10 ns | 👑 极致轻量 · 生产推荐 | [源码直编](./ip-qzdb-sdk/c) |
-| **3** | **Go** | **74.7 M** | 9.2 M | ≈13 ns | ⚡ 高并发 · 生产推荐 | [📦 pkg.go.dev](https://pkg.go.dev/github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go) · [源码](./ip-qzdb-sdk/go) |
-| **4** | **Java**¹ | **74.9 M** | 11.9 M | ≈13 ns | ☕ 稳健 · 生产推荐 | [📦 Maven Central](https://central.sonatype.com/artifact/com.qqzeng/qzdb) · [源码](./ip-qzdb-sdk/java) |
-| **5** | **Rust** | **43.3 M** | 8.4 M | ≈23 ns | 🛡️ 极速安全 · 生产推荐 | [📦 crates.io](https://crates.io/crates/qzdb) · [源码](./ip-qzdb-sdk/rust) |
-| **6** | **C#** | **33.1 M** | 11.0 M | ≈30 ns | 🚀 优秀 · 生产推荐 | [📦 NuGet](https://www.nuget.org/packages/QQZeng.Qzdb) · [源码](./ip-qzdb-sdk/netcore) |
-| **7** | **PHP**¹ | **5.67 M** | 429 K | ≈176 ns | 🐘 实用 · 生产推荐 | [📦 Packagist](https://packagist.org/packages/qqzeng/qzdb) · [源码](./ip-qzdb-sdk/php) |
-| **8** | **Python** | **0.97 M** | 273 K | ≈1.0 µs | 🐍 标准 · 一致性优先 | [📦 PyPI](https://pypi.org/project/qzdb/) · [源码](./ip-qzdb-sdk/python) |
+<details>
+<summary>📐 口径定义、环境声明与复现方式（点开查看）</summary>
 
-> 除 C / C++ 走源码直编外，其余 7 种语言均可通过各自包管理器一条命令安装，**无需克隆本仓库**。
->
-> ¹ Node / Java / PHP 的口径 A 数字来自与 contract 基准同场景的对等直测探针（其余为 BENCH_CONTRACT 契约基准）；
-> 热点缓存（同 IP 重复查询）理想情形下编译语言可达 4600 万 ~ 1 亿 QPS（口径 B，详见 docs/PERFORMANCE.md）。
-> 所有数字可用仓库内基准一键复现，仅供技术选型参考，非 SLA。
+- **口径 A｜整型随机（缓存最不利）**：整型输入、50 万随机散布 IP、省级 8.6MB 库、单线程 —— 容量规划的保守承诺值；
+- **口径 C｜字符串 find_str**：字符串输入（含 IP 解析）、demo 样本库 —— 与 CI 门禁同口径，跨语言可比；
+- 环境：Apple M4 Max（14 核）单线程 best-of-3；x86 平台通常低 2~4 倍；122MB 全球库的口径 A 约为省级库的 1/3；
+- 单次检索延迟（口径 A 均值）：编译语言 10~30 ns，PHP ≈176 ns，Python ≈1.0 µs；
+- ¹ Node / Java / PHP 的口径 A 数字来自与 contract 基准同场景的对等直测探针（其余为 BENCH_CONTRACT 契约基准）；
+- 热点缓存（同 IP 重复查询）理想情形下编译语言可达 **4600 万 ~ 1 亿 QPS**（口径 B）；16 线程无锁扩展最高 **7.3 亿 QPS**；
+- 完整定义与复现命令见 [docs/PERFORMANCE.md](./docs/PERFORMANCE.md)。除 C/C++ 源码直编外，其余 7 语言均可由包管理器一条命令安装（见下方 Quick Start）。仅供技术选型参考，非 SLA。
+
+</details>
 
 ---
 
@@ -313,12 +317,22 @@ flowchart LR
 
 为了帮助架构师进行技术选型，以下列出了 QZDB 与业界主流二进制 IP 格式设计的客观对比（详细基准报告见 [`docs/benchmark-comparison.md`](./docs/benchmark-comparison.md)）：
 
-| 格式分类 | 检索时间复杂度 | 数据结构体积 | 核心检索树与数据机制 | QZDB 的技术优化点 |
-| :--- | :--- | :--- | :--- | :--- |
-| **通用嵌套结构树格式 (`.mmdb`)** | $\mathcal{O}(W)$ <br> (需加上反序列化开销) | 较大 <br> (含元数据 Key-Value 冗余) | 经典二进制 Trie；叶子指向嵌套 Map/List 数据区 | **QZDB 首阶段快速跳级 + 零分配**。IPv4 预读 16-bit 跳过前 16 层；叶子基于 Schema 物理偏移，堆内存零分配。 |
-| **扁平区间二分格式 (`.bin`)** | $\mathcal{O}(\log N)$ <br> (基于多轮二分匹配) | 中等 <br> (需存储完整起止 IP 范围) | 已排序起止范围二分检索；辅以前缀索引缓存 | **QZDB 的 Trie 压缩与短路径检索**。Trie 树结构天生善于压缩重叠段，平均检索路径大幅缩短。 |
-| **分区向量索引格式 (`.xdb`)** | $\mathcal{O}(W)$ 或 $\mathcal{O}(\log N)$ <br> (局部向量二分) | 极小 <br> (一般只索引部分核心地理字段) | 向量索引表 + 局部 B-Tree 区间检索 | **QZDB 对全球超大数据集扩展更佳**。采用全局 RowSchema 与双阶段树设计，能自适应承载从小体积到数行大规模全球网段数据的动态扩展。 |
-| **专有前缀树格式 (`.ipdb`)** | $\mathcal{O}(W)$ <br> (多次树节点跳转) | 较小 <br> (索引节点与偏移量较为紧凑) | 前缀节点位移 Trie 检索；索引与数据区分离 | **QZDB 的多语种只读字符串池与完全免锁设计**。多维字段在初始化后即建立只读内存视图，多线程并发检索无锁竞争。 |
+| 格式 | 检索复杂度 | 体积 | QZDB 的相对优势 |
+| :--- | :--- | :--- | :--- |
+| 嵌套结构树 `.mmdb` | O(W) + 反序列化 | 较大 | 16-bit 跳表预读 + 叶子物理偏移，堆内存零分配 |
+| 扁平区间二分 `.bin` | O(log N) 多轮匹配 | 中等 | Trie 天然压缩重叠段，检索路径更短 |
+| 分区向量索引 `.xdb` | O(W) / O(log N) | 极小 | 全局 RowSchema 双阶段树，超大全球库扩展更佳 |
+| 专有前缀树 `.ipdb` | O(W) 多次跳转 | 较小 | 多语种只读字符串池 + 完全无锁并发 |
+
+<details>
+<summary>🔍 各格式核心机制说明（点开查看）</summary>
+
+- **`.mmdb`（MaxMind 通用嵌套结构树）**：经典二进制 Trie，叶子指向嵌套 Map/List 数据区，读取需反序列化，体积含元数据 Key-Value 冗余。QZDB 对应优化：IPv4 首阶段 16-bit 跳表直接越过前 16 层，叶子基于 Schema 物理偏移零分配直取。
+- **`.bin`（扁平区间二分，如 ip2region）**：已排序起止 IP 范围二分检索，需存储完整起止范围。QZDB 对应优势：Trie 结构天然压缩重叠网段，平均检索路径显著更短。
+- **`.xdb`（分区向量索引）**：向量索引表 + 局部 B-Tree 区间检索，体积最小但通常仅索引核心地理字段。QZDB 对应优势：全局 RowSchema 与双阶段树设计，自适应承载从小体积到亿级全球网段的全字段扩展。
+- **`.ipdb`（专有前缀树）**：前缀节点位移 Trie，索引与数据区分离。QZDB 对应优势：多语种只读字符串池在初始化后建立只读内存视图，多线程并发检索完全无锁。
+
+</details>
 
 ---
 
