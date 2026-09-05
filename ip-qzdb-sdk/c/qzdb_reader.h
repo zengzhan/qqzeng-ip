@@ -52,6 +52,7 @@ typedef struct {
 typedef struct qzdb_cache_entry {
     uint64_t key;     /* (group << 40) | entry_id */
     char**   values;  /* count heap strings, alive for the snapshot's lifetime */
+    char*    pipe;    /* 预编码的 to_pipe 文本（values 以 '|' 连接），qzdb_find_str 快路径直拷；NULL = 未建（OOM 降级走慢路径） */
     int      count;
 } qzdb_cache_entry_t;
 
@@ -240,7 +241,10 @@ int  qzdb_find_each(qzdb_reader_t* ctx, const char** ips, int count,
                     qzdb_find_callback cb, void* user_data);
 
 /* Caller-buffer (zero-heap-allocation) variants.
- * bufs 元素尺寸必须为 QZDB_VALUE_BUF_SIZE（§10.5 大整值定点展开需要 ~310 字节）。 */
+ * bufs 元素尺寸必须为 QZDB_VALUE_BUF_SIZE（§10.5 大整值定点展开需要 ~310 字节）。
+ * 返回值采用计数约定：>0 = 写入 values 的字段数；0 = QZDB_OK 且未命中（零字段）；
+ * <0 = 错误码（INVALID_PARAM / NOT_FOUND（reader 无对应地址族分区）/ CORRUPTED）。
+ * 与 find/find_uint 的差异仅在未命中编码（计数 0 vs 错误码 -1），供零堆分配调用方区分。 */
 int  qzdb_find_uint_buf(qzdb_reader_t* ctx, uint32_t ip_int,
                         char** values, char (*bufs)[QZDB_VALUE_BUF_SIZE], int buf_size);
 int  qzdb_find_v6_buf(qzdb_reader_t* ctx, const uint8_t* ip_bin,

@@ -13,6 +13,10 @@ SENTINEL_MASK_24 = 0x7FFFFF
 SENTINEL_MASK_31 = 0x7FFFFFFF
 MAX_TRIE_WALK_STEPS_V4 = 32 + 8   # IPv4 walk cap = max(32+8,40) = 40
 MAX_TRIE_WALK_STEPS_V6 = 128 + 8  # IPv6 walk cap = max(128+8,40) = 136
+# 走查热路径专用：模块级预绑定，免去每次调用 struct.Struct('<I') 的构造开销
+_unpack_u32_from = struct.Struct('<I').unpack_from
+# _cached_resolve_geo 的哨兵值：区分「缓存未命中」与「缓存值为 None」
+_GEO_CACHE_MISS = object()
 MAX_POOL_COUNT = 1 << 26
 FLOAT_FIELDS = frozenset(['longitude', 'latitude'])
 
@@ -1585,13 +1589,12 @@ class QzdbReader:
 
         idx = ptr
         suffix = (ip_int & 0xFFFF) << 16
-        steps = 0
 
         if v4_node_24:
-            while True:
-                steps += 1
-                if steps >= MAX_TRIE_WALK_STEPS_V4:
-                    return 0
+            # 有界 for：合法 trie 中每步消费 1 个后缀位，16 步内必然命中叶子或
+            # 走空（16 位 jump + 16 位后缀；与 Node/Java/Rust 同构）。畸形链路
+            # 亦在此收敛为 miss（0），不会长走。
+            for _ in range(16):
                 bit = (suffix >> 31) & 1
                 if idx >= v4_node_count:
                     return 0
@@ -1604,25 +1607,23 @@ class QzdbReader:
                     return 0
                 idx = child
                 suffix <<= 1
+            return 0
         else:
             # 32-bit nodes (8 bytes each: left uint32 + right uint32)
             # bit 31 is sentinel (SENTINEL = 0x80000000)
-            unpack_u32 = struct.Struct('<I').unpack_from
-            while True:
-                steps += 1
-                if steps >= MAX_TRIE_WALK_STEPS_V4:
-                    return 0
+            for _ in range(16):
                 bit = (suffix >> 31) & 1
                 if idx >= v4_node_count:
                     return 0
                 child_off = off_nodes + idx * 8 + bit * 4
-                child = unpack_u32(d, child_off)[0]
+                child = _unpack_u32_from(d, child_off)[0]
                 if child & SENTINEL:
                     return child & SENTINEL_MASK_31
                 if child == 0:
                     return 0
                 idx = child
                 suffix <<= 1
+            return 0
 
     def _trie_walk_v6(self, ip_int):
         if not self._has_v6 or self._off_v6_jump <= 0:
@@ -1644,13 +1645,11 @@ class QzdbReader:
 
         idx = ptr
         depth = jump_bits
-        steps = 0
 
         if v6_node_24:
-            while depth < 128:
-                steps += 1
-                if steps >= MAX_TRIE_WALK_STEPS_V6:
-                    return 0
+            # 有界 for：深度天然受 [jump_bits, 128) 约束，畸形链路最多 128 步
+            # 收敛为 miss（0），旧 steps 计数上限（136）在本布局下本就不可达。
+            for depth in range(jump_bits, 128):
                 bit = (ip_int >> (127 - depth)) & 1
                 if idx >= v6_node_count:
                     return 0
@@ -1662,24 +1661,18 @@ class QzdbReader:
                 if child == 0:
                     return 0
                 idx = child
-                depth += 1
         else:
-            unpack_u32 = struct.Struct('<I').unpack_from
-            while depth < 128:
-                steps += 1
-                if steps >= MAX_TRIE_WALK_STEPS_V6:
-                    return 0
+            for depth in range(jump_bits, 128):
                 bit = (ip_int >> (127 - depth)) & 1
                 if idx >= v6_node_count:
                     return 0
                 child_off = off_nodes + idx * 8 + bit * 4
-                child = unpack_u32(d, child_off)[0]
+                child = _unpack_u32_from(d, child_off)[0]
                 if child & SENTINEL:
                     return child & SENTINEL_MASK_31
                 if child == 0:
                     return 0
                 idx = child
-                depth += 1
         return 0
 
     def _read_ip_row(self, row_id):
@@ -1722,15 +1715,19 @@ class QzdbReader:
     def _cached_resolve_geo(self, entry_id, group_index):
         """Per-snapshot bounded lock-free GeoInfo cache (API contract §3/§9).
 
-        Keyed by ``(group_index, entry_id)``. On a miss we resolve and store the
+        Keyed by ``(group_index, entry_id)`` —— 打包为单个整数
+        ``(group_index << 32) | entry_id``（entry_id 已受 u32 校验，键双射），
+        省去每查询的 tuple 分配；用单次 ``dict.get`` + 哨兵替代
+        ``in`` + ``[]`` 的两次哈希。On a miss we resolve and store the
         GeoInfo (up to ``_geo_cache_max`` entries); once full we simply skip
         storing and recompute. A cached ``None`` is still correct for its key, so
         we never return a value for the wrong key (collision → recompute).
         """
-        key = (group_index, entry_id)
+        key = (group_index << 32) | entry_id
         cache = self._geo_cache
-        if key in cache:
-            return cache[key]
+        val = cache.get(key, _GEO_CACHE_MISS)
+        if val is not _GEO_CACHE_MISS:
+            return val
         val = self._resolve_geo(entry_id, group_index)
         if len(cache) < self._geo_cache_max:
             cache[key] = val
@@ -2071,12 +2068,8 @@ class QzdbReader:
             return ptr & SENTINEL_MASK_31, 16
         idx = ptr
         suffix = (ip_int & 0xFFFF) << 16
-        steps = 0
         if v4_node_24:
-            while True:
-                steps += 1
-                if steps > 16:
-                    return 0, 0
+            for step in range(1, 17):
                 bit = (suffix >> 31) & 1
                 if idx >= self._v4_node_count:
                     return 0, 0
@@ -2084,26 +2077,24 @@ class QzdbReader:
                 off = noff if bit == 0 else noff + 3
                 child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
                 if child & 0x800000:
-                    return child & 0x7FFFFF, 16 + steps
+                    return child & 0x7FFFFF, 16 + step
                 if child == 0:
                     return 0, 0
                 idx = child
                 suffix <<= 1
         else:
-            while True:
-                steps += 1
-                if steps > 16:
-                    return 0, 0
+            for step in range(1, 17):
                 bit = (suffix >> 31) & 1
                 if idx >= self._v4_node_count:
                     return 0, 0
                 child = struct.unpack_from('<I', d, off_nodes + idx * 8 + bit * 4)[0]
                 if child & SENTINEL:
-                    return child & SENTINEL_MASK_31, 16 + steps
+                    return child & SENTINEL_MASK_31, 16 + step
                 if child == 0:
                     return 0, 0
                 idx = child
                 suffix <<= 1
+        return 0, 0
 
     def _cidr_walk_v6(self, ip_int):
         if not self._has_v6 or self._off_v6_jump <= 0:
@@ -2121,9 +2112,8 @@ class QzdbReader:
         if ptr & SENTINEL:
             return ptr & SENTINEL_MASK_31, jump_bits
         idx = ptr
-        depth = jump_bits
         if v6_node_24:
-            while depth < 128:
+            for depth in range(jump_bits, 128):
                 bit = (ip_int >> (127 - depth)) & 1
                 if idx >= self._v6_node_count:
                     return 0, 0
@@ -2135,9 +2125,8 @@ class QzdbReader:
                 if child == 0:
                     return 0, 0
                 idx = child
-                depth += 1
         else:
-            while depth < 128:
+            for depth in range(jump_bits, 128):
                 bit = (ip_int >> (127 - depth)) & 1
                 if idx >= self._v6_node_count:
                     return 0, 0
@@ -2147,7 +2136,6 @@ class QzdbReader:
                 if child == 0:
                     return 0, 0
                 idx = child
-                depth += 1
         return 0, 0
 
     @staticmethod

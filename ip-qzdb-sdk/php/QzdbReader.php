@@ -2427,42 +2427,39 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     {
         $n = strlen($s);
         if ($n === 0 || $s[$n - 1] === '.') return null;
-        $result = 0; $val = 0; $dots = 0; $start = 0;
-        for ($i = 0; $i <= $n; $i++) {
-            $c = $i < $n ? ord($s[$i]) : 46;
-            if ($c === 46) {
-                $segLen = $i - $start;
-                if ($segLen === 0 || $segLen > 3) return null;
-                if ($segLen > 1 && $s[$start] === '0') return null;
-                $val = 0;
-                for ($j = $start; $j < $i; $j++) {
-                    $d = ord($s[$j]);
-                    if ($d < 48 || $d > 57) return null;
-                    $val = $val * 10 + ($d - 48);
-                }
-                if ($val > 255) return null;
-                $result = ($result << 8) | $val;
-                $dots++; $start = $i + 1;
-            }
+        // C 级 explode + strspn 替代逐字符解释循环（实测为 findStr 主要耗时）。
+        // 语义与原实现逐条对齐：恰 4 段（原 dots===4 含末尾哨兵点）、段长 1-3、
+        // 多位段禁前导零、全数字（strspn 同时拒绝空白/+-等，与原 ord 检查一致）、
+        // 每段 ≤255。
+        $parts = explode('.', $s);
+        if (count($parts) !== 4) return null;
+        $result = 0;
+        foreach ($parts as $p) {
+            $pl = strlen($p);
+            if ($pl === 0 || $pl > 3) return null;
+            if ($pl > 1 && $p[0] === '0') return null;
+            if (strspn($p, '0123456789') !== $pl) return null;
+            $val = (int)$p;
+            if ($val > 255) return null;
+            $result = ($result << 8) | $val;
         }
-        return $dots === 4 ? $result : null;
+        return $result;
     }
 
     private static function fastParseIp($ip)
     {
         if (!is_string($ip)) return null;
-        for ($i = 0, $n = strlen($ip); $i < $n; $i++) {
-            $c = $ip[$i];
-            if ($c === ' ' || $c === "\t" || $c === "\n" || $c === "\r" || $c === "\v" || $c === "\f") {
-                return null;
-            }
-        }
+        $n = strlen($ip);
         if ($n === 0 || $n > 45) return null;
         $s = $ip;
         if (strpos($s, ':') === false) {
             $v4 = self::fastParseIpv4($s);
             return $v4 !== null ? array($v4, null) : null;
         }
+        // 原 v4/v6 路径之前的逐字符空白预扫描已删除：空白字符不可能通过任何
+        // 下游校验（v4 段 strspn 数字白名单、v6 组 HEX 表 `$cc >= 128 || HEX===0`
+        // 均拒绝空白的 ord=32），对合法地址却白白多付一趟逐字符解释——
+        // 拒绝语义逐字节等价（详见 fastParseIpv4 / v6 组校验）。
         if (strpos($s, '%') !== false) return null;
         $dc = strpos($s, '::');
         if ($dc !== false && strpos($s, '::', $dc + 2) !== false) return null;
@@ -2486,6 +2483,19 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         // 内嵌 IPv4 必须位于地址末尾（最后 32 位）。若带 "::" 压缩且 v4 落在 "::" 之前
         // （rgt 为空，即 "a.b.c.d::" 形态），属于非法地址，netip 同样拒绝，这里显式拒绝。
         if ($hasV4 && $dc !== false && count($rg) === 0) return null;
+        if ($hasV4) {
+            // 把 v4 组同时从来源数组弹出（对齐 Go/Node/Python/Rust 的显式弹出）：
+            // 该组不由移位循环构建（结尾的 v4 块直接写 buf[12..15]），留在原数组
+            // 会被值构建循环当作 hex 组读入——旧实现恰好写入 buf[12..13] 再被
+            // v4 块覆写而侥幸正确，但这是未定义式的巧合而非设计。
+            // 位置论证：dc===false 时全组在 lg（rg 为空）；dc!==false 且走到此处
+            // 时 rg 非空且其尾元素即 v4 组（'a.b.c.d::' 形态已被上一行拒绝）。
+            if (count($rg) > 0 && strpos($rg[count($rg) - 1], '.') !== false) {
+                array_pop($rg);
+            } else {
+                array_pop($lg);
+            }
+        }
         $ng = count($allg);
         $v4Slots = $hasV4 ? 2 : 0;
         if ($dc !== false) {
@@ -2497,25 +2507,25 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         foreach ($allg as $g) {
             $gl = strlen($g);
             if ($gl === 0 || $gl > 4) return null;
-            for ($j = 0; $j < $gl; $j++) {
-                $cc = ord($g[$j]);
-                if ($cc >= 128 || (self::$HEX[$cc] === 0 && $cc !== 48)) return null;
-            }
+            // C 级 strspn 替代逐字符 HEX 表扫描：原判据 `$cc >= 128 || (HEX[$cc] === 0
+            // && $cc !== 48)` 的接受集恰为 [0-9a-fA-F]（'0' 的 HEX 值为 0 但被显式
+            // 放行，其余 0 值字符如空格 ord=32 被拒），与 strspn 的十六进制白名单
+            // 等价，同时一并完成空白拒绝。
+            if (strspn($g, '0123456789abcdefABCDEF') !== $gl) return null;
         }
         $zeros = 8 - $ng - $v4Slots;
         $buf = str_repeat("\0", 16);
         $off = 0;
         foreach ($lg as $g) {
-            $v = 0;
-            for ($j = 0; $j < strlen($g); $j++) $v = ($v << 4) | self::$HEX[ord($g[$j])];
+            // 组已通过 strspn 十六进制白名单，hexdec（C 级）与原逐字符移位累加等值
+            $v = hexdec($g);
             $buf[$off] = chr(($v >> 8) & 0xFF);
             $buf[$off + 1] = chr($v & 0xFF);
             $off += 2;
         }
         $off += $zeros * 2;
         foreach ($rg as $g) {
-            $v = 0;
-            for ($j = 0; $j < strlen($g); $j++) $v = ($v << 4) | self::$HEX[ord($g[$j])];
+            $v = hexdec($g);
             $buf[$off] = chr(($v >> 8) & 0xFF);
             $buf[$off + 1] = chr($v & 0xFF);
             $off += 2;

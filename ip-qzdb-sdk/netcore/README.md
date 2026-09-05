@@ -149,7 +149,7 @@ using var reader = QzdbReader.OpenBuffer(bytes);
 | 字符串查询 | `GeoInfo? Find(string ipStr)` / `Find(ReadOnlySpan<char> ipSpan)` | `GeoInfo?` | 按字符串/Span 查（IPv4 / IPv6 / IPv4 映射地址均可） |
 | 字节查询 | `GeoInfo? Find(ReadOnlySpan<byte> ipBytes)` / `FindBytes(byte[])` | `GeoInfo?` | 按 4 字节（IPv4）或 16 字节（IPv6）原始字节查，支持栈上 Span 零分配 |
 | 整数查询 (v4) | `GeoInfo? FindUint(uint ipInt)` | `GeoInfo?` | 按 IPv4 的 `uint` 整型查（主机序） |
-| 整数查询 (v6) | `GeoInfo? Find(ulong ipHigh, ulong ipLow)` | `GeoInfo?` | 按 IPv6 的高/低 64 位整数直接查，寄存器直接寻址（实测 760 万+ QPS） |
+| 整数查询 (v6) | `GeoInfo? Find(ulong ipHigh, ulong ipLow)` | `GeoInfo?` | 按 IPv6 的高/低 64 位整数直接查，寄存器直接寻址（性能口径见 docs/PERFORMANCE.md） |
 | IPAddress | `GeoInfo? Find(System.Net.IPAddress address)` | `GeoInfo?` | 内部栈分配零 GC 转换 |
 | 字段子集 | `GeoInfo? FindFields(string ipStr, string[]? fields)` | `GeoInfo?` | **物理按需直解**：只解析指定字段，减少 80%+ 字符串分配 |
 | 管道字符串 | `string FindStr(string ipStr)` / `FindStr(ReadOnlySpan<char>)` | `string` | 直接返回 `ToPipe()` 结果；未命中/非法返回 `""`（零异常） |
@@ -398,12 +398,12 @@ catch (QzdbException ex)
 
 | 场景 | 吞吐 | 说明 |
 |------|------|------|
-| 单线程 IPv4 查询 | ~7.8M QPS | 50 万随机散布 IP（缓存最不利情形） |
-| 单线程 IPv6 查询 | ~8.5M QPS | 同上 |
-| 16 线程并发 | 安全无锁 | 0 错误，无竞争退化 |
-| 热点 IP 命中缓存 | ~60M QPS / 0 分配 | 同 IP 重复查询，GC 压力归零 |
+| 整型查询 · 50 万随机散布 IP（缓存最不利） | 33.1M QPS | 省级 8.6MB 库，单线程，口径 A（docs/PERFORMANCE.md） |
+| 热点 IP 命中缓存 | 84.6M QPS / 0 分配 | 口径 B；16 线程无锁并发 463M QPS，16×10 万并发门禁 0 错误 |
+| 字符串查询 find_str（含 IP 解析） | 11.0M QPS | 口径 C，与 CI 门禁同口径 |
 
-> 实际吞吐随 CPU、数据规模、查询分布而变；上述数字用于说明量级，非 SLA。
+> Apple M4 Max 单线程 best-of-3；x86 通常低 2~4 倍。数字由 CI 性能门禁（8 语言）守护，
+> 完整口径与复现命令见 docs/PERFORMANCE.md，用于说明量级，非 SLA。
 
 ---
 
@@ -472,5 +472,3 @@ dotnet add package QQZeng.Qzdb --version x.y.z
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: netcore: C# .NET SDK（内存映射与高并发查询） sync=1788372326 -->

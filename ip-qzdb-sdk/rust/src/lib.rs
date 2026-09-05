@@ -345,7 +345,7 @@ fn synthetic_field_names(count: usize) -> Vec<String> {
 // 字段名归一化（转小写 + 去除 `_` 与 `-`，API_CONTRACT §6）
 // ---------------------------------------------------------------------------
 
-/// 由数值字段索引列表构建位掩码（索引 < 32 才置位；MAX_GEO_FIELDS=25 恒满足）。
+/// 由数值字段索引列表构建位掩码（索引 < 32 才置位；MAX_GEO_FIELDS=64 恒满足）。
 fn build_numeric_mask(indices: &[usize]) -> u32 {
     indices.iter().fold(0u32, |m, &i| if i < 32 { m | (1 << i) } else { m })
 }
@@ -675,6 +675,11 @@ pub struct GeoInfo {
     pub values: Vec<String>,
     norm_map: Arc<HashMap<String, usize>>,
     numeric_indices: Arc<Vec<usize>>,
+    /// 预编码的 to_pipe 文本（对齐 C#/Node/Python/Go 的 _pipe 缓存语义）。
+    /// 仅在缓存解码路径（build_geo）构建；投影/合并等按次构造的实体留空，
+    /// 由 to_pipe 回退现场 join。空串与「1 字段且值为空」的合法 pipe 同形，
+    /// 回退路径结果一致，无误判可能。
+    pipe: String,
 }
 
 impl GeoInfo {
@@ -688,7 +693,11 @@ impl GeoInfo {
     }
 
     /// 全部字段以 `|` 拼接（直接拼接已解码字符串，禁止重新格式化浮点）。
+    /// 命中预编码时仅一次 String 克隆。
     pub fn to_pipe(&self) -> String {
+        if !self.pipe.is_empty() {
+            return self.pipe.clone();
+        }
         self.values.join("|")
     }
 
@@ -1066,11 +1075,13 @@ impl<'a> GeoInfoRef<'a> {
                 Arc::new(idxs),
             )
         };
+        let pipe = values.join("|");
         GeoInfo {
             field_names: names_arc,
             values,
             norm_map: map_arc,
             numeric_indices: num_arc,
+            pipe,
         }
     }
 
@@ -1534,6 +1545,22 @@ impl SnapshotInner {
             gm_off += 4;
             group_dim_masks[gi] = ro!(safe_read_u16(d, gm_off), "group_dim_mask")?;
             gm_off += 2;
+        }
+
+        // Fail-closed：GEO_ENTRIES 表的 group_field_count 超出解码槽位上限
+        // MAX_GEO_FIELDS 的文件在加载期直接拒绝。旧行为是查询期
+        // `fc.min(MAX_GEO_FIELDS)` 静默截断——release 构建下丢字段、
+        // to_pipe 域数与 C#/Java 分叉，违背 fail-closed 契约。
+        for gi in 0..actual_groups {
+            if group_field_counts[gi] > MAX_GEO_FIELDS {
+                return Err(err(
+                    ErrorCode::Unsupported,
+                    format!(
+                        "group {} field count {} exceeds MAX_GEO_FIELDS {}",
+                        gi, group_field_counts[gi], MAX_GEO_FIELDS
+                    ),
+                ));
+            }
         }
 
         let mut group_strides = vec![0; actual_groups];
@@ -2185,8 +2212,8 @@ impl SnapshotInner {
         }
         let gi = self.group_index;
         let fc = self.group_field_counts[gi];
-        // 借用视图的内联/借用槽位上限：超限即静默截断会破坏与 owned GeoInfo
-        // 的逐字对称性（to_pipe/PartialEq 分叉），在此 fail-loud。
+        // 借用视图的内联/借用槽位上限：解析期已对 fc > MAX_GEO_FIELDS 的文件
+        // fail-closed 拒绝，此断言仅为防御性 tripwire（理论不可达）。
         debug_assert!(fc <= MAX_GEO_FIELDS, "group field count {} exceeds MAX_GEO_FIELDS {}", fc, MAX_GEO_FIELDS);
         let entry_off = entry_off_of(
             self.off_geo_entries,
@@ -2296,11 +2323,20 @@ impl SnapshotInner {
             };
             values.push(val);
         }
+        // 解码期一次性预编码 to_pipe（find_str 热路径复用）。
+        let mut pipe = String::new();
+        for (i, v) in values.iter().enumerate() {
+            if i > 0 {
+                pipe.push('|');
+            }
+            pipe.push_str(v);
+        }
         Arc::new(GeoInfo {
             field_names: Arc::clone(&self.field_names),
             values,
             norm_map: Arc::clone(&self.norm_map),
             numeric_indices: Arc::clone(&self.numeric_indices),
+            pipe,
         })
     }
 
@@ -2533,6 +2569,7 @@ impl SnapshotInner {
             values,
             norm_map: Arc::new(nmap),
             numeric_indices: Arc::new(nidx),
+            pipe: String::new(),
         }))
     }
 
@@ -3458,7 +3495,7 @@ impl QzdbReader {
         // 签名约束的 '&self'。健全性 = ① Arc 被移入返回值 _snap 字段，借用所指
         // 内存随 Arc 保活；② 被借用字段（pools/field_names/norm_map/numeric_indices）
         // 在 from_bytes 构造期后绝无写点（不可变快照）；③ reader reload 后旧数据
-        // 仍由 _snap 持有。debug_assert 拦截字段数超 MAX_GEO_FIELDS 的静默截断。
+        // 仍由 _snap 持有。fc > MAX_GEO_FIELDS 的文件已在解析期 fail-closed 拒绝。
         let snap_ptr: *const SnapshotInner = &*snap;
         unsafe { (*snap_ptr).resolve_geo_ref(entry_id, Some(snap)) }
     }
@@ -3615,13 +3652,15 @@ impl QzdbReader {
     }
 
     /// 返回 `to_pipe()` 字符串；未命中/非法返回 ""。
+    /// 走 find_shared（Arc 缓存命中零克隆）+ GeoInfo 内预编码 pipe，
+    /// 全程免逐字段 String 克隆；与 owned 路径逐字节一致（zero_copy_ref 测试守卫）。
     pub fn find_str(&self, ip_str: &str) -> String {
-        self.find(ip_str).map(|g| g.to_pipe()).unwrap_or_default()
+        self.find_shared(ip_str).map(|g| g.to_pipe()).unwrap_or_default()
     }
 
     /// 支持多种 IP 类型的 `find_str`。
     pub fn find_str_ip(&self, ip: impl ToIp) -> String {
-        self.find_ip(ip).map(|g| g.to_pipe()).unwrap_or_default()
+        self.find_shared_ip(ip).map(|g| g.to_pipe()).unwrap_or_default()
     }
 
     // ---- 低级行号 ----
@@ -4182,6 +4221,7 @@ fn merge_geo(base: &GeoInfo, overlay: &GeoInfo, mode: ChainMode) -> GeoInfo {
         values,
         norm_map: Arc::new(nmap),
         numeric_indices: Arc::new(nidx),
+        pipe: String::new(),
     }
 }
 

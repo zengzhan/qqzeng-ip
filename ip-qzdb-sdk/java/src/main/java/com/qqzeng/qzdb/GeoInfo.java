@@ -21,16 +21,23 @@ public final class GeoInfo {
     private final Map<String, Integer> normalizedMap;
     // toJson 数值类型标记（与 fieldNames 等长；内部快路径传入，公共构造时现算）
     private final boolean[] numericFlags;
+    // to_pipe 惰性记忆化（对齐 C#/Node/Python/Go/Rust 的 _pipe 缓存语义）。
+    // 非 volatile 的单引用惰性写与 String.hashCode 同型：最坏情形是并发下
+    // 重复计算一次，任何线程读到的都是完整 String，绝不读到半成品。
+    private String pipeCache;
 
     /**
      * 公共构造函数（自行构建归一化索引，用于 ChainedReader 合并结果等低频场景）
+     * <p>
+     * 数组做防御性拷贝：构造后外部修改原数组不影响本实体，亦是 to_pipe
+     * 记忆化正确性的前提（内部数组从此不可经外部引用变更）。
      *
      * @param fieldNames 字段名数组
      * @param values     字段值数组
      */
     public GeoInfo(String[] fieldNames, String[] values) {
-        this.fieldNames = fieldNames != null ? fieldNames : new String[0];
-        this.values = values != null ? values : new String[0];
+        this.fieldNames = fieldNames != null ? fieldNames.clone() : new String[0];
+        this.values = values != null ? values.clone() : new String[0];
         this.normalizedMap = buildNormalizedMap(this.fieldNames);
         boolean[] flags = new boolean[this.fieldNames.length];
         for (int i = 0; i < this.fieldNames.length; i++) {
@@ -158,16 +165,20 @@ public final class GeoInfo {
     }
 
     /**
-     * 转换为 Pipe 竖线分隔文本
+     * 转换为 Pipe 竖线分隔文本（结果按实例记忆化，重复查询零重建）
      */
     public String toPipeString() {
+        String cached = pipeCache;
+        if (cached != null) return cached;
         if (values.length == 0) return "";
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < values.length; i++) {
             if (i > 0) sb.append('|');
             sb.append(values[i] != null ? values[i] : "");
         }
-        return sb.toString();
+        String out = sb.toString();
+        pipeCache = out;
+        return out;
     }
 
     /**

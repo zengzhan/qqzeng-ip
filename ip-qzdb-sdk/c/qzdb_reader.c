@@ -353,7 +353,7 @@ static int  get_geo_info_buf(qzdb_reader_t* ctx, uint32_t entry_id, int group_in
                              char** values, char (*bufs)[QZDB_VALUE_BUF_SIZE], int buf_size, int* out_count);
 static void geo_cache_init(qzdb_reader_t* ctx);
 static void geo_cache_free(qzdb_reader_t* ctx);
-static char** geo_cache_lookup(qzdb_reader_t* ctx, int group, uint32_t entry_id, int* out_count);
+static char** geo_cache_lookup(qzdb_reader_t* ctx, int group, uint32_t entry_id, int* out_count, char** out_pipe);
 static int  resolve_row_id_cached(qzdb_reader_t* ctx, uint32_t row_id, int group_index,
                                   qzdb_geo_info_t* result);
 static void free_geo_info(qzdb_geo_info_t* info);
@@ -583,6 +583,7 @@ static void geo_cache_entry_destroy(qzdb_cache_entry_t* e) {
         for (int k = 0; k < e->count; k++) free(e->values[k]);
         free(e->values);
     }
+    free(e->pipe);
     free(e);
 }
 
@@ -634,8 +635,9 @@ static char** geo_cache_decode(qzdb_reader_t* ctx, int group, uint32_t entry_id,
  *
  * Returns borrowed pointers (valid until qzdb_free) on hit, NULL on miss.
  */
-static char** geo_cache_lookup(qzdb_reader_t* ctx, int group, uint32_t entry_id, int* out_count) {
+static char** geo_cache_lookup(qzdb_reader_t* ctx, int group, uint32_t entry_id, int* out_count, char** out_pipe) {
     *out_count = 0;
+    *out_pipe = NULL;
     if (!ctx->geo_cache || ctx->geo_cache_cap == 0) return NULL;
 
     uint64_t key = ((uint64_t)group << 40) | (uint64_t)entry_id;
@@ -652,7 +654,7 @@ static char** geo_cache_lookup(qzdb_reader_t* ctx, int group, uint32_t entry_id,
             if (free_idx == UINT32_MAX) free_idx = idx;
             continue;
         }
-        if (e->key == key) { *out_count = e->count; return e->values; }
+        if (e->key == key) { *out_count = e->count; *out_pipe = e->pipe; return e->values; }
     }
     if (free_idx == UINT32_MAX) return NULL;   /* window full — never evict */
 
@@ -666,17 +668,40 @@ static char** geo_cache_lookup(qzdb_reader_t* ctx, int group, uint32_t entry_id,
         return NULL;
     }
     e->key = key; e->values = pv; e->count = cnt;
+    /* 解码期一次性预编码 to_pipe（qzdb_find_str 快路径直拷）。OOM 降级为
+     * NULL：快路径探测到 NULL 即回退逐字段拼接慢路径，行为不变。 */
+    char* pipe = malloc(1);
+    if (pipe) {
+        size_t need = 1, pos = 0;
+        for (int k = 0; k < cnt; k++) need += strlen(pv[k]) + 1;
+        char* grown = realloc(pipe, need);
+        if (grown) {
+            pipe = grown;
+            for (int k = 0; k < cnt; k++) {
+                if (k > 0) pipe[pos++] = '|';
+                size_t l = strlen(pv[k]);
+                memcpy(pipe + pos, pv[k], l);
+                pos += l;
+            }
+            pipe[pos] = '\0';
+        } else {
+            free(pipe);
+            pipe = NULL;
+        }
+    }
+    e->pipe = pipe;
 
     qzdb_cache_entry_t* expected = NULL;
     if (__atomic_compare_exchange_n(&ctx->geo_cache[free_idx], &expected, e,
                                     0 /* strong */, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
         *out_count = cnt;
+        *out_pipe = e->pipe;
         return e->values;
     }
     /* Lost the race: `expected` is now the winner's entry. Ours was never
      * reachable by any other thread, so destroying it here is safe. */
     geo_cache_entry_destroy(e);
-    if (expected && expected->key == key) { *out_count = expected->count; return expected->values; }
+    if (expected && expected->key == key) { *out_count = expected->count; *out_pipe = expected->pipe; return expected->values; }
     return NULL;
 }
 
@@ -831,7 +856,8 @@ static int resolve_row_id_cached(qzdb_reader_t* ctx, uint32_t row_id, int group_
     else if (mask & 0x04) entry_id = usage_id;
     if (entry_id == 0) return QZDB_ERR_NOT_FOUND;
     int cnt = 0;
-    char** cached = geo_cache_lookup(ctx, group_index, entry_id, &cnt);
+    char* pipe_unused = NULL;
+    char** cached = geo_cache_lookup(ctx, group_index, entry_id, &cnt, &pipe_unused);
     if (cached) {
         memset(result, 0, sizeof(*result));
         for (int i = 0; i < cnt && i < QZDB_MAX_FIELDS; i++) result->values[i] = cached[i];
@@ -2202,12 +2228,12 @@ uint32_t qzdb_lookup_row_id(qzdb_reader_t* ctx, const char* ip_str) {
 }
 
 uint32_t qzdb_lookup_row_id_uint(qzdb_reader_t* ctx, uint32_t ip_int) {
-    if (!ctx->has_v4) return 0;
+    if (!ctx || !ctx->has_v4) return 0;
     return trie_walk_v4(ctx, ip_int);
 }
 
 uint32_t qzdb_lookup_row_id_v6(qzdb_reader_t* ctx, const uint8_t* ip_bin) {
-    if (!ctx->has_v6) return 0;
+    if (!ctx || !ip_bin || !ctx->has_v6) return 0;
     return trie_walk_v6(ctx, ip_bin);
 }
 
@@ -2236,6 +2262,36 @@ int qzdb_lookup_ids(qzdb_reader_t* ctx, uint32_t row_id, qzdb_ids_t* out) {
 /* === find_str (WARN-8 fix: preserve distinct error codes) === */
 int qzdb_find_str(qzdb_reader_t* ctx, const char* ip_str, char* out, size_t out_size) {
     if (!ctx || !ip_str || !out || out_size == 0) return QZDB_ERR_INVALID_PARAM;
+    /* 快路径：解析 → 走查 → row→entry → 缓存 pipe 直拷（单次 memcpy）。
+     * 错误语义与慢路径逐项一致：非法 IP → INVALID_PARAM；未命中/无对应
+     * 地址族分区/entry_id==0/行读取错误 → 交给慢路径的 qzdb_find 复现
+     * 原错误码；缓存未建（OOM 降级）→ 回退慢路径。 */
+    parse_result_t res;
+    if (!fast_parse_ip(ip_str, &res)) { out[0] = '\0'; return QZDB_ERR_INVALID_PARAM; }
+    uint32_t row_id = 0;
+    if (res.is_v4) { if (ctx->has_v4) row_id = trie_walk_v4(ctx, res.v4); }
+    else           { if (ctx->has_v6) row_id = trie_walk_v6(ctx, res.v6); }
+    if (row_id != 0) {
+        uint32_t geo_id, asn_id, usage_id;
+        if (read_ip_row(ctx, row_id, &geo_id, &asn_id, &usage_id) == QZDB_OK) {
+            uint16_t mask = ctx->group_index < ctx->actual_groups
+                                ? ctx->group_dim_masks[ctx->group_index] : 0;
+            uint32_t entry_id = geo_id;
+            if (mask & 0x02) entry_id = asn_id;
+            else if (mask & 0x04) entry_id = usage_id;
+            if (entry_id != 0) {
+                int cnt = 0;
+                char* pipe = NULL;
+                if (geo_cache_lookup(ctx, ctx->group_index, entry_id, &cnt, &pipe) && pipe) {
+                    size_t plen = strlen(pipe);
+                    if (plen >= out_size) plen = out_size - 1;
+                    memcpy(out, pipe, plen);
+                    out[plen] = '\0';
+                    return QZDB_OK;
+                }
+            }
+        }
+    }
     qzdb_geo_info_t info;
     int result = qzdb_find(ctx, ip_str, &info);
     if (result != QZDB_OK) { if (out_size > 0) out[0] = '\0'; return result; }  /* preserve error code */

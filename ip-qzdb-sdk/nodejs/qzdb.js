@@ -186,7 +186,7 @@ function _doubleToExactBigInt(v) {
 // ===========================================================================
 // 保留键，绝不覆盖（原型污染 / 方法遮蔽防护）
 const GEOINFO_RESERVED = new Set([
-  '_vals', '_fieldNames', '_floatFlags', '_normMap',
+  '_vals', '_fieldNames', '_floatFlags', '_normMap', '_pipe',
   '__proto__', 'constructor', 'prototype',
   'get', 'toPipe', 'toPipeString', 'toMap', 'toDict', 'toJson',
   'toString', 'valueOf', 'hasOwnProperty', 'fieldNames', 'values',
@@ -220,6 +220,19 @@ class GeoInfo {
         this[name] = this._vals[i] !== undefined ? this._vals[i] : '';
       }
     }
+    // to_pipe 预编码（对齐 C#/Python 的 _pipe 缓存语义）：构造期一次拼好，
+    // 缓存命中的重复查询零分配；对象随后被冻结、字符串不可变，跨调用复用安全。
+    const pn = this._fieldNames.length;
+    if (pn === 0) {
+      this._pipe = '';
+    } else {
+      const out = new Array(pn);
+      for (let i = 0; i < pn; i++) {
+        const v = this._vals[i];
+        out[i] = v !== undefined ? v : '';
+      }
+      this._pipe = out.join('|');
+    }
     // 不可变：冻结自身与底层数组，防止调用方误写污染共享缓存（P0-2）
     Object.freeze(this._vals);
     Object.freeze(this._fieldNames);
@@ -251,16 +264,10 @@ class GeoInfo {
     return v !== undefined ? v : '';
   }
 
-  /** 管道符拼接：直接拼接已解码的字符串值，禁止任何重新格式化（§8.3）。 */
+  /** 管道符拼接：直接拼接已解码的字符串值，禁止任何重新格式化（§8.3）。
+   *  结果在构造期一次性预算并随对象冻结（见 constructor），此处零分配。 */
   toPipe() {
-    const n = this._fieldNames.length;
-    if (n === 0) return '';
-    const out = new Array(n);
-    for (let i = 0; i < n; i++) {
-      const v = this._vals[i];
-      out[i] = v !== undefined ? v : '';
-    }
-    return out.join('|');
+    return this._pipe;
   }
 
   toPipeString() { return this.toPipe(); }
@@ -799,6 +806,36 @@ class QzdbReader {
     chk(this._offRowSchema, 4, 'row_schema');
     chk(this._offGroupSchema, 2, 'group_schema');
 
+    // typed-array 快路径：跳表与 32 位节点段是纯 u32 数组。仅当底层 ArrayBuffer
+    // 视口起点与 section 偏移联合 4 字节对齐时构建视图（格式约定 section 64 字节
+    // 对齐，但这是构建方约定而非校验项，敌意文件可给未对齐偏移，此时保持
+    // safeRead 路径）。视图长度即 chk 校验过的段长，索引由 nodeCount 上限守卫，
+    // 恒在界内——与原路径语义等价，只是免掉每步的函数调用与 try/catch。
+    this._v4JumpU32 = null;
+    this._v4NodesU32 = null;
+    this._v6JumpU32 = null;
+    this._v6NodesU32 = null;
+    // dlen < 2^31 保证后续对偏移的 & 3 位运算不失真（巨文件走 safeRead 原路径）；
+    // Uint32Array 按本机字节序读取，仅在小端平台启用（Node 运行时均为小端，
+    // 此探测是形式正确的保险）。dlen 在上方 chk 前已定义为 this._data.length。
+    const _leProbe = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
+    if ((this._data.byteOffset & 3) === 0 && dlen <= 0x7FFFFFFF && _leProbe) {
+      const ab = this._data.buffer;
+      const base = this._data.byteOffset;
+      if (this._offV4Jump > 0 && (this._offV4Jump & 3) === 0) {
+        this._v4JumpU32 = new Uint32Array(ab, base + this._offV4Jump, 65536);
+      }
+      if (this._offV6Jump > 0 && (this._offV6Jump & 3) === 0) {
+        this._v6JumpU32 = new Uint32Array(ab, base + this._offV6Jump, 1 << this._v6JumpBits);
+      }
+      if (!this._v4Node24 && this._offV4Nodes > 0 && (this._offV4Nodes & 3) === 0) {
+        this._v4NodesU32 = new Uint32Array(ab, base + this._offV4Nodes, this._v4NodeCount * 2);
+      }
+      if (!this._v6Node24 && this._offV6Nodes > 0 && (this._offV6Nodes & 3) === 0) {
+        this._v6NodesU32 = new Uint32Array(ab, base + this._offV6Nodes, this._v6NodeCount * 2);
+      }
+    }
+
     // ROW_SCHEMA 必须在 section 边界校验之后再解析，否则 offRowSchema
     // 可以指到文件外并让宽度推断读到越界数据。
     this._parseRowSchema();
@@ -1190,6 +1227,11 @@ class QzdbReader {
     // 与 PHP/_walkV4Depth 对齐：伪造 child 指针越过节点段时 fail-closed 返回 0，
     // 而不是把文件内其它 section 当节点读（最坏返回错误 rowId 而非 miss）。
     if (nodeIdx >= this._v4NodeCount) return 0;
+    const nodesU32 = this._v4NodesU32;
+    if (nodesU32 !== null) {
+      // 视图长度 = v4NodeCount * 2，nodeIdx 已受上界守卫，索引恒在界内。
+      return nodesU32[nodeIdx * 2 + bit];
+    }
     if (this._v4Node24) {
       const nodeOffset = this._offV4Nodes + nodeIdx * 6;
       const offset = bit === 0 ? nodeOffset : nodeOffset + 3;
@@ -1202,6 +1244,10 @@ class QzdbReader {
 
   _getV6Child(nodeIdx, bit) {
     if (nodeIdx >= this._v6NodeCount) return 0;
+    const nodesU32 = this._v6NodesU32;
+    if (nodesU32 !== null) {
+      return nodesU32[nodeIdx * 2 + bit];
+    }
     if (this._v6Node24) {
       const nodeOffset = this._offV6Nodes + nodeIdx * 6;
       const offset = bit === 0 ? nodeOffset : nodeOffset + 3;
@@ -1214,7 +1260,8 @@ class QzdbReader {
 
   _trieWalkV4(ipInt) {
     const hi16 = (ipInt >>> 16) & 0xFFFF;
-    const ptr = this.safeReadU32(this._offV4Jump + hi16 * 4);
+    const jumpU32 = this._v4JumpU32;
+    const ptr = jumpU32 !== null ? jumpU32[hi16] : this.safeReadU32(this._offV4Jump + hi16 * 4);
     if (ptr === 0) return 0;
     if (ptr & SENTINEL) return ptr & SENTINEL_MASK_31;
 
@@ -1244,15 +1291,21 @@ class QzdbReader {
       const lo = (b4 << 16) | (b5 << 8) | b6;
       idxJump = ((hi << (jumpBits - 32)) | (lo >> (64 - jumpBits))) & ((1 << jumpBits) - 1);
     }
-    const ptr = this.safeReadU32(this._offV6Jump + idxJump * 4);
+    const jumpU32 = this._v6JumpU32;
+    const ptr = jumpU32 !== null ? jumpU32[idxJump] : this.safeReadU32(this._offV6Jump + idxJump * 4);
     if (ptr === 0) return 0;
     if (ptr & SENTINEL) return ptr & SENTINEL_MASK_31;
 
+    // 预读 4 个 BE u32 成 word 数组取位（对齐 C# 的 ipHigh/ipLow ulong 对）：
+    // 每步从「字节索引 + 双移位」变为一次寄存器移位，语义逐位等价
+    // （depth∈[32d,32d+31] 对应 word d 的高位起第 depth&31 位）。
+    const w0 = ipBuf.readUInt32BE(0), w1 = ipBuf.readUInt32BE(4);
+    const w2 = ipBuf.readUInt32BE(8), w3 = ipBuf.readUInt32BE(12);
     let idx = ptr;
     let depth = jumpBits;
     while (depth < 128) {
-      const byteIdx = depth >> 3;
-      const bit = (ipBuf[byteIdx] >> (7 - (depth & 7))) & 1;
+      const word = depth <= 31 ? w0 : depth <= 63 ? w1 : depth <= 95 ? w2 : w3;
+      const bit = (word >>> (31 - (depth & 31))) & 1;
       const child = this._getV6Child(idx, bit);
       if (child === 0) return 0;
       if (child & SENTINEL) return child & SENTINEL_MASK_31;

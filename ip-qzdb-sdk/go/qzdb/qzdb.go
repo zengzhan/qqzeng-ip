@@ -1141,6 +1141,7 @@ func (s *Snapshot) computeGeoInfoEntry(entryID uint32, entryOff uint64, fc int) 
 		Values:     values,
 		normMap:    s.normalizedMap,
 		numeric:    s.numericFlags,
+		pipe:       joinPipe(values),
 	}
 }
 

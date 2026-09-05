@@ -375,7 +375,7 @@ if qe, ok := err.(*qzdb.QzdbError); ok {
 - **Trie 热路径直接小端加载**：检索热路径对节点字段执行直接小端（little-endian）读取，不再做逐节点边界检查；安全性由加载期的段范围（section-extent）校验保证，Header 的 Fail-Closed 检查仍为权威防线。
 - **`escapeJson` 零分配快路径**：对纯文本值（不含需转义字符）新增零分配快速分支，避免不必要的缓冲分配。
 
-> 基准示例见 `cmd/bench`；典型单线程查询可达百万级 QPS，16 线程并发无锁线性扩展、race-free。
+> 基准示例见 `cmd/bench`；整型查询 50 万随机散布 IP（缓存最不利）实测 74.7M QPS，热点缓存 75.9M，字符串口径 find_str 9.2M；16 线程无锁线性扩展（729M QPS）、race-free。口径与复现见 docs/PERFORMANCE.md。
 
 ---
 
@@ -435,5 +435,3 @@ go/
 │   ├── *_test.go      # Tier1 单测 + Tier2 黄金校验 + Tier0 CSV 真值 + Tier3 并发/性能
 └── cmd/               # demo / batch / bench / dump / regress 等示例
 ```
-
-<!-- commit: go: Go SDK（跨平台 mmap，无锁并发查询） sync=1788372326 -->

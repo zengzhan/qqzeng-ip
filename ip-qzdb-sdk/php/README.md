@@ -459,7 +459,7 @@ try {
 
 | 场景 | 量级 | 说明 |
 |------|------|------|
-| 单线程 IPv4 / IPv6 查询 | 数百万 QPS 量级 | 50 万随机散布 IP（缓存最不利情形），与 Java / .NET 实现同架构 |
+| 整型查询 · 50 万随机散布 IP（缓存最不利） | 5.67M QPS | 省级 8.6MB 库，单线程，口径 A（docs/PERFORMANCE.md）；字符串口径 find_str 429K QPS（解析占大头，见口径说明） |
 | 多请求并发 | 安全无锁 | 并发查询零竞争退化 |
 | 热点 IP 重复查询 | 吞吐进一步放大、分配趋零 | 同 IP 重复查询，GC 压力显著下降 |
 
@@ -532,5 +532,3 @@ php csv_oracle_test.php                    # 独立真值校验（需源 CSV + �
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: php: PHP SDK（纯 PHP 实现，缓冲与流式双模式） sync=1788372326 -->

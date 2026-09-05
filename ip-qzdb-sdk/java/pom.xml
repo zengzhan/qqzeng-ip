@@ -11,7 +11,7 @@
     -->
     <groupId>com.qqzeng</groupId>
     <artifactId>qzdb</artifactId>
-    <version>1.0.5</version>
+    <version>1.0.6</version>
     <packaging>jar</packaging>
 
     <name>QZDB Java SDK</name>

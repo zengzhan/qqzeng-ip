@@ -15,6 +15,10 @@ type GeoInfo struct {
 	normMap map[string]int
 	// numeric 逐字段数值标记（toJson 用）。
 	numeric []bool
+	// pipe 预编码的 to_pipe 文本（对齐 C#/Node/Python 的 _pipe 缓存语义）。
+	// 仅在缓存解码路径一次性构建；投影/合并等按次构造的实体留空，由
+	// ToPipe 现场计算（不回写——共享实体无锁，避免写竞争）。
+	pipe string
 }
 
 // normalizeKey 归一化算法：小写化并移除所有 '_' 与 '-'（契约 §6）。
@@ -55,8 +59,9 @@ func buildNormalizedMap(fields []string) map[string]int {
 	m := make(map[string]int, len(fields)*2)
 	for i, f := range fields {
 		if f != "" {
-			if _, ok := m[normalizeKey(f)]; !ok {
-				m[normalizeKey(f)] = i
+			nk := normalizeKey(f)
+			if _, ok := m[nk]; !ok {
+				m[nk] = i
 			}
 		}
 	}
@@ -124,26 +129,39 @@ func (g *GeoInfo) Get(name string) string {
 	return ""
 }
 
-// ToPipe 返回竖线分隔文本：直接拼接已解码的字符串值，禁止重新格式化。
-func (g *GeoInfo) ToPipe() string {
-	if g == nil || len(g.Values) == 0 {
+// joinPipe 按 to_pipe 契约拼接（0 值 → ""，1 值 → 原值，其余 '|' 连接）。
+// 解码期预编码与 ToPipe 回退路径共用，保证逐字节一致。
+func joinPipe(values []string) string {
+	if len(values) == 0 {
 		return ""
 	}
-	if len(g.Values) == 1 {
-		return g.Values[0]
+	if len(values) == 1 {
+		return values[0]
 	}
 	var n int
-	for _, v := range g.Values {
+	for _, v := range values {
 		n += len(v) + 1
 	}
 	var b strings.Builder
 	b.Grow(n - 1)
-	b.WriteString(g.Values[0])
-	for _, v := range g.Values[1:] {
+	b.WriteString(values[0])
+	for _, v := range values[1:] {
 		b.WriteByte('|')
 		b.WriteString(v)
 	}
 	return b.String()
+}
+
+// ToPipe 返回竖线分隔文本：直接拼接已解码的字符串值，禁止重新格式化。
+// 缓存解码条目已在解码期预编码（pipe 字段），此处零分配直返。
+func (g *GeoInfo) ToPipe() string {
+	if g == nil || len(g.Values) == 0 {
+		return ""
+	}
+	if g.pipe != "" {
+		return g.pipe
+	}
+	return joinPipe(g.Values)
 }
 
 // String 等价于 ToPipe()。
@@ -165,7 +183,7 @@ func (g *GeoInfo) ToMap() map[string]string {
 	return m
 }
 
-// ---------- 无锁 GeoInfo 缓存（per-snapshot，row_id 为键） ----------
+// ---------- 无锁 GeoInfo 缓存（per-snapshot，entryId 为键） ----------
 
 type geoSlot struct {
 	key atomic.Uint32

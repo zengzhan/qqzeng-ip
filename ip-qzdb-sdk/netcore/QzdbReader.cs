@@ -1344,9 +1344,11 @@ public sealed class QzdbReader : IDisposable
     private static unsafe uint TrieWalkV4Core(Snapshot snap, byte* bp, uint ipInt)
     {
         {
+            // ReadUnaligned<uint>: u32 解引用一律走非对齐安全读——格式对齐是构建方
+            // 约定而非加载期校验项,敌意文件可给出未对齐分区偏移;JIT 仍发射单条 mov。
             uint* jump = (uint*)(bp + snap._offV4Jump);
             uint hi16 = (ipInt >> 16) & 0xFFFF;
-            uint ptr = jump[hi16];
+            uint ptr = Unsafe.ReadUnaligned<uint>(jump + hi16);
 
             if (ptr == 0) return 0;
             if ((ptr & Sentinel) != 0) return ptr & SentinelMask31;
@@ -1383,7 +1385,7 @@ public sealed class QzdbReader : IDisposable
                     uint* node = (uint*)(nodes + idx * 8);
                     if (node >= nodesEnd) return 0;
                     uint bit = (suffix >> 31) & 1;
-                    uint child = node[bit];
+                    uint child = Unsafe.ReadUnaligned<uint>(node + bit);
                     if ((child & Sentinel) != 0) return child & SentinelMask31;
                     if (child == 0) return 0;
                     idx = child;
@@ -1408,7 +1410,7 @@ public sealed class QzdbReader : IDisposable
             int jumpBits = snap._v6JumpBits;
             uint idxJump = (uint)(ipHigh >> (64 - jumpBits));
             uint* jump = (uint*)(bp + snap._offV6Jump);
-            uint ptr = jump[idxJump];
+            uint ptr = Unsafe.ReadUnaligned<uint>(jump + idxJump);
 
             if (ptr == 0) return 0;
             if ((ptr & Sentinel) != 0) return ptr & SentinelMask31;
@@ -1441,7 +1443,7 @@ public sealed class QzdbReader : IDisposable
                     uint bit = depth <= 63 ? (uint)((ipHigh >> (63 - depth)) & 1) : (uint)((ipLow >> (127 - depth)) & 1);
                     uint* node = (uint*)(nodes + idx * 8);
                     if (node >= nodesEnd) return 0;
-                    uint child = node[bit];
+                    uint child = Unsafe.ReadUnaligned<uint>(node + bit);
                     if ((child & Sentinel) != 0) return child & SentinelMask31;
                     if (child == 0) return 0;
                     idx = child;
@@ -1467,7 +1469,7 @@ public sealed class QzdbReader : IDisposable
     {
         uint* jump = (uint*)(bp + snap._offV4Jump);
         uint hi16 = (ipInt >> 16) & 0xFFFF;
-        uint ptr = jump[hi16];
+        uint ptr = Unsafe.ReadUnaligned<uint>(jump + hi16);
         if (ptr == 0) return -1;
         if ((ptr & Sentinel) != 0) return WalkV4Depth(snap, bp, ipInt, 0, 0, 16);
         return WalkV4Depth(snap, bp, ipInt, ptr & SentinelMask31, 16, 32);
@@ -1504,7 +1506,7 @@ public sealed class QzdbReader : IDisposable
                 uint bit = (ipInt >> (31 - depth)) & 1;
                 uint* node = (uint*)(nodes + idx * 8);
                 if (node >= nodesEnd) return -1;
-                uint child = node[bit];
+                uint child = Unsafe.ReadUnaligned<uint>(node + bit);
                 if ((child & Sentinel) != 0) return depth + 1;
                 if (child == 0) return -1;
                 idx = child;
@@ -1526,7 +1528,7 @@ public sealed class QzdbReader : IDisposable
         int jumpBits = snap._v6JumpBits;
         uint idxJump = (uint)(ipHigh >> (64 - jumpBits));
         uint* jump = (uint*)(bp + snap._offV6Jump);
-        uint ptr = jump[idxJump];
+        uint ptr = Unsafe.ReadUnaligned<uint>(jump + idxJump);
         if (ptr == 0) return -1;
         if ((ptr & Sentinel) != 0) return WalkV6Depth(snap, bp, ipHigh, ipLow, 0, 0, jumpBits);
         return WalkV6Depth(snap, bp, ipHigh, ipLow, ptr & SentinelMask31, jumpBits, 128);
@@ -1563,7 +1565,7 @@ public sealed class QzdbReader : IDisposable
                 uint bit = depth <= 63 ? (uint)((ipHigh >> (63 - depth)) & 1) : (uint)((ipLow >> (127 - depth)) & 1);
                 uint* node = (uint*)(nodes + idx * 8);
                 if (node >= nodesEnd) return -1;
-                uint child = node[bit];
+                uint child = Unsafe.ReadUnaligned<uint>(node + bit);
                 if ((child & Sentinel) != 0) return depth + 1;
                 if (child == 0) return -1;
                 idx = child;

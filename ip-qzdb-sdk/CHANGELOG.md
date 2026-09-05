@@ -15,15 +15,33 @@
 
 ### Changed
 
+- **PHP（find_str +28~35%）**：分阶段剖析证实字符串解析占 findStr 的 93%（1250/1336ns，走查仅 86ns）。`fastParseIpv4` 重写为 `explode`+`strspn`（C 级，逐条语义等价：恰 4 段/段长/禁前导零/数字白名单/≤255）；`fastParseIp` 删除逐字符空白预扫描（空白必被下游校验拒绝，对合法地址白付一趟）；v6 组校验改 strspn 十六进制白名单、组值改 `hexdec`；v4 组显式从来源数组弹出——旧实现 v4 点分串残留在 rg/lg 被当作 hex 组读入，恰好写入 buf[12..13] 后被结尾 v4 块覆写而侥幸正确（未定义式巧合），现已彻底消除。bench STRING：std_china 182K→250K qps、max_global 51.5K→55.2K。49 个解析语义用例（v4 19 + v6 15 + v4-in-v6 15）逐条核对，与 Python 裁决一致。
+- **CI 性能门禁覆盖补齐至 8/8 语言**：新增 `perf_gate_php.php` / `perf_gate_java/PerfGate.java`（现场 javac 全 SDK 树，JAVA_HOME/bin 优先——CI setup-java 与本机 homebrew 布局均无 PATH javac）/ `perf_gate_cs`（SetTargetFramework 单 TFM 引用，避免为门禁编译库全部 4 个目标框架）三驱动器（协议与既有五腿一致：逗号 IP argv + best-of-3 + 全未命中哨兵）；FLOORS 按本机真实值 ~1/10 标定（php 40K / java 1M / netcore 1.5M）；ci.yml perf-gate job 补 setup-java(temurin 21)/setup-dotnet(10.x)/setup-php(8.3)，`--langs` 默认扩至 8 语言。实测 php 429K / java 12.0M / netcore 14.1M qps。
+- **【测量缺陷修复】CI perf gate 的 C/Go/Rust 三腿自创建以来一直在测「非法 IP 快速失败路径」**：perf_gate.py 误将 JSON 数组文本（`["1.2.3.4",...]`）当作逗号分隔裸 IP 串传给三个驱动，切分后每段带引号/方括号全部判非法——此前报告的 c 306M / go 113M / rust 389M qps 均为非物理数字（真实查询不可能 <3ns/op），仅 node/python（内联 JSON 数组，形态正确）测的是真实查询。修复：`_ips_csv()` 供 argv 形态；四驱动补全未命中哨兵（sink≤0 或 0 命中即报错，C 原占位检查 `sink == -1` 永假且其 sink 累加的是恒为 0 的成功返回码）；FLOORS 按真实数值重校准（c 2M→500K、go 1M→800K、rust 2M→150K，node/python 维持）。`perf_baseline_reference.json` 同步以真实数字重写。
+- **【find_str 全语言管道预编码】**对齐 C# 既有 `_pipe` 缓存模式，修复后真实基线下 find_str 是各语言与 uint API 差距最大的路径：
+  - **Rust（5.6×，1.48M → 8.33M qps）**：根因是 owned 路径每次调用 `(*a).clone()` 整个 GeoInfo（29 字段 = 29 次 String 分配），即使缓存命中也照克隆。`GeoInfo` 新增 `pipe` 字段（`build_geo` 解码期一次性预编码），`find_str/find_str_ip` 改走 `find_shared/find_shared_ip` 免克隆路径 + 预编码直取；投影/合并路径留空走回退 join，`zero_copy_ref` 逐字节 parity 守卫通过。探针实测单次 find_str 650 → 123 ns。
+  - **C（2×，5.2M → 10.68M qps）**：`qzdb_cache_entry_t` 新增 `pipe`（构建条目时一次性连接，OOM 降级 NULL 回退不变，随条目释放——leak_regress delta=0）；`qzdb_find_str` 快路径经 dimensionMask 选维直探缓存 pipe 单次 memcpy，错误码与截断语义逐项对齐慢路径。
+  - **Go（FindStr 微基准 -35%，97 → 63 ns/op）**：`GeoInfo.pipe` 解码期预编码，`ToPipe` 零分配直返；投影/合并按次构造的实体走回退现场计算（不回写，共享实体免锁）。contract bench 的 string_roundtrip 段实测的是 Find 结构体 API 不含 ToPipe，该指标不受影响。
+  - **Java**：`toPipeString` 惰性记忆化（非 volatile 单引用惰性写，String.hashCode 同型安全模式）；公共构造器对数组做防御性拷贝（与 `values()` 克隆语义对齐，亦是记忆化正确性前提）。
+  - Node/Python/C# 上轮或既有已记忆化；PHP 的 STRING/uint 比值 1.2×（瓶颈在对象机制非管道），不动。
 - **Go**：解码缓存键 rowID → entryId（同一 GeoEntry 被 N 个相邻 CIDR row 共享时只解码一次占一个槽，命中率提升；对齐 Java/C#/Node 语义）；`fastParseIp` 改值返回（21 字节结构体走栈，热路径零堆分配）；dimensionMask 双位（畸形文件）选维对齐 Java 优先级链 asn > usage > geo。
 - **Go（安全审查 P1）**：GROUP_SCHEMA 字段偏移加载期校验 `offsets[fi] + width <= stride`，越界整组回退默认布局——此前畸形文件可让查询期触发不可 recover 的 boundsPanic。
 - **C#**：`BuildGeo` 原生浮点旁路（解码时同步保留 double，`GetLongitude/GetLatitude` 免 `"116.400000"` → TryParse 往返；字符串契约形态不变）；退役快照释放改为 GC 可达性模型（移除一代隔离环：查询栈 root 住 Snapshot 时绝不 unmap，与 Go finalizer/Rust Arc 同模型，消除快速 Reload 与慢查询并发的 AccessViolation 窗口）。
 - **C# ToJson 投影路径补 numeric 标记**（与 Go 修复同款跨语言一致性）。
+- **Node.js（perf）**：`toPipe()` 构造期预编码并随对象冻结（对齐 C#/Python `_pipe` 缓存语义，重复查询零分配）；跳表与 32 位节点段 `Uint32Array` 视图直查（视口 4 字节对齐 + 文件 <2GB + 小端三条件守卫，否则回退原 safeRead 路径；24 位节点段不动）；V6 走查预读 4×BE u32 成 word 数组取位（对齐 C# ulong hi/lo）。`perf_gate` find_str **1,069,894 → 5,406,522 qps（5.05×）**。Node 版本 1.0.5 → 1.0.6。
+- **Python（perf）**：V4/V6/CIDR 走查 while+steps 计数改有界 `for range`（合法 trie 步数天然有界，可观测行为不变）；`struct.Struct('<I').unpack_from` 模块级预绑定；GeoInfo 缓存键 `(group, entry)` tuple 改整型键 + 单次 `dict.get`。`perf_gate` find_str 263,929 → 268,745 qps（+1.8%，cProfile 证实解释器瓶颈均摊、无单点热点）。Python 版本 1.0.5 → 1.0.6。
+- **负结果存档（防后人重蹈）**：V6 走查 hi/lo 两相位拆分在 Go（±0%）、Rust（-10%，三轮 A/B）、C（+1%，噪声内）均无收益——编译器对逐字节取位形态已优化到位，维持原实现；Go 解码缓存 2^18→2^16 缩容实测 hot.mixed **-10~13%**（触碰 BENCH_CONTRACT §9 门禁），撤销。候选淘汰：Python `memoryview.cast('I')`（仅 +10% 但引入 mmap BufferError 生命周期风险）、Python V6 hi/lo 拆分（CPython PyLong 双字位移已高效，0.96×）。
 
 ### Fixed
 
 - **C（安全审查 P1）**：GEO_ENTRIES 组元数据表加载期校验实际读取字节数（1 + groups×7）——此前仅校验 16 字节，畸形文件可使 mmap 路径越页 SIGBUS。
 - Go `FindFields` 投影结果补 numeric 标记（此前 `ToJson` 把 longitude 输出为字符串，与 C#/PHP 分叉）。
+- **C**：`qzdb_lookup_row_id_uint/_v6` 补 `!ctx`（及 `_v6` 的 `!ip_bin`）空指针防护，与兄弟函数一致——NULL 入参不再解引用崩溃；`fuzz/boundary_test.c` 新增 NULL-guard 回归探针（CI ASan 门禁覆盖）。caller-buffer 家族返回值计数约定（>0 计数 / 0=OK 未命中 / <0 错误码）在 `qzdb_reader.h` 文档化；`test_main.c` 修 buf 元素尺寸违约（64B → QZDB_VALUE_BUF_SIZE）。
+- **C#**：trie 跳表/节点 8 处 `(uint*)` 强转解引用改 `Unsafe.ReadUnaligned<uint>`——分区 64B 对齐是构建方约定而非加载期校验项，敌意文件的未对齐偏移原属形式 UB；JIT 仍发射单条 mov，热路径零开销。
+- **Rust 1.0.8**：group field count > MAX_GEO_FIELDS(64) 由查询期 `fc.min(64)` 静默截断改为加载期 fail-closed（`ErrorCode::Unsupported`）——release 构建丢字段、to_pipe 域数与 C#/Java 分叉；`tests/failclosed.rs` 新增加载期拒绝回归。
+- **Go**：`buildNormalizedMap` 每字段单次归一化（原同一行调用两次 `normalizeKey`，加载期白做一半）；geoCache 注释过期键名（row_id → entryId）修正。
+- **Java**：pom 1.0.5 → 1.0.6 对齐 Maven Central 已发布版本——`sync_to_github.py` 原样拷贝 pom，漂移会把发布仓版本回退、阻塞下个 Maven 版本。
+- **tools/release.sh**：版本解析改为 BSD/GNU 通用 sed——旧 `grep -oP` 双重失效（-oP 是 GNU 专有 + lookbehind 模式在现行契约里不存在），任何平台都恒回退 `0.0.0` 生成 `release: v0.0.1` 提交。
 
 ## [1.0.6] - 2026-09-02
 

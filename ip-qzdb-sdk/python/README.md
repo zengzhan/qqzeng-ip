@@ -335,7 +335,7 @@ python3 test_csv_oracle.py  # Tier0 独立真值校验（对源 CSV 抽样，证
 - **Tier0（CSV 真值）**：加载 `data/qqzeng_ip_{std,ult}_china.qzdb`，对照 `../test_data_202608/{std,ult}/china/*_range.csv` 的 `start_ip_num/end_ip_num` 与地理字段，全局随机 + 区间内随机共 22000 样本比对 `country/province/city/isp`，**0 偏差**。注意：`test_golden.py` 的向量由被测代码自身生成，仅证明确定性/跨语言一致；本测试以独立于 SDK 的源数据为裁判，是唯一能证明"返回正确答案"的用例。源 CSV 缺失时优雅跳过。
 - **Tier1**：严格 IP 解析（含 SSRF 防护）、Mapped 降级、字段归一化、UsageType 21+未知兜底、损坏文件 Fail-Closed、CRC 强制、无锁 Reload、CIDR 反查、资源释放、批量/流式/注册表。
 - **Tier2**：加载 `data/qqzeng_ip_std_china.qzdb` 与 `qqzeng_ip_ult_china.qzdb`，对每个 IP 断言 `find(ip).to_pipe() == expected`，**必须 0 失败**。
-- **Tier3（性能，建议）**：16 线程 × 10 万双栈混合查询无异常；单/多线程 QPS 报告。当前基准（Apple Silicon，Python 3.13）：`find(str)` ≈ **0.48 M ops/s**，`find_uint` ≈ **1.29 M ops/s**（前者含纯 Python IP 解析开销，后者已跳过解析）。
+- **Tier3（性能，建议）**：16 线程 × 10 万双栈混合查询无异常；单/多线程 QPS 报告。当前基准（Apple M4 Max，口径见 docs/PERFORMANCE.md）：`find_uint`（口径 A，50 万随机散布最不利）≈ **0.97 M ops/s**，`find(str)`（口径 C）≈ **273 K ops/s**（前者跳过解析，后者含纯 Python IP 解析开销）。
 
 ---
 
@@ -345,5 +345,3 @@ python3 test_csv_oracle.py  # Tier0 独立真值校验（对源 CSV 抽样，证
 2. 放入 `../data/` 或指定路径，`QzdbReader(path)` 重新加载即可；线上热更新用 `reader.reload(path)`（原子替换，不影响在途查询）。
 3. 字段新增/布局变化由文件头 `GROUP_SCHEMA` / `ROW_SCHEMA` 自描述，SDK 自动适配，无需改代码。
 4. 多语言行为以 `../API_CONTRACT.md` 为准；新增 IP 样本后重建 `tools/golden_vectors.json` 并跑全语言 Tier2 校验。
-
-<!-- commit: python: Python SDK（mmap 轻量读取） sync=1788372326 -->
