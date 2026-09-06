@@ -78,27 +78,34 @@ public sealed class GeoInfo
         out int geoId, out int longitude, out int latitude, out int timezone,
         out int asName, out int asDomain, out int usageType)
     {
-        map.TryGetValue("country", out country);
-        map.TryGetValue("countryen", out countryEn);
-        map.TryGetValue("province", out province);
-        map.TryGetValue("provinceen", out provinceEn);
-        map.TryGetValue("city", out city);
-        map.TryGetValue("cityen", out cityEn);
-        map.TryGetValue("district", out district);
-        map.TryGetValue("isp", out isp);
-        map.TryGetValue("ispen", out ispEn);
-        map.TryGetValue("continent", out continent);
-        map.TryGetValue("continenten", out continentEn);
-        map.TryGetValue("countrycode", out countryCode);
-        map.TryGetValue("asn", out asn);
-        map.TryGetValue("geoid", out geoId);
-        map.TryGetValue("longitude", out longitude);
-        map.TryGetValue("latitude", out latitude);
-        map.TryGetValue("timezone", out timezone);
-        map.TryGetValue("asname", out asName);
-        map.TryGetValue("asdomain", out asDomain);
-        map.TryGetValue("usagetype", out usageType);
+        country     = IndexOf(map, "country");
+        countryEn   = IndexOf(map, "countryen");
+        province    = IndexOf(map, "province");
+        provinceEn  = IndexOf(map, "provinceen");
+        city        = IndexOf(map, "city");
+        cityEn      = IndexOf(map, "cityen");
+        district    = IndexOf(map, "district");
+        isp         = IndexOf(map, "isp");
+        ispEn       = IndexOf(map, "ispen");
+        continent   = IndexOf(map, "continent");
+        continentEn = IndexOf(map, "continenten");
+        countryCode = IndexOf(map, "countrycode");
+        asn         = IndexOf(map, "asn");
+        geoId       = IndexOf(map, "geoid");
+        longitude   = IndexOf(map, "longitude");
+        latitude    = IndexOf(map, "latitude");
+        timezone    = IndexOf(map, "timezone");
+        asName      = IndexOf(map, "asname");
+        asDomain    = IndexOf(map, "asdomain");
+        usageType   = IndexOf(map, "usagetype");
     }
+
+    /// <summary>缺键返回 -1(而非默认 0),保证"字段不存在 → 语义 Getter 返回空串"
+    /// 的契约语义;TryGetValue 的 out 参数缺键时会被置为 default(int)=0,
+    /// 曾导致缺失字段误命中首字段(如 std 版 GetDistrict 返回大洲值)。</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static int IndexOf(Dictionary<string, int> map, string key)
+        => map.TryGetValue(key, out var index) ? index : -1;
 
     /// <summary>Field names in file order (defensive clone; safe to retain).</summary>
     public string[] FieldNames => (string[])_fieldNames.Clone();

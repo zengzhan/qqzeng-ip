@@ -157,6 +157,7 @@ type Snapshot struct {
 	groupFieldOffsets    [][]int
 	groupFieldNative     [][]bool
 	groupFieldNativeType [][]int
+	groupFieldNames      [][]string
 	groupFieldIds        [][]uint16
 	groupPools           [][][]string
 
@@ -247,6 +248,26 @@ func (s *Snapshot) readUintWidth(off uint64, width int) uint32 {
 }
 
 // ---------- 快照加载（Fail-Closed） ----------
+
+// deriveGroupFieldNames 按组派生字段名:Metadata TLV 优先(长度须与该组字段数
+// 一致),再回落到该组 edition 的 canonical 表,最后 synthetic field_N。
+// 与 Python/C#/Java/Rust/Node/PHP 的按组派生同构。
+func (s *Snapshot) deriveGroupFieldNames(gi int, metaFields []string, edition string) ([]string, string) {
+	numFields := s.groupFieldCounts[gi]
+	canonical := EditionFieldNames[edition]
+	switch {
+	case metaFields != nil && len(metaFields) == numFields:
+		return append([]string(nil), metaFields...), FieldNamesSourceMetadata
+	case canonical != nil && len(canonical) == numFields:
+		return append([]string(nil), canonical...), FieldNamesSourceEdition
+	default:
+		names := make([]string, numFields)
+		for i := range names {
+			names[i] = fmt.Sprintf("field_%d", i)
+		}
+		return names, FieldNamesSourceSynthetic
+	}
+}
 
 func buildSnapshot(data []byte, release func(), groupIndex int, verifyCrc bool) (snap *Snapshot, err error) {
 	// 收口解析期越界访问（畸形文件 DoS）：仅捕获 boundsPanic 哨兵，其余 panic 照常上浮。
@@ -647,7 +668,6 @@ func (s *Snapshot) parseMetadata() error {
 	if gi < 0 || gi >= len(s.groupFieldCounts) {
 		gi = 0
 	}
-	numFields := s.groupFieldCounts[gi]
 
 	// --- edition：先用本组自己的掩码，再回落到文件级掩码 -----------------------
 	mask := s.versionMask
@@ -674,7 +694,7 @@ func (s *Snapshot) parseMetadata() error {
 		}
 	}
 	if edition == "" {
-		if edition = editionByFieldCount[numFields]; edition != "" {
+		if edition = editionByFieldCount[s.groupFieldCounts[gi]]; edition != "" {
 			editionSource = EditionSourceInferred
 		} else {
 			editionSource = EditionSourceUnknown
@@ -683,35 +703,35 @@ func (s *Snapshot) parseMetadata() error {
 	s.edition = edition
 	s.editionSource = editionSource
 
-	// --- 字段名 ---------------------------------------------------------------
-	canonical := EditionFieldNames[edition]
-	switch {
-	case metaFields != nil && len(metaFields) == numFields:
-		s.fieldNames = metaFields
-		s.fieldNamesSource = FieldNamesSourceMetadata
-	case canonical != nil && len(canonical) == numFields:
-		s.fieldNames = append([]string(nil), canonical...)
-		s.fieldNamesSource = FieldNamesSourceEdition
-	default:
-		names := make([]string, numFields)
-		for i := range names {
-			names[i] = fmt.Sprintf("field_%d", i)
-		}
-		s.fieldNames = names
-		s.fieldNamesSource = FieldNamesSourceSynthetic
+	// --- 字段名：按组派生（对齐 Python/C#/Java/Rust/Node/PHP 的 per-group 设计）----
+	// 每个 group 基于自身 fieldCount 独立走 元数据→canonical→synthetic 回退；
+	// 读取组的名字与派生源保持与旧单组实现逐字节一致。
+	s.groupFieldNames = make([][]string, s.actualGroups)
+	groupFieldNamesSource := make([]string, s.actualGroups)
+	for g := 0; g < s.actualGroups; g++ {
+		s.groupFieldNames[g], groupFieldNamesSource[g] = s.deriveGroupFieldNames(g, metaFields, edition)
 	}
+	s.fieldNames = s.groupFieldNames[gi]
+	s.fieldNamesSource = groupFieldNamesSource[gi]
 	s.normalizedMap = buildNormalizedMap(s.fieldNames)
 	s.numericFlags = make([]bool, len(s.fieldNames))
 	for i, n := range s.fieldNames {
 		s.numericFlags[i] = isNumericFieldName(n)
 	}
 
-	// 维度掩码兜底：只看解析出来的字段名里有没有 asn。fieldId 只是槽位序号
-	// （0..N-1），不带任何跨档语义，绝不可用来判定维度。
-	_, hasAsn := s.normalizedMap["asn"]
+	// 维度掩码兜底：看**各组自己**的字段名里有没有 asn。fieldId 只是槽位序号
+	// （0..N-1），不带任何跨档语义，绝不可用来判定维度。旧实现用读取组单一的
+	// normalizedMap 给所有组推断——多组 geo/asn 混合文件会跨组误判。
 	for g := 0; g < s.actualGroups; g++ {
 		if s.groupDimMasks[g] != 0 {
 			continue
+		}
+		hasAsn := false
+		for _, name := range s.groupFieldNames[g] {
+			if normalizeKey(name) == "asn" {
+				hasAsn = true
+				break
+			}
 		}
 		if hasAsn {
 			s.groupDimMasks[g] = 0x02

@@ -56,6 +56,25 @@
 
 ### Fixed
 
+- **C# 语义 Getter 缺失字段误命中首字段（P0,准确性行为修复）**:
+  `BindStandardIndices` 用 `map.TryGetValue(key, out idx)` 绑定 20 个语义字段索引,
+  TryGetValue 缺键时 out 被置为 default(int)=0,而 Getter 以 `_idxX >= 0` 判存在——
+  **字段不存在的 edition 上语义 Getter 返回 values[0]（首字段值）而非空串**。
+  影响:std 版(6 字段)GetDistrict/GetLongitude/GetLatitude/GetAsn/GetTimezone/
+  GetAsName 等返回大洲值;与契约"缺失字段返回空串"相悖,且其余 7 语言均正确
+  (Java/Python/Node/PHP/Go/Rust 的 get(name) 模式天然安全,C# 是唯一的
+  pre-bound index 实现)。修复:IndexOf 助手缺键返回 -1;Getter 回落 Get(name)
+  返回空串/null。Tier1 新增 8 条缺失字段回归断言(std 版 GetDistrict==""
+  等——修复前该断言会失败,即回归证明)。
+- **Go 维度掩码兜底推断跨组误判（P1,多组文件边界）**:
+  dimMask=0 的兜底推断用读取组单一的 `normalizedMap["asn"]` 判定**所有** group——
+  多组 geo/asn 混合文件会跨组误判(读取组含 asn 则全部组误标 0x02)。
+  Python/C#/Java/Rust/Node/PHP 均为按组字段名推断,Go 是唯一例外。
+  修复:字段名派生提取为 `deriveGroupFieldNames(g, ...)` 按组执行并存入
+  `groupFieldNames [][]string`,兜底推断改按各组自己的名字判定;读取组的
+  fieldNames/fieldNamesSource 逐字节保持与旧实现一致(10 个商业库均为单组
+  且掩码显式,零行为变化;多组 dimMask=0 夹具测试待多组合成库生成器支持)。
+
 - **Java 土耳其语 I 硬化 + 代码卫生(并行 agent 产出,已验证收编)**:
   - `KnownUsageType` 建表与 `fromRaw` 改 `toLowerCase(Locale.ROOT)`——原实现两侧
     同变换虽内部自洽,但依赖 JVM 默认 locale(类加载期与调用期若环境不同或
