@@ -30,7 +30,7 @@ import java.util.zip.CRC32;
  * GroupMetadataTable/GROUP_SCHEMA 动态布局、原生标量字段、String Pools、Metadata TLV、CRC32）。
  * API 依据 docs/QZDB_SDK_API.md v2.4。
  */
-public class QzdbReader implements AutoCloseable {
+public final class QzdbReader implements AutoCloseable {
 
     private static final int HEADER_SIZE = 192;
     private static final int SENTINEL = 0x80000000;
@@ -979,7 +979,6 @@ public class QzdbReader implements AutoCloseable {
     }
 
     private final AtomicReference<Snapshot> activeSnapshot = new AtomicReference<>();
-    private final File loadedFile;
 
     /**
      * 保存最近一次被替换下来的快照，延迟一代再真正 unmap，而不是在 activeSnapshot
@@ -1000,9 +999,6 @@ public class QzdbReader implements AutoCloseable {
         if (toRelease != null) toRelease.unmapIfMapped();
     }
 
-    /**
-     * QzdbReader 构建器
-     */
     /**
      * QzdbReader 构建器。使用方式：
      * <pre>{@code
@@ -1061,7 +1057,6 @@ public class QzdbReader implements AutoCloseable {
          */
         public QzdbReader build() throws QzdbException {
             ByteBuffer buffer;
-            File fileRef = databaseFile;
 
             if (databaseFile != null) {
                 if (!databaseFile.exists() || !databaseFile.canRead()) {
@@ -1087,14 +1082,13 @@ public class QzdbReader implements AutoCloseable {
             }
 
             Snapshot snapshot = new Snapshot(buffer, groupIndex, verifyCrc);
-            QzdbReader reader = new QzdbReader(fileRef);
+            QzdbReader reader = new QzdbReader();
             reader.activeSnapshot.set(snapshot);
             return reader;
         }
     }
 
-    private QzdbReader(File file) {
-        this.loadedFile = file;
+    private QzdbReader() {
     }
 
     private Snapshot requireSnapshot() {

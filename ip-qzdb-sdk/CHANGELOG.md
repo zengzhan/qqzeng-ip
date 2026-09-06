@@ -56,6 +56,19 @@
 
 ### Fixed
 
+- **Java 土耳其语 I 硬化 + 代码卫生(并行 agent 产出,已验证收编)**:
+  - `KnownUsageType` 建表与 `fromRaw` 改 `toLowerCase(Locale.ROOT)`——原实现两侧
+    同变换虽内部自洽,但依赖 JVM 默认 locale(类加载期与调用期若环境不同或
+    `Locale.setDefault` 被宿主变更即分叉);实证 tr-TR 下修复后 6/6 命中;
+  - `QzdbReader` 删除死字段 `loadedFile` 及其级联死变量 `fileRef`(唯一赋值点
+    随之失效)、重复孤儿 Javadoc;`QzdbReader`/`ChainedReader` 加 `final`
+    (均无 public 构造器以外的扩展设计);`QzdbRegistry` 删除冗余空构造函数
+    (隐式构造等价);
+  - `javac -Xlint:all` 0 错误;TEST_PASS(P6 UsageType 21 场景)、
+    FAILCLOSED 29/29、tr-TR 实证 6/6。 Turkish-I 审计同时确认其余 7 语言
+    归一化均为 locale 无关(C# OrdinalIgnoreCase、PHP 两侧同变换、
+    Go/Node/Python/Rust 原生 Unicode 折叠、C 无归一化路径)——Java 是唯一暴露点。
+
 - **Java 契约基准落地（8/8 语言基准集补齐）**：新增 `BenchContract.java`（splitmix64 /
   四分布 / 双栈三模式 / 冷热 / 分位数 / 1-16 线程扩展 / 16×10 万并发门禁），
   FNV-1a 指纹对拍 12/12 流与其他 7 语言逐字节一致。首份权威数据（M4 Max）：

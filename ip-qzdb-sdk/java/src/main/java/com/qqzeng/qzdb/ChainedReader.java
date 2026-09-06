@@ -13,7 +13,7 @@ import java.util.Optional;
  * <p>
  * 支持将多个 QzdbReader 组合（例如“国内精华版 + 全球旗舰版”），提供 Fallback 备性退避与 Merge 字段自动拼接。
  */
-public class ChainedReader {
+public final class ChainedReader {
 
     public enum Mode {
         /**

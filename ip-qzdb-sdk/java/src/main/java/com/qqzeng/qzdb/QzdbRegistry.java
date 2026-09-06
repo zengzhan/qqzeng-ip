@@ -19,9 +19,6 @@ public class QzdbRegistry {
     private final Map<String, QzdbReader> registryMap = new ConcurrentHashMap<>();
     private final Queue<QzdbReader> quarantine = new ConcurrentLinkedQueue<>();
 
-    public QzdbRegistry() {
-    }
-
     private void retire(QzdbReader old) {
         if (old == null) return;
         quarantine.add(old);

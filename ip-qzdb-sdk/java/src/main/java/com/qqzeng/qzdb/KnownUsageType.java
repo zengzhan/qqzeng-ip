@@ -1,6 +1,7 @@
 package com.qqzeng.qzdb;
 
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -37,8 +38,13 @@ public enum KnownUsageType implements UsageType {
     private static final Map<String, KnownUsageType> RAW_MAP = new HashMap<>();
 
     static {
+        // Locale.ROOT(而不是不带参数的 toLowerCase()):这是一份 ASCII 英文用途分类名的
+        // 查找表(AICrawler/ISP/IXP/IoT 等含大写 I 的名字),必须用 locale 无关的规范化
+        // 方式,否则在土耳其语(tr-TR)等默认区域设置下,大写 I 会被转成无点的 ı 而不是 i
+        // (著名的"土耳其 I 问题"),导致这里建表和下面 fromRaw() 查表用的字符串不一致,
+        // 使原本应该命中的用途分类查找静默失败。
         for (KnownUsageType type : values()) {
-            RAW_MAP.put(type.rawValue.toLowerCase(), type);
+            RAW_MAP.put(type.rawValue.toLowerCase(Locale.ROOT), type);
         }
     }
 
@@ -76,6 +82,6 @@ public enum KnownUsageType implements UsageType {
 
     public static KnownUsageType fromRaw(String raw) {
         if (raw == null) return null;
-        return RAW_MAP.get(raw.toLowerCase());
+        return RAW_MAP.get(raw.toLowerCase(Locale.ROOT));
     }
 }
