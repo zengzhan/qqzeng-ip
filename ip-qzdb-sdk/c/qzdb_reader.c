@@ -193,32 +193,28 @@ static int apply_group_meta(qzdb_reader_t* ctx, int g) {
     }
     int nf = ctx->group_field_counts[g];
 
-    if (ctx->norm_field_names) {
-        for (int i = 0; i < ctx->field_count; i++) free(ctx->norm_field_names[i]);
-        free(ctx->norm_field_names);
-        ctx->norm_field_names = NULL;
+    /* 先分配新资源，成功后再释放旧资源——避免 OOM 时读者处于新旧不一致状态。 */
+    char*  new_edition = strdup(ctx->group_editions[g] ? ctx->group_editions[g] : "");
+    if (!new_edition) return QZDB_ERR_OUT_OF_MEMORY;
+
+    int*   new_flags = calloc((size_t)(nf > 0 ? nf : 1), sizeof(int));
+    char** new_norms = calloc((size_t)(nf > 0 ? nf : 1), sizeof(char*));
+    if (!new_flags || !new_norms) {
+        free(new_edition); free(new_flags); free(new_norms);
+        return QZDB_ERR_OUT_OF_MEMORY;
     }
-    norm_map_free(ctx);
-    free(ctx->float_field_flags); ctx->float_field_flags = NULL;
-    free(ctx->edition);           ctx->edition = NULL;
-
-    ctx->field_names        = ctx->group_field_names[g];
-    ctx->field_count        = nf;
-    ctx->edition            = strdup(ctx->group_editions[g] ? ctx->group_editions[g] : "");
-    ctx->edition_source     = ctx->group_edition_sources[g];
-    ctx->field_names_source = ctx->group_name_sources[g];
-    if (!ctx->edition) return QZDB_ERR_OUT_OF_MEMORY;
-
-    ctx->float_field_flags = calloc((size_t)(nf > 0 ? nf : 1), sizeof(int));
-    ctx->norm_field_names  = calloc((size_t)(nf > 0 ? nf : 1), sizeof(char*));
-    if (!ctx->float_field_flags || !ctx->norm_field_names) return QZDB_ERR_OUT_OF_MEMORY;
 
     for (int i = 0; i < nf; i++) {
-        const char* fn = ctx->field_names[i] ? ctx->field_names[i] : "";
+        const char* fn = ctx->group_field_names[g][i] ? ctx->group_field_names[g][i] : "";
         if (strcmp(fn, "longitude") == 0 || strcmp(fn, "latitude") == 0)
-            ctx->float_field_flags[i] = 1;
+            new_flags[i] = 1;
         char* n = malloc(strlen(fn) + 1);
-        if (!n) return QZDB_ERR_OUT_OF_MEMORY;
+        if (!n) {
+            free(new_edition); free(new_flags);
+            for (int k = 0; k < i; k++) free(new_norms[k]);
+            free(new_norms);
+            return QZDB_ERR_OUT_OF_MEMORY;
+        }
         size_t j = 0;
         for (size_t k = 0; fn[k]; k++) {
             char c = fn[k];
@@ -227,9 +223,27 @@ static int apply_group_meta(qzdb_reader_t* ctx, int g) {
             n[j++] = c;
         }
         n[j] = '\0';
-        ctx->norm_field_names[i] = n;
+        new_norms[i] = n;
     }
-    norm_map_build(ctx);   /* O(1) 归一化索引，加载期一次性构建（spec §6.1） */
+
+    /* 所有分配成功——安全释放旧资源并原子切换 */
+    if (ctx->norm_field_names) {
+        for (int i = 0; i < ctx->field_count; i++) free(ctx->norm_field_names[i]);
+        free(ctx->norm_field_names);
+    }
+    norm_map_free(ctx);
+    free(ctx->float_field_flags);
+    free(ctx->edition);
+
+    ctx->field_names        = ctx->group_field_names[g];
+    ctx->field_count        = nf;
+    ctx->edition            = new_edition;
+    ctx->edition_source     = ctx->group_edition_sources[g];
+    ctx->field_names_source = ctx->group_name_sources[g];
+    ctx->float_field_flags  = new_flags;
+    ctx->norm_field_names   = new_norms;
+
+    norm_map_build(ctx);
     return QZDB_OK;
 }
 
@@ -756,6 +770,7 @@ static int get_geo_info(qzdb_reader_t* ctx, uint32_t entry_id, int group_index, 
                 result->values[i] = "";
         }
     }
+    result->value_count = field_count;
     return QZDB_OK;
 }
 
@@ -860,6 +875,7 @@ static int resolve_row_id_cached(qzdb_reader_t* ctx, uint32_t row_id, int group_
     char** cached = geo_cache_lookup(ctx, group_index, entry_id, &cnt, &pipe_unused);
     if (cached) {
         memset(result, 0, sizeof(*result));
+        result->value_count = cnt;
         for (int i = 0; i < cnt && i < QZDB_MAX_FIELDS; i++) result->values[i] = cached[i];
         return QZDB_OK;
     }
@@ -903,6 +919,8 @@ int qzdb_find_each(qzdb_reader_t* ctx, const char** ips, int count,
         res.info.values_mask = 0;
         res.error_code = qzdb_find(ctx, ips[i], &res.info);
         cb(i, &res, user_data);
+        free_geo_info(&res.info);  /* 释放缓存未命中时 get_geo_info 分配的堆字符串；
+                                    * 缓存命中时 values_mask=0，此调用为空操作。 */
     }
     return QZDB_OK;
 }
@@ -919,8 +937,9 @@ const char* qzdb_geo_info_get(qzdb_reader_t* ctx, const qzdb_geo_info_t* info, c
 
 int qzdb_geo_info_to_pipe(qzdb_reader_t* ctx, const qzdb_geo_info_t* info, char* out, size_t out_size) {
     if (!ctx || !info || !out || out_size == 0) return QZDB_ERR_INVALID_PARAM;
+    if (ctx->group_index < 0 || ctx->group_index >= ctx->actual_groups) return QZDB_ERR_INVALID_PARAM;
     size_t pos = 0;
-    int fc = ctx->group_field_counts[ctx->group_index];
+    int fc = info->value_count > 0 ? info->value_count : ctx->group_field_counts[ctx->group_index];
     for (int i = 0; i < fc && i < QZDB_MAX_FIELDS; i++) {
         if (i > 0 && pos < out_size - 1) out[pos++] = '|';
         const char* v = info->values[i] ? info->values[i] : "";
@@ -1139,8 +1158,8 @@ static int lookup_v6_prefix_len(const qzdb_reader_t* ctx, const uint8_t* ip) {
 }
 
 static void format_v4_cidr(uint32_t ip, int n, char* out, size_t sz) {
-    // 注意：C 中 `x << 32` 属未定义行为，故用 `n>=32` 短路避免移位量达到类型宽度。
-    uint32_t mask = (n <= 0 || n >= 32) ? 0u : (0xFFFFFFFFu << (32 - n));
+    // C 中 `x << 32` 属未定义行为，故对 n==0 和 n==32 单独处理。
+    uint32_t mask = (n <= 0) ? 0u : (n >= 32) ? 0xFFFFFFFFu : (0xFFFFFFFFu << (32 - n));
     uint32_t net = ip & mask;
     snprintf(out, sz, "%u.%u.%u.%u/%d", (net >> 24) & 0xFF, (net >> 16) & 0xFF, (net >> 8) & 0xFF, net & 0xFF, n);
 }
@@ -1198,6 +1217,11 @@ struct qzdb_chain {
     qzdb_reader_t** readers;
     int             count;
     int             mode;       /* QZDB_CHAIN_FALLBACK | MERGE | MERGE_OVERRIDE */
+    /* Per-chain storage for metadata arrays (replaces static locals to avoid
+     * data races when multiple chains or threads call these concurrently). */
+    const char*     editions[32];
+    const char*     scopes[32];
+    const char*     data_months[32];
 };
 
 qzdb_chain_t* qzdb_chain_new(qzdb_reader_t** ctxs, int count, int mode) {
@@ -1320,24 +1344,21 @@ int qzdb_chain_find_batch(qzdb_chain_t* chain, const char** ips, int count, qzdb
 }
 
 const char** qzdb_chain_editions(qzdb_chain_t* chain, int* count) {
-    static const char* edits[32];
     if (!chain || !count || chain->count > 32) { if (count) *count = 0; return NULL; }
-    for (int i = 0; i < chain->count; i++) edits[i] = qzdb_get_edition(chain->readers[i]);
-    *count = chain->count; return edits;
+    for (int i = 0; i < chain->count; i++) chain->editions[i] = qzdb_get_edition(chain->readers[i]);
+    *count = chain->count; return chain->editions;
 }
 
 const char** qzdb_chain_scopes(qzdb_chain_t* chain, int* count) {
-    static const char* scps[32];
     if (!chain || !count || chain->count > 32) { if (count) *count = 0; return NULL; }
-    for (int i = 0; i < chain->count; i++) scps[i] = qzdb_get_scope(chain->readers[i]);
-    *count = chain->count; return scps;
+    for (int i = 0; i < chain->count; i++) chain->scopes[i] = qzdb_get_scope(chain->readers[i]);
+    *count = chain->count; return chain->scopes;
 }
 
 const char** qzdb_chain_data_months(qzdb_chain_t* chain, int* count) {
-    static const char* months[32];
     if (!chain || !count || chain->count > 32) { if (count) *count = 0; return NULL; }
-    for (int i = 0; i < chain->count; i++) months[i] = qzdb_get_data_month(chain->readers[i]);
-    *count = chain->count; return months;
+    for (int i = 0; i < chain->count; i++) chain->data_months[i] = qzdb_get_data_month(chain->readers[i]);
+    *count = chain->count; return chain->data_months;
 }
 
 void qzdb_chain_free(qzdb_chain_t* chain) {
@@ -1863,19 +1884,22 @@ static int init_from_buffer(qzdb_reader_t* ctx, int is_heap, int verify_crc) {
             else if (t == 2) {
                 for (int i = 0; i < meta_name_count; i++) free(meta_names[i]);
                 free(meta_names); meta_names = NULL; meta_name_count = 0;
+                /* 先按 '|' 分隔，若只有一段则回退 ',' 分隔（兼容遗留文件） */
+                char sep = '|';
                 int cnt = 1;
                 for (const char* q = val; *q; q++) if (*q == '|') cnt++;
+                if (cnt == 1) { sep = ','; for (const char* q = val; *q; q++) if (*q == ',') cnt++; }
                 meta_names = calloc((size_t)cnt, sizeof(char*));
                 if (meta_names) {
                     const char* seg = val; int idx = 0;
                     while (idx < cnt) {
-                        const char* q = seg; while (*q && *q != '|') q++;
+                        const char* q = seg; while (*q && *q != sep) q++;
                         size_t tok_len = (size_t)(q - seg);
                         char* token = malloc(tok_len + 1);
                         if (!token) break;
                         memcpy(token, seg, tok_len); token[tok_len] = '\0';
                         meta_names[idx++] = token;
-                        if (*q == '|') seg = q + 1; else break;
+                        if (*q == sep) seg = q + 1; else break;
                     }
                     meta_name_count = idx;
                 }

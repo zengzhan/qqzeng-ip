@@ -289,7 +289,6 @@ func buildSnapshot(data []byte, release func(), groupIndex int, verifyCrc bool) 
 	if err := s.parsePools(); err != nil {
 		return nil, err
 	}
-	s.storedCrc = safeReadU32(data, 16)
 	s.geoCache = newGeoCache(1 << 18)
 	return s, nil
 }

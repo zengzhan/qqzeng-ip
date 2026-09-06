@@ -1404,7 +1404,8 @@ class QzdbReader:
                 if t == 1:
                     self._version_name = val
                 elif t == 2:
-                    meta_field_names = val.split('|')
+                    parts = val.split('|')
+                    meta_field_names = parts if len(parts) > 1 else val.split(',')
                 elif t == 3:
                     self._description = val
                 elif t == 4:

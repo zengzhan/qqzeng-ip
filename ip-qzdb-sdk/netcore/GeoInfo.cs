@@ -104,6 +104,8 @@ public sealed class GeoInfo
     public string[] FieldNames => (string[])_fieldNames.Clone();
     /// <summary>Field values in file order (defensive clone; safe to retain).</summary>
     public string[] Values => (string[])_values.Clone();
+    /// <summary>Internal zero-copy accessor for projection (caller must not mutate).</summary>
+    internal string[] RawValues => _values;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private string GetFast(int idx)

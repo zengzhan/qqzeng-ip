@@ -562,10 +562,10 @@ public sealed class QzdbReader : IDisposable
             int tableGroups = span[gmOff];
             gmOff++;
 
-            if (tableGroups < 1 || tableGroups > 4 || tableGroups != gCount)
+            // 与 Go/Java/Node/Python/C/Rust/PHP 对齐：取 min(tableGroups, geoEntryGroupCount, 4)
+            int groups = Math.Max(1, Math.Min(tableGroups, Math.Min(gCount, 4)));
+            if (tableGroups < 1 || tableGroups > 4)
                 throw new QzdbException(ErrorCode.Corrupted, $"Invalid group table count: {tableGroups}");
-            int groups = tableGroups;
-            if (groups < 1) throw new QzdbException(ErrorCode.Corrupted, "Group count is 0");
             if (_groupIndex < 0 || _groupIndex >= groups)
                 throw new QzdbException(ErrorCode.InvalidParam, $"groupIndex {_groupIndex} out of range");
 
@@ -600,10 +600,9 @@ public sealed class QzdbReader : IDisposable
             {
                 int sp = (int)_offGroupSchema;
                 int gsGroupCount = BinaryPrimitives.ReadUInt16LittleEndian(span[sp..]);
-                if (gsGroupCount != groups)
-                    throw new QzdbException(ErrorCode.Corrupted, "Group schema count does not match group table");
+                int maxGsGroups = Math.Min(gsGroupCount, groups);
                 sp += 2;
-                for (int gi = 0; gi < groups; gi++)
+                for (int gi = 0; gi < maxGsGroups; gi++)
                 {
                     if (sp + 14 > _dataLen)
                         throw new QzdbException(ErrorCode.Corrupted, "Group schema is truncated");
@@ -704,7 +703,10 @@ public sealed class QzdbReader : IDisposable
                     switch (type)
                     {
                         case 1: _version = val; break;
-                        case 2: metaFields = val.Split('|'); break;
+                        case 2:
+                            metaFields = val.Split('|');
+                            if (metaFields.Length == 1) metaFields = val.Split(',');
+                            break;
                         case 3: _description = val; break;
                         case 4: _edition = val; break; // legacy primary edition/version
                         case 5: _dataMonth = val; break; // v2.4 explicit data month
@@ -1682,57 +1684,28 @@ public sealed class QzdbReader : IDisposable
     private static GeoInfo? ResolveGeoFields(Snapshot snap, uint entryId, string[] fields)
     {
         if (entryId == 0) return null;
-        int gi = snap._groupIndex;
-        if (entryId >= snap._groupEntryCounts[gi]) return null;
+        if (entryId >= snap._groupEntryCounts[snap._groupIndex]) return null;
 
-        int fc = snap._groupFieldCounts[gi];
-        long entryOff = snap._groupEntryOffsets[gi] + (long)entryId * snap._groupStrides[gi];
+        // API_CONTRACT §3.5: 优先从解码缓存的全字段结果切片（骑缓存，勿绕过）
+        var full = ResolveGeo(snap, entryId);
+        if (full == null) return null;
 
-        var span = snap._data.Span;
-        var widths = snap._groupFieldWidths[gi];
-        var offsets = snap._groupFieldOffsets[gi];
-        var natives = snap._groupFieldNative[gi];
-        var natTypes = snap._groupFieldNativeType[gi];
-        var groupPools = snap._pools[gi];
         var normMap = snap._normMap;
-
+        var fullValues = full.RawValues;
         var values = new string[fields.Length];
         var numFlags = new bool[fields.Length];
 
         for (int i = 0; i < fields.Length; i++)
         {
-            string reqField = fields[i];
-            if (!normMap.TryGetValue(GeoInfo.NormalizeKey(reqField), out int fi) || fi < 0 || fi >= fc)
+            if (normMap.TryGetValue(GeoInfo.NormalizeKey(fields[i]), out int fi)
+                && fi >= 0 && fi < fullValues.Length)
             {
-                values[i] = "";
-                continue;
-            }
-
-            int w = widths[fi];
-            int fo = (int)(entryOff + offsets[fi]);
-
-            if (natives[fi])
-            {
-                int nt = natTypes[fi];
-                if (nt == 1)
-                {
-                    ref var r = ref Unsafe.Add(ref MemoryMarshal.GetReference(span), fo);
-                    values[i] = w == 4
-                        ? FormatFloat6(Unsafe.ReadUnaligned<float>(ref r))
-                        : FormatFloat6(Unsafe.ReadUnaligned<double>(ref r));
-                }
-                else
-                {
-                    values[i] = ReadUintWidth(span, fo, w).ToString();
-                }
-                numFlags[i] = true;
+                values[i] = fullValues[fi];
+                numFlags[i] = snap._numericFlags != null && fi < snap._numericFlags.Length && snap._numericFlags[fi];
             }
             else
             {
-                uint idx = ReadUintWidth(span, fo, w);
-                var pool = groupPools[fi];
-                values[i] = idx < (uint)pool.Length ? pool[(int)idx] : "";
-                numFlags[i] = snap._numericFlags != null && fi < snap._numericFlags.Length && snap._numericFlags[fi];
+                values[i] = "";
             }
         }
 

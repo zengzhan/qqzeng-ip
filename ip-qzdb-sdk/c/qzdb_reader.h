@@ -165,6 +165,7 @@ typedef struct {
 typedef struct {
     char*    values[QZDB_MAX_FIELDS];
     uint32_t values_mask;  /* bit i = 1 if values[i] is heap-owned and must be freed */
+    int      value_count;  /* actual number of valid entries in values[] (≤ group_field_count) */
 } qzdb_geo_info_t;
 
 typedef struct {

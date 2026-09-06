@@ -26,8 +26,13 @@ use memmap2::{Mmap, MmapOptions};
 const SENTINEL: u32 = 0x80000000;
 const SENTINEL_MASK_31: u32 = 0x7FFFFFFF;
 
-/// GeoInfo 缓存槽位数（2 的幂，≈16K 槽 ≈ 196KB/快照）。
-const GEO_CACHE_SIZE: usize = 1 << 14;
+/// GeoInfo 缓存槽位数（2 的幂，≈256K 槽 ≈ 12MB/快照；与 C 侧 2^18 对齐）。
+/// 解码缓存槽位按快照实际条目总数自适应（next_pow2(条目数 × 2)），
+/// 钳制在 [GEO_CACHE_MIN, GEO_CACHE_MAX]：
+/// - 小库（如省级 8.6MB）条目少，大缓存只会污染 CPU 缓存（实测 std random -28%）；
+/// - 大库（122MB 全球）条目数十万，小缓存碰撞淘汰导致反复重建（实测 max random 仅 1.69M）。
+const GEO_CACHE_MAX: usize = 1 << 18;
+const GEO_CACHE_MIN: usize = 1 << 12;
 
 enum DataStorage {
     Owned(Arc<Vec<u8>>),
@@ -672,7 +677,7 @@ impl UsageType {
 #[derive(Debug, Clone)]
 pub struct GeoInfo {
     pub field_names: Arc<Vec<String>>,
-    pub values: Vec<String>,
+    pub values: Vec<Arc<str>>,
     norm_map: Arc<HashMap<String, usize>>,
     numeric_indices: Arc<Vec<usize>>,
     /// 预编码的 to_pipe 文本（对齐 C#/Node/Python/Go 的 _pipe 缓存语义）。
@@ -688,7 +693,7 @@ impl GeoInfo {
         self.norm_map
             .get(&normalize_key(name))
             .and_then(|i| self.values.get(*i))
-            .map(|s| s.as_str())
+            .map(|s| s.as_ref())
             .unwrap_or("")
     }
 
@@ -705,7 +710,7 @@ impl GeoInfo {
     pub fn to_map(&self) -> HashMap<String, String> {
         let mut m = HashMap::with_capacity(self.field_names.len());
         for (i, name) in self.field_names.iter().enumerate() {
-            let v = self.values.get(i).cloned().unwrap_or_default();
+            let v = self.values.get(i).map(|s| s.to_string()).unwrap_or_default();
             m.insert(name.clone(), v);
         }
         m
@@ -720,7 +725,7 @@ impl GeoInfo {
             if name.is_empty() {
                 continue;
             }
-            let val = self.values.get(i).map(|s| s.as_str()).unwrap_or("");
+            let val = self.values.get(i).map(|s| s.as_ref()).unwrap_or("");
             if !first {
                 out.push(',');
             }
@@ -990,7 +995,11 @@ impl<'a> GeoInfoRef<'a> {
 
     /// 全部字段以 `|` 拼接（直接拼接已解码字符串，禁止重新格式化浮点）。
     pub fn to_pipe(&self) -> String {
-        let mut out = String::new();
+        let cap = self.values[..self.field_count]
+            .iter()
+            .map(|v| v.as_str().len() + 1)
+            .sum::<usize>();
+        let mut out = String::with_capacity(cap);
         for i in 0..self.field_count {
             if i > 0 {
                 out.push('|');
@@ -1056,7 +1065,7 @@ impl<'a> GeoInfoRef<'a> {
     pub fn to_geo_info(&self) -> GeoInfo {
         let mut values = Vec::with_capacity(self.field_count);
         for i in 0..self.field_count {
-            values.push(self.get_value_at(i).to_string());
+            values.push(Arc::from(self.get_value_at(i)));
         }
         let (names_arc, map_arc, num_arc) = if let Some(ref snap) = self._snap {
             (
@@ -1187,7 +1196,7 @@ impl<'a> PartialEq<GeoInfo> for GeoInfoRef<'a> {
     fn eq(&self, other: &GeoInfo) -> bool {
         self.field_names() == other.field_names.as_slice()
             && self.len() == other.values.len()
-            && (0..self.field_count).all(|i| self.get_value_at(i) == other.values.get(i).map(|s| s.as_str()).unwrap_or(""))
+            && (0..self.field_count).all(|i| self.get_value_at(i) == other.values.get(i).map(|s| s.as_ref()).unwrap_or(""))
     }
 }
 
@@ -1241,8 +1250,14 @@ impl CacheSlot {
     }
 }
 
-fn new_geo_cache() -> Vec<CacheSlot> {
-    (0..GEO_CACHE_SIZE).map(|_| CacheSlot::empty()).collect()
+fn new_geo_cache(total_entries: usize) -> (Vec<CacheSlot>, usize) {
+    // 直接映射缓存：槽位 ≥ 2× 条目数可把碰撞率压到低位；取 2 的幂以便用掩码取模。
+    let want = total_entries.saturating_mul(2);
+    let mut slots = GEO_CACHE_MIN;
+    while slots < want && slots < GEO_CACHE_MAX {
+        slots <<= 1;
+    }
+    ((0..slots).map(|_| CacheSlot::empty()).collect(), slots - 1)
 }
 
 pub struct SnapshotInner {
@@ -1289,7 +1304,7 @@ pub struct SnapshotInner {
     group_field_native: Vec<Vec<bool>>,
     group_field_native_type: Vec<Vec<usize>>,
 
-    pools: Vec<Vec<Vec<String>>>,
+    pools: Vec<Vec<Vec<Arc<str>>>>,
 
     // 元信息
     field_names: Arc<Vec<String>>,
@@ -1308,6 +1323,7 @@ pub struct SnapshotInner {
 
     // per-snapshot 有界 GeoInfo 解码缓存（无锁：AtomicU32 + ArcSwapOption）
     geo_cache: Vec<CacheSlot>,
+    geo_cache_mask: usize,
 }
 
 impl std::fmt::Debug for SnapshotInner {
@@ -1862,7 +1878,8 @@ impl SnapshotInner {
             }
         }
 
-        let geo_cache = new_geo_cache();
+        let total_entries: usize = group_entry_counts.iter().map(|&c| c as usize).sum();
+        let (geo_cache, geo_cache_mask) = new_geo_cache(total_entries);
 
         Ok(SnapshotInner {
             data,
@@ -1917,6 +1934,7 @@ impl SnapshotInner {
             field_names_source,
             canonical_crc,
             geo_cache,
+            geo_cache_mask,
         })
     }
 
@@ -2183,7 +2201,7 @@ impl SnapshotInner {
         if entry_id == 0 || entry_id >= self.group_entry_counts[self.group_index] {
             return None;
         }
-        let slot = &self.geo_cache[(entry_id as usize) & (GEO_CACHE_SIZE - 1)];
+        let slot = &self.geo_cache[(entry_id as usize) & self.geo_cache_mask];
         // 快路径：无锁读。node 内 key 与 val 是同一原子单元——key 命中时 val 必为该
         // entry 的数据，绝不会出现 key/val 错位（此前双原子位置实现会撕裂）。
         if let Some(node) = slot.node.load_full() {
@@ -2254,7 +2272,7 @@ impl SnapshotInner {
             } else {
                 let idx = self.read_uint_width(fo, w) as usize;
                 let s = if i < pools.len() && idx < pools[i].len() {
-                    pools[i][idx].as_str()
+                    pools[i][idx].as_ref()
                 } else {
                     ""
                 };
@@ -2305,26 +2323,27 @@ impl SnapshotInner {
                 if t == 1 {
                     if w == 4 {
                         let bits = safe_read_u32(d, fo).unwrap_or(0);
-                        fmt_native_float(f32::from_bits(bits) as f64)
+                        Arc::from(fmt_native_float(f32::from_bits(bits) as f64))
                     } else {
                         let bits = safe_read_u64(d, fo).unwrap_or(0);
-                        fmt_native_float(f64::from_bits(bits))
+                        Arc::from(fmt_native_float(f64::from_bits(bits)))
                     }
                 } else {
-                    self.read_uint_width(fo, w).to_string()
+                    Arc::from(self.read_uint_width(fo, w).to_string())
                 }
             } else {
                 let idx = self.read_uint_width(fo, w) as usize;
                 if i < pools.len() && idx < pools[i].len() {
                     pools[i][idx].clone()
                 } else {
-                    String::new()
+                    Arc::from("")
                 }
             };
             values.push(val);
         }
         // 解码期一次性预编码 to_pipe（find_str 热路径复用）。
-        let mut pipe = String::new();
+        let pipe_cap = values.iter().map(|v| v.len() + 1).sum::<usize>();
+        let mut pipe = String::with_capacity(pipe_cap);
         for (i, v) in values.iter().enumerate() {
             if i > 0 {
                 pipe.push('|');
@@ -2538,20 +2557,20 @@ impl SnapshotInner {
                 if t == 1 {
                     if w == 4 {
                         let bits = safe_read_u32(d, fo).unwrap_or(0);
-                        fmt_native_float(f32::from_bits(bits) as f64)
+                        Arc::from(fmt_native_float(f32::from_bits(bits) as f64))
                     } else {
                         let bits = safe_read_u64(d, fo).unwrap_or(0);
-                        fmt_native_float(f64::from_bits(bits))
+                        Arc::from(fmt_native_float(f64::from_bits(bits)))
                     }
                 } else {
-                    self.read_uint_width(fo, w).to_string()
+                    Arc::from(self.read_uint_width(fo, w).to_string())
                 }
             } else {
                 let idx = self.read_uint_width(fo, w) as usize;
                 if fi < pools.len() && idx < pools[fi].len() {
                     pools[fi][idx].clone()
                 } else {
-                    String::new()
+                    Arc::from("")
                 }
             };
             nmap.insert(key, names.len());
@@ -2835,7 +2854,14 @@ fn parse_metadata(d: &[u8], off_meta: u64) -> MetaInfo {
         let val = String::from_utf8_lossy(&d[pos + 4..pos + 4 + length]).into_owned();
         match t {
             1 => m.version_name = val,
-            2 => m.field_names = val.split('|').map(|s| s.to_string()).collect(),
+            2 => {
+                let parts: Vec<String> = val.split('|').map(|s| s.to_string()).collect();
+                m.field_names = if parts.len() == 1 {
+                    val.split(',').map(|s| s.to_string()).collect()
+                } else {
+                    parts
+                };
+            }
             3 => m.description = val,
             4 => m.primary_version = val,
             5 => m.data_month = val, // v2.4：数据期号（权威）
@@ -2856,7 +2882,7 @@ fn parse_pools(
     off_meta: u64,
     off_row_schema: &u64,
     _pool_idx_size: usize,
-) -> Vec<Vec<Vec<String>>> {
+) -> Vec<Vec<Vec<Arc<str>>>> {
     let group_count = group_field_counts.len();
     let mut result = vec![Vec::new(); group_count];
     if off_pools == 0 {
@@ -2923,7 +2949,7 @@ fn parse_pools(
                 pool_cursor = string_data_start;
                 continue;
             }
-            let mut strings = vec![String::new(); count];
+            let mut strings: Vec<Arc<str>> = vec![Arc::from(""); count];
             let mut prev_end = 0usize;
             for s in 0..count {
                 let start = offsets[s];
@@ -2943,7 +2969,7 @@ fn parse_pools(
                     continue;
                 };
                 if b <= d.len() {
-                    strings[s] = String::from_utf8_lossy(&d[a..b]).into_owned();
+                    strings[s] = Arc::from(String::from_utf8_lossy(&d[a..b]).as_ref());
                 }
             }
             pool_cursor = string_data_start.saturating_add(tail);
@@ -3881,7 +3907,8 @@ fn empty_snapshot() -> SnapshotInner {
         edition_source: EDITION_SOURCE_UNKNOWN,
         field_names_source: FIELD_NAMES_SOURCE_SYNTHETIC,
         canonical_crc: OnceLock::new(),
-        geo_cache: new_geo_cache(),
+        geo_cache: new_geo_cache(GEO_CACHE_MIN).0,
+        geo_cache_mask: GEO_CACHE_MIN - 1,
     }
 }
 
@@ -4194,7 +4221,7 @@ fn merge_geo(base: &GeoInfo, overlay: &GeoInfo, mode: ChainMode) -> GeoInfo {
                 } else if let Some(v) = ov_val {
                     v.clone()
                 } else {
-                    String::new()
+                    Arc::from("")
                 }
             }
             ChainMode::MergeOverride => {
@@ -4204,12 +4231,12 @@ fn merge_geo(base: &GeoInfo, overlay: &GeoInfo, mode: ChainMode) -> GeoInfo {
                     } else if let Some(v) = base_val {
                         v.clone()
                     } else {
-                        String::new()
+                        Arc::from("")
                     }
                 } else if let Some(v) = base_val {
                     v.clone()
                 } else {
-                    String::new()
+                    Arc::from("")
                 }
             }
             ChainMode::Fallback => unreachable!(),

@@ -1027,7 +1027,7 @@ class QzdbReader {
         if (length > d.length - (pos + 4)) break;
         const val = d.toString('utf8', pos + 4, pos + 4 + length);
         if (t === 1) this._versionName = val;
-        else if (t === 2) metaNames = val.split('|');
+        else if (t === 2) { metaNames = val.split('|'); if (metaNames.length === 1) metaNames = val.split(','); }
         else if (t === 3) this._description = val;
         else if (t === 4) this._primaryVersion = val;
         else if (t === 5) this._metaDataMonth = val; // v2.4：数据期号（权威）

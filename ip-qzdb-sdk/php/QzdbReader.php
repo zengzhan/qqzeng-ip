@@ -1197,6 +1197,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $pcMap = [6 => 1, 7 => 2, 25 => 3];
         return $pcMap[$this->poolCount] ?? 3;
     }
+    /** 返回 Header 存储的 CRC32 十六进制（有效文件与 canonical CRC 一致；verifyCrc=false 时为原始存储值）。 */
     public function getFileHash(): string { return sprintf('%08x', $this->storedCrc & 0xFFFFFFFF); }
     public function getFieldNames(): array { return $this->fieldNames; }
     public function hasField(string $name): bool
@@ -1531,6 +1532,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
                     $this->versionName = $val;
                 } elseif ($t === 2) {
                     $metaNames = explode('|', $val);
+                    if (count($metaNames) === 1) $metaNames = explode(',', $val);
                     $this->metaFieldNames = $metaNames;
                 } elseif ($t === 3) {
                     $this->description = $val;
@@ -2181,7 +2183,6 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     {
         if ($len <= 0) return '';
         if ($this->stream !== null) {
-            if ($off < 0) return '';
             if ($off < 0) return '';
             // 分块缓存避免 Trie 热路径中每次节点读取都触发 fseek/fread。
             // 大于一页的请求（例如 CRC）仍按页拼接，保证 O(1) 峰值额外内存。

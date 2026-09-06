@@ -151,7 +151,7 @@ using var reader = QzdbReader.OpenBuffer(bytes);
 | 整数查询 (v4) | `GeoInfo? FindUint(uint ipInt)` | `GeoInfo?` | 按 IPv4 的 `uint` 整型查（主机序） |
 | 整数查询 (v6) | `GeoInfo? Find(ulong ipHigh, ulong ipLow)` | `GeoInfo?` | 按 IPv6 的高/低 64 位整数直接查，寄存器直接寻址（性能口径见 docs/PERFORMANCE.md） |
 | IPAddress | `GeoInfo? Find(System.Net.IPAddress address)` | `GeoInfo?` | 内部栈分配零 GC 转换 |
-| 字段子集 | `GeoInfo? FindFields(string ipStr, string[]? fields)` | `GeoInfo?` | **物理按需直解**：只解析指定字段，减少 80%+ 字符串分配 |
+| 字段子集 | `GeoInfo? FindFields(string ipStr, string[]? fields)` | `GeoInfo?` | **骑解码缓存切片**（API_CONTRACT §3.5）：从缓存的全字段结果按需取值，重复投影零重复解码 |
 | 管道字符串 | `string FindStr(string ipStr)` / `FindStr(ReadOnlySpan<char>)` | `string` | 直接返回 `ToPipe()` 结果；未命中/非法返回 `""`（零异常） |
 | 行号查询 | `uint LookupRowId(string ipStr)` / `LookupRowId(ReadOnlySpan<char>)` | `uint` | 仅返回内部行号（不物化字段，最轻量） |
 | 行号（v4 整数） | `uint LookupRowIdUint(uint ipInt)` | `uint` | `FindUint` 的轻量版，只返回行号 |
@@ -472,5 +472,3 @@ dotnet add package QQZeng.Qzdb --version x.y.z
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: netcore: C# .NET SDK（内存映射与高并发查询） sync=1788620896 -->

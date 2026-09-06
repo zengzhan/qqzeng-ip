@@ -15,6 +15,28 @@
 
 ### Changed
 
+- **Rust SDK 2.0.0（破坏性）：`GeoInfo.values` 改为 `Vec<Arc<str>>`**。
+  动机：owned `find()` 每查询克隆 29 个 `String`（29 次堆分配 + 29 次释放），
+  是大库随机查询距 C 的根因；`Arc<str>` 池直供后，owned 克隆变为 1 次 Vec
+  分配 + 29 次原子引用计数增量。实测（M4 Max，contract 契约基准）：
+  max_global hot.mixed 3.17→8.52M(+169%)、random 2.73→4.42M(+62%)，
+  std_china random 41.8→55.4M(+32%)、hot 46.0→61.5M(+34%)。
+  **迁移**：直接索引比较 `info.values[0] == "x"` 改为
+  `info.values[0].as_ref() == "x"`，或改用 `get()` / `to_pipe()` / `to_map()`
+  （签名不变）；`values()` 字段读取类型随字段变更。其余公开 API（`get` /
+  `to_pipe` / `find` 族 / `find_shared` / `find_ref`）签名与输出逐字节不变
+  （`tests/zero_copy_ref.rs` parity 全绿）。
+
+- **Rust 解码缓存自适应容量（修正并行 agent 的一刀切方案）**：并行 agent 将缓存从 2^14
+  一刀切扩至 2^18——max_global random +46~64% 属实，但 std_china random.v4 一度 -28%
+  （2MB 缓存阵列污染小库热路径），且其配对的 pools Arc<str> 改造为**无效优化**
+  （GeoInfo.values 仍为 Vec<String>，build_geo 的 to_string() 照样逐字段堆分配）。
+  修正为按快照实际条目总数自适应：slots = next_pow2(条目数×2)，钳制 [2^12, 2^18]
+  （std 10.5K 条目→2^15/256KB；max 全球库→2^18/2MB）。实测：max_global random
+  1.69→2.73M(+62%)、real_world 1.73→2.99M(+73%)，std_china 全指标回到基线噪声带内。
+  **剩余瓶颈已定位**：owned find() 每查询 clone 29 个 String（缓存命中也照付），是
+  max random 距 C(13.7M) 的根因——解锁需 GeoInfo.values 改 Vec<Arc<str>>（公开 API
+  破坏性变更，待定版本决策）。
 - **PHP（find_str +28~35%）**：分阶段剖析证实字符串解析占 findStr 的 93%（1250/1336ns，走查仅 86ns）。`fastParseIpv4` 重写为 `explode`+`strspn`（C 级，逐条语义等价：恰 4 段/段长/禁前导零/数字白名单/≤255）；`fastParseIp` 删除逐字符空白预扫描（空白必被下游校验拒绝，对合法地址白付一趟）；v6 组校验改 strspn 十六进制白名单、组值改 `hexdec`；v4 组显式从来源数组弹出——旧实现 v4 点分串残留在 rg/lg 被当作 hex 组读入，恰好写入 buf[12..13] 后被结尾 v4 块覆写而侥幸正确（未定义式巧合），现已彻底消除。bench STRING：std_china 182K→250K qps、max_global 51.5K→55.2K。49 个解析语义用例（v4 19 + v6 15 + v4-in-v6 15）逐条核对，与 Python 裁决一致。
 - **CI 性能门禁覆盖补齐至 8/8 语言**：新增 `perf_gate_php.php` / `perf_gate_java/PerfGate.java`（现场 javac 全 SDK 树，JAVA_HOME/bin 优先——CI setup-java 与本机 homebrew 布局均无 PATH javac）/ `perf_gate_cs`（SetTargetFramework 单 TFM 引用，避免为门禁编译库全部 4 个目标框架）三驱动器（协议与既有五腿一致：逗号 IP argv + best-of-3 + 全未命中哨兵）；FLOORS 按本机真实值 ~1/10 标定（php 40K / java 1M / netcore 1.5M）；ci.yml perf-gate job 补 setup-java(temurin 21)/setup-dotnet(10.x)/setup-php(8.3)，`--langs` 默认扩至 8 语言。实测 php 429K / java 12.0M / netcore 14.1M qps。
 - **【测量缺陷修复】CI perf gate 的 C/Go/Rust 三腿自创建以来一直在测「非法 IP 快速失败路径」**：perf_gate.py 误将 JSON 数组文本（`["1.2.3.4",...]`）当作逗号分隔裸 IP 串传给三个驱动，切分后每段带引号/方括号全部判非法——此前报告的 c 306M / go 113M / rust 389M qps 均为非物理数字（真实查询不可能 <3ns/op），仅 node/python（内联 JSON 数组，形态正确）测的是真实查询。修复：`_ips_csv()` 供 argv 形态；四驱动补全未命中哨兵（sink≤0 或 0 命中即报错，C 原占位检查 `sink == -1` 永假且其 sink 累加的是恒为 0 的成功返回码）；FLOORS 按真实数值重校准（c 2M→500K、go 1M→800K、rust 2M→150K，node/python 维持）。`perf_baseline_reference.json` 同步以真实数字重写。
@@ -33,6 +55,37 @@
 - **负结果存档（防后人重蹈）**：V6 走查 hi/lo 两相位拆分在 Go（±0%）、Rust（-10%，三轮 A/B）、C（+1%，噪声内）均无收益——编译器对逐字节取位形态已优化到位，维持原实现；Go 解码缓存 2^18→2^16 缩容实测 hot.mixed **-10~13%**（触碰 BENCH_CONTRACT §9 门禁），撤销。候选淘汰：Python `memoryview.cast('I')`（仅 +10% 但引入 mmap BufferError 生命周期风险）、Python V6 hi/lo 拆分（CPython PyLong 双字位移已高效，0.96×）。
 
 ### Fixed
+
+- **Java 契约基准落地（8/8 语言基准集补齐）**：新增 `BenchContract.java`（splitmix64 /
+  四分布 / 双栈三模式 / 冷热 / 分位数 / 1-16 线程扩展 / 16×10 万并发门禁），
+  FNV-1a 指纹对拍 12/12 流与其他 7 语言逐字节一致。首份权威数据（M4 Max）：
+  std_china random 48.1M / hot 64.3M，max_global random 13.9M，STRING 2.0~3.1M。
+- **C `qzdb_find_each` 结果泄漏修复（P1）**：缓存未命中时 `get_geo_info` 的堆字符串
+  从未释放，每条未命中查询泄漏一次；现回调后 `free_geo_info`（缓存命中时为空操作）。
+- **C `apply_group_meta` OOM 原子切换**：先分配新资源再释放旧资源（含逐项回滚），
+  消除 OOM 中途读者处于新旧不一致状态的窗口。
+- **C# 组表数量不一致容忍化（对齐 7 语言）**：`tableGroups != gCount` 由抛异常改为
+  `min(tableGroups, gCount, 4)` 截断。
+- **C `to_pipe` 补 group_index 边界防护**。
+- **Node/PHP 契约基准自身降噪**：Node v4 流改 Number 直传（免 BigInt/Number 混转）
+  与 v6 预分配 Buffer 复用（FNV 对拍 12/12 不变）；PHP gmp 常量预计算。
+
+- **C /32 CIDR 网络地址错误（P1,跨语言比对发现）**:`format_v4_cidr` 将 `n<=0` 与 `n>=32`
+  合并短路为 mask=0,单 IP 段(如 114.114.114.114/32)被输出为 `0.0.0.0/32`;其余 7 语言
+  均正确(C# 用 uint 移 0、Java 用 long 移位、Rust n==0 分支)。现对 n==32 显式取全掩码;
+  test_main.c 补 `/32 == ip 本身` 回归断言(旧断言仅检查含 '/',放过了该 bug)。
+- **C chain 元数据数组静态存储竞态(P2)**:`qzdb_chain_editions/scopes/data_months` 使用
+  函数级 `static` 数组,多 chain/多线程并发调用互相覆盖;改为 per-chain 存储。
+  生命周期语义变化:返回指针 valid until `qzdb_chain_free`。
+- **6 语言 TLV Type 2 字段表逗号回退(对齐 Java golden)**:字段名表仅一段时按 ','
+  再分割(C/C#/Node/PHP/Python/Rust;Java 的 splitFieldNames 本就支持)。
+- **C# GROUP_SCHEMA 组数不一致由抛异常改为容忍截断(对齐 Go/Rust/C)**:畸形文件
+  行为从 fail-closed 收敛为与其余语言一致的 min(groups) 容忍解析;hostile 全套通过。
+- **Go buildSnapshot 移除 storedCrc 重复赋值**(parseHeader 已设置);PHP 移除重复
+  越界分支;Rust to_pipe/build_geo 管道拼接改 with_capacity 预分配(消除增量扩容)。
+- **C qzdb_geo_info_t 新增 value_count 字段**(防御性):记录 values[] 有效条数,
+  to_pipe 优先使用(现全路径与旧回退值相等,无行为变化;结构体尺寸 +4,源码分发
+  重编译即可)。
 
 - **C（安全审查 P1）**：GEO_ENTRIES 组元数据表加载期校验实际读取字节数（1 + groups×7）——此前仅校验 16 字节，畸形文件可使 mmap 路径越页 SIGBUS。
 - Go `FindFields` 投影结果补 numeric 标记（此前 `ToJson` 把 longitude 输出为字符串，与 C#/PHP 分叉）。
