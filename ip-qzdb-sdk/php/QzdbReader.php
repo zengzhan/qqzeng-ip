@@ -1116,16 +1116,20 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         if ($ipStr === null || $ipStr === '') return null;
         $ip = trim($ipStr);
         if ($ip === '') return null;
-        if (strpos($ip, ':') !== false) {
-            $bytes = self::parseIpv6Raw($ip);
-            if ($bytes === null) return null;
-            if ($this->isV4MappedBytes($bytes)) {
-                $v4 = $this->v4FromMappedBytes($bytes);
+        if (strpos($ip, ':') !== false || preg_match('/^\d+\.\d+\.\d+\.\d+$/', $ip)) {
+            // 与 find() 相同的解析分流:fastParseIp 会在解析期把 IPv4-mapped
+            // (::ffff:a.b.c.d)降级为 v4(§8 规则 4)。此前这里走 parseIpv6Raw,
+            // 其"不降级返回 16 字节"的前提已被解析期降级破坏——mapped 地址
+            // 在这里永远拿不到 v6 字节,lookupCidr 的 mapped 查询恒为 null。
+            $parsed = self::fastParseIp($ip);
+            if ($parsed === null) return null;
+            list($v4, $v6bin) = $parsed;
+            if ($v4 !== null) {
                 $n = $this->lookupV4PrefixLen($v4);
                 return $n < 0 ? null : $this->formatV4Cidr($v4, $n);
             }
-            $n = $this->lookupV6PrefixLen($bytes);
-            return $n < 0 ? null : $this->formatV6Cidr($bytes, $n);
+            $n = $this->lookupV6PrefixLen($v6bin);
+            return $n < 0 ? null : $this->formatV6Cidr($v6bin, $n);
         }
         $v4 = self::fastParseIpv4($ip);
         if ($v4 === null) return null;

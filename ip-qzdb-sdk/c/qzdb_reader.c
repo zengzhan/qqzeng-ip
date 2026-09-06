@@ -1181,6 +1181,9 @@ static void format_v6_cidr(const uint8_t* ip, int n, char* out, size_t sz) {
         int first = 1;
         for (int i = bestStart + bestLen; i < 8; i++) { if (!first) tmp[p++] = ':'; p += snprintf(tmp + p, sizeof(tmp) - p, "%x", g[i]); first = 0; }
     } else { for (int i = 0; i < 8; i++) { if (i > 0) tmp[p++] = ':'; p += snprintf(tmp + p, sizeof(tmp) - p, "%x", g[i]); } }
+    tmp[p] = '\0';  /* 尾部循环为空时(零压缩覆盖到末尾,如 /37 的 ::)tmp 无 NUL,
+                     * %s 会读越界栈内存输出垃圾(实测 2408:8000:9000::1 →
+                     * "2408:8000:9000::p:G.../37")。 */
     snprintf(out, sz, "%s/%d", tmp, n);
 }
 

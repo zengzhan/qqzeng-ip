@@ -2066,7 +2066,30 @@ class QzdbReader:
         if ptr == 0:
             return 0, 0
         if ptr & SENTINEL:
-            return ptr & SENTINEL_MASK_31, 16
+            # 跳表哨兵:该行的真实前缀可能短于跳表位数(短范围哨兵存于 trie 浅层),
+            # 跳表深度不是真实前缀。从根重走恢复真实前缀(对齐 C/Go/Node);
+            # 未命中更浅哨兵回落 16。实测 max_global:224.0.0.1 真值 224.0.0.0/4。
+            idx, n = 0, 16
+            for depth in range(16):
+                if idx >= self._v4_node_count:
+                    break
+                bit = (ip_int >> (31 - depth)) & 1
+                if v4_node_24:
+                    noff = off_nodes + idx * 6
+                    off = noff if bit == 0 else noff + 3
+                    child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
+                    if child & 0x800000:
+                        n = depth + 1
+                        break
+                else:
+                    child = _unpack_u32_from(d, off_nodes + idx * 8 + bit * 4)[0]
+                    if child & SENTINEL:
+                        n = depth + 1
+                        break
+                if child == 0:
+                    break
+                idx = child
+            return ptr & SENTINEL_MASK_31, n
         idx = ptr
         suffix = (ip_int & 0xFFFF) << 16
         if v4_node_24:
@@ -2111,7 +2134,31 @@ class QzdbReader:
         if ptr == 0:
             return 0, 0
         if ptr & SENTINEL:
-            return ptr & SENTINEL_MASK_31, jump_bits
+            # 跳表哨兵:该行的真实前缀可能短于跳表位数(短范围哨兵存于 trie 浅层),
+            # 跳表深度不是真实前缀。从根重走恢复真实前缀(对齐 C/Go/Node 的
+            # 根重走设计);未命中更浅哨兵回落 jump_bits。实测 max_global:
+            # fe80::1 真值 fe80::/10(链路本地),旧实现误报 fe80::/20。
+            idx, n = 0, jump_bits
+            for depth in range(jump_bits):
+                if idx >= self._v6_node_count:
+                    break
+                bit = (ip_int >> (127 - depth)) & 1
+                if v6_node_24:
+                    noff = off_nodes + idx * 6
+                    off = noff if bit == 0 else noff + 3
+                    child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
+                    if child & 0x800000:
+                        n = depth + 1
+                        break
+                else:
+                    child = struct.unpack_from('<I', d, off_nodes + idx * 8 + bit * 4)[0]
+                    if child & SENTINEL:
+                        n = depth + 1
+                        break
+                if child == 0:
+                    break
+                idx = child
+            return ptr & SENTINEL_MASK_31, n
         idx = ptr
         if v6_node_24:
             for depth in range(jump_bits, 128):

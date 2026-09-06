@@ -56,6 +56,25 @@
 
 ### Fixed
 
+- **新增跨 API 一致性验证层 `cross_api_verify.py`(审计基建)**:
+  同一 IP 横向比对 `lookup_cidr` + `lookup_row_id`(此前 cross_lang_verify 只比
+  pipe,/32 类错误不可见)。首跑即在 4 语言间抓到 26 处真实分歧,全部修复后
+  **504/504 全过**(Python 参照 + Node/PHP/Java/C,63 IP 含 mapped 降级与
+  /32 单段)。TEST_IPS 补 V4-mapped 降级路径(`::ffff:` 前缀 2 条)。
+  Go/Rust/C# 的 batch 二进制 cidr 字段扩展留待下一轮(源码在 tools/)。
+- **PHP `lookupCidr` IPv4-mapped 降级失效修复(P1)**:`parseIpv6Raw` 的
+  "不降级返回 16 字节"前提被解析期 mapped 降级(§8 规则 4)破坏——mapped
+  地址在此永远拿不到 v6 字节,lookupCidr 的 mapped 查询恒为 null。
+  改走与 find() 相同的解析分流;非 mapped 路径逐字节不变。
+- **Python `lookup_cidr` 跳表哨兵前缀错误(P1,v4+v6)**:跳表级哨兵
+  (短于跳表位数的范围,如多播 224.0.0.0/4、链路本地 fe80::/10)的 CIDR
+  前缀误报为跳表深度。改从根重走恢复真实前缀(对齐 C/Go/Node 设计)。
+  实测:224.0.0.1 /16→/4、fe80::1 /20→/10,与真值 CSV 一致。
+- **C `format_v6_cidr` 尾部空压缩缺 NUL(P1,UB)**:零压缩覆盖到末尾时
+  (如 /37 的 `::`)tmp 无 NUL 终止,`%s` 读越界栈内存输出垃圾字节
+  (实测 `2408:8000:9000::1` → `2408:8000:9000::p:G.../37`)。补 `tmp[p]='\0'`。
+- **Java `CrossApiProbe` 探针**(验证基建):临时目录编译,不污染源码树。
+
 - **C# 语义 Getter 缺失字段误命中首字段（P0,准确性行为修复）**:
   `BindStandardIndices` 用 `map.TryGetValue(key, out idx)` 绑定 20 个语义字段索引,
   TryGetValue 缺键时 out 被置为 default(int)=0,而 Getter 以 `_idxX >= 0` 判存在——

@@ -35,6 +35,21 @@
 2. **未命中 (Not Found)**：`geo_info == null`，`error == null`（合法公网/私网 IP 但库内无记录）
 3. **参数非法 (Invalid IP)**：`geo_info == null`，`error != null`（格式错误、含非法字符等）
 
+### 2.5 缺失字段的语义 Getter 两层约定(v2.5.1,跨语言审计确认)
+
+语义 Getter 存在两层,缺失字段行为**必须**遵循:
+
+1. **类型化 Getter**(如 `GetLongitude()` / `getLongitude()` / `longitude` 属性):
+   字符串字段缺失 → 空串 `""`;数值字段缺失 → 语言原生 optional
+   (C# `null` / Java `null` / Python `None`),**绝不返回其他字段的值**。
+   历史教训:C# `BindStandardIndices` 曾因 `TryGetValue` 缺键置 0 而误命中
+   首字段(已修,见 CHANGELOG)。
+2. **动态取值**(`get(name)` / `Get(name)` / `geo_info_get`):一律返回空串 `""`,
+   绝不抛错(既有约定,重申)。
+
+跨语言矩阵验证:`multi-lang/cross_api_verify.py`(cidr + row_id)+
+`multi-lang/cross_lang_verify.py`(pipe)。
+
 ### 3. 字段投影语义（`find_fields` / `findFields`，v2.5 对齐 Java golden）
 以 Java 实现为认证参考，8 语言投影行为逐字一致：
 1. **字段顺序**：输出 GeoInfo 的字段名与顺序 = 调用方输入原样（含重复字段、未知字段）。
