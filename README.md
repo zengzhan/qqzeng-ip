@@ -15,7 +15,7 @@
 [![npm](https://img.shields.io/npm/v/@qqzengip/qzdb?logo=npm&label=npm&color=CB3837)](https://www.npmjs.com/package/@qqzengip/qzdb)
 [![crates.io](https://img.shields.io/crates/v/qzdb?logo=rust&label=crates.io&color=DEA584)](https://crates.io/crates/qzdb)
 [![Packagist](https://img.shields.io/packagist/v/qqzeng/qzdb?logo=composer&label=Packagist&color=F28D1A)](https://packagist.org/packages/qqzeng/qzdb)
-[![Go Module](https://img.shields.io/badge/Go%20Module-v1.0.0-00ADD8?logo=go)](https://pkg.go.dev/github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go)
+[![Go Module](https://img.shields.io/badge/Go%20Module-v1.0.6-00ADD8?logo=go)](https://pkg.go.dev/github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go)
 
 </div>
 
@@ -118,14 +118,14 @@ Maven：
 <dependency>
     <groupId>com.qqzeng</groupId>
     <artifactId>qzdb</artifactId>
-    <version>1.0.6</version>
+    <version>1.0.7</version>
 </dependency>
 ```
 
 Gradle：
 
 ```groovy
-implementation 'com.qqzeng:qzdb:1.0.6'
+implementation 'com.qqzeng:qzdb:1.0.7'
 ```
 
 </details>
