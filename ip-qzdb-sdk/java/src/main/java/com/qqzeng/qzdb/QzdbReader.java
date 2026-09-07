@@ -1357,7 +1357,7 @@ public final class QzdbReader implements AutoCloseable {
     /**
      * 从 row_id 解包 IPRow 获取各维度 ID。
      *
-     * @param rowId 行号（> 0 且 < rowCount）
+     * @param rowId 行号（大于 0 且小于 rowCount）
      * @return RowIds 具名结构体；越界返回 null
      */
     public RowIds lookupIds(int rowId) {
