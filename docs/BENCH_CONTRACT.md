@@ -5,7 +5,7 @@
 **性质**：`docs/QZDB_TEST_SPECIFICATION.md` §四（Tier 3 性能压测）的**强制性补充条款**，非替代。
 **性质**：`docs/QZDB_TEST_SPECIFICATION.md` §四（Tier 3 性能压测）的**强制性补充条款**，非替代。
 **适用范围**：C / C# / Go / Java / Node.js / PHP / Python / Rust 八语言 SDK 的**全部性能基准**。
-**依赖基线**：`multi-lang/API_CONTRACT.md`（行为契约）、`multi-lang/tools/golden_vectors.json`（正确性裁判）。
+**依赖基线**：`ip-qzdb-sdk/API_CONTRACT.md`（行为契约）、`ip-qzdb-sdk/tools/golden_vectors.json`（正确性裁判）。
 
 ---
 
@@ -35,7 +35,7 @@
 
 1. 使用 §3 参考 RNG 生成全部查询数组（**禁止** `rand()` / `Math.random()` / `random.Random` 无种子，或硬编码 IP 数组）。
 2. 覆盖 §4 四种分布，每种分布报告 §6 全部指标。
-3. 输出 §7 规范化 JSON 到 `multi-lang/bench_reports/<lang>_<edition>.json`。
+3. 输出 §7 规范化 JSON 到 `ip-qzdb-sdk/bench_reports/<lang>_<edition>.json`。
 4. 在 JSON 中完整填写 §8 环境声明。
 5. 双栈：每种分布分别报告 v4-only / v6-only / mixed(50/40/10) 三模式（见 §5）。
 6. 接入 §9 baseline 回归门禁（CI 中，非 `|| true`）。
@@ -50,12 +50,12 @@
 | 主测库（必测） | `max/global/qqzeng_ip_max_global.qzdb`（117 MB） | 大库，缓存压力与 trie 深度最坏 |
 | 小库（必测） | `std/china/qqzeng_ip_std_china.qzdb`（8.6 MB） | 快路径、低基数，作为下限对照 |
 | 可选库 | `ult/global/qqzeng_ip_ult_global.qzdb`（122 MB） | 内存峰值压力测试 |
-| 数据根目录 | `multi-lang/test_data_202608/` | 路径解析见下 |
+| 数据根目录 | `ip-qzdb-sdk/test_data_202608/` | 路径解析见下 |
 
 **路径解析**（每种语言须按序尝试，命中即停，与 Java 当前策略一致）：
 ```
 <lang>/../test_data_202608/<edition>/<region>/<file>
-multi-lang/test_data_202608/<edition>/<region>/<file>
+ip-qzdb-sdk/test_data_202608/<edition>/<region>/<file>
 ../test_data_202608/<edition>/<region>/<file>
 test_data_202608/<edition>/<region>/<file>
 ```
@@ -86,7 +86,7 @@ u128() = (next_u64() << 64) | next_u64()         // 大端语义：high 在前
 
 **确定性约定**：每种分布/模式独立"消费" RNG 流，顺序严格按 §4 伪代码。各语言须**按相同顺序调用 `next_u64`**，不得为"好看"而重排，否则跨语言数组失配。
 
-> 参考实现建议：新增 `multi-lang/tools/bench_gen.py`，按本契约生成并落盘 `bench_vectors.json`（含四种分布 × 双栈的 IP 数组），作为八语言 bench 的**公共输入**，从根上消除"各语言各自生成、互不可比"。（该工具属于实现步骤，不在本契约强制之内，但强烈建议。）
+> 参考实现建议：新增 `ip-qzdb-sdk/tools/bench_gen.py`，按本契约生成并落盘 `bench_vectors.json`（含四种分布 × 双栈的 IP 数组），作为八语言 bench 的**公共输入**，从根上消除"各语言各自生成、互不可比"。（该工具属于实现步骤，不在本契约强制之内，但强烈建议。）
 
 ---
 
@@ -170,7 +170,7 @@ else:       ip = sequential 采样     // 10% 单调
 
 ## 7. 规范化 JSON 输出 schema
 
-每种语言输出到 `multi-lang/bench_reports/<lang>_<edition>.json`，顶层结构：
+每种语言输出到 `ip-qzdb-sdk/bench_reports/<lang>_<edition>.json`，顶层结构：
 
 ```json
 {
@@ -180,7 +180,7 @@ else:       ip = sequential 采样     // 10% 单调
   "timestamp": "2026-08-10T15:43:27+08:00",
   "seed": 20260807,
   "db": {
-    "path": "multi-lang/test_data_202608/max/global/qqzeng_ip_max_global.qzdb",
+    "path": "ip-qzdb-sdk/test_data_202608/max/global/qqzeng_ip_max_global.qzdb",
     "edition": "max_global",
     "bytes": 117127664,
     "hash": "crc32:xxxxxxxx"
@@ -222,7 +222,7 @@ else:       ip = sequential 采样     // 10% 单调
 
 ## 9. Baseline 与回归门禁（CI）
 
-1. 每种语言在 `multi-lang/bench_reports/baseline/<lang>_<edition>.json` 提交**基线**（首次由该语言合规 bench 产出）。
+1. 每种语言在 `ip-qzdb-sdk/bench_reports/baseline/<lang>_<edition>.json` 提交**基线**（首次由该语言合规 bench 产出）。
 2. CI（`verify.yml`，**禁止使用 `|| true`**）在 Tier 3 阶段运行合规 bench，将 `hot` 分布（缓存敏感、信息量最大）的 QPS 与 P99 对比基线：
    - `hot.mixed` QPS 下降 **> 10%** → 失败
    - `hot.mixed` P99 上升 **> 20%** → 失败
@@ -264,7 +264,7 @@ else:       ip = sequential 采样     // 10% 单调
 
 ## 12. 实施顺序（建议，非本契约强制）
 
-1. 落地 `multi-lang/tools/bench_gen.py`（§3 参考实现），产 `bench_vectors.json`，人工核对八语言数组逐字节一致。
+1. 落地 `ip-qzdb-sdk/tools/bench_gen.py`（§3 参考实现），产 `bench_vectors.json`，人工核对八语言数组逐字节一致。
 2. 各语言 bench 改为消费公共向量（或按 §3/§4 自实现 RNG，二者等价），补齐四分布 + 双栈三元 + P50/P99 + 线程扩展 + JSON + 环境声明。
 3. 提交 `baseline/`，把回归门禁挂进 `verify.yml`（不用 `|| true`）。
 4. 拿到数据后，按第 11 节门槛决定 P1/P2 是否进入代码优化。
