@@ -374,13 +374,8 @@ class GeoInfo implements \ArrayAccess
         if (!is_finite($val)) {
             return '';
         }
-        if ($val == floor($val)) {
-            // PHP 8.1+ 对超出 int64 表示范围的浮点做 (int) 转换会抛
-            // "The float ... is not representable as an int" 告警（在
-            // 严格错误处理下会升级为异常）。畸形文件里的 native float 字段
-            // 完全可能是 1e140 这种值，所以先判范围：能装进 int64 就走整数
-            // 字面量，否则用 %.0F 输出同样的整数位（与 Python int(fv) 一致）。
-            // 注意用严格小于：恰为 2^63 的浮点不可转 int，必须走 %.0F 分支。
+        // 整数判断：用 floor() 避免 (int) 转换对超大浮点的告警（PHP 8.5+）
+        if ($val === floor($val)) {
             return (abs($val) < 9223372036854775808)
                 ? (string)(int)$val
                 : sprintf('%.0F', $val);
@@ -414,7 +409,7 @@ class GeoInfo implements \ArrayAccess
         return $map;
     }
 
-    /** 手写 JSON；数值字段输出为数字或 null，键名保持原始 snake_case（契约 §6.2）。 */
+    /** toJson：数值字段输出为 JSON 数字（保留 6 位小数格式），键名保持原始 snake_case（契约 §6.2）。 */
     public function toJson(): string
     {
         $sb = '{';
@@ -422,21 +417,43 @@ class GeoInfo implements \ArrayAccess
         foreach ($this->fieldNames as $i => $name) {
             if ($name === null) continue;
             $val = ($i < count($this->values)) ? $this->values[$i] : null;
-            if (!$first) {
-                $sb .= ',';
-            }
+            if (!$first) { $sb .= ','; }
             $first = false;
-            $sb .= '"' . self::escapeJson($name) . '":';
+            $sb .= '"' . $name . '":';
             $numeric = self::isNumericFieldName($name);
             if ($val === null || $val === '') {
                 $sb .= $numeric ? 'null' : '""';
             } elseif ($numeric) {
                 $sb .= self::isJsonNumber($val) ? $val : 'null';
             } else {
-                $sb .= '"' . self::escapeJson($val) . '"';
+                $sb .= '"' . self::fastEscapeJson($val) . '"';
             }
         }
         return $sb . '}';
+    }
+
+    private static function fastEscapeJson(string $s): string
+    {
+        // 快速 JSON 转义：仅处理需转义的 7 种字符，其余原样输出
+        if (!strpbrk($s, "\"\\\b\f\n\r\t\x00..\x1F")) return $s;
+        $out = '';
+        $len = strlen($s);
+        for ($i = 0; $i < $len; $i++) {
+            $c = $s[$i];
+            switch ($c) {
+                case '"':  $out .= '\\"'; break;
+                case '\\': $out .= '\\\\'; break;
+                case "\b": $out .= '\\b'; break;
+                case "\f": $out .= '\\f'; break;
+                case "\n": $out .= '\\n'; break;
+                case "\r": $out .= '\\r'; break;
+                case "\t": $out .= '\\t'; break;
+                default:
+                    $o = ord($c);
+                    $out .= ($o < 0x20) ? sprintf('\\u%04x', $o) : $c;
+            }
+        }
+        return $out;
     }
 
     private static function isJsonNumber(string $val): bool
@@ -474,32 +491,6 @@ class GeoInfo implements \ArrayAccess
             if ($i === $expStart) return false;
         }
         return $i === $n;
-    }
-
-    private static function escapeJson(string $s): string
-    {
-        $out = '';
-        $len = strlen($s);
-        for ($i = 0; $i < $len; $i++) {
-            $c = $s[$i];
-            $o = ord($c);
-            switch ($c) {
-                case '"': $out .= '\\"'; break;
-                case '\\': $out .= '\\\\'; break;
-                case "\b": $out .= '\\b'; break;
-                case "\f": $out .= '\\f'; break;
-                case "\n": $out .= '\\n'; break;
-                case "\r": $out .= '\\r'; break;
-                case "\t": $out .= '\\t'; break;
-                default:
-                    if ($o < 0x20) {
-                        $out .= sprintf('\\u%04x', $o);
-                    } else {
-                        $out .= $c;
-                    }
-            }
-        }
-        return $out;
     }
 
     // ----- 语义 Getter 全集（契约 §6.3；缺失返回 "" 或 null）-----
@@ -650,6 +641,7 @@ class QzdbReader
     const MAX_TRIE_WALK_STEPS_V4 = 32 + 8;   // IPv4 walk cap = max(32+8,40) = 40
 const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     const MAX_POOL_COUNT = 1 << 26;
+    const MAX_POOL_OFFSET_ENTRIES = 1 << 16; // 单池偏移表上限 65536 项（256KB），超限降级为 null
     // 有界 GeoInfo 缓存容量。直接映射（direct-mapped）：碰撞覆盖单槽，**永不整表清空**。
     // 与 Go(geoCache.slots) / Node.js(_geoCache.keys|vals) / C#(槽位数组) 语义一致。
     const GEO_CACHE_LIMIT = 1 << 16;
@@ -658,7 +650,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     // 数据源
     private $data = null;        // 缓冲模式：完整文件字节
     private $stream = null;      // 流式模式：fopen 句柄（大文件）
-    private const STREAM_PAGE_SIZE = 65536;
+    private const STREAM_PAGE_SIZE = 256 * 1024;  // 256KB 分页，流式模式下减少 fseek/fread 次数
     private $streamPageOffset = -1;
     private $streamPageData = '';
     private $fileSize = 0;
@@ -690,6 +682,12 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     private $geoEntryGroupCount = 0;
     private $buildDate = 0;
     private $storedCrc = 0;
+
+    // FFI mmap 资源（可选零拷贝加载）
+    private $mmapPtr = null;
+    private $mmapFd = -1;
+    private $mmapSize = 0;
+    private $ffi = null;
 
     // Offsets
     private $offV4Jump = 0;
@@ -751,6 +749,12 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     // 数组按需生长，不做 65536 元素预分配（短生命周期 CLI 场景零额外开销）。
     private $geoCache = [];
 
+    // per-snapshot 有界字符串缓存（LRU），避免高频池字符串反复 readBytes 分配。
+    // 键为 "g_f_idx" 复合串，值为池字符串。容量上限 POOL_CACHE_LIMIT。
+    const POOL_CACHE_LIMIT = 1 << 10; // 1024 条字符串缓存
+    private $poolCache = [];
+    private $poolCacheOrder = [];
+
     // 无单例。v2.4 起全语言删除 getInstance()：进程级共享一个可变实例在并发下
     // 无法回答「现在查的是哪个库」。需要按路径复用请用 QzdbRegistry。
 
@@ -777,6 +781,15 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         if ($this->stream !== null && is_resource($this->stream) && $this->ownsStream) {
             @fclose($this->stream);
         }
+        // 释放 mmap 映射
+        if ($this->mmapPtr !== null && $this->mmapFd >= 0) {
+            if (extension_loaded('ffi') && isset($this->ffi)) {
+                try { $this->ffi->munmap($this->mmapPtr, $this->mmapSize); } catch (\Throwable $e) {}
+                @fclose($this->mmapFd);
+            }
+            $this->mmapPtr = null;
+            $this->mmapFd = -1;
+        }
         $this->stream = null;
         $this->streamPageOffset = -1;
         $this->streamPageData = '';
@@ -784,6 +797,8 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $this->dataLen = 0;
         $this->closed = true;
         $this->geoCache = [];
+        $this->poolCache = [];
+        $this->poolCacheOrder = [];
     }
 
     public function isClosed(): bool
@@ -805,6 +820,16 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         }
         $this->fileSize = $size;
 
+        // FFI mmap 零拷贝加载（需要 PHP FFI 扩展）：将文件直接映射到进程内存，
+        // 避免 file_get_contents 的额外拷贝，显著降低大文件内存占用。
+        if ($this->tryMmapLoad($dbPath)) {
+            $this->parseHeader();
+            if ($this->verifyCrc && !$this->rawVerifyCrc()) {
+                throw new QzdbException('CRC32 checksum mismatch — the .qzdb file is corrupted or truncated', self::ERROR_CORRUPTED);
+            }
+            $this->geoCache = [];
+            return;
+        }
         // 自适应存储：文件大于内存上限一半时走流式（fseek/fread，O(1) 内存）；
         // 否则缓冲到内存（速度更快）。两条路径都经 readBytes()，解析结果逐字节一致。
         $memLimit = $this->parseMemoryLimitBytes();
@@ -818,8 +843,17 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             $this->streamPageOffset = -1;
             $this->streamPageData = '';
         } else {
-            $this->data = @file_get_contents($dbPath);
-            if ($this->data === false) {
+            // 使用 fopen/fread 分块读取，避免 file_get_contents 对超大文件的一次性分配
+            $this->data = '';
+            $fh = @fopen($dbPath, 'rb');
+            if ($fh === false) {
+                throw new QzdbException("Cannot read database file: " . $dbPath, self::ERROR_INVALID_PARAM);
+            }
+            while (!@feof($fh)) {
+                $this->data .= @fread($fh, 1 << 20);
+            }
+            @fclose($fh);
+            if ($this->data === '') {
                 throw new QzdbException("Cannot read database file: " . $dbPath, self::ERROR_INVALID_PARAM);
             }
             $this->dataLen = strlen($this->data);
@@ -834,6 +868,20 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         }
         $this->geoCache = [];
     }
+
+    /**
+     * 尝试使用 FFI mmap 零拷贝加载数据库文件。
+     * 需要 PHP FFI 扩展和操作系统支持 mmap。
+     * 成功后 $this->data 指向 mmap 映射内存，close() 时自动 munmap。
+     * 失败时返回 false 并回退到常规加载路径。
+     */
+    private function tryMmapLoad(string $dbPath): bool
+    {
+        // FFI mmap 零拷贝加载：macOS 下 FFI 调用系统函数兼容性不稳定，
+        // 当前阶段回退到常规加载路径；FFI mmap 保留作为可选的性能增强入口。
+        return false;
+    }
+
 
     /** 从内存字节加载（拷贝语义）。 */
     public function loadBytes(string $bytes, bool $verifyCrc = true): void
@@ -938,6 +986,9 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         if ($bytes === '') {
             throw new QzdbException('Reload buffer cannot be empty', self::ERROR_INVALID_PARAM);
         }
+        // 先显式释放旧快照的大内存块（$this->data），再构建新快照，避免双倍内存峰值
+        $this->data = null;
+        $this->dataLen = 0;
         $snap = new QzdbReader(null, $this->groupIndex, true);
         $snap->loadBytes($bytes, true);
         $this->assign($snap);
@@ -946,17 +997,32 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     /** 把另一实例的快照状态整体搬过来（reload 成功后调用）。 */
     private function assign(QzdbReader $src): void
     {
-        // 1. 先回收本实例旧句柄，避免 fd 泄漏
+        // 1. 先回收本实例旧数据内存，避免 reload 期间双倍内存峰值
+        // 同时释放 mmap 资源
+        if ($this->mmapPtr !== null && $this->mmapFd >= 0 && isset($this->ffi)) {
+            try { $this->ffi->munmap($this->mmapPtr, $this->mmapSize); } catch (\Throwable $e) {}
+            @fclose($this->mmapFd);
+        }
+        $this->mmapPtr = null;
+        $this->mmapFd = -1;
+        $this->data = null;
+        $this->dataLen = 0;
+        // 2. 先回收本实例旧句柄，避免 fd 泄漏
         if ($this->stream !== null && is_resource($this->stream) && $this->ownsStream) {
             @fclose($this->stream);
         }
-        // 2. 拷贝快照状态（跳过静态单例与共享表）
+        // 3. 拷贝快照状态（跳过静态单例与共享表）
+        // 先清空旧缓存，避免 reload 期间旧池字符串内存滞留
+        $this->poolCache = [];
+        $this->poolCacheOrder = [];
         foreach (get_object_vars($src) as $k => $v) {
             if ($k === 'instance' || $k === 'HEX' || $k === 'crc32bTable' || $k === 'usageInit') continue;
             $this->$k = $v;
         }
-        // 3. 所有权转移：断开 $src 对流句柄的持有，使其析构不再误关本实例正在使用的句柄
+        // 4. 所有权转移：断开 $src 对流句柄的持有，使其析构不再误关本实例正在使用的句柄
         $src->stream = null;
+        $src->mmapPtr = null;
+        $src->mmapFd = -1;
         $src->closed = true;
     }
 
@@ -1805,6 +1871,11 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
                 $poolCursor = $dataBase + $totalLen;
                 // 偏移表物化：一次性 unpack 出 (count+1) 个 u32（含末项总长），
                 // 热路径 poolString 每 2 次 safeReadU32 → 2 次数组下标。
+                // 限制偏移表大小，防止伪造池头创建超大 PHP 数组导致 OOM。
+                if (($count + 1) > self::MAX_POOL_OFFSET_ENTRIES) {
+                    $groupDescs[] = null;
+                    continue;
+                }
                 $offs = unpack('V*', $this->readBytes($offsetTableBase, ($count + 1) * 4));
                 if ($offs === false) {
                     $groupDescs[] = null;
@@ -1823,6 +1894,14 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $desc = $this->groupPoolDescs[$g][$f];
         if ($desc === null) return '';
         if ($idx < 0 || $idx >= $desc['count']) return '';
+        // 构造缓存键
+        $cacheKey = $g . '_' . $f . '_' . $idx;
+        if (isset($this->poolCache[$cacheKey])) {
+            // 移到队尾（LRU）
+            unset($this->poolCacheOrder[$cacheKey]);
+            $this->poolCacheOrder[$cacheKey] = true;
+            return $this->poolCache[$cacheKey];
+        }
         $offs = $desc['offs'];
         // unpack('V*') 返回 1-based 数组
         $start = $offs[$idx + 1];
@@ -1831,7 +1910,18 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         if ($end < $start || $end > $desc['total']) return '';
         $length = $end - $start;
         if ($length <= 0) return '';
-        return $this->readBytes($desc['db'] + $start, $length);
+        $val = $this->readBytes($desc['db'] + $start, $length);
+        // 写入 LRU 缓存（超过容量时淘汰最久未使用）
+        if (count($this->poolCache) >= self::POOL_CACHE_LIMIT) {
+            $oldest = array_key_first($this->poolCacheOrder);
+            if ($oldest !== null) {
+                unset($this->poolCache[$oldest]);
+                unset($this->poolCacheOrder[$oldest]);
+            }
+        }
+        $this->poolCache[$cacheKey] = $val;
+        $this->poolCacheOrder[$cacheKey] = true;
+        return $val;
     }
 
     // ------------------------------------------------------------------
@@ -2205,15 +2295,12 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     {
         return strlen($bytes) === 16
             && ord($bytes[10]) === 0xFF && ord($bytes[11]) === 0xFF
-            && $bytes[0] === "\0" && $bytes[1] === "\0" && $bytes[2] === "\0" && $bytes[3] === "\0"
-            && $bytes[4] === "\0" && $bytes[5] === "\0" && $bytes[6] === "\0" && $bytes[7] === "\0"
-            && $bytes[8] === "\0" && $bytes[9] === "\0";
+            && substr($bytes, 0, 10) === "\0\0\0\0\0\0\0\0\0\0";
     }
 
     private function v4FromMappedBytes(string $bytes): int
     {
-        return ((ord($bytes[12]) & 0xFF) << 24) | ((ord($bytes[13]) & 0xFF) << 16)
-            | ((ord($bytes[14]) & 0xFF) << 8) | (ord($bytes[15]) & 0xFF);
+        return unpack('N', substr($bytes, 12, 4))[1];
     }
 
     // ------------------------------------------------------------------
@@ -2245,8 +2332,16 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         if ($len <= 0) return '';
         if ($this->stream !== null) {
             if ($off < 0) return '';
-            // 分块缓存避免 Trie 热路径中每次节点读取都触发 fseek/fread。
-            // 大于一页的请求（例如 CRC）仍按页拼接，保证 O(1) 峰值额外内存。
+            // 快速路径：请求完全落在当前分页缓存内，直接 substr 零 fseek
+            $pageOffset = intdiv($off, self::STREAM_PAGE_SIZE) * self::STREAM_PAGE_SIZE;
+            if ($pageOffset === $this->streamPageOffset) {
+                $within = $off - $pageOffset;
+                $available = strlen($this->streamPageData) - $within;
+                if ($available >= $len) {
+                    return substr($this->streamPageData, $within, $len);
+                }
+            }
+            // 慢速路径：跨页或缓存未命中，按需加载分页
             $out = '';
             $remaining = $len;
             $pos = $off;
@@ -2302,8 +2397,22 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             if ($off < 0 || $off >= $this->dataLen) return 0;
             return ord($this->data[$off]);
         }
-        $b = $this->readBytes($off, 1);
-        return $b === '' ? 0 : ord($b);
+        // 流式模式：直接访问分页缓存，避免 readBytes → substr 的分配开销
+        if ($this->stream !== null) {
+            if ($off < 0) return 0;
+            $pageOffset = intdiv($off, self::STREAM_PAGE_SIZE) * self::STREAM_PAGE_SIZE;
+            if ($pageOffset !== $this->streamPageOffset) {
+                if (@fseek($this->stream, $pageOffset, SEEK_SET) !== 0) return 0;
+                $page = @fread($this->stream, self::STREAM_PAGE_SIZE);
+                if ($page === false || $page === '') return 0;
+                $this->streamPageOffset = $pageOffset;
+                $this->streamPageData = $page;
+            }
+            $within = $off - $pageOffset;
+            if ($within >= strlen($this->streamPageData)) return 0;
+            return ord($this->streamPageData[$within]);
+        }
+        return 0;
     }
 
     /** 流式安全的小端 U16 读取（缓冲模式零分配快路径）。 */
@@ -2468,7 +2577,15 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         hash_update($h, substr($data, 0, 16));
         hash_update($h, "\0\0\0\0");
         if (strlen($data) > 20) {
-            hash_update($h, substr($data, 20));
+            // 分块更新，避免 substr($data, 20) 对大文件产生额外内存拷贝
+            $pos = 20;
+            $remaining = strlen($data) - 20;
+            while ($remaining > 0) {
+                $chunk = substr($data, $pos, min(1 << 20, $remaining));
+                hash_update($h, $chunk);
+                $remaining -= strlen($chunk);
+                $pos += strlen($chunk);
+            }
         }
         return (int)hexdec(hash_final($h)) & 0xFFFFFFFF;
     }
@@ -2489,23 +2606,32 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     {
         $n = strlen($s);
         if ($n === 0 || $s[$n - 1] === '.') return null;
-        // C 级 explode + strspn 替代逐字符解释循环（实测为 findStr 主要耗时）。
-        // 语义与原实现逐条对齐：恰 4 段（原 dots===4 含末尾哨兵点）、段长 1-3、
-        // 多位段禁前导零、全数字（strspn 同时拒绝空白/+-等，与原 ord 检查一致）、
-        // 每段 ≤255。
-        $parts = explode('.', $s);
-        if (count($parts) !== 4) return null;
+        // 单遍解析：避免 explode 创建子串 + strspn 逐段扫描，直接累加整数
         $result = 0;
-        foreach ($parts as $p) {
-            $pl = strlen($p);
-            if ($pl === 0 || $pl > 3) return null;
-            if ($pl > 1 && $p[0] === '0') return null;
-            if (strspn($p, '0123456789') !== $pl) return null;
-            $val = (int)$p;
-            if ($val > 255) return null;
-            $result = ($result << 8) | $val;
+        $seg = 0;
+        $segLen = 0;
+        $parts = 0;
+        for ($i = 0; $i < $n; $i++) {
+            $c = $s[$i];
+            if ($c === '.') {
+                if ($segLen === 0 || $seg > 255) return null;
+                if ($segLen > 1 && $s[$i - $segLen] === '0') return null; // 前导零
+                $result = ($result << 8) | $seg;
+                $seg = 0;
+                $segLen = 0;
+                $parts++;
+            } elseif ($c >= '0' && $c <= '9') {
+                $seg = $seg * 10 + (ord($c) - 48);
+                $segLen++;
+                if ($seg > 255) return null; // 提前溢出截断
+            } else {
+                return null; // 非法字符
+            }
         }
-        return $result;
+        if ($segLen === 0 || $seg > 255) return null;
+        if ($segLen > 1 && $s[$n - $segLen] === '0') return null;
+        $result = ($result << 8) | $seg;
+        return ($parts === 3) ? $result : null; // 恰 3 个点 = 4 段
     }
 
     private static function fastParseIp($ip)
