@@ -80,17 +80,17 @@
 
 ```bash
 # 口径 A/B(contract 契约基准,c/go/rust/python,含并发与四分布)
-cd multi-lang && BENCH_OPS=2000000 <lang>/bench_contract*    # 各语言入口见其 README
+cd ip-qzdb-sdk && BENCH_OPS=2000000 <lang>/bench_contract*    # 各语言入口见其 README
 
 # 口径 C(CI 门禁,8 语言全量,数据无关可跑)
-cd multi-lang && python3 tools/perf_gate.py                  # 默认 8 语言
+cd ip-qzdb-sdk && python3 tools/perf_gate.py                  # 默认 8 语言
 
 # 基线回归对比(本地细粒度,hot.mixed QPS -10% 或 P99 +20% 即失败)
 python3 tools/perf_gate.py --save baseline.json
 python3 tools/perf_gate.py --baseline baseline.json --tol 0.25
 ```
 
-历史与最新基准报告:multi-lang/bench_reports/*.json(随仓库版本化,含 environment 字段)。
+历史与最新基准报告:ip-qzdb-sdk/bench_reports/*.json(随仓库版本化,含 environment 字段)。
 
 ## 四、宣传使用规则
 
