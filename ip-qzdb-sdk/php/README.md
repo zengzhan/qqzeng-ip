@@ -76,7 +76,7 @@ use Qqzeng\Ip\QzdbBuilder;
 ```json
 {
   "autoload": {
-    "psr-4": { "Qqzeng\\Ip\\": "multi-lang/php/" }
+    "psr-4": { "Qqzeng\\Ip\\": "ip-qzdb-sdk/php/" }
   }
 }
 ```
@@ -529,12 +529,10 @@ php tier2_golden.php                       # 需仓库根 test_data_202608/ 真�
 php csv_oracle_test.php                    # 独立真值校验（需源 CSV + 真实库）
 ```
 
-跨语言完整 API 规范见仓库根：`multi-lang/API_CONTRACT.md`（v2.4，单一事实来源）。
+跨语言完整 API 规范见仓库根：`ip-qzdb-sdk/API_CONTRACT.md`（v2.4，单一事实来源）。
 
 ---
 
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: php: PHP SDK（纯 PHP 实现，缓冲与流式双模式） sync=1788775576 -->

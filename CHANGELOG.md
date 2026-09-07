@@ -8,7 +8,7 @@
 
 ### Added
 
-- **CI 性能门禁（perf-gate job）**：`multi-lang/tools/perf_gate.py` + C/Go/Rust/Node/Python 五语言驱动器，基于公共 demo 样本（数据无关、可在托管 runner 运行）。绝对下限（floors）拦截数量级回退，对 runner 硬件代际免疫；`--baseline --tol` 支持本地细粒度对比。挂入 `.github/workflows/ci.yml`（产出 30 天 perf 报告 artifact）。
+- **CI 性能门禁（perf-gate job）**：`ip-qzdb-sdk/tools/perf_gate.py` + C/Go/Rust/Node/Python 五语言驱动器，基于公共 demo 样本（数据无关、可在托管 runner 运行）。绝对下限（floors）拦截数量级回退，对 runner 硬件代际免疫；`--baseline --tol` 支持本地细粒度对比。挂入 `.github/workflows/ci.yml`（产出 30 天 perf 报告 artifact）。
 - **API_CONTRACT 升级 v2.5**：新增 §二.3 字段投影语义（对齐 Java golden：未知字段补空串/保留重复/全未知返回非空）、§二.4 零拷贝共享查询（Rust `find_shared`/`find_ref`/`ToIp` 扩展层 + 逐字节 parity 强制约束）、§五 已裁决行为口径登记（跳表哨兵/空白字符/getScope/dimensionMask 双位/Go finalizer 生命周期/性能基线 7 条）。
 - **CSV 新鲜度检查**：`tools/csv_freshness_check.py` 逐 edition 抽样对比 CIDR 真值与 DB（advisory；上游生成器改为同步产出 CIDR CSV 后可用 `--strict` 升级为硬门禁）。实测确认 10 个数据集过期（与 Node tier2_csv_verify 的 86618 偏差判别一致，属数据层问题）。
 - Rust SDK 1.0.7（crates.io 发布准备）：
@@ -183,7 +183,7 @@
 
 #### Added
 
-- Rust SDK **已发布到 crates.io**：`cargo add qzdb`（1.0.5，2026-08-29 上线，<https://crates.io/crates/qzdb>）。crate 名 `qzdb_reader` → **`qzdb`**（与 PyPI 的 `qzdb` 对齐；C 语言的 `qzdb_reader_t` / `qzdb_reader.h` 不受影响）；`Cargo.toml` 补全 crates.io 必需的 `description` / `license` / `repository` / `homepage` / `documentation` / `keywords` / `categories` / `rust-version=1.74`；新增 `multi-lang/rust/LICENSE`；新增 `.github/workflows/publish-crates.yml`（tag `v-rust-*` 触发，先 dry-run 后 publish）。
+- Rust SDK **已发布到 crates.io**：`cargo add qzdb`（1.0.5，2026-08-29 上线，<https://crates.io/crates/qzdb>）。crate 名 `qzdb_reader` → **`qzdb`**（与 PyPI 的 `qzdb` 对齐；C 语言的 `qzdb_reader_t` / `qzdb_reader.h` 不受影响）；`Cargo.toml` 补全 crates.io 必需的 `description` / `license` / `repository` / `homepage` / `documentation` / `keywords` / `categories` / `rust-version=1.74`；新增 `ip-qzdb-sdk/rust/LICENSE`；新增 `.github/workflows/publish-crates.yml`（tag `v-rust-*` 触发，先 dry-run 后 publish）。
 - PHP SDK 具备 Packagist 发布条件：发布仓库根新增 `composer.json`（包 **`qqzeng/qzdb`**，classmap 指向 `ip-qzdb-sdk/php/QzdbReader.php`，源头在 `tools/publish_meta/`）。因 Packagist 只认仓库根的 `composer.json`，同时新增根 `.gitattributes`，用 `export-ignore` 把 GitHub 归档裁剪到 5 个文件 / **44 KB**（未裁剪时 2.5 MB，会连带下载另外 7 种语言源码、4.3 MB demo 数据库与另外 3 条产品线）。包已建好、`v1.0.5` tag 已推送，`1.0.5` 正式版待在 Packagist 页面触发 Update 生成。
 - 多语言 monorepo 的 git tag 发布约定（`v<ver>` 全平台 / `v-python-*` / `v-java-*` / `v-rust-*` 单平台），见 `PUBLISHING.md` §0。
 
@@ -210,7 +210,7 @@
 
 ### Changed
 
-- .NET / C# 显式开启严格静态分析：`AnalysisMode=All` + `TreatWarningsAsErrors`（配套逐规则豁免见 `multi-lang/netcore/.editorconfig`）；`EnforceCodeStyleInBuild` 刻意不开启（被目录外 ProjectReference 消费时不可移植）。
+- .NET / C# 显式开启严格静态分析：`AnalysisMode=All` + `TreatWarningsAsErrors`（配套逐规则豁免见 `ip-qzdb-sdk/netcore/.editorconfig`）；`EnforceCodeStyleInBuild` 刻意不开启（被目录外 ProjectReference 消费时不可移植）。
 - .NET / C# 包验证基线由 1.0.5 提升至 1.0.6；ApiCompat 确认 1.0.7 无破坏性 API 变更。
 
 ### Fixed
@@ -234,7 +234,7 @@
 ### Added
 
 - Metadata TLV type=5（data_month）/ type=6（scope）权威消费，8 语言（C/C#/Go/Java/Node/PHP/Python/Rust）getter 行为逐字对齐：带条目时 TLV 为权威，无条目时 data_month 回落 Header BuildDate、scope 返回空串。规范见 `docs/QZDB_FORMAT.md` §8.2 与 `docs/QZDB_SDK_API.md` §4.5。
-- C 注入式回归测试 `multi-lang/c/tlv_meta_test.c`：真实库注入 TLV 后校验权威/回落/重复条目 last-wins 三路径，兼作 scope 字符串所有权 UAF 回归守卫（ASan 下验证）。
+- C 注入式回归测试 `ip-qzdb-sdk/c/tlv_meta_test.c`：真实库注入 TLV 后校验权威/回落/重复条目 last-wins 三路径，兼作 scope 字符串所有权 UAF 回归守卫（ASan 下验证）。
 - `docs/QZDB_SYNC_GUIDE.md` 新增文档同步规范（§六）与语言 README 统一章节骨架（§6.1）。
 
 ### Fixed
@@ -248,7 +248,7 @@
 ### Changed
 
 - Trie 游走终止保护跨语言统一为按 IP 位宽派生的上限（Node.js/Go/C/PHP/Python 以命名常量替换魔法常量 1000；Rust/Java/C# 本就构造性有界，仅登记机制）。良构文件行为不变。
-- 文档专业化整改：根 README 与 multi-lang README 重写（示例全部来自可运行代码与实测输出、fail-closed 路径完整）、SDK_API 头部去叙事化、9 篇过程稿归档至 `docs/archive/`。
+- 文档专业化整改：根 README 与 ip-qzdb-sdk README 重写（示例全部来自可运行代码与实测输出、fail-closed 路径完整）、SDK_API 头部去叙事化、9 篇过程稿归档至 `docs/archive/`。
 
 ### Compatibility
 

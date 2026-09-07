@@ -19,7 +19,7 @@ import java.util.zip.CRC32;
  * (v4 / v6 / mixed), cold vs hot QPS, P50/P95/P99 latency, thread scaling
  * 1/2/4/8/16 on a SHARED QzdbReader, 16x100k concurrency gate, FNV-1a parity
  * self-check against bench_vectors.json, string round-trip benchmark, and canonical
- * JSON output to multi-lang/bench_reports/java_{edition}.json.
+ * JSON output to ip-qzdb-sdk/bench_reports/java_{edition}.json.
  *
  * Usage: java com.qqzeng.qzdb.BenchContract [OPS] [EDITIONS]
  *   OPS      - ops per distribution/mode measurement (default 2000000)
@@ -586,7 +586,7 @@ public class BenchContract {
     private static String findRepoRoot() {
         File cwd = new File(System.getProperty("user.dir"));
         for (int i = 0; i < 8; i++) {
-            if (new File(cwd, "multi-lang/tools/bench_vectors.json").exists()) {
+            if (new File(cwd, "ip-qzdb-sdk/tools/bench_vectors.json").exists()) {
                 return cwd.getAbsolutePath();
             }
             cwd = cwd.getParentFile();
@@ -603,7 +603,7 @@ public class BenchContract {
         String filename = "qqzeng_ip_" + edition + ".qzdb";
 
         String[] bases = {
-            "multi-lang/test_data_202608",
+            "ip-qzdb-sdk/test_data_202608",
             "../test_data_202608",
             "test_data_202608"
         };
@@ -828,11 +828,11 @@ public class BenchContract {
         // Find repo root and load manifest for parity check
         String root = findRepoRoot();
         if (root.isEmpty()) {
-            System.err.println("ERROR: cannot locate repo root (multi-lang/tools/bench_vectors.json not found)");
+            System.err.println("ERROR: cannot locate repo root (ip-qzdb-sdk/tools/bench_vectors.json not found)");
             System.exit(1);
             return;
         }
-        String manifestPath = root + File.separator + "multi-lang/tools/bench_vectors.json";
+        String manifestPath = root + File.separator + "ip-qzdb-sdk/tools/bench_vectors.json";
         Object manifestRoot;
         try {
             manifestRoot = parseManifest(manifestPath);
@@ -852,7 +852,7 @@ public class BenchContract {
         }
 
         // Prepare report directory
-        String repDir = root + File.separator + "multi-lang/bench_reports";
+        String repDir = root + File.separator + "ip-qzdb-sdk/bench_reports";
         new File(repDir).mkdirs();
 
         String ts = timestamp();

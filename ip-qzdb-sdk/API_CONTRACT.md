@@ -47,8 +47,8 @@
 2. **动态取值**(`get(name)` / `Get(name)` / `geo_info_get`):一律返回空串 `""`,
    绝不抛错(既有约定,重申)。
 
-跨语言矩阵验证:`multi-lang/cross_api_verify.py`(cidr + row_id,8/8 语言——
-Go/Rust/C# 经 batch 二进制 `--cidr` 模式)+ `multi-lang/cross_lang_verify.py`(pipe)。
+跨语言矩阵验证:`ip-qzdb-sdk/cross_api_verify.py`(cidr + row_id,8/8 语言——
+Go/Rust/C# 经 batch 二进制 `--cidr` 模式)+ `ip-qzdb-sdk/cross_lang_verify.py`(pipe)。
 
 ### 3. 字段投影语义（`find_fields` / `findFields`，v2.5 对齐 Java golden）
 以 Java 实现为认证参考，8 语言投影行为逐字一致：

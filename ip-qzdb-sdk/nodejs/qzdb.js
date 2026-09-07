@@ -3,7 +3,7 @@
 /*
  * QZDB Node.js SDK —— 纯离线、零依赖、高性能 IP 地理定位数据库读取器。
  *
- * 严格遵循 multi-lang/API_CONTRACT.md（v2.4，唯一事实来源）：
+ * 严格遵循 ip-qzdb-sdk/API_CONTRACT.md（v2.4，唯一事实来源）：
  *   - SENTINEL 高位哨兵位在解析前剥离（§8.1）
  *   - 原生浮点 6 位小数格式（§8.2），toPipe 直接拼接已格式化字符串（§8.3）
  *   - IPv4-Mapped IPv6 自动降级（§8.4）

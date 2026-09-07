@@ -459,7 +459,7 @@ dotnet add package QQZeng.Qzdb --version x.y.z
 | `QzdbException.cs` | 异常类型与 `ErrorCode` 枚举 |
 | `QQZeng.Qzdb.csproj` | SDK 风格项目文件（多目标 net8.0/net9.0/net10.0/net11.0 + NuGet 元数据） |
 
-相邻项目（同 `multi-lang/` 下）：
+相邻项目（同 `ip-qzdb-sdk/` 下）：
 
 - `netcore.samples/` —— 控制台示例（演示完整用法，`IsPackable=false`）
 - `netcore.Tests/` —— 测试套件（正确性 + 性能基准，含 `test_data_202608/`）
@@ -472,5 +472,3 @@ dotnet add package QQZeng.Qzdb --version x.y.z
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: netcore: C# .NET SDK（内存映射与高并发查询） sync=1788775576 -->

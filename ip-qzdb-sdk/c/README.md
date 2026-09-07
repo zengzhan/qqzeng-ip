@@ -706,7 +706,7 @@ typedef enum { QZDB_OK=0, QZDB_ERR_NOT_FOUND=-1, QZDB_ERR_CORRUPTED=-2,
 
 ## 16. 项目结构
 
-`multi-lang/c/` 目录：
+`ip-qzdb-sdk/c/` 目录：
 
 | 文件 | 职责 |
 |------|------|
@@ -724,5 +724,3 @@ typedef enum { QZDB_OK=0, QZDB_ERR_NOT_FOUND=-1, QZDB_ERR_CORRUPTED=-2,
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: c: C SDK（零拷贝 mmap 读取，单文件集成） sync=1788775576 -->

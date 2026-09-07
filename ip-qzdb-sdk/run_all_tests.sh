@@ -37,7 +37,7 @@ fi
 if [ ${#DB_FILES[@]} -eq 0 ] || [ ! -f "${DB_FILES[0]}" ]; then
     DEMO_DB="$SCRIPT_DIR/../demo/qqzeng-ip-ult.qzdb"
     if [ -f "$DEMO_DB" ]; then
-        echo "No multi-lang/data fixtures found; running the public demo oracle instead."
+        echo "No ip-qzdb-sdk/data fixtures found; running the public demo oracle instead."
         if "$PYTHON_BIN" "$SCRIPT_DIR/tools/demo_sample_check.py"; then
             echo "Full fixture-dependent suite skipped (no private edition/scope fixtures)."
             exit 0
@@ -200,7 +200,7 @@ if [ -n "$JAVA_HOME" ]; then
         TEST_PIDS+=(0)
     else
         # QzdbReaderTest 覆盖 Tier 1 全场景，成功时打印 TEST_PASS；
-        # 以 multi-lang/ 为 CWD 运行时按相对路径候选自动定位 test_data_202608 数据。
+        # 以 ip-qzdb-sdk/ 为 CWD 运行时按相对路径候选自动定位 test_data_202608 数据。
         run_test "Java" "$JAVA_HOME/bin/java -cp java/build com.qqzeng.qzdb.QzdbReaderTest" ""
         run_test "Java-Tier2" "$JAVA_HOME/bin/java -cp java/build com.qqzeng.qzdb.FullAccuracyAndPerfTester" ""
         run_test "Java-Tier3" "$JAVA_HOME/bin/java -Xmx4g -cp java/build com.qqzeng.qzdb.DualStackBenchmark" ""

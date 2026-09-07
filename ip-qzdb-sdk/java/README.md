@@ -67,12 +67,12 @@ implementation 'com.qqzeng:qzdb:1.0.6'
 implementation("com.qqzeng:qzdb:1.0.6")
 ```
 
-> 若需本地构建：在 `multi-lang/java/` 执行 `mvn install` 安装到本地仓库；或直接把 `src/main/java/com/qqzeng/qzdb/` 目录加入你的源码树编译。
+> 若需本地构建：在 `ip-qzdb-sdk/java/` 执行 `mvn install` 安装到本地仓库；或直接把 `src/main/java/com/qqzeng/qzdb/` 目录加入你的源码树编译。
 
 ### 2.2 源码编译
 
 ```bash
-cd multi-lang/java
+cd ip-qzdb-sdk/java
 mvn -q compile          # 产出 target/classes
 # 或打成 jar
 mvn -q package -DskipTests
@@ -521,5 +521,3 @@ String hash = reader.getFileHash();
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: java: Java SDK（堆外内存与 Builder API） sync=1788775576 -->

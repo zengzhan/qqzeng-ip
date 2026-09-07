@@ -2,7 +2,7 @@
 /**
  * QZDB — 离线 IP 地理定位数据库 PHP SDK（IPv4 / IPv6 双栈）
  *
- * 单一事实来源：multi-lang/API_CONTRACT.md (v2.4)
+ * 单一事实来源：ip-qzdb-sdk/API_CONTRACT.md (v2.4)
  * 认证参考实现：Java / C#（已通过 Tier1/2/3 全量验证）
  *
  * 本文件在命名空间 Qqzeng\Ip 下提供：

@@ -508,7 +508,7 @@ cargo update -p qzdb
 
 > **运行测试**：`cargo test`（覆盖 Tier1 + golden + 独立 CSV 真值 + CIDR Oracle + 并发/边界）。其中 `csv_oracle` 需仓库根 `test_data_202608/` 源 CSV 与 `../data/` 真实库，强制 0 失配。
 
-跨语言完整 API 规范见仓库根：`multi-lang/API_CONTRACT.md`。
+跨语言完整 API 规范见仓库根：`ip-qzdb-sdk/API_CONTRACT.md`。
 
 ---
 
@@ -516,4 +516,4 @@ cargo update -p qzdb
 
 [MIT](https://opensource.org/licenses/MIT)
 
-<!-- commit: rust: Rust SDK（mmap 只读映射，内存安全） sync=1788775576 -->
+<!-- commit: rust: Rust 极速解析引擎 (mmap + 最小 unsafe surface, 整型随机最不利 4300 万+ QPS, 口径见 docs/PERFORMANCE.md) -->

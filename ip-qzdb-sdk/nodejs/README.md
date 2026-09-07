@@ -485,7 +485,7 @@ const hash = reader.getFileHash();
 运行测试：
 
 ```bash
-node test_suite.js              # Tier1 单元测试 + Tier2 黄金校验（需同仓 multi-lang/data 真实库）
+node test_suite.js              # Tier1 单元测试 + Tier2 黄金校验（需同仓 ip-qzdb-sdk/data 真实库）
 node tier2_csv_verify.js        # 独立地面真值校验（需 test_data_202608 源 CSV + qzdb，全 10 库抽样）
 node tier2_csv_verify.js full std china   # 单库全量
 node tier3_concurrent.js        # 并发安全验证
@@ -498,5 +498,3 @@ node tier3_concurrent.js        # 并发安全验证
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: nodejs: Node.js SDK（BigInt 偏移解析） sync=1788775576 -->
