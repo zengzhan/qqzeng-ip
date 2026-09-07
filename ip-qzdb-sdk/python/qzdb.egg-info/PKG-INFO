@@ -1,3 +1,26 @@
+Metadata-Version: 2.4
+Name: qzdb
+Version: 1.0.6
+Summary: High-performance Python reader for .qzdb IP geolocation databases (multi-language QZDB SDK).
+Author: qqzeng
+License: MIT
+Project-URL: Homepage, https://github.com/qqzeng/qzdb
+Project-URL: Repository, https://github.com/qqzeng/qzdb
+Keywords: ip,geolocation,ip-lookup,qzdb,maxmind-alternative,ip-geolocation
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Programming Language :: Python :: 3.13
+Classifier: Programming Language :: Python :: 3.14
+Classifier: Topic :: Internet
+Classifier: Topic :: Software Development :: Libraries :: Python Modules
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+
 # QZDB Python SDK
 
 官方 QZDB（离线 IP 地理定位数据库）Python SDK。纯离线、零依赖、零分配查询路径，支持 IPv4/IPv6 单条/批量/流式查询、CIDR 反查、多库链式合并与无锁热更新。
@@ -345,3 +368,5 @@ python3 test_csv_oracle.py  # Tier0 独立真值校验（对源 CSV 抽样，证
 2. 放入 `../data/` 或指定路径，`QzdbReader(path)` 重新加载即可；线上热更新用 `reader.reload(path)`（原子替换，不影响在途查询）。
 3. 字段新增/布局变化由文件头 `GROUP_SCHEMA` / `ROW_SCHEMA` 自描述，SDK 自动适配，无需改代码。
 4. 多语言行为以 `../API_CONTRACT.md` 为准；新增 IP 样本后重建 `tools/golden_vectors.json` 并跑全语言 Tier2 校验。
+
+<!-- commit: python: Python SDK（mmap 轻量读取） sync=1788771793 -->

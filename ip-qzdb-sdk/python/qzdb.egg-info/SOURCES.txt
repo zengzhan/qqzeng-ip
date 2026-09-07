@@ -1,0 +1,7 @@
+README.md
+pyproject.toml
+qzdb.py
+qzdb.egg-info/PKG-INFO
+qzdb.egg-info/SOURCES.txt
+qzdb.egg-info/dependency_links.txt
+qzdb.egg-info/top_level.txt
