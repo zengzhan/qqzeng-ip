@@ -47,8 +47,8 @@
 2. **动态取值**(`get(name)` / `Get(name)` / `geo_info_get`):一律返回空串 `""`,
    绝不抛错(既有约定,重申)。
 
-跨语言矩阵验证:`multi-lang/cross_api_verify.py`(cidr + row_id)+
-`multi-lang/cross_lang_verify.py`(pipe)。
+跨语言矩阵验证:`multi-lang/cross_api_verify.py`(cidr + row_id,8/8 语言——
+Go/Rust/C# 经 batch 二进制 `--cidr` 模式)+ `multi-lang/cross_lang_verify.py`(pipe)。
 
 ### 3. 字段投影语义（`find_fields` / `findFields`，v2.5 对齐 Java golden）
 以 Java 实现为认证参考，8 语言投影行为逐字一致：
@@ -102,7 +102,7 @@
 
 | # | 口径 | 裁决 | 依据 |
 |---|------|------|------|
-| 1 | **跳表哨兵语义** | 跳表条目带 SENTINEL = 终止叶子，`find`/`lookup_row_id` 直接返回低 31 位 row_id；CIDR 反查需前缀长度，从根重走是合法实现 | FORMAT §4 SearchV4/V6 + C/Java/C#/Node/Python 多数派（2026-09-02 裁决，Rust/PHP 已对齐；回归测试 `jump_sentinel_test*`） |
+| 1 | **跳表哨兵语义** | 跳表条目带 SENTINEL = 终止叶子，`find`/`lookup_row_id` 直接返回低 31 位 row_id；CIDR 反查需前缀长度，**必须从根重走求真实前缀**（跳表深度不是真实前缀，短范围行挂在 trie 浅层；全 8 语言一致实现） | FORMAT §4 SearchV4/V6 + 8 语言 cross_api 对拍（2026-09-02 裁决，Rust/PHP/Python 已对齐；回归测试 `jump_sentinel_test*` / rust `v6_cidr_jump_sentinel_reports_true_prefix`） |
 | 2 | **IP 前后空白字符** | Java `trim()` 接受 `" 1.2.3.4 "`；Go/Node 显式拒绝。**保留现状**，Java 为 golden；Go/Node 的严格口径为 SSRF 防护场景的推荐实现 | 2026-09-02 审查登记 |
 | 3 | **IP 字符串解析口径** | 非法 IP：托管语言（Java/C#）抛 `InvalidIp`；Go/Node/PHP/Rust 返回 null/零值。单条口径随语言，**批量路径三态为强制**（§二.3） | 契约 §二 |
 | 4 | **`getScope()` / `scope`** | 当前格式无 scope 字段，8 语言一律返回 `""`。`"cn"\|"global"` 为格式迁移后的目标契约（见 QZDB_SDK_API.md 前置依赖注记） | 2026-09-02 裁决 |

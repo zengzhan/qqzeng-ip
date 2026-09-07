@@ -2034,8 +2034,11 @@ impl SnapshotInner {
             return None;
         }
         if ptr & SENTINEL != 0 {
-            // 与 C/Java/C#/Node/Python/Go/PHP 一致：SENTINEL 直接返回（QZDB_FORMAT.md §4）
-            return Some((ptr & SENTINEL_MASK_31, 0));
+            // 跳表级哨兵:该行的真实前缀可能短于跳表位数(短范围行挂在 trie 浅层),
+            // 跳表深度不是真实前缀。从根重走 [0, jump_bits) 恢复真实前缀,与 Go
+            // lookupV6PrefixLen / C lookup_v6_prefix_len 完全一致。旧实现直接返回
+            // 深度 0,实测 fe80::1 误报 ::/0(真值 fe80::/10)。
+            return self.walk_v6_depth(bytes, 0, 0, self.v6_jump_bits as u8);
         }
         self.walk_v6_depth(bytes, ptr, self.v6_jump_bits as u8, 128)
     }

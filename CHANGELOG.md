@@ -56,12 +56,33 @@
 
 ### Fixed
 
+- **跨 API 验证层补齐至 8/8 语言（882/882 全过）**:`cross_api_verify.py` 接入
+  Go / Rust / C#(此前只覆盖 5 语言 / 504 对比)。三个 batch 二进制新增
+  `--cidr` 模式,输出改为 `key|cidr|row_id`——pipe 串自身以 `|` 分隔无法追加
+  字段,故整行切换格式(同源注释三份一致)。首跑即抓到 2 处真实分歧(见下)。
+- **Go batch runner 未对 IPv4-mapped 降级(L1 缺陷,P1)**:`cmd/batch_go` 的
+  v6 路径用 `FindV6Uint`(纯 v6 走查),而 `::ffff:a.b.c.d` 按契约 §5.2 必须
+  降级走 V4 Trie——V6 trie 存有 `::ffff:0:0/96` 保留行,不降级会返回
+  "保留地址/Reserved" 而非真实归属地。改 `FindBytes`(与 Python/C#/Rust/PHP
+  runner 一致)。此缺陷在 pipe 层(cross_lang_verify)实测暴露:
+  `::ffff:114.114.114.114` Go 独错,其余 7 语言正确。
+- **Rust `trie_walk_v6` 跳表哨兵误报深度 0(P1,与上轮 Python 同类)**:
+  CIDR 反查在 v6 跳表哨兵命中时直接返回前缀长度 0,实测
+  `fe80::1` → `::/0`(真值 `fe80::/10`)。改从根重走 `[0, jump_bits)` 求真实
+  前缀,与 Go `lookupV6PrefixLen` / C `lookup_v6_prefix_len` 逐字对齐
+  (`trie_walk_v4` 早已如此,本轮补齐 v6 对称面)。回归测试
+  `tests/jump_sentinel.rs::v6_cidr_jump_sentinel_reports_true_prefix`。
+  注:find / lookup_row_id 路径仍按 §4 直接返回哨兵 row_id(不改,
+  既有 `v6_jump_sentinel_returns_leaf_row_directly` 测试守护)。
+- **`cross_api_verify.py` Java 腿在非交互 shell 静默降级(P1,工具)**:只认
+  `JAVA_HOME`/裸 `javac`,而 Homebrew JDK 不在该 PATH——Java 腿整体缺席却
+  仍以"通过"收尾(4 语言 378 对比冒充全量)。改复用
+  `cross_lang_verify._find_java_home`(与 run_batch_test_suite 同一探测)。
 - **新增跨 API 一致性验证层 `cross_api_verify.py`(审计基建)**:
   同一 IP 横向比对 `lookup_cidr` + `lookup_row_id`(此前 cross_lang_verify 只比
   pipe,/32 类错误不可见)。首跑即在 4 语言间抓到 26 处真实分歧,全部修复后
-  **504/504 全过**(Python 参照 + Node/PHP/Java/C,63 IP 含 mapped 降级与
+  全过(Python 参照 + Node/PHP/Java/C,63 IP 含 mapped 降级与
   /32 单段)。TEST_IPS 补 V4-mapped 降级路径(`::ffff:` 前缀 2 条)。
-  Go/Rust/C# 的 batch 二进制 cidr 字段扩展留待下一轮(源码在 tools/)。
 - **PHP `lookupCidr` IPv4-mapped 降级失效修复(P1)**:`parseIpv6Raw` 的
   "不降级返回 16 字节"前提被解析期 mapped 降级(§8 规则 4)破坏——mapped
   地址在此永远拿不到 v6 字节,lookupCidr 的 mapped 查询恒为 null。
