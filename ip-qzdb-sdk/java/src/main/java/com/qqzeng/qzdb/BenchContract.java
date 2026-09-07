@@ -375,26 +375,36 @@ public class BenchContract {
         Thread[] threads = new Thread[CONC_THREADS];
 
         for (int t = 0; t < CONC_THREADS; t++) {
+            final int threadIdx = t;
             threads[t] = new Thread(() -> {
-                splitmixSeed(seed);
-                long base4 = splitmixU32();
-                long base6Hi = splitmixNext();
-                long base6Lo = splitmixNext();
+                // Thread-confined splitmix64 state: each thread gets its own
+                // independent RNG seeded differently (seed + threadIdx + 1),
+                // eliminating the data race on the shared static splitmixState.
+                // The concurrency gate only verifies "N threads hitting a shared
+                // QzdbReader don't crash", not deterministic RNG sequence parity.
+                long state = seed + threadIdx + 1;
 
                 for (int i = 0; i < CONC_OPS; i++) {
+                    // Inline splitmix64 step (thread-local, no shared mutable state)
+                    state += 0x9E3779B97F4A7C15L;
+                    long z = state;
+                    z = (z ^ (z >>> 30)) * 0xBF58476D1CE4E5B9L;
+                    z = (z ^ (z >>> 27)) * 0x94D049BB133111EBL;
+                    long r1 = (z ^ (z >>> 31)) & 0xFFFFFFFFL;
+
                     // Hot distribution, Mixed mode (matches Rust concurrency_safe)
                     long m2 = i % 10;
                     int kind;
                     long hi, lo;
                     if (m2 < 5) {
-                        kind = 0; hi = poolV4[(int) (splitmixU32() % POOL_HOT_V4)]; lo = 0;
+                        kind = 0; hi = poolV4[(int) (r1 % POOL_HOT_V4)]; lo = 0;
                     } else if (m2 < 9) {
                         kind = 1;
-                        int idx = (int) (splitmixU32() % POOL_HOT_V6);
+                        int idx = (int) (r1 % POOL_HOT_V6);
                         hi = poolV6Hi[idx]; lo = poolV6Lo[idx];
                     } else {
                         kind = 2; hi = 0;
-                        lo = MAPPED_PREFIX | poolV4[(int) (splitmixU32() % POOL_HOT_V4)];
+                        lo = MAPPED_PREFIX | poolV4[(int) (r1 % POOL_HOT_V4)];
                     }
 
                     try {
