@@ -1567,13 +1567,13 @@ impl SnapshotInner {
         // MAX_GEO_FIELDS 的文件在加载期直接拒绝。旧行为是查询期
         // `fc.min(MAX_GEO_FIELDS)` 静默截断——release 构建下丢字段、
         // to_pipe 域数与 C#/Java 分叉，违背 fail-closed 契约。
-        for gi in 0..actual_groups {
-            if group_field_counts[gi] > MAX_GEO_FIELDS {
+        for (gi, &field_count) in group_field_counts.iter().enumerate().take(actual_groups) {
+            if field_count > MAX_GEO_FIELDS {
                 return Err(err(
                     ErrorCode::Unsupported,
                     format!(
                         "group {} field count {} exceeds MAX_GEO_FIELDS {}",
-                        gi, group_field_counts[gi], MAX_GEO_FIELDS
+                        gi, field_count, MAX_GEO_FIELDS
                     ),
                 ));
             }
@@ -2223,11 +2223,11 @@ impl SnapshotInner {
         Some(Arc::clone(&node.val))
     }
 
-    pub(crate) fn resolve_geo_ref<'a>(
-        &'a self,
+    pub(crate) fn resolve_geo_ref(
+        &self,
         entry_id: u32,
         snap_arc: Option<Arc<SnapshotInner>>,
-    ) -> Option<GeoInfoRef<'a>> {
+    ) -> Option<GeoInfoRef<'_>> {
         if entry_id == 0 || entry_id >= self.group_entry_counts[self.group_index] {
             return None;
         }
@@ -2363,7 +2363,7 @@ impl SnapshotInner {
     }
 
     /// 零拷贝查询：返回借用视图 `GeoInfoRef`。
-    pub fn find_ref<'a>(&'a self, ip: impl ToIp) -> Option<GeoInfoRef<'a>> {
+    pub fn find_ref(&self, ip: impl ToIp) -> Option<GeoInfoRef<'_>> {
         let parsed = ip.to_parsed_ip()?;
         match parsed {
             ParsedIp::V4(v4) => self.find_uint_ref(v4),
@@ -2372,15 +2372,15 @@ impl SnapshotInner {
     }
 
     /// `find_ref` 的同义方法。
-    pub fn find_ref_ip<'a>(&'a self, ip: impl ToIp) -> Option<GeoInfoRef<'a>> {
+    pub fn find_ref_ip(&self, ip: impl ToIp) -> Option<GeoInfoRef<'_>> {
         self.find_ref(ip)
     }
 
-    pub fn find_ref_v4<'a>(&'a self, ip: u32) -> Option<GeoInfoRef<'a>> {
+    pub fn find_ref_v4(&self, ip: u32) -> Option<GeoInfoRef<'_>> {
         self.find_uint_ref(ip)
     }
 
-    pub fn find_ref_v6<'a>(&'a self, ip: u128) -> Option<GeoInfoRef<'a>> {
+    pub fn find_ref_v6(&self, ip: u128) -> Option<GeoInfoRef<'_>> {
         if !self.has_v6 {
             return None;
         }
@@ -2408,11 +2408,11 @@ impl SnapshotInner {
         }
     }
 
-    pub fn find_ref_uint<'a>(&'a self, ip: u32) -> Option<GeoInfoRef<'a>> {
+    pub fn find_ref_uint(&self, ip: u32) -> Option<GeoInfoRef<'_>> {
         self.find_uint_ref(ip)
     }
 
-    pub fn find_uint_ref<'a>(&'a self, ip: u32) -> Option<GeoInfoRef<'a>> {
+    pub fn find_uint_ref(&self, ip: u32) -> Option<GeoInfoRef<'_>> {
         if !self.has_v4 {
             return None;
         }
