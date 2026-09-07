@@ -64,9 +64,23 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
-          server-id: central
-          server-username: ${{ secrets.CENTRAL_USERNAME }}
-          server-password: ${{ secrets.CENTRAL_TOKEN }}
+      - name: Configure Maven settings.xml
+        if: steps.guard.outputs.exists == 'false'
+        run: |
+          mkdir -p ~/.m2
+          cat << 'EOF' > ~/.m2/settings.xml
+          <settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                    xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">
+            <servers>
+              <server>
+                <id>central</id>
+                <username>${env.CENTRAL_USERNAME}</username>
+                <password>${env.CENTRAL_TOKEN}</password>
+              </server>
+            </servers>
+          </settings>
+          EOF
 
       - name: Import GPG private key
         if: steps.guard.outputs.exists == 'false'
@@ -83,7 +97,4 @@ jobs:
           CENTRAL_TOKEN: ${{ secrets.CENTRAL_TOKEN }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
         run: |
-          echo "=== Maven settings.xml servers ==="
-          grep -A 5 '<server>' ~/.m2/settings.xml || true
-          echo "=== Running deploy ==="
-          mvn -B -e -X -Ppublish-central -Dgpg.passphrase="$GPG_PASSPHRASE" deploy
+          mvn -B -e -Ppublish-central -Dgpg.passphrase="$GPG_PASSPHRASE" deploy
