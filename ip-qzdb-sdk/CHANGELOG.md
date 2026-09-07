@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [2026-09-07] - Rust 2.0.0 / PHP 1.1.0 / C# 1.0.8 / Java 1.0.7 / Go 1.0.6 多平台集成版发布
+
 ### Added
 
 - **CI 性能门禁（perf-gate job）**：`multi-lang/tools/perf_gate.py` + C/Go/Rust/Node/Python 五语言驱动器，基于公共 demo 样本（数据无关、可在托管 runner 运行）。绝对下限（floors）拦截数量级回退，对 runner 硬件代际免疫；`--baseline --tol` 支持本地细粒度对比。挂入 `.github/workflows/ci.yml`（产出 30 天 perf 报告 artifact）。

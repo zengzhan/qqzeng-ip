@@ -37,7 +37,7 @@
     <PackageId>QQZeng.Qzdb</PackageId>
     <RootNamespace>QQZeng.Qzdb</RootNamespace>
     <AssemblyName>QQZeng.Qzdb</AssemblyName>
-    <Version>1.0.7</Version>
+    <Version>1.0.8</Version>
 
     <!--
         SDK 内建包验证（无需额外 NuGet 包）：EnablePackageValidation + PackageValidationBaselineVersion
