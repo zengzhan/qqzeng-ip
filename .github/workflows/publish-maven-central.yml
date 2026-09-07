@@ -82,4 +82,8 @@ jobs:
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_TOKEN: ${{ secrets.CENTRAL_TOKEN }}
           GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
-        run: mvn -B -Ppublish-central -Dgpg.passphrase="$GPG_PASSPHRASE" deploy
+        run: |
+          echo "=== Maven settings.xml servers ==="
+          grep -A 5 '<server>' ~/.m2/settings.xml || true
+          echo "=== Running deploy ==="
+          mvn -B -e -X -Ppublish-central -Dgpg.passphrase="$GPG_PASSPHRASE" deploy
