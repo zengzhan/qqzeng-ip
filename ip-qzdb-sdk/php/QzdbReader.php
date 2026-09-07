@@ -664,6 +664,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     private $fileSize = 0;
     /** $this->dataLen 的缓存：热路径原语读取免每次 strlen。 */
     private $dataLen = 0;
+    private $ownsStream = true;  // 是否负责关闭 $this->stream（外部句柄非接管时不关闭）
     private $verifyCrc = true;
     private $closed = false;
 
@@ -773,7 +774,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
 
     public function close(): void
     {
-        if ($this->stream !== null && is_resource($this->stream)) {
+        if ($this->stream !== null && is_resource($this->stream) && $this->ownsStream) {
             @fclose($this->stream);
         }
         $this->stream = null;
@@ -851,18 +852,74 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $this->geoCache = [];
     }
 
-    /** 从输入流句柄加载（读取全部字节到内存）。 */
-    public function loadStream($handle, bool $verifyCrc = true): void
+    /**
+     * 从输入流句柄加载。
+     *
+     * @param resource $handle 输入流句柄（支持 seek 时可直接流式读取，无需将整个文件载入内存）
+     * @param bool $verifyCrc 是否校验 CRC32
+     * @param bool|null $streaming 是否强制流式模式（null 为自适应：支持 seek 且大小超限时走流式；true 强制流式；false 读入内存）
+     * @param bool $takeOwnership 是否由 QzdbReader 接管该句柄的生命周期（close/destruct 时是否负责 fclose）
+     */
+    public function loadStream($handle, bool $verifyCrc = true, ?bool $streaming = null, bool $takeOwnership = false): void
     {
         $this->verifyCrc = $verifyCrc;
         if (!is_resource($handle)) {
             throw new QzdbException('Invalid stream handle', self::ERROR_INVALID_PARAM);
         }
-        $bytes = stream_get_contents($handle);
-        if ($bytes === false) {
-            throw new QzdbException('Failed to read from stream', self::ERROR_INVALID_PARAM);
+
+        $stat = @fstat($handle);
+        $size = ($stat && isset($stat['size']) && $stat['size'] >= 0) ? (int)$stat['size'] : -1;
+        $meta = @stream_get_meta_data($handle);
+        $seekable = ($meta && !empty($meta['seekable']));
+
+        $memLimit = $this->parseMemoryLimitBytes();
+        $useStreaming = false;
+        if ($streaming === true) {
+            if (!$seekable) {
+                throw new QzdbException('Streaming mode requested but stream is not seekable', self::ERROR_INVALID_PARAM);
+            }
+            $useStreaming = true;
+        } elseif ($streaming === null) {
+            // 自适应：可寻址且已知文件大小大于内存上限一半时走流式
+            if ($seekable && $size > 0 && $memLimit > 0 && $size > (int)($memLimit * 0.5)) {
+                $useStreaming = true;
+            }
         }
-        $this->loadBytes($bytes, $verifyCrc);
+
+        if ($useStreaming) {
+            if ($size < 0) {
+                // 如果 fstat 未提供 size，尝试 seek 获取
+                $cur = @ftell($handle);
+                @fseek($handle, 0, SEEK_END);
+                $size = @ftell($handle);
+                @fseek($handle, $cur !== false ? $cur : 0, SEEK_SET);
+                if ($size === false || $size < 0) {
+                    throw new QzdbException('Cannot determine stream size for streaming mode', self::ERROR_INVALID_PARAM);
+                }
+            }
+            $this->fileSize = $size;
+            $this->stream = $handle;
+            $this->ownsStream = $takeOwnership;
+            $this->data = null;
+            $this->dataLen = 0;
+            $this->streamPageOffset = -1;
+            $this->streamPageData = '';
+
+            $this->parseHeader();
+            if ($this->verifyCrc && !$this->rawVerifyCrc()) {
+                throw new QzdbException('CRC32 checksum mismatch — the .qzdb stream is corrupted or truncated', self::ERROR_CORRUPTED);
+            }
+            $this->geoCache = [];
+        } else {
+            $bytes = stream_get_contents($handle);
+            if ($bytes === false) {
+                throw new QzdbException('Failed to read from stream', self::ERROR_INVALID_PARAM);
+            }
+            if ($takeOwnership) {
+                @fclose($handle);
+            }
+            $this->loadBytes($bytes, $verifyCrc);
+        }
     }
 
     // ------------------------------------------------------------------
@@ -890,7 +947,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     private function assign(QzdbReader $src): void
     {
         // 1. 先回收本实例旧句柄，避免 fd 泄漏
-        if ($this->stream !== null && is_resource($this->stream)) {
+        if ($this->stream !== null && is_resource($this->stream) && $this->ownsStream) {
             @fclose($this->stream);
         }
         // 2. 拷贝快照状态（跳过静态单例与共享表）
@@ -2572,6 +2629,8 @@ class QzdbBuilder
     private $path = '';
     private $bytes = '';
     private $stream = null;
+    private $streaming = null;
+    private $takeOwnership = false;
     private $groupIndex = 0;
     private $verifyCrc = true;
 
@@ -2591,12 +2650,26 @@ class QzdbBuilder
         return $b;
     }
 
-    public static function stream($handle): self
+    public static function stream($handle, ?bool $streaming = null, bool $takeOwnership = false): self
     {
         $b = new self();
         $b->source = 'stream';
         $b->stream = $handle;
+        $b->streaming = $streaming;
+        $b->takeOwnership = $takeOwnership;
         return $b;
+    }
+
+    public function streaming(?bool $streaming = true): self
+    {
+        $this->streaming = $streaming;
+        return $this;
+    }
+
+    public function takeOwnership(bool $takeOwnership = true): self
+    {
+        $this->takeOwnership = $takeOwnership;
+        return $this;
     }
 
     public function groupIndex(int $groupIndex): self
@@ -2619,7 +2692,7 @@ class QzdbBuilder
         } elseif ($this->source === 'bytes') {
             $reader->loadBytes($this->bytes, $this->verifyCrc);
         } else {
-            $reader->loadStream($this->stream, $this->verifyCrc);
+            $reader->loadStream($this->stream, $this->verifyCrc, $this->streaming, $this->takeOwnership);
         }
         return $reader;
     }

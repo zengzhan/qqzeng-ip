@@ -149,7 +149,11 @@ $reader = QzdbBuilder::bytes($bytes)->build();
 
 // 已打开的流句柄（fopen 返回的资源；内部按需 fseek/fread，适合超大文件）
 $fh = fopen('qqzeng_ip_std_china.qzdb', 'rb');
-$reader = QzdbBuilder::stream($fh)->build();
+// 默认缓冲加载；若库文件超过百兆或内存受限，可开启 streaming(true) 走分页流式读取（常驻内存仅几十 KB）：
+$reader = QzdbBuilder::stream($fh)
+    ->streaming(true)         // 强制开启分页流式模式（fseek/fread，极低常驻内存）
+    ->takeOwnership(true)     // 由 reader 负责在 close/destruct 时关闭句柄
+    ->build();
 ```
 
 ### 4.3 关于分组（GroupIndex）
@@ -532,5 +536,3 @@ php csv_oracle_test.php                    # 独立真值校验（需源 CSV + �
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: php: PHP SDK（纯 PHP 实现，缓冲与流式双模式） sync=1788761275 -->
