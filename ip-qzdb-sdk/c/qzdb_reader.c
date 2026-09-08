@@ -2469,11 +2469,16 @@ int qzdb_find_fields_uint(qzdb_reader_t* ctx, uint32_t ip_int,
     char bufs[QZDB_MAX_FIELDS][QZDB_VALUE_BUF_SIZE]; char* vals[QZDB_MAX_FIELDS]; int cnt = 0;
     if (get_geo_info_buf(ctx, entry_id, ctx->group_index, vals, bufs, QZDB_VALUE_BUF_SIZE, &cnt) != QZDB_OK) return QZDB_ERR_CORRUPTED;
     memset(result, 0, sizeof(*result));
+    result->value_count = cnt;
     for (int i = 0; i < QZDB_MAX_FIELDS; i++) result->values[i] = "";
     for (int fi = 0; fields[fi] != NULL; fi++) {
         int fidx = field_index_normalized(ctx, fields[fi]);
         if (fidx >= 0 && fidx < cnt && fidx < QZDB_MAX_FIELDS) {
             result->values[fidx] = strdup(vals[fidx] ? vals[fidx] : "");
+            if (!result->values[fidx]) {
+                free_geo_info(result);
+                return QZDB_ERR_OUT_OF_MEMORY;
+            }
             result->values_mask |= (1u << fidx);
         }
     }
@@ -2500,11 +2505,16 @@ int qzdb_find_fields(qzdb_reader_t* ctx, const char* ip_str,
     char bufs[QZDB_MAX_FIELDS][QZDB_VALUE_BUF_SIZE]; char* vals[QZDB_MAX_FIELDS]; int cnt = 0;
     if (get_geo_info_buf(ctx, entry_id, ctx->group_index, vals, bufs, QZDB_VALUE_BUF_SIZE, &cnt) != QZDB_OK) return QZDB_ERR_CORRUPTED;
     memset(result, 0, sizeof(*result));
+    result->value_count = cnt;
     for (int i = 0; i < QZDB_MAX_FIELDS; i++) result->values[i] = "";
     for (int fi = 0; fields[fi] != NULL; fi++) {
         int fidx = field_index_normalized(ctx, fields[fi]);
         if (fidx >= 0 && fidx < cnt && fidx < QZDB_MAX_FIELDS) {
             result->values[fidx] = strdup(vals[fidx] ? vals[fidx] : "");
+            if (!result->values[fidx]) {
+                free_geo_info(result);
+                return QZDB_ERR_OUT_OF_MEMORY;
+            }
             result->values_mask |= (1u << fidx);
         }
     }
