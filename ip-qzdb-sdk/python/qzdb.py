@@ -727,10 +727,11 @@ class QzdbReader:
     def __del__(self):
         self.close()
 
-    def __init__(self, db_path=None, group_index=0, verify_crc=True):
+    def __init__(self, db_path=None, group_index=0, verify_crc=True, warmup=False):
         self._data = b''
         self._is_mmap = False
         self._group_index = group_index
+        self._warmup = warmup
         # §10.6: CRC32 verification is ON by default at open time. Pass
         # verify_crc=False only for diagnostics/benchmarks on trusted data.
         self._verify_crc = verify_crc
@@ -811,10 +812,14 @@ class QzdbReader:
 
         if db_path is not None:
             self.load(db_path)
+            if self._warmup:
+                self.Warmup()
 
-    def load(self, db_path, verify_crc=None):
+    def load(self, db_path, verify_crc=None, warmup=None):
         if verify_crc is not None:
             self._verify_crc = verify_crc
+        if warmup is not None:
+            self._warmup = warmup
         try:
             f = open(db_path, 'rb')
         except FileNotFoundError:
@@ -840,6 +845,8 @@ class QzdbReader:
 
         shadow = self._build_shadow(data, is_mmap)
         self._publish(shadow)
+        if self._warmup:
+            self.Warmup()
 
     def _build_shadow(self, data, is_mmap):
         """Build a fully-parsed shadow snapshot from raw bytes (file or buffer).
@@ -856,6 +863,7 @@ class QzdbReader:
         shadow._is_mmap = is_mmap
         shadow._verify_crc = self._verify_crc
         shadow._group_index = self._group_index
+        shadow._warmup = self._warmup
         # Reset lazy-pool flags so the new file rebuilds its own pools.
         shadow._pools_loaded = False
         shadow._group_pools = None
@@ -898,6 +906,36 @@ class QzdbReader:
             except OSError:
                 pass
 
+    def Warmup(self):
+        d = self._data
+        if d is None or len(d) == 0:
+            return
+        page_size = 4096
+        touch_sum = 0
+        if self._has_v4 and self._off_v4_jump > 0:
+            start = self._off_v4_jump
+            end = min(len(d), start + 65536 * 4)
+            for p in range(start, end, page_size):
+                touch_sum ^= d[p]
+            if self._v4_node_count > 0 and self._off_v4_nodes > 0:
+                node_size = 6 if self._v4_node_24 else 8
+                n_start = self._off_v4_nodes
+                n_end = min(len(d), n_start + self._v4_node_count * node_size)
+                for p in range(n_start, n_end, page_size):
+                    touch_sum ^= d[p]
+        if self._has_v6 and self._off_v6_jump > 0:
+            start = self._off_v6_jump
+            end = min(len(d), start + (1 << self._v6_jump_bits) * 4)
+            for p in range(start, end, page_size):
+                touch_sum ^= d[p]
+            if self._v6_node_count > 0 and self._off_v6_nodes > 0:
+                node_size = 6 if self._v6_node_24 else 8
+                n_start = self._off_v6_nodes
+                n_end = min(len(d), n_start + self._v6_node_count * node_size)
+                for p in range(n_start, n_end, page_size):
+                    touch_sum ^= d[p]
+        return touch_sum
+
     def reload(self, path):
         """Hot-swap to a new database file. CRC is ALWAYS forced (API contract §2).
 
@@ -926,6 +964,7 @@ class QzdbReader:
                 raise QzdbError(f'Failed to memory-map reload file: {exc}', QzdbError.CORRUPTED) from exc
         shadow = self._build_shadow(data, is_mmap)
         self._verify_crc = saved_verify
+        shadow.Warmup()
         self._publish(shadow)
 
     def reload_buffer(self, buffer):
@@ -939,6 +978,7 @@ class QzdbReader:
             shadow = self._build_shadow(data, False)
         finally:
             self._verify_crc = saved_verify
+        shadow.Warmup()
         self._publish(shadow)
 
     @staticmethod
@@ -1699,6 +1739,21 @@ class QzdbReader:
         return geo_id, asn_id, usage_type_id
 
     def _resolve_row_id(self, row_id, group_index):
+        entry_id = self._resolve_entry_id(row_id, group_index)
+        if entry_id is None:
+            return None
+        return self._cached_resolve_geo(entry_id, group_index)
+
+    def _resolve_entry_id(self, row_id, group_index):
+        """Decode row_id → the geo-entry id consumed by this group.
+
+        Dim-mask priority chain (asn > usage > geo, aligned with Java/C#/Go
+        API contract §五.5): a double-set bit in a forged file resolves as
+        asn first, never silently drops to geo. Returns None when the row is
+        unreachable or the resolved entry id is 0.
+        """
+        if row_id <= 0 or row_id >= self._row_count:
+            return None
         geo_id, asn_id, usage_type_id = self._read_ip_row(row_id)
         mask = self._group_dim_masks[group_index] if group_index < len(self._group_dim_masks) else 0
 
@@ -1711,7 +1766,7 @@ class QzdbReader:
 
         if entry_id == 0:
             return None
-        return self._cached_resolve_geo(entry_id, group_index)
+        return entry_id
 
     def _cached_resolve_geo(self, entry_id, group_index):
         """Per-snapshot bounded lock-free GeoInfo cache (API contract §3/§9).
@@ -1971,25 +2026,52 @@ class QzdbReader:
     def find_fields(self, ip_str, field_names=None):
         """Field-projection query (API contract §9.6, aligned to Java golden).
 
-        Slices the requested fields (in the requested order, duplicates kept)
-        from the cached full-field result; unknown fields yield ``''`` at their
-        position (input/output length parity); all-unknown still returns a
-        GeoInfo. Invalid IP raises ``QzdbError`` (same as ``find``)， so
-        ``find_batch_fields`` can keep the invalid/miss tri-state (§4).
-        Returns ``None`` only when the IP itself is not found.
+        Resolves **only** the requested fields directly from the geo entry —
+        no full-field decode (Go/Java/C#/C projection parity). Requested
+        fields keep the requested order (duplicates kept); unknown fields
+        yield ``''`` at their position (input/output length parity);
+        all-unknown still returns a GeoInfo. Invalid IP raises ``QzdbError``
+        (same as ``find``)， so ``find_batch_fields`` can keep the
+        invalid/miss tri-state (§4). Returns ``None`` only when the IP itself
+        is not found.
         """
+        if self._closed:
+            return None
         if field_names is None:
             return self.find(ip_str)
-        full = self.find(ip_str)  # 非法 IP 抛 QzdbError；未命中返回 None
-        if full is None:
+        if not ip_str:
+            raise QzdbError(f'invalid IP address: {ip_str!r}', QzdbError.INVALID_PARAM)
+        parsed = _fast_parse_ip(ip_str)
+        if parsed is None:
+            raise QzdbError(f'invalid IP address: {ip_str!r}', QzdbError.INVALID_PARAM)
+        v4, v6 = parsed
+        if v4 is not None:
+            if not self._has_v4:
+                return None
+            row_id = self._trie_walk_v4(v4)
+        else:
+            if not self._has_v6:
+                return None
+            row_id = self._trie_walk_v6_bytes(v6)
+        if row_id == 0:
             return None
+        row_id &= SENTINEL_MASK_31
+
+        gi = self._group_index
+        entry_id = self._resolve_entry_id(row_id, gi)
+        if entry_id is None or entry_id >= self._group_entry_counts[gi]:
+            return None
+
         norm_idx = self._norm_idx
         n = len(field_names)
-        values = [''] * n
+        field_indices = [-1] * n
         for i in range(n):
-            idx = norm_idx.get(_norm_key(field_names[i]))
-            if idx is not None and idx < len(full._values):
-                values[i] = full._values[idx]
+            name = field_names[i]
+            if isinstance(name, str):
+                idx = norm_idx.get(_norm_key(name))
+                if idx is not None:
+                    field_indices[i] = idx
+        values, _ = self._resolve_geo_fields(entry_id, gi, field_indices)
         return GeoInfo(values=values, field_names=list(field_names),
                        float_indices=self._float_field_indices)
 

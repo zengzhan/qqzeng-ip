@@ -2168,6 +2168,7 @@ int qzdb_reload_buffer(qzdb_reader_t* ctx, const uint8_t* buf, size_t len) {
     memset(&new_ctx, 0, sizeof(new_ctx));
     int rc = qzdb_init_buffer(&new_ctx, buf, len, 1);
     if (rc != QZDB_OK) return rc;
+    qzdb_warmup(&new_ctx);
     qzdb_free(ctx);
     memcpy(ctx, &new_ctx, sizeof(*ctx));
     return QZDB_OK;
@@ -2182,6 +2183,7 @@ int qzdb_reload(qzdb_reader_t* ctx, const char* db_path) {
     memset(&new_ctx, 0, sizeof(new_ctx));
     int result = qzdb_init(&new_ctx, db_path);  /* reload: CRC always enforced (spec §4.2) */
     if (result != QZDB_OK) return result;
+    qzdb_warmup(&new_ctx);
     qzdb_free(ctx);
     memcpy(ctx, &new_ctx, sizeof(*ctx));
     return QZDB_OK;
@@ -2507,4 +2509,44 @@ int qzdb_find_fields(qzdb_reader_t* ctx, const char* ip_str,
         }
     }
     return QZDB_OK;
+}
+
+/* ========================================================================
+ * Warmup: pre-fault the mmap'd data so the first queries don't take page
+ * faults. Touches one byte per 4 KiB page across the V4/V6 jump tables and
+ * node segments. Safe: all ranges are clamped to data_size, and the read
+ * result is folded into touch_sum only to keep the loads observable (the
+ * compiler cannot elide them), then discarded.
+ * ======================================================================== */
+void qzdb_warmup(qzdb_reader_t* reader) {
+    if (reader == NULL || reader->data == NULL || reader->data_size == 0) return;
+    const size_t page = 4096;
+    uint8_t touch_sum = 0;
+    if (reader->has_v4 && reader->off_v4_jump > 0) {
+        size_t start = (size_t)reader->off_v4_jump;
+        size_t end = start + 65536UL * 4;
+        if (end > reader->data_size) end = reader->data_size;
+        for (size_t p = start; p < end; p += page) touch_sum ^= reader->data[p];
+        if (reader->v4_node_count > 0 && reader->off_v4_nodes > 0) {
+            size_t node_size = reader->v4_node_24 ? 6 : 8;
+            size_t ns = (size_t)reader->off_v4_nodes;
+            size_t ne = ns + (size_t)reader->v4_node_count * node_size;
+            if (ne > reader->data_size) ne = reader->data_size;
+            for (size_t p = ns; p < ne; p += page) touch_sum ^= reader->data[p];
+        }
+    }
+    if (reader->has_v6 && reader->off_v6_jump > 0) {
+        size_t start = (size_t)reader->off_v6_jump;
+        size_t end = start + ((size_t)1 << reader->v6_jump_bits) * 4;
+        if (end > reader->data_size) end = reader->data_size;
+        for (size_t p = start; p < end; p += page) touch_sum ^= reader->data[p];
+        if (reader->v6_node_count > 0 && reader->off_v6_nodes > 0) {
+            size_t node_size = reader->v6_node_24 ? 6 : 8;
+            size_t ns = (size_t)reader->off_v6_nodes;
+            size_t ne = ns + (size_t)reader->v6_node_count * node_size;
+            if (ne > reader->data_size) ne = reader->data_size;
+            for (size_t p = ns; p < ne; p += page) touch_sum ^= reader->data[p];
+        }
+    }
+    (void)touch_sum;
 }

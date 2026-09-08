@@ -37,7 +37,9 @@ const (
 // 派生步数上限（取代魔法常量 1000）：正确 Patricia 树深度不可能超过
 // IP 地址位数 + 8（root 余量）；超过即视为敌对文件，拒绝（返回 ErrCorrupted）
 // 是正确的 fail-closed 行为。IPv4 = max(32+8, 40) = 40，IPv6 = max(128+8, 40) = 136。
-// 本文件 V4 游走使用此上限；V6 游走由 `for depth < 128` 构造性有界，无需步数上限。
+// 本文件 V4 游走使用步骤上限；V6 游走由 `for depth < 128` 构造性有界
+// （深度即已消费的地址位数，128 是上限），两者在耗尽仍无叶子/空子时
+// 均统一 fail-closed 返回 ErrCorrupted，与畸形链路"静默未命中"划清界限。
 const v4AddrBits = 32
 const maxTrieWalkSteps = v4AddrBits + 8 // = max(32+8, 40) = 40，IPv4 路径使用
 
@@ -876,9 +878,44 @@ func (s *Snapshot) computeCanonicalCrc() uint32 {
 }
 
 func (s *Snapshot) verifyCrcNow() bool {
-	// 经 crcHash 的 OnceValue 缓存：open(verifyCrc=true) 与 GetFileHash
-	// 共享同一次全文件 CRC 计算（数百 MB 库省一次数十至数百 ms 的重复扫描）。
 	return s.crcHash() == s.storedCrc
+}
+
+// Warmup 主动触碰跳表与节点内存页（按 4096 字节步长），消除冷页在首查时的抖动。
+func (s *Snapshot) Warmup() {
+	d := s.data
+	if len(d) == 0 { return }
+	const pageSize = 4096
+	var touchSum byte
+	if s.hasV4 && s.offV4Jump > 0 {
+		start := s.offV4Jump
+		end := start + 65536*4
+		if end > uint64(len(d)) { end = uint64(len(d)) }
+		for p := start; p < end; p += pageSize { touchSum ^= d[p] }
+		if s.v4NodeCount > 0 && s.offV4Nodes > 0 {
+			nodeSize := uint64(8)
+			if s.v4Node24 { nodeSize = 6 }
+			nStart := s.offV4Nodes
+			nEnd := nStart + uint64(s.v4NodeCount)*nodeSize
+			if nEnd > uint64(len(d)) { nEnd = uint64(len(d)) }
+			for p := nStart; p < nEnd; p += pageSize { touchSum ^= d[p] }
+		}
+	}
+	if s.hasV6 && s.offV6Jump > 0 {
+		start := s.offV6Jump
+		end := start + (uint64(1)<<uint(s.v6JumpBits))*4
+		if end > uint64(len(d)) { end = uint64(len(d)) }
+		for p := start; p < end; p += pageSize { touchSum ^= d[p] }
+		if s.v6NodeCount > 0 && s.offV6Nodes > 0 {
+			nodeSize := uint64(8)
+			if s.v6Node24 { nodeSize = 6 }
+			nStart := s.offV6Nodes
+			nEnd := nStart + uint64(s.v6NodeCount)*nodeSize
+			if nEnd > uint64(len(d)) { nEnd = uint64(len(d)) }
+			for p := nStart; p < nEnd; p += pageSize { touchSum ^= d[p] }
+		}
+	}
+	_ = touchSum
 }
 
 func (s *Snapshot) fileHashHex() string {
@@ -999,7 +1036,9 @@ func (s *Snapshot) trieWalkV6(ip [16]byte) (uint32, error) {
 		}
 		idx = child & mask
 	}
-	return 0, nil
+	// 128 位全部消费完仍未命中叶子：合法 Patricia 树最后一层必然以叶子
+	// 或空子结束，走到这里说明链路退化/畸形，按 V4 同款语义 fail-closed。
+	return 0, ErrCorrupted
 }
 
 // readV6Prefix 提取 IPv6 地址高 bits 位作为跳表索引。
@@ -1645,6 +1684,7 @@ func (r *QzdbReader) Reload(path string) error {
 	if err != nil {
 		return err // 旧快照仍在位，继续服务
 	}
+	ns.Warmup()
 	r.installSnapshot(ns)
 	return nil
 }
@@ -1659,8 +1699,71 @@ func (r *QzdbReader) ReloadBuffer(b []byte) error {
 	if err != nil {
 		return err // 旧快照仍在位，继续服务
 	}
+	ns.Warmup()
 	r.installSnapshot(ns)
 	return nil
+}
+
+// Warmup 主动触碰跳表与节点内存页（按 4096 字节步长），消除冷页在首查时的抖动。
+func (r *QzdbReader) Warmup() {
+	s := r.snapshot()
+	if s == nil || len(s.data) == 0 {
+		return
+	}
+	d := s.data
+	const pageSize = 4096
+	var touchSum byte
+
+	if s.hasV4 && s.offV4Jump > 0 {
+		start := s.offV4Jump
+		end := start + 65536*4
+		if end > uint64(len(d)) {
+			end = uint64(len(d))
+		}
+		for p := start; p < end; p += pageSize {
+			touchSum ^= d[p]
+		}
+		if s.v4NodeCount > 0 && s.offV4Nodes > 0 {
+			nodeSize := uint64(8)
+			if s.v4Node24 {
+				nodeSize = 6
+			}
+			nStart := s.offV4Nodes
+			nEnd := nStart + uint64(s.v4NodeCount)*nodeSize
+			if nEnd > uint64(len(d)) {
+				nEnd = uint64(len(d))
+			}
+			for p := nStart; p < nEnd; p += pageSize {
+				touchSum ^= d[p]
+			}
+		}
+	}
+
+	if s.hasV6 && s.offV6Jump > 0 {
+		start := s.offV6Jump
+		end := start + (uint64(1)<<uint(s.v6JumpBits))*4
+		if end > uint64(len(d)) {
+			end = uint64(len(d))
+		}
+		for p := start; p < end; p += pageSize {
+			touchSum ^= d[p]
+		}
+		if s.v6NodeCount > 0 && s.offV6Nodes > 0 {
+			nodeSize := uint64(8)
+			if s.v6Node24 {
+				nodeSize = 6
+			}
+			nStart := s.offV6Nodes
+			nEnd := nStart + uint64(s.v6NodeCount)*nodeSize
+			if nEnd > uint64(len(d)) {
+				nEnd = uint64(len(d))
+			}
+			for p := nStart; p < nEnd; p += pageSize {
+				touchSum ^= d[p]
+			}
+		}
+	}
+	_ = touchSum
 }
 
 // ---------- 文件 / 字节加载 ----------

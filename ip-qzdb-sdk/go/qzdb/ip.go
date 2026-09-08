@@ -38,22 +38,21 @@ type parseResult struct {
 // 值返回：21 字节结构体走寄存器/栈，热路径零堆分配。
 // 对 IPv4-mapped IPv6 自动降级为 IPv4。空白字符一律拒绝（SSRF 安全）。
 func fastParseIp(s string) (parseResult, bool) {
-	n := len(s)
-	// 空白字符一律拒绝（SSRF 安全）。strings.ContainsAny 在标准库里就是
-	// IndexAny(s, chars) >= 0 的字面封装，行为与之前完全等价，只是更符合
-	// Go 官方惯用法（staticcheck S1003）。
-	if n > 0 && strings.ContainsAny(s, " \t\n\r\v\f") {
-		return parseResult{}, false
+	// IPv4 极速热路径：直走快速解析，免去空白/冒号预扫描。
+	// fastParseIpv4 具有 100% 严格校验，任何带空白、带符号、带字母、带冒号或越界的输入均会返回 false。
+	if v4, ok := fastParseIpv4(s); ok {
+		return parseResult{v4: v4, isV4: true}, true
 	}
+	n := len(s)
 	if n == 0 || n > 45 {
 		return parseResult{}, false
 	}
 	if !strings.Contains(s, ":") {
-		v4, ok := fastParseIpv4(s)
-		if !ok {
-			return parseResult{}, false
-		}
-		return parseResult{v4: v4, isV4: true}, true
+		return parseResult{}, false
+	}
+	// 空白字符一律拒绝（SSRF 安全）。
+	if strings.ContainsAny(s, " \t\n\r\v\f") {
+		return parseResult{}, false
 	}
 	if strings.IndexByte(s, '%') >= 0 {
 		return parseResult{}, false // zone-id 不支持
@@ -157,44 +156,192 @@ func fastParseIp(s string) (parseResult, bool) {
 
 func fastParseIpv4(s string) (uint32, bool) {
 	n := len(s)
-	if n == 0 || s[n-1] == '.' {
+	if n < 7 || n > 15 {
 		return 0, false
 	}
-	var result, val uint32
-	dots, start := 0, 0
-	for i := 0; i <= n; i++ {
-		c := byte('.')
-		if i < n {
-			c = s[i]
+
+	// --- Octet 0 ---
+	var v0 uint32
+	c0 := s[0]
+	idx := 0
+	if c0 == '0' {
+		if s[1] != '.' {
+			return 0, false
 		}
-		if c == '.' {
-			segLen := i - start
-			if segLen == 0 || segLen > 3 {
-				return 0, false
-			}
-			if segLen > 1 && s[start] == '0' { // 拒绝前导零
-				return 0, false
-			}
-			val = 0
-			for j := start; j < i; j++ {
-				d := s[j]
-				if d < '0' || d > '9' {
+		v0 = 0
+		idx = 2
+	} else {
+		d0 := uint32(c0 - '0')
+		if d0 > 9 {
+			return 0, false
+		}
+		if s[1] == '.' {
+			v0 = d0
+			idx = 2
+		} else {
+			d1 := uint32(s[1] - '0')
+			if s[2] == '.' {
+				if d1 > 9 {
 					return 0, false
 				}
-				val = val*10 + uint32(d-'0')
+				v0 = d0*10 + d1
+				idx = 3
+			} else {
+				if s[3] != '.' {
+					return 0, false
+				}
+				d2 := uint32(s[2] - '0')
+				if d1 > 9 || d2 > 9 {
+					return 0, false
+				}
+				val := d0*100 + d1*10 + d2
+				if val > 255 {
+					return 0, false
+				}
+				v0 = val
+				idx = 4
 			}
+		}
+	}
+
+	// --- Octet 1 ---
+	var v1 uint32
+	if idx >= n {
+		return 0, false
+	}
+	c0 = s[idx]
+	if c0 == '0' {
+		if idx+1 >= n || s[idx+1] != '.' {
+			return 0, false
+		}
+		v1 = 0
+		idx += 2
+	} else {
+		d0 := uint32(c0 - '0')
+		if d0 > 9 || idx+1 >= n {
+			return 0, false
+		}
+		if s[idx+1] == '.' {
+			v1 = d0
+			idx += 2
+		} else {
+			if idx+2 >= n {
+				return 0, false
+			}
+			d1 := uint32(s[idx+1] - '0')
+			if s[idx+2] == '.' {
+				if d1 > 9 {
+					return 0, false
+				}
+				v1 = d0*10 + d1
+				idx += 3
+			} else {
+				if idx+3 >= n || s[idx+3] != '.' {
+					return 0, false
+				}
+				d2 := uint32(s[idx+2] - '0')
+				if d1 > 9 || d2 > 9 {
+					return 0, false
+				}
+				val := d0*100 + d1*10 + d2
+				if val > 255 {
+					return 0, false
+				}
+				v1 = val
+				idx += 4
+			}
+		}
+	}
+
+	// --- Octet 2 ---
+	var v2 uint32
+	if idx >= n {
+		return 0, false
+	}
+	c0 = s[idx]
+	if c0 == '0' {
+		if idx+1 >= n || s[idx+1] != '.' {
+			return 0, false
+		}
+		v2 = 0
+		idx += 2
+	} else {
+		d0 := uint32(c0 - '0')
+		if d0 > 9 || idx+1 >= n {
+			return 0, false
+		}
+		if s[idx+1] == '.' {
+			v2 = d0
+			idx += 2
+		} else {
+			if idx+2 >= n {
+				return 0, false
+			}
+			d1 := uint32(s[idx+1] - '0')
+			if s[idx+2] == '.' {
+				if d1 > 9 {
+					return 0, false
+				}
+				v2 = d0*10 + d1
+				idx += 3
+			} else {
+				if idx+3 >= n || s[idx+3] != '.' {
+					return 0, false
+				}
+				d2 := uint32(s[idx+2] - '0')
+				if d1 > 9 || d2 > 9 {
+					return 0, false
+				}
+				val := d0*100 + d1*10 + d2
+				if val > 255 {
+					return 0, false
+				}
+				v2 = val
+				idx += 4
+			}
+		}
+	}
+
+	// --- Octet 3 ---
+	var v3 uint32
+	rem := n - idx
+	if rem < 1 || rem > 3 {
+		return 0, false
+	}
+	c0 = s[idx]
+	if c0 == '0' {
+		if rem != 1 {
+			return 0, false
+		}
+		v3 = 0
+	} else {
+		d0 := uint32(c0 - '0')
+		if d0 > 9 {
+			return 0, false
+		}
+		if rem == 1 {
+			v3 = d0
+		} else if rem == 2 {
+			d1 := uint32(s[idx+1] - '0')
+			if d1 > 9 {
+				return 0, false
+			}
+			v3 = d0*10 + d1
+		} else { // rem == 3
+			d1 := uint32(s[idx+1] - '0')
+			d2 := uint32(s[idx+2] - '0')
+			if d1 > 9 || d2 > 9 {
+				return 0, false
+			}
+			val := d0*100 + d1*10 + d2
 			if val > 255 {
 				return 0, false
 			}
-			result = (result << 8) | val
-			dots++
-			start = i + 1
+			v3 = val
 		}
 	}
-	if dots != 4 {
-		return 0, false
-	}
-	return result, true
+
+	return (v0 << 24) | (v1 << 16) | (v2 << 8) | v3, true
 }
 
 // ---------- 小工具 ----------

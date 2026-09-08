@@ -273,6 +273,40 @@ public final class QzdbReader implements AutoCloseable {
             this.pools = parsePools();
         }
 
+        /**
+         * 主动触碰跳表与节点内存页（按 4096 字节步长），消除冷页在首查时的抖动。
+         * 在 Reload 中于 atomic swap 前调用，确保新快照的页面已预热入 OS Page Cache。
+         */
+        void warmup() {
+            if (data == null || !data.hasRemaining()) return;
+            final int PAGE = 4096;
+            long touchSum = 0;
+            int limit = data.limit();
+            if (hasV4 && offV4Jump > 0) {
+                int start = (int) offV4Jump;
+                int end = Math.min(limit, start + 65536 * 4);
+                for (int p = start; p < end; p += PAGE) touchSum ^= data.get(p) & 0xFF;
+                if (v4NodeCount > 0 && offV4Nodes > 0) {
+                    int nodeSize = v4Node24 ? 6 : 8;
+                    int ns = (int) offV4Nodes;
+                    int ne = Math.min(limit, ns + v4NodeCount * nodeSize);
+                    for (int p = ns; p < ne; p += PAGE) touchSum ^= data.get(p) & 0xFF;
+                }
+            }
+            if (hasV6 && offV6Jump > 0) {
+                int start = (int) offV6Jump;
+                int end = Math.min(limit, start + (1 << v6JumpBits) * 4);
+                for (int p = start; p < end; p += PAGE) touchSum ^= data.get(p) & 0xFF;
+                if (v6NodeCount > 0 && offV6Nodes > 0) {
+                    int nodeSize = v6Node24 ? 6 : 8;
+                    int ns = (int) offV6Nodes;
+                    int ne = Math.min(limit, ns + v6NodeCount * nodeSize);
+                    for (int p = ns; p < ne; p += PAGE) touchSum ^= data.get(p) & 0xFF;
+                }
+            }
+            // touchSum 仅用于防止 JIT 死代码消除；实际无副作用
+        }
+
         private void parseHeader() throws QzdbException {
             if (dataLen < HEADER_SIZE) {
                 throw new QzdbException(ErrorCode.CORRUPTED, "File too small for QZDB header: " + dataLen + " bytes");
@@ -1474,7 +1508,8 @@ public final class QzdbReader implements AutoCloseable {
                 throw new QzdbException(ErrorCode.INVALID_PARAM, "Reload file too large: " + size + " bytes");
             }
             MappedByteBuffer buffer = ch.map(FileChannel.MapMode.READ_ONLY, 0, size);
-            Snapshot newSnap = new Snapshot(buffer, requireSnapshot().groupIndex, true); // reload 强制 CRC
+            Snapshot newSnap = new Snapshot(buffer, requireSnapshot().groupIndex, true);
+            newSnap.warmup();
             Snapshot old = activeSnapshot.getAndSet(newSnap);
             retireSnapshot(old);
         } catch (IOException e) {
@@ -1494,6 +1529,7 @@ public final class QzdbReader implements AutoCloseable {
         }
         ByteBuffer wrap = ByteBuffer.wrap(buffer.clone()); // 拷贝保护
         Snapshot newSnap = new Snapshot(wrap, requireSnapshot().groupIndex, true);
+        newSnap.warmup();
         Snapshot old = activeSnapshot.getAndSet(newSnap);
         retireSnapshot(old);
     }
@@ -1511,6 +1547,57 @@ public final class QzdbReader implements AutoCloseable {
         Snapshot old = retiring.getAndSet(null);
         if (old != null) old.unmapIfMapped();
     }
+
+    /**
+     * 预热 mmap 页面：顺序触碰 V4/V6 Jump Table 与 Trie 节点区的每个页面，
+     * 迫使操作系统将磁盘页加载到物理内存，消除首次查询时的 major page fault 延迟。
+     * <p>
+     * 对非 mmap 的堆内 ByteBuffer 无副作用（已是堆内存，无 page fault），
+     * 对已关闭的 reader 为空操作。
+     */
+    public void warmup() {
+        Snapshot snap = activeSnapshot.get();
+        if (snap == null || snap.data == null) return;
+        ByteBuffer buf = snap.data;
+        final int PAGE = 4096;
+        long touchSum = 0;
+
+        if (snap.hasV4 && snap.offV4Jump > 0) {
+            long start = snap.offV4Jump;
+            long end = Math.min(snap.dataLen, start + 65536L * 4);
+            for (long p = start; p < end; p += PAGE) {
+                touchSum ^= buf.get((int) p) & 0xFFL;
+            }
+        }
+        if (snap.hasV4 && snap.v4NodeCount > 0 && snap.offV4Nodes > 0) {
+            int nodeSize = snap.v4Node24 ? 6 : 8;
+            long start = snap.offV4Nodes;
+            long end = Math.min(snap.dataLen, start + (long) snap.v4NodeCount * nodeSize);
+            for (long p = start; p < end; p += PAGE) {
+                touchSum ^= buf.get((int) p) & 0xFFL;
+            }
+        }
+        if (snap.hasV6 && snap.offV6Jump > 0) {
+            long start = snap.offV6Jump;
+            long end = Math.min(snap.dataLen, start + (1L << snap.v6JumpBits) * 4);
+            for (long p = start; p < end; p += PAGE) {
+                touchSum ^= buf.get((int) p) & 0xFFL;
+            }
+        }
+        if (snap.hasV6 && snap.v6NodeCount > 0 && snap.offV6Nodes > 0) {
+            int nodeSize = snap.v6Node24 ? 6 : 8;
+            long start = snap.offV6Nodes;
+            long end = Math.min(snap.dataLen, start + (long) snap.v6NodeCount * nodeSize);
+            for (long p = start; p < end; p += PAGE) {
+                touchSum ^= buf.get((int) p) & 0xFFL;
+            }
+        }
+        warmupDrain = touchSum;
+    }
+
+    /** 防止 JIT 将 warmup 循环优化为空操作（volatile 写不可被消除）。 */
+    @SuppressWarnings("unused")
+    private static volatile long warmupDrain;
 
     // =========================================================================
     // 元信息自省 API

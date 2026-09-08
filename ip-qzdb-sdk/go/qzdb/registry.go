@@ -324,6 +324,11 @@ func (c *ChainedReader) FindBatch(ips []string) []BatchResult {
 	return out
 }
 
+// LookupBatch 批量查询别名（对标 FindBatch）。
+func (c *ChainedReader) LookupBatch(ips []string) []BatchResult {
+	return c.FindBatch(ips)
+}
+
 // FindBatchFields 顺序批量字段投影查询。
 func (c *ChainedReader) FindBatchFields(ips []string, fields []string) []BatchResult {
 	if ips == nil {

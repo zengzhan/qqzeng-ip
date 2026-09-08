@@ -173,8 +173,14 @@ public sealed class ChainedReader : IDisposable
         return result;
     }
 
+    /// <summary>Batch query over IP strings; alias for FindBatch.</summary>
+    public BatchResult[] LookupBatch(string[] ipStrs) => FindBatch(ipStrs);
+
     /// <summary>Batch query over an enumerable of IP strings.</summary>
     public BatchResult[] FindBatch(IEnumerable<string> ipStrs) => FindBatch(ipStrs?.ToArray() ?? throw new ArgumentNullException(nameof(ipStrs)));
+
+    /// <summary>Batch query over an enumerable of IP strings; alias for FindBatch.</summary>
+    public BatchResult[] LookupBatch(IEnumerable<string> ipStrs) => FindBatch(ipStrs);
 
     /// <summary>Batch query over IP strings, resolving only the given fields.</summary>
     public BatchResult[] FindBatchFields(string[] ipStrs, string[]? fields)

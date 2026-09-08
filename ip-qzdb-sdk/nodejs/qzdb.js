@@ -520,11 +520,12 @@ class BatchResult {
 // QzdbReader（核心读取器）
 // ===========================================================================
 class QzdbReader {
-  constructor(dbPath = null, groupIndex = 0, verifyCrc = true) {
+  constructor(dbPath = null, groupIndex = 0, verifyCrc = true, warmup = false) {
     this._data = Buffer.alloc(0);
     this._groupIndex = groupIndex;
     this._verifyCrc = verifyCrc;
     this._closed = false;
+    this._warmup = warmup;
 
     // 元数据
     this._flags = 0;
@@ -605,16 +606,18 @@ class QzdbReader {
 
     if (dbPath !== null) {
       this.load(dbPath);
+      if (this._warmup) this.warmup();
     }
   }
 
   static open(path, options = {}) {
-    return new QzdbReader(path, options.groupIndex || 0, options.verifyCrc !== false);
+    return new QzdbReader(path, options.groupIndex || 0, options.verifyCrc !== false, options.warmup === true);
   }
 
   static openBuffer(buffer, options = {}) {
-    const r = new QzdbReader(null, options.groupIndex || 0, options.verifyCrc !== false);
+    const r = new QzdbReader(null, options.groupIndex || 0, options.verifyCrc !== false, options.warmup === true);
     r.loadBuffer(buffer);
+    if (r._warmup) r.warmup();
     return r;
   }
 
@@ -634,6 +637,7 @@ class QzdbReader {
     }
     this._initCache();
     this._closed = false;
+    if (this._warmup) this.warmup();
     return this;
   }
 
@@ -650,7 +654,38 @@ class QzdbReader {
     }
     this._initCache();
     this._closed = false;
+    if (this._warmup) this.warmup();
     return this;
+  }
+
+  warmup() {
+    const d = this._data;
+    if (!d || d.length === 0) return;
+    const pageSize = 4096;
+    let touchSum = 0;
+    if (this._hasV4 && this._offV4Jump > 0) {
+      let start = this._offV4Jump;
+      let end = Math.min(d.length, start + 65536 * 4);
+      for (let p = start; p < end; p += pageSize) touchSum ^= d[p];
+      if (this._v4NodeCount > 0 && this._offV4Nodes > 0) {
+        const nodeSize = this._v4Node24 ? 6 : 8;
+        const nStart = this._offV4Nodes;
+        const nEnd = Math.min(d.length, nStart + this._v4NodeCount * nodeSize);
+        for (let p = nStart; p < nEnd; p += pageSize) touchSum ^= d[p];
+      }
+    }
+    if (this._hasV6 && this._offV6Jump > 0) {
+      let start = this._offV6Jump;
+      let end = Math.min(d.length, start + (1 << this._v6JumpBits) * 4);
+      for (let p = start; p < end; p += pageSize) touchSum ^= d[p];
+      if (this._v6NodeCount > 0 && this._offV6Nodes > 0) {
+        const nodeSize = this._v6Node24 ? 6 : 8;
+        const nStart = this._offV6Nodes;
+        const nEnd = Math.min(d.length, nStart + this._v6NodeCount * nodeSize);
+        for (let p = nStart; p < nEnd; p += pageSize) touchSum ^= d[p];
+      }
+    }
+    void touchSum;
   }
 
   _initCache() {
@@ -1773,6 +1808,7 @@ class QzdbReader {
   reload(dbPath) {
     const tmp = new QzdbReader(null, this._groupIndex, true);
     tmp.load(dbPath, true); // 失败抛错 → 旧快照（this）继续服务
+    tmp.warmup();
     Object.assign(this, tmp); // 原子替换全部状态字段
     return this;
   }
@@ -1780,6 +1816,7 @@ class QzdbReader {
   reloadBuffer(bytes) {
     const tmp = new QzdbReader(null, this._groupIndex, true);
     tmp.loadBuffer(bytes, true); // reload 强制 CRC
+    tmp.warmup();
     Object.assign(this, tmp);
     return this;
   }

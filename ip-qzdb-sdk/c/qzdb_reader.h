@@ -224,6 +224,10 @@ int  qzdb_reload_buffer(qzdb_reader_t* ctx, const uint8_t* buf, size_t len);
 int  qzdb_set_group_index(qzdb_reader_t* ctx, int group_index);
 int  qzdb_verify_crc(qzdb_reader_t* ctx);
 
+/* Pre-fault the mmap'd data so the first queries don't take page faults.
+ * Safe to call any time after a successful init. */
+void qzdb_warmup(qzdb_reader_t* ctx);
+
 /* ---- Query ---- */
 int      qzdb_find(qzdb_reader_t* ctx, const char* ip_str, qzdb_geo_info_t* result);
 int      qzdb_find_uint(qzdb_reader_t* ctx, uint32_t ip_int, qzdb_geo_info_t* result);

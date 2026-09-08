@@ -18,6 +18,7 @@ type Builder struct {
 	groupIndex int
 	verifyCrc  bool
 	noCopy     bool // 零拷贝模式：调用方保证 buffer 生命周期内只读不释放
+	warmup     bool // 主动预热跳表与节点冷页
 }
 
 // NewBuilder 以文件路径构建。
@@ -62,6 +63,12 @@ func (b *Builder) NoCopy(enabled bool) *Builder {
 	return b
 }
 
+// Warmup 启用跳表与核心节点的主动冷页预热（消除首次查询抖动）。
+func (b *Builder) Warmup(enabled bool) *Builder {
+	b.warmup = enabled
+	return b
+}
+
 // Build 构建 QzdbReader。任一异常均 Fail-Closed 拒绝初始化。
 func (b *Builder) Build() (*QzdbReader, error) {
 	var s *Snapshot
@@ -93,5 +100,8 @@ func (b *Builder) Build() (*QzdbReader, error) {
 	}
 	r := &QzdbReader{}
 	r.installSnapshot(s)
+	if b.warmup {
+		r.Warmup()
+	}
 	return r, nil
 }

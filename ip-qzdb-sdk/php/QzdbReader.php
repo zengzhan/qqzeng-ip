@@ -641,7 +641,7 @@ class QzdbReader
     const MAX_TRIE_WALK_STEPS_V4 = 32 + 8;   // IPv4 walk cap = max(32+8,40) = 40
 const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     const MAX_POOL_COUNT = 1 << 26;
-    const MAX_POOL_OFFSET_ENTRIES = 1 << 16; // 单池偏移表上限 65536 项（256KB），超限降级为 null
+    const MAX_POOL_OFFSET_ENTRIES = 1 << 18; // 单池偏移表上限 262144 项（1MB，约 4MB PHP 数组），超限降级为 null。
     // 有界 GeoInfo 缓存容量。直接映射（direct-mapped）：碰撞覆盖单槽，**永不整表清空**。
     // 与 Go(geoCache.slots) / Node.js(_geoCache.keys|vals) / C#(槽位数组) 语义一致。
     const GEO_CACHE_LIMIT = 1 << 16;
@@ -811,7 +811,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     // ------------------------------------------------------------------
 
     /** 兼容旧用法：从文件路径加载（默认校验 CRC）。 */
-    public function load($dbPath, bool $verifyCrc = true): void
+    public function load($dbPath, bool $verifyCrc = true, bool $warmup = false): void
     {
         $this->verifyCrc = $verifyCrc;
         $size = @filesize($dbPath);
@@ -867,6 +867,9 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             throw new QzdbException('CRC32 checksum mismatch — the .qzdb file is corrupted or truncated', self::ERROR_CORRUPTED);
         }
         $this->geoCache = [];
+        if ($warmup) {
+            $this->warmup();
+        }
     }
 
     /**
@@ -884,7 +887,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
 
 
     /** 从内存字节加载（拷贝语义）。 */
-    public function loadBytes(string $bytes, bool $verifyCrc = true): void
+    public function loadBytes(string $bytes, bool $verifyCrc = true, bool $warmup = false): void
     {
         $this->verifyCrc = $verifyCrc;
         $this->fileSize = strlen($bytes);
@@ -898,6 +901,9 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             throw new QzdbException('CRC32 checksum mismatch — the .qzdb buffer is corrupted or truncated', self::ERROR_CORRUPTED);
         }
         $this->geoCache = [];
+        if ($warmup) {
+            $this->warmup();
+        }
     }
 
     /**
@@ -971,6 +977,52 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     }
 
     // ------------------------------------------------------------------
+    // 预热（页面预触，减少首次查询冷启动延迟）
+    // ------------------------------------------------------------------
+
+    /**
+     * 预触缓冲数据的关键 Trie 区域，让操作系统将相关页面调入物理内存。
+     * 仅在缓冲模式（$this->data）下有效；流式模式 / mmap 模式直接返回。
+     */
+    public function warmup(): void
+    {
+        if ($this->data === null || $this->data === '') return;
+        $dl = $this->dataLen;
+        $pageSize = 4096;
+        $touchSum = 0;
+        if ($this->hasV4 && $this->offV4Jump > 0) {
+            $start = $this->offV4Jump;
+            $end = min($dl, $start + 65536 * 4);
+            for ($p = $start; $p < $end; $p += $pageSize) {
+                $touchSum ^= ord($this->data[$p]);
+            }
+            if ($this->v4NodeCount > 0 && $this->offV4Nodes > 0) {
+                $nodeSize = $this->v4Node24 ? 6 : 8;
+                $nStart = $this->offV4Nodes;
+                $nEnd = min($dl, $nStart + $this->v4NodeCount * $nodeSize);
+                for ($p = $nStart; $p < $nEnd; $p += $pageSize) {
+                    $touchSum ^= ord($this->data[$p]);
+                }
+            }
+        }
+        if ($this->hasV6 && $this->offV6Jump > 0) {
+            $start = $this->offV6Jump;
+            $end = min($dl, $start + (1 << min($this->v6JumpBits, 30)) * 4);
+            for ($p = $start; $p < $end; $p += $pageSize) {
+                $touchSum ^= ord($this->data[$p]);
+            }
+            if ($this->v6NodeCount > 0 && $this->offV6Nodes > 0) {
+                $nodeSize = $this->v6Node24 ? 6 : 8;
+                $nStart = $this->offV6Nodes;
+                $nEnd = min($dl, $nStart + $this->v6NodeCount * $nodeSize);
+                for ($p = $nStart; $p < $nEnd; $p += $pageSize) {
+                    $touchSum ^= ord($this->data[$p]);
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
     // 热更新（原子替换；reload 强制 CRC）
     // ------------------------------------------------------------------
 
@@ -978,6 +1030,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     {
         // 构造完整新快照；成功后再替换（本实现单线程，整体赋值即原子）。
         $snap = new QzdbReader($dbPath, $this->groupIndex, true); // 强制 CRC
+        $snap->warmup();
         $this->assign($snap);
     }
 
@@ -991,6 +1044,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $this->dataLen = 0;
         $snap = new QzdbReader(null, $this->groupIndex, true);
         $snap->loadBytes($bytes, true);
+        $snap->warmup();
         $this->assign($snap);
     }
 

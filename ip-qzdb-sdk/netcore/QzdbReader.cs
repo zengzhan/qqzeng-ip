@@ -115,7 +115,9 @@ public sealed class QzdbReader : IDisposable
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
         var normalized = NormalizeOptions(options);
-        return new QzdbReader(LoadPath(path, normalized.GroupIndex, normalized.VerifyCrc));
+        var reader = new QzdbReader(LoadPath(path, normalized.GroupIndex, normalized.VerifyCrc));
+        if (normalized.Warmup) reader.Warmup();
+        return reader;
     }
 
     private static Snapshot LoadPath(string path, int groupIndex, bool verifyCrc)
@@ -141,7 +143,9 @@ public sealed class QzdbReader : IDisposable
     {
         ArgumentNullException.ThrowIfNull(buffer);
         var normalized = NormalizeOptions(options);
-        return new QzdbReader(Snapshot.FromBuffer(buffer, normalized.GroupIndex, normalized.VerifyCrc));
+        var reader = new QzdbReader(Snapshot.FromBuffer(buffer, normalized.GroupIndex, normalized.VerifyCrc));
+        if (normalized.Warmup) reader.Warmup();
+        return reader;
     }
 
     private static ReaderOptions NormalizeOptions(ReaderOptions? options)
@@ -181,6 +185,7 @@ public sealed class QzdbReader : IDisposable
         internal byte[]? _buffer;
         internal int _groupIndex;
         internal bool _verifyCrc = true;
+        internal bool _warmup;
 
         /// <summary>Creates a builder that loads from the given file path.</summary>
         public Builder(string path) { _path = path ?? throw new ArgumentNullException(nameof(path)); }
@@ -190,14 +195,16 @@ public sealed class QzdbReader : IDisposable
         public Builder GroupIndex(int idx) { _groupIndex = idx; return this; }
         /// <summary>Enables or disables CRC32 verification at open; returns this for chaining.</summary>
         public Builder VerifyCrc(bool enabled) { _verifyCrc = enabled; return this; }
+        /// <summary>Enables or disables touch/warmup of index and jump table pages; returns this for chaining.</summary>
+        public Builder Warmup(bool enabled = true) { _warmup = enabled; return this; }
 
         /// <summary>Builds and returns the configured <see cref="QzdbReader"/>.</summary>
         public QzdbReader Build()
         {
             if (_path != null)
-                return Open(_path, new ReaderOptions { GroupIndex = _groupIndex, VerifyCrc = _verifyCrc });
+                return Open(_path, new ReaderOptions { GroupIndex = _groupIndex, VerifyCrc = _verifyCrc, Warmup = _warmup });
             if (_buffer != null)
-                return OpenBuffer(_buffer, new ReaderOptions { GroupIndex = _groupIndex, VerifyCrc = _verifyCrc });
+                return OpenBuffer(_buffer, new ReaderOptions { GroupIndex = _groupIndex, VerifyCrc = _verifyCrc, Warmup = _warmup });
             throw new QzdbException(ErrorCode.InvalidParam, "Neither file path nor buffer was provided");
         }
     }
@@ -271,6 +278,43 @@ public sealed class QzdbReader : IDisposable
         /// safe in practice without per-query reference counting.
         /// </summary>
         internal void DisposeOwner() => ((IDisposable?)_dataOwner)?.Dispose();
+
+        /// <summary>
+        /// 主动触碰跳表与节点内存页（按 4096 字节步长），消除冷页在首查时的抖动。
+        /// 在 Reload 中于 PublishSnapshot 前调用，确保新快照的页面已预热入 OS Page Cache。
+        /// </summary>
+        internal void Warmup()
+        {
+            var span = _data.Span;
+            if (span.IsEmpty) return;
+            const int PageSize = 4096;
+            uint touchSum = 0;
+            if (_hasV4 && _offV4Jump > 0)
+            {
+                long start = _offV4Jump;
+                long end = Math.Min(span.Length, start + 65536L * 4);
+                for (long p = start; p < end; p += PageSize) touchSum ^= span[(int)p];
+                if (_v4NodeCount > 0 && _offV4Nodes > 0)
+                {
+                    long nStart = _offV4Nodes;
+                    long nEnd = Math.Min(span.Length, nStart + (long)_v4NodeCount * (_v4Node24 ? 6 : 8));
+                    for (long p = nStart; p < nEnd; p += PageSize) touchSum ^= span[(int)p];
+                }
+            }
+            if (_hasV6 && _offV6Jump > 0)
+            {
+                long start = _offV6Jump;
+                long end = Math.Min(span.Length, start + (1L << _v6JumpBits) * 4);
+                for (long p = start; p < end; p += PageSize) touchSum ^= span[(int)p];
+                if (_v6NodeCount > 0 && _offV6Nodes > 0)
+                {
+                    long nStart = _offV6Nodes;
+                    long nEnd = Math.Min(span.Length, nStart + (long)_v6NodeCount * (_v6Node24 ? 6 : 8));
+                    for (long p = nStart; p < nEnd; p += PageSize) touchSum ^= span[(int)p];
+                }
+            }
+            _ = touchSum;
+        }
 
         internal sealed class CacheEntry
         {
@@ -1285,10 +1329,28 @@ public sealed class QzdbReader : IDisposable
     public BatchResult[] FindBatch(string[] ipStrs)
     {
         ArgumentNullException.ThrowIfNull(ipStrs);
+        var snap = RequireSnapshot();
         var results = new BatchResult[ipStrs.Length];
-        for (int i = 0; i < ipStrs.Length; i++) results[i] = FindResult(ipStrs[i]);
+        if (ipStrs.Length == 0) return results;
+
+        unsafe
+        {
+            if (snap._dataPtr != null)
+                FindBatchCore(snap, snap._dataPtr, ipStrs, results, null);
+            else
+            {
+                fixed (byte* bp = snap._data.Span)
+                    FindBatchCore(snap, bp, ipStrs, results, null);
+            }
+        }
         return results;
     }
+
+    /// <summary>Batch query over IP strings; alias for FindBatch.</summary>
+    public BatchResult[] LookupBatch(string[] ipStrs) => FindBatch(ipStrs);
+
+    /// <summary>Batch query over an enumerable of IP strings; alias for FindBatch.</summary>
+    public BatchResult[] LookupBatch(IEnumerable<string> ipStrs) => FindBatch(ipStrs);
 
     /// <summary>Batch query over an enumerable of IP strings.</summary>
     public BatchResult[] FindBatch(IEnumerable<string> ipStrs) => FindBatch(ipStrs?.ToArray() ?? throw new ArgumentNullException(nameof(ipStrs)));
@@ -1297,15 +1359,21 @@ public sealed class QzdbReader : IDisposable
     public BatchResult[] FindBatchFields(string[] ipStrs, string[]? fields)
     {
         ArgumentNullException.ThrowIfNull(ipStrs);
+        if (fields == null || fields.Length == 0) return FindBatch(ipStrs);
+
+        var snap = RequireSnapshot();
         var results = new BatchResult[ipStrs.Length];
-        for (int i = 0; i < ipStrs.Length; i++)
+        if (ipStrs.Length == 0) return results;
+
+        unsafe
         {
-            try
+            if (snap._dataPtr != null)
+                FindBatchCore(snap, snap._dataPtr, ipStrs, results, fields);
+            else
             {
-                var info = FindFields(ipStrs[i], fields);
-                results[i] = new BatchResult(info, null, ipStrs[i]);
+                fixed (byte* bp = snap._data.Span)
+                    FindBatchCore(snap, bp, ipStrs, results, fields);
             }
-            catch (QzdbException e) { results[i] = new BatchResult(null, e, ipStrs[i]); }
         }
         return results;
     }
@@ -1319,6 +1387,265 @@ public sealed class QzdbReader : IDisposable
     {
         if (ipStrs == null) yield break;
         foreach (var ip in ipStrs) yield return FindResult(ip);
+    }
+
+    private struct ErrQuad
+    {
+        public QzdbException? E0, E1, E2, E3;
+        public QzdbException? this[int index]
+        {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => index switch { 0 => E0, 1 => E1, 2 => E2, 3 => E3, _ => null };
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            set { switch (index) { case 0: E0 = value; break; case 1: E1 = value; break; case 2: E2 = value; break; case 3: E3 = value; break; } }
+        }
+    }
+
+    private static unsafe void FindBatchCore(Snapshot snap, byte* bp, string[] ipStrs, BatchResult[] results, string[]? fields)
+    {
+        int total = ipStrs.Length;
+        const int BatchW = 4;
+
+        uint* v4s = stackalloc uint[BatchW];
+        ulong* v6Hi = stackalloc ulong[BatchW];
+        ulong* v6Lo = stackalloc ulong[BatchW];
+        uint* rowIds = stackalloc uint[BatchW];
+        bool* isV4 = stackalloc bool[BatchW];
+        bool* isV6 = stackalloc bool[BatchW];
+        bool* active = stackalloc bool[BatchW];
+        ErrQuad errs = default;
+
+        for (int baseIdx = 0; baseIdx < total; baseIdx += BatchW)
+        {
+            int chunk = Math.Min(BatchW, total - baseIdx);
+
+            for (int j = 0; j < chunk; j++)
+            {
+                v4s[j] = 0;
+                v6Hi[j] = 0;
+                v6Lo[j] = 0;
+                rowIds[j] = 0;
+                isV4[j] = false;
+                isV6[j] = false;
+                active[j] = false;
+                errs[j] = null;
+            }
+
+            // Stage 1: Fast parse all IPs in chunk (zero heap allocations)
+            for (int j = 0; j < chunk; j++)
+            {
+                string ip = ipStrs[baseIdx + j];
+                if (string.IsNullOrEmpty(ip) || !TryParseIp(ip.AsSpan(), out var v4, out var hi, out var lo, out var v4Flag))
+                {
+                    errs[j] = new QzdbException(ErrorCode.InvalidIp, $"Invalid IP address: '{ip}'");
+                }
+                else if (v4Flag)
+                {
+                    isV4[j] = true;
+                    v4s[j] = v4;
+                    active[j] = true;
+                }
+                else
+                {
+                    isV6[j] = true;
+                    v6Hi[j] = hi;
+                    v6Lo[j] = lo;
+                }
+            }
+
+            // Stage 2 & 3: Interleaved IPv4 trie walk
+            if (snap._hasV4 && snap._offV4Jump > 0)
+            {
+                try
+                {
+                    TrieWalkV4Batch(snap, bp, v4s, rowIds, active, chunk);
+                }
+                catch (Exception ex)
+                {
+                    for (int j = 0; j < chunk; j++)
+                    {
+                        if (isV4[j] && errs[j] == null)
+                        {
+                            errs[j] = new QzdbException(ErrorCode.Corrupted, "Corrupted database payload during IPv4 batch trie walk", ex);
+                        }
+                    }
+                }
+            }
+
+            // Stage 4: Process IPv6
+            for (int j = 0; j < chunk; j++)
+            {
+                if (isV6[j] && errs[j] == null)
+                {
+                    try
+                    {
+                        rowIds[j] = TrieWalkV6Core(snap, bp, v6Hi[j], v6Lo[j]);
+                    }
+                    catch (QzdbException e)
+                    {
+                        errs[j] = e;
+                    }
+                    catch (Exception ex)
+                    {
+                        errs[j] = new QzdbException(ErrorCode.Corrupted, "Corrupted database payload during IPv6 trie walk", ex);
+                    }
+                }
+            }
+
+            // Stage 5: Resolve results
+            for (int j = 0; j < chunk; j++)
+            {
+                string ip = ipStrs[baseIdx + j];
+                if (errs[j] != null)
+                {
+                    results[baseIdx + j] = new BatchResult(null, errs[j], ip);
+                }
+                else if (rowIds[j] == 0)
+                {
+                    results[baseIdx + j] = new BatchResult(null, null, ip);
+                }
+                else
+                {
+                    try
+                    {
+                        var info = fields == null || fields.Length == 0
+                            ? ResolveRowId(snap, rowIds[j])
+                            : ResolveRowIdFields(snap, rowIds[j], fields);
+                        results[baseIdx + j] = new BatchResult(info, null, ip);
+                    }
+                    catch (QzdbException e)
+                    {
+                        results[baseIdx + j] = new BatchResult(null, e, ip);
+                    }
+                    catch (Exception ex)
+                    {
+                        results[baseIdx + j] = new BatchResult(null, new QzdbException(ErrorCode.Corrupted, "Corrupted database payload during row resolution", ex), ip);
+                    }
+                }
+            }
+        }
+    }
+
+    private static unsafe void TrieWalkV4Batch(Snapshot snap, byte* bp, uint* ips, uint* rowIds, bool* active, int chunk)
+    {
+        if (snap._offV4Jump + 65536L * 4 > snap._dataLen)
+        {
+            for (int j = 0; j < chunk; j++) { rowIds[j] = 0; active[j] = false; }
+            return;
+        }
+        uint* jump = (uint*)(bp + snap._offV4Jump);
+        uint* idx = stackalloc uint[4];
+        uint* suffix = stackalloc uint[4];
+
+        for (int j = 0; j < chunk; j++)
+        {
+            if (!active[j]) continue;
+            uint hi16 = (ips[j] >> 16) & 0xFFFF;
+            uint ptr = Unsafe.ReadUnaligned<uint>(jump + hi16);
+            if (ptr == 0)
+            {
+                rowIds[j] = 0;
+                active[j] = false;
+            }
+            else if ((ptr & Sentinel) != 0)
+            {
+                rowIds[j] = ptr & SentinelMask31;
+                active[j] = false;
+            }
+            else
+            {
+                idx[j] = ptr;
+                suffix[j] = (ips[j] & 0xFFFF) << 16;
+            }
+        }
+
+        byte* nodes = bp + snap._offV4Nodes;
+        if (snap._v4Node24)
+        {
+            byte* nodesEnd = nodes + (long)snap._v4NodeCount * 6;
+            for (int step = 0; step < 16; step++)
+            {
+                bool anyActive = false;
+                for (int j = 0; j < chunk; j++)
+                {
+                    if (!active[j]) continue;
+                    if (idx[j] >= snap._v4NodeCount)
+                    {
+                        rowIds[j] = 0;
+                        active[j] = false;
+                        continue;
+                    }
+                    byte* node = nodes + idx[j] * 6;
+                    if (node >= nodesEnd)
+                    {
+                        rowIds[j] = 0;
+                        active[j] = false;
+                        continue;
+                    }
+                    int off = ((suffix[j] >> 31) & 1) == 0 ? 0 : 3;
+                    uint child = (uint)(node[off] | (node[off + 1] << 8) | (node[off + 2] << 16));
+                    if ((child & 0x800000) != 0)
+                    {
+                        rowIds[j] = child & SentinelMask24;
+                        active[j] = false;
+                        continue;
+                    }
+                    if (child == 0)
+                    {
+                        rowIds[j] = 0;
+                        active[j] = false;
+                        continue;
+                    }
+                    idx[j] = child;
+                    suffix[j] <<= 1;
+                    anyActive = true;
+                }
+                if (!anyActive) break;
+            }
+        }
+        else
+        {
+            uint* nodesEnd = (uint*)(nodes + (long)snap._v4NodeCount * 8);
+            for (int step = 0; step < 16; step++)
+            {
+                bool anyActive = false;
+                for (int j = 0; j < chunk; j++)
+                {
+                    if (!active[j]) continue;
+                    if (idx[j] >= snap._v4NodeCount)
+                    {
+                        rowIds[j] = 0;
+                        active[j] = false;
+                        continue;
+                    }
+                    uint* node = (uint*)(nodes + idx[j] * 8);
+                    if (node >= nodesEnd)
+                    {
+                        rowIds[j] = 0;
+                        active[j] = false;
+                        continue;
+                    }
+                    uint bit = (suffix[j] >> 31) & 1;
+                    uint child = Unsafe.ReadUnaligned<uint>(node + bit);
+                    if ((child & Sentinel) != 0)
+                    {
+                        rowIds[j] = child & SentinelMask31;
+                        active[j] = false;
+                        continue;
+                    }
+                    if (child == 0)
+                    {
+                        rowIds[j] = 0;
+                        active[j] = false;
+                        continue;
+                    }
+                    idx[j] = child;
+                    suffix[j] <<= 1;
+                    anyActive = true;
+                }
+                if (!anyActive) break;
+            }
+        }
     }
 
     private BatchResult FindResult(string ip)
@@ -1651,12 +1978,15 @@ public sealed class QzdbReader : IDisposable
 
         var span = snap._data.Span;
         long rOff = snap._offIPRow + (long)rowId * snap._ipRowSize;
+        if (rOff < 0 || rOff + snap._ipRowSize > span.Length) return null;
 
         uint geoId = ReadUintWidth(span, (int)rOff, snap._rowGeoWidth);
         uint asnId = snap._rowAsnWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowGeoWidth), snap._rowAsnWidth) : 0;
         uint usageId = snap._rowUsageWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowGeoWidth + snap._rowAsnWidth), snap._rowUsageWidth) : 0;
 
-        int mask = snap._groupDimMasks[snap._groupIndex];
+        int gi = snap._groupIndex;
+        if (gi < 0 || gi >= snap._groupDimMasks.Length) return null;
+        int mask = snap._groupDimMasks[gi];
         uint entryId = (mask & 0x02) != 0 ? asnId : (mask & 0x04) != 0 ? usageId : geoId;
 
         if (entryId == 0) return null;
@@ -1669,12 +1999,15 @@ public sealed class QzdbReader : IDisposable
 
         var span = snap._data.Span;
         long rOff = snap._offIPRow + (long)rowId * snap._ipRowSize;
+        if (rOff < 0 || rOff + snap._ipRowSize > span.Length) return null;
 
         uint geoId = ReadUintWidth(span, (int)rOff, snap._rowGeoWidth);
         uint asnId = snap._rowAsnWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowGeoWidth), snap._rowAsnWidth) : 0;
         uint usageId = snap._rowUsageWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowGeoWidth + snap._rowAsnWidth), snap._rowUsageWidth) : 0;
 
-        int mask = snap._groupDimMasks[snap._groupIndex];
+        int gi = snap._groupIndex;
+        if (gi < 0 || gi >= snap._groupDimMasks.Length) return null;
+        int mask = snap._groupDimMasks[gi];
         uint entryId = (mask & 0x02) != 0 ? asnId : (mask & 0x04) != 0 ? usageId : geoId;
 
         if (entryId == 0) return null;
@@ -1728,17 +2061,21 @@ public sealed class QzdbReader : IDisposable
             return cached.Value;
 
         var geo = BuildGeo(snap, entryId);
-        Volatile.Write(ref cache[h], new Snapshot.CacheEntry(entryId, geo));
+        if (geo != null)
+            Volatile.Write(ref cache[h], new Snapshot.CacheEntry(entryId, geo));
         return geo;
     }
 
-    private static GeoInfo BuildGeo(Snapshot snap, uint entryId)
+    private static GeoInfo? BuildGeo(Snapshot snap, uint entryId)
     {
         int gi = snap._groupIndex;
+        if (gi < 0 || gi >= snap._groupFieldCounts.Length) return null;
         int fc = snap._groupFieldCounts[gi];
         long entryOff = snap._groupEntryOffsets[gi] + (long)entryId * snap._groupStrides[gi];
 
         var span = snap._data.Span;
+        if (entryOff < 0 || entryOff + snap._groupStrides[gi] > span.Length) return null;
+
         var widths = snap._groupFieldWidths[gi];
         var offsets = snap._groupFieldOffsets[gi];
         var natives = snap._groupFieldNative[gi];
@@ -1757,6 +2094,9 @@ public sealed class QzdbReader : IDisposable
                 int nt = natTypes[fi];
                 if (nt == 1)
                 {
+                     int need = w == 4 ? 4 : 8;
+                     if (fo < 0 || fo + need > span.Length)
+                         throw new QzdbException(ErrorCode.Corrupted, $"Native float out of bounds: fo={fo} need={need} len={span.Length}");
                      ref var r = ref Unsafe.Add(ref MemoryMarshal.GetReference(span), fo);
                      if (w == 4)
                      {
@@ -1887,40 +2227,180 @@ public sealed class QzdbReader : IDisposable
         for (int i = 0; i < 6; i++) { HexLUT[97 + i] = (byte)(10 + i); HexLUT[65 + i] = (byte)(10 + i); }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool TryParseV4(ReadOnlySpan<char> s, out uint v4, out bool hasColon)
     {
         v4 = 0;
         int n = s.Length;
-        if (n == 0) { hasColon = false; return false; }
-        hasColon = s.Contains(':');
-        if (hasColon || n > 15) return false;
-        uint result = 0;
-        int val = 0, dots = 0, start = 0;
-        for (int i = 0; i <= n; i++)
+        if (n < 7 || n > 15) goto Fail;
+
+        // --- Octet 0 ---
+        uint v0;
+        char c0 = s[0];
+        int idx = 0;
+        if (c0 == '0')
         {
-            char c = i < n ? s[i] : '.';
-            if (c == '.')
-            {
-                int segLen = i - start;
-                if (segLen == 0 || segLen > 3) return false;
-                if (segLen > 1 && s[start] == '0') return false;
-                val = 0;
-                for (int j = start; j < i; j++)
-                {
-                    char d = s[j];
-                    if (d < '0' || d > '9') return false;
-                    val = val * 10 + (d - '0');
-                }
-                if (val > 255) return false;
-                result = (result << 8) | (uint)val;
-                dots++;
-                start = i + 1;
-            }
-            else if (c < '0' || c > '9') return false;
+            if (s[1] != '.') goto Fail;
+            v0 = 0;
+            idx = 2;
         }
-        if (dots != 4) return false;
-        v4 = result;
+        else
+        {
+            uint d0 = (uint)(c0 - '0');
+            if (d0 > 9) goto Fail;
+            if (s[1] == '.')
+            {
+                v0 = d0;
+                idx = 2;
+            }
+            else
+            {
+                uint d1 = (uint)(s[1] - '0');
+                if (s[2] == '.')
+                {
+                    if (d1 > 9) goto Fail;
+                    v0 = d0 * 10 + d1;
+                    idx = 3;
+                }
+                else
+                {
+                    if (s[3] != '.') goto Fail;
+                    uint d2 = (uint)(s[2] - '0');
+                    if (d1 > 9 || d2 > 9) goto Fail;
+                    uint val = d0 * 100 + d1 * 10 + d2;
+                    if (val > 255) goto Fail;
+                    v0 = val;
+                    idx = 4;
+                }
+            }
+        }
+
+        // --- Octet 1 ---
+        uint v1;
+        if (idx >= n) goto Fail;
+        c0 = s[idx];
+        if (c0 == '0')
+        {
+            if (idx + 1 >= n || s[idx + 1] != '.') goto Fail;
+            v1 = 0;
+            idx += 2;
+        }
+        else
+        {
+            uint d0 = (uint)(c0 - '0');
+            if (d0 > 9 || idx + 1 >= n) goto Fail;
+            if (s[idx + 1] == '.')
+            {
+                v1 = d0;
+                idx += 2;
+            }
+            else
+            {
+                if (idx + 2 >= n) goto Fail;
+                uint d1 = (uint)(s[idx + 1] - '0');
+                if (s[idx + 2] == '.')
+                {
+                    if (d1 > 9) goto Fail;
+                    v1 = d0 * 10 + d1;
+                    idx += 3;
+                }
+                else
+                {
+                    if (idx + 3 >= n || s[idx + 3] != '.') goto Fail;
+                    uint d2 = (uint)(s[idx + 2] - '0');
+                    if (d1 > 9 || d2 > 9) goto Fail;
+                    uint val = d0 * 100 + d1 * 10 + d2;
+                    if (val > 255) goto Fail;
+                    v1 = val;
+                    idx += 4;
+                }
+            }
+        }
+
+        // --- Octet 2 ---
+        uint v2;
+        if (idx >= n) goto Fail;
+        c0 = s[idx];
+        if (c0 == '0')
+        {
+            if (idx + 1 >= n || s[idx + 1] != '.') goto Fail;
+            v2 = 0;
+            idx += 2;
+        }
+        else
+        {
+            uint d0 = (uint)(c0 - '0');
+            if (d0 > 9 || idx + 1 >= n) goto Fail;
+            if (s[idx + 1] == '.')
+            {
+                v2 = d0;
+                idx += 2;
+            }
+            else
+            {
+                if (idx + 2 >= n) goto Fail;
+                uint d1 = (uint)(s[idx + 1] - '0');
+                if (s[idx + 2] == '.')
+                {
+                    if (d1 > 9) goto Fail;
+                    v2 = d0 * 10 + d1;
+                    idx += 3;
+                }
+                else
+                {
+                    if (idx + 3 >= n || s[idx + 3] != '.') goto Fail;
+                    uint d2 = (uint)(s[idx + 2] - '0');
+                    if (d1 > 9 || d2 > 9) goto Fail;
+                    uint val = d0 * 100 + d1 * 10 + d2;
+                    if (val > 255) goto Fail;
+                    v2 = val;
+                    idx += 4;
+                }
+            }
+        }
+
+        // --- Octet 3 ---
+        uint v3;
+        int rem = n - idx;
+        if (rem < 1 || rem > 3) goto Fail;
+        c0 = s[idx];
+        if (c0 == '0')
+        {
+            if (rem != 1) goto Fail;
+            v3 = 0;
+        }
+        else
+        {
+            uint d0 = (uint)(c0 - '0');
+            if (d0 > 9) goto Fail;
+            if (rem == 1)
+            {
+                v3 = d0;
+            }
+            else if (rem == 2)
+            {
+                uint d1 = (uint)(s[idx + 1] - '0');
+                if (d1 > 9) goto Fail;
+                v3 = d0 * 10 + d1;
+            }
+            else // rem == 3
+            {
+                uint d1 = (uint)(s[idx + 1] - '0');
+                uint d2 = (uint)(s[idx + 2] - '0');
+                if (d1 > 9 || d2 > 9) goto Fail;
+                uint val = d0 * 100 + d1 * 10 + d2;
+                if (val > 255) goto Fail;
+                v3 = val;
+            }
+        }
+
+        v4 = (v0 << 24) | (v1 << 16) | (v2 << 8) | v3;
+        hasColon = false;
         return true;
+
+    Fail:
+        hasColon = s.Contains(':');
+        return false;
     }
 
     private struct V6Result
@@ -2128,6 +2608,52 @@ public sealed class QzdbReader : IDisposable
     /// <summary>Alias of <see cref="VerifyCrc"/> (legacy casing).</summary>
     public bool VerifyCRC() => VerifyCrc();
 
+    /// <summary>
+    /// Actively touches index pages (IPv4/IPv6 Jump Tables and Trie Nodes) to eliminate cold page fault latency spikes on first queries.
+    /// Safe to call concurrently or repeatedly.
+    /// </summary>
+    public void Warmup()
+    {
+        var snap = TryGetSnapshot();
+        if (snap == null) return;
+        var span = snap._data.Span;
+        if (span.IsEmpty) return;
+
+        // Touch pages with 4096-byte step (OS virtual memory page boundary)
+        const int PageSize = 4096;
+        uint touchSum = 0;
+
+        if (snap._hasV4 && snap._offV4Jump > 0)
+        {
+            long start = snap._offV4Jump;
+            long end = Math.Min(span.Length, start + 65536L * 4);
+            for (long p = start; p < end; p += PageSize)
+                touchSum ^= span[(int)p];
+            if (snap._v4NodeCount > 0 && snap._offV4Nodes > 0)
+            {
+                long nStart = snap._offV4Nodes;
+                long nEnd = Math.Min(span.Length, nStart + (long)snap._v4NodeCount * (snap._v4Node24 ? 6 : 8));
+                for (long p = nStart; p < nEnd; p += PageSize)
+                    touchSum ^= span[(int)p];
+            }
+        }
+
+        if (snap._hasV6 && snap._offV6Jump > 0)
+        {
+            long start = snap._offV6Jump;
+            long end = Math.Min(span.Length, start + (1L << snap._v6JumpBits) * 4);
+            for (long p = start; p < end; p += PageSize)
+                touchSum ^= span[(int)p];
+            if (snap._v6NodeCount > 0 && snap._offV6Nodes > 0)
+            {
+                long nStart = snap._offV6Nodes;
+                long nEnd = Math.Min(span.Length, nStart + (long)snap._v6NodeCount * (snap._v6Node24 ? 6 : 8));
+                for (long p = nStart; p < nEnd; p += PageSize)
+                    touchSum ^= span[(int)p];
+            }
+        }
+    }
+
     #endregion
 
     #region Lifecycle
@@ -2148,6 +2674,7 @@ public sealed class QzdbReader : IDisposable
         long epoch = Interlocked.Increment(ref _reloadEpoch);
         int groupIndex = RequireSnapshot()._groupIndex;
         var snap = LoadPath(path, groupIndex, verifyCrc: true);
+        snap.Warmup();
         PublishSnapshot(snap, epoch);
     }
 
@@ -2158,6 +2685,7 @@ public sealed class QzdbReader : IDisposable
         long epoch = Interlocked.Increment(ref _reloadEpoch);
         int groupIndex = RequireSnapshot()._groupIndex;
         var snap = Snapshot.FromBuffer(buffer, groupIndex, verifyCrc: true);
+        snap.Warmup();
         PublishSnapshot(snap, epoch);
     }
 

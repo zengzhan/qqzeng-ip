@@ -1,5 +1,7 @@
 package qzdb
 
+import "encoding/binary"
+
 // BatchResult 批量查询的单条结果（保留三态语义）。
 type BatchResult struct {
 	IP      string
@@ -19,28 +21,305 @@ func batchEntry(ip string, g *GeoInfo, err error) BatchResult {
 	return BatchResult{IP: ip, GeoInfo: g, Error: err}
 }
 
-// FindBatch 顺序批量查询（内部不起线程池）；逐条保留三态语义。ips 为 nil 返回空列表。
+// LookupBatch 批量查询别名（对标 FindBatch）。
+func (r *QzdbReader) LookupBatch(ips []string) []BatchResult {
+	return r.FindBatch(ips)
+}
+
+// FindBatch 流水线交织批量查询；逐条保留三态语义（命中、未命中、非法）。ips 为 nil 返回空。
 func (r *QzdbReader) FindBatch(ips []string) []BatchResult {
 	if ips == nil {
 		return nil
 	}
-	out := make([]BatchResult, 0, len(ips))
-	for _, ip := range ips {
-		g, err := r.Find(ip)
-		out = append(out, batchEntry(ip, g, err))
+	s := r.snapshot()
+	if s == nil {
+		out := make([]BatchResult, len(ips))
+		for i, ip := range ips {
+			out[i] = BatchResult{IP: ip, GeoInfo: nil, Error: ErrClosed}
+		}
+		return out
+	}
+
+	out := make([]BatchResult, len(ips))
+	const batchWidth = 4
+	n := len(ips)
+
+	for base := 0; base < n; base += batchWidth {
+		chunk := n - base
+		if chunk > batchWidth {
+			chunk = batchWidth
+		}
+
+		var (
+			v4s      [batchWidth]uint32
+			isV4     [batchWidth]bool
+			v6s      [batchWidth][16]byte
+			isV6     [batchWidth]bool
+			rowIDs   [batchWidth]uint32
+			errs     [batchWidth]error
+			resolved [batchWidth]bool
+
+			// Trie walk state for v4
+			active [batchWidth]bool
+			idx    [batchWidth]uint32
+			suffix [batchWidth]uint32
+		)
+
+		// Stage 1: Fast parse all items in chunk (zero-alloc)
+		for j := 0; j < chunk; j++ {
+			ip := ips[base+j]
+			if ip == "" {
+				errs[j] = newErr(ErrCodeInvalidParam, "invalid ip: ")
+				resolved[j] = true
+				continue
+			}
+			res, ok := fastParseIp(ip)
+			if !ok {
+				errs[j] = newErr(ErrCodeInvalidParam, "invalid ip: "+ip)
+				resolved[j] = true
+			} else if res.isV4 {
+				isV4[j] = true
+				v4s[j] = res.v4
+			} else {
+				isV6[j] = true
+				v6s[j] = res.v6
+			}
+		}
+
+		// Stage 2: Jump table lookup for v4 items
+		for j := 0; j < chunk; j++ {
+			if isV4[j] {
+				if !s.hasV4 || s.offV4Jump <= 0 || s.offV4Jump+uint64(v4s[j]>>16)*4+4 > uint64(len(s.data)) {
+					resolved[j] = true
+					rowIDs[j] = 0
+				} else {
+					ptr := binary.LittleEndian.Uint32(s.data[s.offV4Jump+uint64(v4s[j]>>16)*4:])
+					if ptr == 0 {
+						resolved[j] = true
+						rowIDs[j] = 0
+					} else if ptr&SENTINEL != 0 {
+						resolved[j] = true
+						rowIDs[j] = ptr & SENTINEL_MASK_31
+					} else {
+						idx[j] = ptr & SENTINEL_MASK_31
+						suffix[j] = (v4s[j] & 0xFFFF) << 16
+						active[j] = true
+					}
+				}
+			}
+		}
+
+		// Stage 3: Interleaved Trie walk for active v4 items
+		mask := s.nodeMask(true)
+		for steps := 0; steps < maxTrieWalkSteps; steps++ {
+			anyActive := false
+			for j := 0; j < chunk; j++ {
+				if active[j] {
+					child := s.readV4Child(idx[j], (suffix[j]>>31)&1)
+					if child == 0 {
+						active[j] = false
+						resolved[j] = true
+						rowIDs[j] = 0
+					} else if s.isLeaf(child, true) {
+						active[j] = false
+						resolved[j] = true
+						rowIDs[j] = s.leafValue(child, true)
+					} else {
+						idx[j] = child & mask
+						suffix[j] <<= 1
+						anyActive = true
+					}
+				}
+			}
+			if !anyActive {
+				break
+			}
+		}
+
+		for j := 0; j < chunk; j++ {
+			if active[j] {
+				errs[j] = ErrCorrupted
+				resolved[j] = true
+			}
+		}
+
+		// Stage 4: Process IPv6 items in chunk
+		for j := 0; j < chunk; j++ {
+			if isV6[j] && !resolved[j] {
+				rowID, err := s.trieWalkV6(v6s[j])
+				rowIDs[j] = rowID
+				errs[j] = err
+				resolved[j] = true
+			}
+		}
+
+		// Stage 5: Geo resolution with zero-alloc batch entries
+		for j := 0; j < chunk; j++ {
+			ip := ips[base+j]
+			if errs[j] != nil {
+				out[base+j] = BatchResult{IP: ip, GeoInfo: nil, Error: errs[j]}
+			} else if rowIDs[j] == 0 {
+				out[base+j] = BatchResult{IP: ip, GeoInfo: nil, Error: nil}
+			} else {
+				func() {
+					defer func() {
+						if rec := recover(); rec != nil {
+							out[base+j] = BatchResult{IP: ip, GeoInfo: nil, Error: ErrCorrupted}
+						}
+					}()
+					g := s.extractGeoInfo(rowIDs[j])
+					out[base+j] = BatchResult{IP: ip, GeoInfo: g, Error: nil}
+				}()
+			}
+		}
 	}
 	return out
 }
 
-// FindBatchFields 顺序批量字段投影查询。
+// FindBatchFields 顺序批量字段投影查询（流水线交织）。
 func (r *QzdbReader) FindBatchFields(ips []string, fields []string) []BatchResult {
 	if ips == nil {
 		return nil
 	}
-	out := make([]BatchResult, 0, len(ips))
-	for _, ip := range ips {
-		g, err := r.FindFields(ip, fields)
-		out = append(out, batchEntry(ip, g, err))
+	if len(fields) == 0 {
+		return r.FindBatch(ips)
+	}
+	s := r.snapshot()
+	if s == nil {
+		out := make([]BatchResult, len(ips))
+		for i, ip := range ips {
+			out[i] = BatchResult{IP: ip, GeoInfo: nil, Error: ErrClosed}
+		}
+		return out
+	}
+
+	out := make([]BatchResult, len(ips))
+	const batchWidth = 4
+	n := len(ips)
+
+	for base := 0; base < n; base += batchWidth {
+		chunk := n - base
+		if chunk > batchWidth {
+			chunk = batchWidth
+		}
+
+		var (
+			v4s      [batchWidth]uint32
+			isV4     [batchWidth]bool
+			v6s      [batchWidth][16]byte
+			isV6     [batchWidth]bool
+			rowIDs   [batchWidth]uint32
+			errs     [batchWidth]error
+			resolved [batchWidth]bool
+
+			// Trie walk state for v4
+			active [batchWidth]bool
+			idx    [batchWidth]uint32
+			suffix [batchWidth]uint32
+		)
+
+		for j := 0; j < chunk; j++ {
+			ip := ips[base+j]
+			if ip == "" {
+				errs[j] = newErr(ErrCodeInvalidParam, "invalid ip: ")
+				resolved[j] = true
+				continue
+			}
+			res, ok := fastParseIp(ip)
+			if !ok {
+				errs[j] = newErr(ErrCodeInvalidParam, "invalid ip: "+ip)
+				resolved[j] = true
+			} else if res.isV4 {
+				isV4[j] = true
+				v4s[j] = res.v4
+			} else {
+				isV6[j] = true
+				v6s[j] = res.v6
+			}
+		}
+
+		for j := 0; j < chunk; j++ {
+			if isV4[j] {
+				if !s.hasV4 || s.offV4Jump <= 0 || s.offV4Jump+uint64(v4s[j]>>16)*4+4 > uint64(len(s.data)) {
+					resolved[j] = true
+					rowIDs[j] = 0
+				} else {
+					ptr := binary.LittleEndian.Uint32(s.data[s.offV4Jump+uint64(v4s[j]>>16)*4:])
+					if ptr == 0 {
+						resolved[j] = true
+						rowIDs[j] = 0
+					} else if ptr&SENTINEL != 0 {
+						resolved[j] = true
+						rowIDs[j] = ptr & SENTINEL_MASK_31
+					} else {
+						idx[j] = ptr & SENTINEL_MASK_31
+						suffix[j] = (v4s[j] & 0xFFFF) << 16
+						active[j] = true
+					}
+				}
+			}
+		}
+
+		mask := s.nodeMask(true)
+		for steps := 0; steps < maxTrieWalkSteps; steps++ {
+			anyActive := false
+			for j := 0; j < chunk; j++ {
+				if active[j] {
+					child := s.readV4Child(idx[j], (suffix[j]>>31)&1)
+					if child == 0 {
+						active[j] = false
+						resolved[j] = true
+						rowIDs[j] = 0
+					} else if s.isLeaf(child, true) {
+						active[j] = false
+						resolved[j] = true
+						rowIDs[j] = s.leafValue(child, true)
+					} else {
+						idx[j] = child & mask
+						suffix[j] <<= 1
+						anyActive = true
+					}
+				}
+			}
+			if !anyActive {
+				break
+			}
+		}
+
+		for j := 0; j < chunk; j++ {
+			if active[j] {
+				errs[j] = ErrCorrupted
+				resolved[j] = true
+			}
+		}
+
+		for j := 0; j < chunk; j++ {
+			if isV6[j] && !resolved[j] {
+				rowID, err := s.trieWalkV6(v6s[j])
+				rowIDs[j] = rowID
+				errs[j] = err
+				resolved[j] = true
+			}
+		}
+
+		for j := 0; j < chunk; j++ {
+			ip := ips[base+j]
+			if errs[j] != nil {
+				out[base+j] = BatchResult{IP: ip, GeoInfo: nil, Error: errs[j]}
+			} else if rowIDs[j] == 0 {
+				out[base+j] = BatchResult{IP: ip, GeoInfo: nil, Error: nil}
+			} else {
+				func() {
+					defer func() {
+						if rec := recover(); rec != nil {
+							out[base+j] = BatchResult{IP: ip, GeoInfo: nil, Error: ErrCorrupted}
+						}
+					}()
+					g := s.computeGeoInfoProjected(rowIDs[j], fields)
+					out[base+j] = BatchResult{IP: ip, GeoInfo: g, Error: nil}
+				}()
+			}
+		}
 	}
 	return out
 }

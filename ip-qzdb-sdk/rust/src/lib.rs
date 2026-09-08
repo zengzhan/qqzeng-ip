@@ -2818,6 +2818,38 @@ impl SnapshotInner {
         let stored = safe_read_u32(self.data.as_slice(), 16).unwrap_or(0);
         stored == *self.canonical_crc.get_or_init(|| compute_canonical_crc(self.data.as_slice()))
     }
+
+    /// 主动触碰跳表与节点内存页（按 4096 字节步长），消除冷页在首查时的抖动。
+    /// 在 Reload 中于原子替换前调用，确保新快照的页面已预热入 OS Page Cache。
+    pub fn warmup(&self) {
+        let d = self.data.as_slice();
+        if d.is_empty() { return; }
+        const PAGE: usize = 4096;
+        let mut touch_sum: u8 = 0;
+        if self.has_v4 && self.off_v4_jump > 0 {
+            let start = self.off_v4_jump as usize;
+            let end = (start + 65536 * 4).min(d.len());
+            for p in (start..end).step_by(PAGE) { touch_sum ^= d[p]; }
+            if self.v4_node_count > 0 && self.off_v4_nodes > 0 {
+                let node_size = if self.v4_node_24 { 6 } else { 8 };
+                let ns = self.off_v4_nodes as usize;
+                let ne = (ns + self.v4_node_count as usize * node_size).min(d.len());
+                for p in (ns..ne).step_by(PAGE) { touch_sum ^= d[p]; }
+            }
+        }
+        if self.has_v6 && self.off_v6_jump > 0 {
+            let start = self.off_v6_jump as usize;
+            let end = (start + (1usize << self.v6_jump_bits) * 4).min(d.len());
+            for p in (start..end).step_by(PAGE) { touch_sum ^= d[p]; }
+            if self.v6_node_count > 0 && self.off_v6_nodes > 0 {
+                let node_size = if self.v6_node_24 { 6 } else { 8 };
+                let ns = self.off_v6_nodes as usize;
+                let ne = (ns + self.v6_node_count as usize * node_size).min(d.len());
+                for p in (ns..ne).step_by(PAGE) { touch_sum ^= d[p]; }
+            }
+        }
+        let _ = touch_sum;
+    }
 }
 
 /// Metadata TLV 段解析结果（FORMAT §8.1）。
@@ -3411,6 +3443,84 @@ impl QzdbReader {
         self.snap.load_full()
     }
 
+    /// 主动触碰跳表与节点内存页（按 4096 字节步长），消除冷页在首查时的抖动。
+    ///
+    /// mmap 数据的读取会触发 page fault，本方法提前把常用区段读入内存，避免
+    /// 首次查询时的缺页延迟。XOR 累加防止编译器把读取优化为空操作；所有索引
+    /// 均经 `.get()` 边界检查（范围已在加载期校验）。
+    pub fn warmup(&self) {
+        let snap = self.snap.load_full();
+        let d = snap.data.as_slice();
+        if d.is_empty() {
+            return;
+        }
+        const PAGE: usize = 4096;
+        let mut touch_sum: u8 = 0;
+
+        if snap.has_v4 && snap.off_v4_jump > 0 {
+            let start = snap.off_v4_jump as usize;
+            let mut end = start.saturating_add(65536usize.saturating_mul(4));
+            if end > d.len() {
+                end = d.len();
+            }
+            let mut p = start;
+            while p < end {
+                if let Some(&b) = d.get(p) {
+                    touch_sum ^= b;
+                }
+                p += PAGE;
+            }
+            if snap.v4_node_count > 0 && snap.off_v4_nodes > 0 {
+                let node_size: usize = if snap.v4_node_24 { 6 } else { 8 };
+                let n_start = snap.off_v4_nodes as usize;
+                let mut n_end = n_start.saturating_add((snap.v4_node_count as usize).saturating_mul(node_size));
+                if n_end > d.len() {
+                    n_end = d.len();
+                }
+                let mut q = n_start;
+                while q < n_end {
+                    if let Some(&b) = d.get(q) {
+                        touch_sum ^= b;
+                    }
+                    q += PAGE;
+                }
+            }
+        }
+
+        if snap.has_v6 && snap.off_v6_jump > 0 {
+            let start = snap.off_v6_jump as usize;
+            let jump_len = (1usize << snap.v6_jump_bits).saturating_mul(4);
+            let mut end = start.saturating_add(jump_len);
+            if end > d.len() {
+                end = d.len();
+            }
+            let mut p = start;
+            while p < end {
+                if let Some(&b) = d.get(p) {
+                    touch_sum ^= b;
+                }
+                p += PAGE;
+            }
+            if snap.v6_node_count > 0 && snap.off_v6_nodes > 0 {
+                let node_size: usize = if snap.v6_node_24 { 6 } else { 8 };
+                let n_start = snap.off_v6_nodes as usize;
+                let mut n_end = n_start.saturating_add((snap.v6_node_count as usize).saturating_mul(node_size));
+                if n_end > d.len() {
+                    n_end = d.len();
+                }
+                let mut q = n_start;
+                while q < n_end {
+                    if let Some(&b) = d.get(q) {
+                        touch_sum ^= b;
+                    }
+                    q += PAGE;
+                }
+            }
+        }
+
+        std::hint::black_box(touch_sum);
+    }
+
 
     // ---- 单条查询 ----
 
@@ -3836,6 +3946,7 @@ impl QzdbReader {
     pub fn reload(&self, path: &str) -> Result<(), QzdbError> {
         let group_index = self.inner().group_index;
         let new_inner = SnapshotInner::from_bytes(DataStorage::Mapped(map_file(path)?), group_index, true)?;
+        new_inner.warmup();
         self.snap.store(Arc::new(new_inner));
         Ok(())
     }
@@ -3843,6 +3954,7 @@ impl QzdbReader {
     pub fn reload_bytes(&self, bytes: &[u8]) -> Result<(), QzdbError> {
         let group_index = self.inner().group_index;
         let new_inner = SnapshotInner::from_bytes(DataStorage::Owned(Arc::new(bytes.to_vec())), group_index, true)?;
+        new_inner.warmup();
         self.snap.store(Arc::new(new_inner));
         Ok(())
     }
