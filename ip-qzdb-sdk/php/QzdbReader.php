@@ -1948,8 +1948,8 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $desc = $this->groupPoolDescs[$g][$f];
         if ($desc === null) return '';
         if ($idx < 0 || $idx >= $desc['count']) return '';
-        // 构造缓存键
-        $cacheKey = $g . '_' . $f . '_' . $idx;
+        // 构造整型复合缓存键：g(8位) | f(12位) | idx(28位)，避免热路径字符串分配与散列
+        $cacheKey = ($g << 40) | ($f << 28) | $idx;
         if (isset($this->poolCache[$cacheKey])) {
             // 移到队尾（LRU）
             unset($this->poolCacheOrder[$cacheKey]);

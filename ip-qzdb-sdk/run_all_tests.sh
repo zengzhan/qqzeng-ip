@@ -221,7 +221,7 @@ if command -v dotnet &> /dev/null; then
     # Pin the executable test target to net10.0; the library itself remains
     # multi-targeted, while an unqualified dotnet run can trigger a slow or
     # ambiguous cross-target build on macOS.
-    run_test "C#" "dotnet build netcore.Tests/netcore.Tests.csproj -c Release -p:TargetFramework=net10.0 -p:TargetFrameworks=net10.0 --no-restore -v:q && dotnet run --project netcore.Tests/netcore.Tests.csproj -c Release -f net10.0 --no-build --no-restore" "." "ALL TIERS PASSED" "0"
+    run_test "C#" "dotnet build netcore.Tests/netcore.Tests.csproj -c Release -p:TargetFramework=net10.0 -p:TargetFrameworks=net10.0 -v:q && dotnet run --project netcore.Tests/netcore.Tests.csproj -c Release -f net10.0 --no-build" "." "ALL TIERS PASSED" "0"
 else
     echo "[SKIP] C# (.NET SDK not found)"
 fi

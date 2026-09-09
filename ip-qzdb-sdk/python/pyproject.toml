@@ -26,8 +26,8 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/qqzeng/qzdb"
-Repository = "https://github.com/qqzeng/qzdb"
+Homepage = "https://github.com/zengzhan/qqzeng-ip"
+Repository = "https://github.com/zengzhan/qqzeng-ip"
 
 [tool.setuptools]
 py-modules = ["qzdb"]

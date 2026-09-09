@@ -333,7 +333,11 @@ void          qzdb_chain_free(qzdb_chain_t* chain);
 #define QZDB_CHAIN_MERGE           1
 #define QZDB_CHAIN_MERGE_OVERRIDE  2
 
-/* ---- Registry (spec §3.2) ---- */
+/* ---- Registry (spec §3.2) ----
+ * 线程安全的命名 Reader 容器。
+ * 注意：qzdb_registry_get() 返回借用指针。为保证无锁读性能，内部采用固定容量
+ * 环形隔离队列（Quarantine Queue）延迟回收旧 Reader。register/unregister 面向
+ * 低频配置管理与热更（秒/分钟级）；请避免在紧凑循环中进行毫秒级反复同名重注册。 */
 qzdb_registry_t* qzdb_registry_new(void);
 void             qzdb_registry_free(qzdb_registry_t* reg);
 int              qzdb_registry_register(qzdb_registry_t* reg, const char* name, const char* path);
