@@ -2,7 +2,16 @@
 
   <PropertyGroup>
     <!-- 目标框架：多框架支持 net8.0 (LTS), net9.0, net10.0, net11.0 -->
-    <TargetFrameworks>net8.0;net9.0;net10.0;net11.0</TargetFrameworks>
+    <!--
+        目标框架：net8.0 (LTS) / net9.0 / net10.0 默认构建。
+        net11.0 需要 .NET 11 RC1+ SDK（GA 定于 2026-11-10）；而绝大多数开发机/CI 目前
+        装的是稳定通道的 8/9/10 SDK——对着它们，只要 TargetFrameworks 里带了 net11.0，
+        任何不带参数的 `dotnet build`/`dotnet pack` 就会以 NETSDK1045 整体失败，哪怕
+        调用方压根没打算构建 net11.0（已用 stock dotnet-sdk-10.0 复现，100% 必现）。
+        用 IncludeNet11 开关按需追加，net11 GA 后把默认值合并回去即可。
+    -->
+    <TargetFrameworks>net8.0;net9.0;net10.0</TargetFrameworks>
+    <TargetFrameworks Condition="'$(IncludeNet11)' == 'true'">$(TargetFrameworks);net11.0</TargetFrameworks>
     <OutputType>Library</OutputType>
 
     <!-- 语言/编译选项 -->
