@@ -1213,14 +1213,18 @@ public final class QzdbReader implements AutoCloseable {
 
     /**
      * 查询并返回 pipe 分隔的结果字符串（格式：field1|field2|...|fieldN）。
+     * 与其余 7 语言契约一致（API_CONTRACT §find_str）：非法 IP 与未命中均返回 ""。
      *
      * @param ipStr IP 地址字符串
-     * @return pipe 分隔结果；未找到返回空字符串 ""
-     * @throws QzdbException IP 格式非法时抛出
+     * @return pipe 分隔结果；未找到或 IP 非法返回空字符串 ""
      */
     public String findStr(String ipStr) {
-        Optional<GeoInfo> info = find(ipStr);
-        return info.map(GeoInfo::toPipeString).orElse("");
+        try {
+            Optional<GeoInfo> info = find(ipStr);
+            return info.map(GeoInfo::toPipeString).orElse("");
+        } catch (QzdbException e) {
+            return "";
+        }
     }
 
     private Optional<GeoInfo> findInternal(String ipStr, String[] fieldFilter) {

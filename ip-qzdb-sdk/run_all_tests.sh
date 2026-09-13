@@ -114,11 +114,19 @@ run_test "Node.js" "node test.js" "nodejs"
 # FORMAT §10.5 原生浮点统一契约边界（P0-2，DB-free）
 run_test "Node-NativeFloat" "node native_float_test.js" "nodejs" "NATIVE_FLOAT_OK"
 
+# 严格 IP 解析一致性（DB-free）：IPv4 解析改单遍扫描 + 删除冗余空白预扫描后，
+# 严格性必须由该表驱动测试钉死（对齐 C-IpStrict / PHP-IpStrict）。
+run_test "Node-IpStrict" "node ip_strict_test.js" "nodejs" "IP_STRICT_OK"
+
 # PHP
 run_test "PHP" "php test.php" "php"
 
 # PHP hostile-vector conformance (skips gracefully without base DB).
 run_test "PHP-HostileVectors" "php tier2_hostile.php" "php" "HOSTILE_VECTORS_OK"
+
+# 严格 IPv4 解析一致性（DB-free）：fastParseIpv4 改用 filter_var + ip2long 后，
+# 严格性不再由手写循环保证，必须由该表驱动测试钉死（对齐 C-IpStrict）。
+run_test "PHP-IpStrict" "php ip_strict_test.php" "php" "IP_STRICT_OK"
 
 # Go
 if command -v go &> /dev/null; then

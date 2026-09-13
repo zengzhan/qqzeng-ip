@@ -222,12 +222,14 @@ for b in results:
 
 results = r.find_batch_fields(ips, ['country', 'isp'])
 
-# 流式（两种）：
-for gi in r.find_stream(ips):        # 宽松：GeoInfo|None，非法输入 yield None
-    if gi:
-        print(gi.to_pipe())
+# 流式（三态，find_stream ≡ find_iter）：
+for b in r.find_stream(ips):         # BatchResult：命中 / 未命中 / 非法 三态
+    if b.geo_info:
+        print(b.geo_info.to_pipe())
+    elif b.error:
+        print(b.ip, 'invalid')
 
-for b in r.find_iter(ips):           # 三态：BatchResult（含 error）
+for b in r.find_iter(ips):           # 同上（显式名）
     if b.geo_info:
         print(b.geo_info.to_pipe())
 ```
@@ -345,5 +347,3 @@ python3 test_csv_oracle.py  # Tier0 独立真值校验（对源 CSV 抽样，证
 2. 放入 `../data/` 或指定路径，`QzdbReader(path)` 重新加载即可；线上热更新用 `reader.reload(path)`（原子替换，不影响在途查询）。
 3. 字段新增/布局变化由文件头 `GROUP_SCHEMA` / `ROW_SCHEMA` 自描述，SDK 自动适配，无需改代码。
 4. 多语言行为以 `../API_CONTRACT.md` 为准；新增 IP 样本后重建 `tools/golden_vectors.json` 并跑全语言 Tier2 校验。
-
-<!-- commit: python: Python SDK（mmap 轻量读取） sync=1788929994 -->

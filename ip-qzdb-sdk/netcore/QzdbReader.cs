@@ -2227,180 +2227,40 @@ public sealed class QzdbReader : IDisposable
         for (int i = 0; i < 6; i++) { HexLUT[97 + i] = (byte)(10 + i); HexLUT[65 + i] = (byte)(10 + i); }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool TryParseV4(ReadOnlySpan<char> s, out uint v4, out bool hasColon)
     {
         v4 = 0;
         int n = s.Length;
-        if (n < 7 || n > 15) goto Fail;
-
-        // --- Octet 0 ---
-        uint v0;
-        char c0 = s[0];
-        int idx = 0;
-        if (c0 == '0')
-        {
-            if (s[1] != '.') goto Fail;
-            v0 = 0;
-            idx = 2;
-        }
-        else
-        {
-            uint d0 = (uint)(c0 - '0');
-            if (d0 > 9) goto Fail;
-            if (s[1] == '.')
-            {
-                v0 = d0;
-                idx = 2;
-            }
-            else
-            {
-                uint d1 = (uint)(s[1] - '0');
-                if (s[2] == '.')
-                {
-                    if (d1 > 9) goto Fail;
-                    v0 = d0 * 10 + d1;
-                    idx = 3;
-                }
-                else
-                {
-                    if (s[3] != '.') goto Fail;
-                    uint d2 = (uint)(s[2] - '0');
-                    if (d1 > 9 || d2 > 9) goto Fail;
-                    uint val = d0 * 100 + d1 * 10 + d2;
-                    if (val > 255) goto Fail;
-                    v0 = val;
-                    idx = 4;
-                }
-            }
-        }
-
-        // --- Octet 1 ---
-        uint v1;
-        if (idx >= n) goto Fail;
-        c0 = s[idx];
-        if (c0 == '0')
-        {
-            if (idx + 1 >= n || s[idx + 1] != '.') goto Fail;
-            v1 = 0;
-            idx += 2;
-        }
-        else
-        {
-            uint d0 = (uint)(c0 - '0');
-            if (d0 > 9 || idx + 1 >= n) goto Fail;
-            if (s[idx + 1] == '.')
-            {
-                v1 = d0;
-                idx += 2;
-            }
-            else
-            {
-                if (idx + 2 >= n) goto Fail;
-                uint d1 = (uint)(s[idx + 1] - '0');
-                if (s[idx + 2] == '.')
-                {
-                    if (d1 > 9) goto Fail;
-                    v1 = d0 * 10 + d1;
-                    idx += 3;
-                }
-                else
-                {
-                    if (idx + 3 >= n || s[idx + 3] != '.') goto Fail;
-                    uint d2 = (uint)(s[idx + 2] - '0');
-                    if (d1 > 9 || d2 > 9) goto Fail;
-                    uint val = d0 * 100 + d1 * 10 + d2;
-                    if (val > 255) goto Fail;
-                    v1 = val;
-                    idx += 4;
-                }
-            }
-        }
-
-        // --- Octet 2 ---
-        uint v2;
-        if (idx >= n) goto Fail;
-        c0 = s[idx];
-        if (c0 == '0')
-        {
-            if (idx + 1 >= n || s[idx + 1] != '.') goto Fail;
-            v2 = 0;
-            idx += 2;
-        }
-        else
-        {
-            uint d0 = (uint)(c0 - '0');
-            if (d0 > 9 || idx + 1 >= n) goto Fail;
-            if (s[idx + 1] == '.')
-            {
-                v2 = d0;
-                idx += 2;
-            }
-            else
-            {
-                if (idx + 2 >= n) goto Fail;
-                uint d1 = (uint)(s[idx + 1] - '0');
-                if (s[idx + 2] == '.')
-                {
-                    if (d1 > 9) goto Fail;
-                    v2 = d0 * 10 + d1;
-                    idx += 3;
-                }
-                else
-                {
-                    if (idx + 3 >= n || s[idx + 3] != '.') goto Fail;
-                    uint d2 = (uint)(s[idx + 2] - '0');
-                    if (d1 > 9 || d2 > 9) goto Fail;
-                    uint val = d0 * 100 + d1 * 10 + d2;
-                    if (val > 255) goto Fail;
-                    v2 = val;
-                    idx += 4;
-                }
-            }
-        }
-
-        // --- Octet 3 ---
-        uint v3;
-        int rem = n - idx;
-        if (rem < 1 || rem > 3) goto Fail;
-        c0 = s[idx];
-        if (c0 == '0')
-        {
-            if (rem != 1) goto Fail;
-            v3 = 0;
-        }
-        else
-        {
-            uint d0 = (uint)(c0 - '0');
-            if (d0 > 9) goto Fail;
-            if (rem == 1)
-            {
-                v3 = d0;
-            }
-            else if (rem == 2)
-            {
-                uint d1 = (uint)(s[idx + 1] - '0');
-                if (d1 > 9) goto Fail;
-                v3 = d0 * 10 + d1;
-            }
-            else // rem == 3
-            {
-                uint d1 = (uint)(s[idx + 1] - '0');
-                uint d2 = (uint)(s[idx + 2] - '0');
-                if (d1 > 9 || d2 > 9) goto Fail;
-                uint val = d0 * 100 + d1 * 10 + d2;
-                if (val > 255) goto Fail;
-                v3 = val;
-            }
-        }
-
-        v4 = (v0 << 24) | (v1 << 16) | (v2 << 8) | v3;
-        hasColon = false;
-        return true;
-
-    Fail:
+        if (n == 0) { hasColon = false; return false; }
         hasColon = s.Contains(':');
-        return false;
+        if (hasColon || n > 15) return false;
+        uint result = 0;
+        int val = 0, dots = 0, start = 0;
+        for (int i = 0; i <= n; i++)
+        {
+            char c = i < n ? s[i] : '.';
+            if (c == '.')
+            {
+                int segLen = i - start;
+                if (segLen == 0 || segLen > 3) return false;
+                if (segLen > 1 && s[start] == '0') return false;
+                val = 0;
+                for (int j = start; j < i; j++)
+                {
+                    char d = s[j];
+                    if (d < '0' || d > '9') return false;
+                    val = val * 10 + (d - '0');
+                }
+                if (val > 255) return false;
+                result = (result << 8) | (uint)val;
+                dots++;
+                start = i + 1;
+            }
+            else if (c < '0' || c > '9') return false;
+        }
+        if (dots != 4) return false;
+        v4 = result;
+        return true;
     }
 
     private struct V6Result

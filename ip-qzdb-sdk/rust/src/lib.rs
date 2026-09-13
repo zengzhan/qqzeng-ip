@@ -684,7 +684,11 @@ pub struct GeoInfo {
     /// 仅在缓存解码路径（build_geo）构建；投影/合并等按次构造的实体留空，
     /// 由 to_pipe 回退现场 join。空串与「1 字段且值为空」的合法 pipe 同形，
     /// 回退路径结果一致，无误判可能。
-    pipe: String,
+    ///
+    /// 用 `Arc<str>` 而非 `String`：该字段是私有的，改类型不影响公开 API，
+    /// 但让 `GeoInfo: Clone`（owned `find()` 的缓存命中路径）不再为 pipe
+    /// 做一次堆分配 + memcpy，只剩一次原子引用计数增量。
+    pipe: Arc<str>,
 }
 
 impl GeoInfo {
@@ -698,10 +702,10 @@ impl GeoInfo {
     }
 
     /// 全部字段以 `|` 拼接（直接拼接已解码字符串，禁止重新格式化浮点）。
-    /// 命中预编码时仅一次 String 克隆。
+    /// 命中预编码时仅一次 String 克隆（返回值语义与签名不变）。
     pub fn to_pipe(&self) -> String {
         if !self.pipe.is_empty() {
-            return self.pipe.clone();
+            return self.pipe.to_string();
         }
         self.values.join("|")
     }
@@ -1090,7 +1094,7 @@ impl<'a> GeoInfoRef<'a> {
             values,
             norm_map: map_arc,
             numeric_indices: num_arc,
-            pipe,
+            pipe: Arc::from(pipe),
         }
     }
 
@@ -2358,7 +2362,7 @@ impl SnapshotInner {
             values,
             norm_map: Arc::clone(&self.norm_map),
             numeric_indices: Arc::clone(&self.numeric_indices),
-            pipe,
+            pipe: Arc::from(pipe),
         })
     }
 
@@ -2591,7 +2595,7 @@ impl SnapshotInner {
             values,
             norm_map: Arc::new(nmap),
             numeric_indices: Arc::new(nidx),
-            pipe: String::new(),
+            pipe: Arc::from(""),
         }))
     }
 
@@ -4363,7 +4367,7 @@ fn merge_geo(base: &GeoInfo, overlay: &GeoInfo, mode: ChainMode) -> GeoInfo {
         values,
         norm_map: Arc::new(nmap),
         numeric_indices: Arc::new(nidx),
-        pipe: String::new(),
+        pipe: Arc::from(""),
     }
 }
 

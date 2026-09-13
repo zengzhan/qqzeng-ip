@@ -4,6 +4,136 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **C# SDK：`FindStr` 3.6x 性能回退修复**（`ip-qzdb-sdk/netcore/QzdbReader.cs`）。
+  `b7015b9` 引入的手写展开 `TryParseV4`（~5.5KB）带 `[MethodImpl(AggressiveInlining)]`，
+  RyuJIT 将其强制内联进 `TryParseIp` → `FindStr`/`Find` 等全部调用方，撑爆内联预算与
+  I-cache。同 worktree A/B 实测：回退为 `41dc4d3` 的简单循环解析后 `find_str` 口径 C
+  从 **5.3M 恢复到 15.9–19.8M QPS**（`tools/perf_gate.py --langs netcore`）。
+  仅摘掉 `AggressiveInlining` 不够（unrolled 仍 5.8M）——必须换回简单循环。
+  `b7015b9` 的安全边界检查与批量路径全部保留。详见 `docs/ROADMAP.md` T11。
+
+- **Java SDK：`findStr` 非法 IP 返回 `""`**（`QzdbReader.java`）。
+  此前是 8 语言中唯一对非法 IP 抛 `QzdbException` 的实现，违反 API 契约
+  `find_str` 条款（非法与未命中均应返回空串）。现已与其余 7 语言对齐。
+
+- **Python SDK：`find_stream` 改为三态 `BatchResult`**（`qzdb.py`）。
+  ⚠️ **行为变更**：此前 `find_stream` 对非法 IP 静默 yield `None`（与未命中不可区分），
+  违反契约 §4 三态要求。现为 `find_iter` 的别名，逐条 yield `BatchResult`
+  （`geo_info` / `error` 二选一）。迁移：`for gi in r.find_stream(ips)` 改为
+  `for b in r.find_stream(ips)` 后用 `b.geo_info` / `b.error` 分流。
+  与其余 7 语言的 `findStream` 入口对齐。
+
+- **Python SDK：`chain_merge` / `chain_merge_override` 实现真字段级合并**（`qzdb.py`）。
+  ⚠️ **行为变更**：此前 `chain_merge` 仅是 `chain`（FALLBACK）的别名，
+  `chain_merge_override` 只是反转列表——字段级并集完全缺失。契约 §9.5 的典型场景
+  「CN-pro 链 Global-ASN」会静默丢失 ASN 字段。现对齐 Node/Go/Java/C#/Rust/C：
+  `MERGE` 最早非空优先，`MERGE_OVERRIDE` 最新非空优先，字段序为首次出现序。
+
+### Changed
+
+- **性能门禁下限重标定**（`tools/perf_gate.py`）。
+  各语言 floors 从「实测 ~1/10」上调到「实测 ~1/3」，使 3x 以上回退无法静默通过。
+  netcore 因 T11 修复从 1.5M 上调到 6M。c/go/rust/node 原余量 13–57x，
+  正是 T11 能潜伏的制度原因。
+
+- **C SDK：IPv4 解析改 Go 同构八位组展开单遍**（`qzdb_reader.c`）。
+  `find_str` 口径实测 10.6M → 12.8–13.0M QPS。IPv4 热路径免去空白/冒号预扫描
+  与冗余 strlen；严格性由展开逻辑本身保证（前导零 / ≤255 / 非数字符 / 段数）。
+  `ip_strict_test` 10/10 与 Tier1 172/172 全过。
+
+- **C SDK：`find_str` 缓存 miss 复用已解析 `entry_id`**（`qzdb_reader.c`）。
+  此前 miss 时回退 `qzdb_find(ip_str)` 会重做一遍 parse + trie walk；现直接
+  `get_geo_info(entry_id)`。错误语义逐项不变。C 缓存仍为 fill-only（借用指针
+  生命周期契约不允许简单淘汰）。
+
+- **PHP SDK：`GeoInfo::toPipe()` 结果 memoize**（`QzdbReader.php`）。
+  对象不可变，`implode` 只做一次；对齐 Python `_pipe` 缓存与 Node 构造期预编码。
+  geo 缓存命中流量下 `findStr` 免去每次全量拼接。
+
+- **Python SDK：geo 缓存改直接映射覆盖式**（`qzdb.py`）。
+  此前 dict 满 64K 后永不再收，长跑进程永久冷路径；现 `slot = hash & mask`
+  碰撞覆盖单槽，与 Node/PHP 一致。内存上界不变，碰撞重算不返回错值。
+
+- **Python SDK：`struct` 热路径预绑定 u16/u64/f32/f64 + `_norm_idx` 按组预构建**（`qzdb.py`）。
+  此前只有 `'<I'` 做了模块级绑定；`safe_read_u16` 与 `_decode_native` 每次调用
+  都重建 `Struct`。`_norm_idx` 此前每次 GeoInfo 构造都重跑 `_norm_key()`，
+  现与 `_group_name_idx` 一样按组预构建一次（Node `_geoMetaCache` 同款）。
+
+- **Node.js SDK：IPv4 解析改单遍扫描 + 有界解析记忆表，`find(ip_str)` 提速约 2.6x**（`ip-qzdb-sdk/nodejs/qzdb.js`）。
+  动机：`find(str)` 的 ~104ns 里约 75ns 花在 `_fastParseIPv4`——原实现每个段要扫两遍
+  （外层先定段边界，内层再逐位累加）。改为单遍扫描后解析本身 75.2→38.8ns。
+  另删除 `fastParseIp` 里那趟独立的逐字符空白预扫描：它完全冗余——v4 单遍解析只接受
+  数字与点，v6 的十六进制组校验 `(cc >= 128 || (_HEX[cc] === 0 && cc !== 48))`
+  会拒绝 ord=32 等所有空白（PHP 侧此前已按同一理由删除）。
+  再叠一层有界记忆表（16K 条、满则清空、记录经 `Object.freeze` 冻结以挡住外部改写
+  污染缓存——`QzdbReader.parseIp` 是公开导出，命中返回的是同一个共享对象）。
+  实测（M4 Max，std_china，6 万次）：`find(str)` IP 全不重复 104→39.4ns（2.6x）、
+  Zipf 重复语料 103→43.5ns（2.4x）；`findUint(int)` 无变化（实测存在 JIT 双峰，
+  前后都能测到 22ns 与 11ns，不作为收益）。
+  备选方案已实测否决：正则式解析（形状正则 99ns / 全范围正则 103ns）**比逐字符循环更慢**，
+  V8 对 charCodeAt 循环的 JIT 优于正则引擎。
+
+- **PHP SDK：IPv4 解析改用 C 层原语，`find(ip_str)` 提速 2.38x**（`ip-qzdb-sdk/php/QzdbReader.php`）。
+  动机：PHP 是全语言吞吐垫底（bench_reports 0.72M QPS，C 的 1/96）。基线实测
+  `find(str)` 903ns 中解析占 619ns（69%）——`fastParseIpv4` 是 PHP 层逐字符解释循环。
+  改为 `filter_var($s, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)` + `ip2long($s)`
+  两个 C 调用，解析 619→83ns（7.5x），`find(str)` 903→380ns（2.38x）。
+  **不使用 inet_pton**：实测 PHP 的 inet_pton **接受前导零**（`010.1.1.1`、`0177.0.0.1`
+  均返回 4 字节），严格性必须额外手写；而 filter_var 本身即严格，少一个被漏掉的风险面。
+  刻意不设 `FILTER_FLAG_NO_PRIV_RANGE` / `NO_RES_RANGE`——私有段与保留段
+  （`0.0.0.0` / `10.0.0.1` / `224.0.0.1` / `255.255.255.255`）都是合法查询目标。
+
+- **Rust SDK：`GeoInfo.pipe` 由 `String` 改为 `Arc<str>`，owned `find()` 提速 1.46x**
+  （`ip-qzdb-sdk/rust/src/lib.rs`）。owned `find()` 在 geo 缓存命中时仍要
+  `(*arc).clone()` 整个 `GeoInfo`，其中 `pipe: String` 每次克隆都要一次堆分配 + memcpy。
+  `pipe` 是私有字段，`to_pipe()` 签名与返回值不变，**非破坏性改动**。
+  实测（std_global，6 万次，release）：`find()` 141.5→97.1ns、`find_shared()` 78.8→63.2ns、
+  `find_ref()` 149.3→139.0ns、`find_str()` 103.1→101.8ns。
+  注：`values: Vec<Arc<str>>` 若要一并改为 `Arc<[Arc<str>]>` 可再省约 34ns，
+  但属破坏性公开 API 变更，需 major 版本，本次未动。
+
+- **Python SDK：IPv4 字符串解析改用 C 层原语，并新增有界解析记忆表**（`ip-qzdb-sdk/python/qzdb.py`）。
+  动机：`find(ip_str)` 的 1208ns 里有 623ns（约 52%）耗在 `_fast_parse_ipv4` 的纯 Python
+  逐段循环上——同一查询走 `find_uint(int)` 只要 320ns。
+  做法：长度 / 段数 / 字符白名单 / 段非空 / 前导零全部改用 C 实现的 `str` 方法判定，
+  数值与 0-255 范围交给 `socket.inet_aton`，Python 只做一次 `bytes → int`；
+  inet_aton 原生宽松（接受 `1.2.3`、八进制 `010.1.1.1`、`0x7f.0.0.1`、空段），
+  已由前置校验全部挡在调用之前，传入的必是「4 段非空十进制、每段 ≤255」，
+  该语义在 glibc / BSD libc / musl 上一致，不依赖具体实现对宽松形式的宽严差异。
+  另叠一层 `_fast_parse_ip` 记忆表（上限 16384 条、满则整体清空、峰值约 1.7MB），
+  命中即跳过整段解析——真实业务 IP 高度重复，这一层收益最大。
+  实测（M4 Max，Python 3.13，std_china，6 万次查询）：
+  `find(str)` IP 全不重复的**最坏情况** 1144→878ns（1.30×，无回退）；
+  Zipf 重复语料 990→317ns（3.12×，已触及 `find_uint` 的 328ns 下界）；
+  `find_uint` 不变。
+
+### Added
+
+- `ip-qzdb-sdk/nodejs/ip_strict_test.js`：759 条表驱动断言（含空白对 v4/v6 逐位置注入），
+  钉死单遍解析与「删除空白预扫描」后的严格性；已注册进 `run_all_tests.sh` 的 `Node-IpStrict`。
+- `ip-qzdb-sdk/php/ip_strict_test.php`：119 条表驱动断言，钉死 `filter_var` 方案的严格性；
+  已注册进 `run_all_tests.sh` 的 `PHP-IpStrict`。
+- `ip-qzdb-sdk/rust/src/bin/owned_vs_shared.rs`：量化 owned `find()` 与零拷贝
+  `find_shared()` / `find_ref()` 差距的内部基准。放在 `src/bin/` 是因为该目录已在
+  `Cargo.toml` 的 `exclude` 中（内部工具不随包发布）。
+- `ip-qzdb-sdk/python/test_ip_parse_strict.py`：107 条表驱动断言，钉死解析器的**严格性**
+  （4 段 / 非空 / 纯 ASCII 十进制 / 0-255 / 禁前导零 / 禁 0x 与八进制 / 禁空白·SSRF 变体 /
+  禁非 ASCII 数字 / 记忆表有界）。解析器改用 C 原语后，严格性不再由 Python 循环天然保证，
+  必须由测试固化。等价性另有 12 万条随机 + 敌对语料的差分验证（0 差异）背书。
+
+### Fixed
+
+- `_fast_parse_ipv4('')` 由抛 `IndexError` 改为返回 `None`。该路径经 `_fast_parse_ip`
+  （`n == 0` 先返回）与 `_fast_parse_ipv6`（空组已被拒绝）均不可达，属潜在脆弱点加固，
+  无用户可见行为变化。
+
+### 已实测否决（勿再提议）
+
+- C# T11 归因过程中否决：Resolve 边界检查、批量路径大方法、仅摘 `AggressiveInlining`
+  保留 unrolled。根因是「大 unrolled 方法 + 强制内联」的组合，详见 `docs/ROADMAP.md` T11。
+
 ## [2026-09-07] - Rust 2.0.0 / PHP 1.1.0 / C# 1.0.8 / Java 1.0.7 / Python 1.0.6 / Go 1.0.6 多平台集成版发布
 
 ### Added

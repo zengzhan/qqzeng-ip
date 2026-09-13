@@ -1008,24 +1008,125 @@ static const uint8_t hex_lut[128] = {
     ['A']=10,11,12,13,14,15
 };
 
+/* Strict IPv4 parse — octet-unrolled, single pass (aligned with Go fastParseIpv4).
+ * Rejects: leading zeros, octet >255, non-digits, wrong segment count, empty segs.
+ * Returns 1 on success. Length gate n∈[7,15] first; every subsequent index is
+ * proven in-range by that gate plus the octet-length structure. */
 static int fast_parse_ipv4(const char* s, uint32_t* out) {
     int n = 0; while (s[n]) n++;
-    if (n == 0 || s[n-1] == '.') return 0;
-    uint32_t result = 0, val = 0; int dots = 0, start = 0;
-    for (int i = 0; i <= n; i++) {
-        char c = i < n ? s[i] : '.';
-        if (c == '.') {
-            int seg_len = i - start;
-            if (seg_len == 0 || seg_len > 3) return 0;
-            if (seg_len > 1 && s[start] == '0') return 0;
-            val = 0;
-            for (int j = start; j < i; j++) { char d = s[j]; if (d < '0' || d > '9') return 0; val = val * 10 + (uint32_t)(d - '0'); }
-            if (val > 255) return 0;
-            result = (result << 8) | val; dots++; start = i + 1;
+    if (n < 7 || n > 15) return 0;
+
+    /* --- Octet 0 --- */
+    uint32_t v0;
+    char c0 = s[0];
+    int idx = 0;
+    if (c0 == '0') {
+        if (s[1] != '.') return 0;
+        v0 = 0; idx = 2;
+    } else {
+        uint32_t d0 = (uint32_t)(c0 - '0');
+        if (d0 > 9) return 0;
+        if (s[1] == '.') { v0 = d0; idx = 2; }
+        else {
+            uint32_t d1 = (uint32_t)(s[1] - '0');
+            if (s[2] == '.') {
+                if (d1 > 9) return 0;
+                v0 = d0 * 10 + d1; idx = 3;
+            } else {
+                if (s[3] != '.') return 0;
+                uint32_t d2 = (uint32_t)(s[2] - '0');
+                if (d1 > 9 || d2 > 9) return 0;
+                uint32_t val = d0 * 100 + d1 * 10 + d2;
+                if (val > 255) return 0;
+                v0 = val; idx = 4;
+            }
         }
     }
-    if (dots != 4) return 0;
-    *out = result; return 1;
+
+    /* --- Octet 1 --- */
+    uint32_t v1;
+    if (idx >= n) return 0;
+    c0 = s[idx];
+    if (c0 == '0') {
+        if (idx + 1 >= n || s[idx + 1] != '.') return 0;
+        v1 = 0; idx += 2;
+    } else {
+        uint32_t d0 = (uint32_t)(c0 - '0');
+        if (d0 > 9 || idx + 1 >= n) return 0;
+        if (s[idx + 1] == '.') { v1 = d0; idx += 2; }
+        else {
+            if (idx + 2 >= n) return 0;
+            uint32_t d1 = (uint32_t)(s[idx + 1] - '0');
+            if (s[idx + 2] == '.') {
+                if (d1 > 9) return 0;
+                v1 = d0 * 10 + d1; idx += 3;
+            } else {
+                if (idx + 3 >= n || s[idx + 3] != '.') return 0;
+                uint32_t d2 = (uint32_t)(s[idx + 2] - '0');
+                if (d1 > 9 || d2 > 9) return 0;
+                uint32_t val = d0 * 100 + d1 * 10 + d2;
+                if (val > 255) return 0;
+                v1 = val; idx += 4;
+            }
+        }
+    }
+
+    /* --- Octet 2 --- */
+    uint32_t v2;
+    if (idx >= n) return 0;
+    c0 = s[idx];
+    if (c0 == '0') {
+        if (idx + 1 >= n || s[idx + 1] != '.') return 0;
+        v2 = 0; idx += 2;
+    } else {
+        uint32_t d0 = (uint32_t)(c0 - '0');
+        if (d0 > 9 || idx + 1 >= n) return 0;
+        if (s[idx + 1] == '.') { v2 = d0; idx += 2; }
+        else {
+            if (idx + 2 >= n) return 0;
+            uint32_t d1 = (uint32_t)(s[idx + 1] - '0');
+            if (s[idx + 2] == '.') {
+                if (d1 > 9) return 0;
+                v2 = d0 * 10 + d1; idx += 3;
+            } else {
+                if (idx + 3 >= n || s[idx + 3] != '.') return 0;
+                uint32_t d2 = (uint32_t)(s[idx + 2] - '0');
+                if (d1 > 9 || d2 > 9) return 0;
+                uint32_t val = d0 * 100 + d1 * 10 + d2;
+                if (val > 255) return 0;
+                v2 = val; idx += 4;
+            }
+        }
+    }
+
+    /* --- Octet 3 --- */
+    uint32_t v3;
+    int rem = n - idx;
+    if (rem < 1 || rem > 3) return 0;
+    c0 = s[idx];
+    if (c0 == '0') {
+        if (rem != 1) return 0;
+        v3 = 0;
+    } else {
+        uint32_t d0 = (uint32_t)(c0 - '0');
+        if (d0 > 9) return 0;
+        if (rem == 1) { v3 = d0; }
+        else if (rem == 2) {
+            uint32_t d1 = (uint32_t)(s[idx + 1] - '0');
+            if (d1 > 9) return 0;
+            v3 = d0 * 10 + d1;
+        } else { /* rem == 3 */
+            uint32_t d1 = (uint32_t)(s[idx + 1] - '0');
+            uint32_t d2 = (uint32_t)(s[idx + 2] - '0');
+            if (d1 > 9 || d2 > 9) return 0;
+            uint32_t val = d0 * 100 + d1 * 10 + d2;
+            if (val > 255) return 0;
+            v3 = val;
+        }
+    }
+
+    *out = (v0 << 24) | (v1 << 16) | (v2 << 8) | v3;
+    return 1;
 }
 
 static int split_hextets(const char* src, int src_len, char parts[][16], int max_parts) {
@@ -1050,6 +1151,13 @@ typedef struct { uint8_t v6[16]; uint32_t v4; int is_v4; } parse_result_t;
 
 static int fast_parse_ip(const char* s, parse_result_t* res) {
     if (!s) return 0;
+    /* IPv4 极速热路径：直走严格展开解析，免去空白/冒号预扫描。
+     * fast_parse_ipv4 具有 100% 严格校验，任何带空白、带符号、带字母、
+     * 带冒号或越界的输入均会返回 0（与 Go fastParseIp 同构）。 */
+    {
+        uint32_t v4;
+        if (fast_parse_ipv4(s, &v4)) { res->v4 = v4; res->is_v4 = 1; return 1; }
+    }
     int n = 0;
     while (s[n]) { unsigned char c = (unsigned char)s[n];
         if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f') return 0;
@@ -1057,7 +1165,7 @@ static int fast_parse_ip(const char* s, parse_result_t* res) {
     if (n == 0 || n > 45) return 0;
     int has_colon = 0;
     for (int i = 0; i < n; i++) { if (s[i] == ':') { has_colon = 1; break; } }
-    if (!has_colon) { uint32_t v4; if (!fast_parse_ipv4(s, &v4)) return 0; res->v4 = v4; res->is_v4 = 1; return 1; }
+    if (!has_colon) return 0;   /* IPv4 already failed above */
     for (int i = 0; i < n; i++) { if (s[i] == '%') return 0; }
     const char* dc_ptr = NULL;
     for (int i = 0; i < n - 1; i++) { if (s[i] == ':' && s[i+1] == ':') { if (dc_ptr) return 0; dc_ptr = s + i; } }
@@ -2292,40 +2400,48 @@ int qzdb_lookup_ids(qzdb_reader_t* ctx, uint32_t row_id, qzdb_ids_t* out) {
 int qzdb_find_str(qzdb_reader_t* ctx, const char* ip_str, char* out, size_t out_size) {
     if (!ctx || !ip_str || !out || out_size == 0) return QZDB_ERR_INVALID_PARAM;
     /* 快路径：解析 → 走查 → row→entry → 缓存 pipe 直拷（单次 memcpy）。
-     * 错误语义与慢路径逐项一致：非法 IP → INVALID_PARAM；未命中/无对应
-     * 地址族分区/entry_id==0/行读取错误 → 交给慢路径的 qzdb_find 复现
-     * 原错误码；缓存未建（OOM 降级）→ 回退慢路径。 */
+     * 缓存 miss 时直接 get_geo_info(entry_id) 解码，复用已算好的 entry_id，
+     * 不再回退 qzdb_find 重解析+重走查（那是本函数此前的双重工作）。
+     * 错误语义与 qzdb_find 逐项一致。 */
     parse_result_t res;
     if (!fast_parse_ip(ip_str, &res)) { out[0] = '\0'; return QZDB_ERR_INVALID_PARAM; }
+
+    int gi = ctx->group_index;
     uint32_t row_id = 0;
-    if (res.is_v4) { if (ctx->has_v4) row_id = trie_walk_v4(ctx, res.v4); }
-    else           { if (ctx->has_v6) row_id = trie_walk_v6(ctx, res.v6); }
-    if (row_id != 0) {
-        uint32_t geo_id, asn_id, usage_id;
-        if (read_ip_row(ctx, row_id, &geo_id, &asn_id, &usage_id) == QZDB_OK) {
-            uint16_t mask = ctx->group_index < ctx->actual_groups
-                                ? ctx->group_dim_masks[ctx->group_index] : 0;
-            uint32_t entry_id = geo_id;
-            if (mask & 0x02) entry_id = asn_id;
-            else if (mask & 0x04) entry_id = usage_id;
-            if (entry_id != 0) {
-                int cnt = 0;
-                char* pipe = NULL;
-                if (geo_cache_lookup(ctx, ctx->group_index, entry_id, &cnt, &pipe) && pipe) {
-                    size_t plen = strlen(pipe);
-                    if (plen >= out_size) plen = out_size - 1;
-                    memcpy(out, pipe, plen);
-                    out[plen] = '\0';
-                    return QZDB_OK;
-                }
-            }
-        }
+    if (res.is_v4) {
+        if (!ctx->has_v4) { out[0] = '\0'; return QZDB_ERR_NOT_FOUND; }
+        row_id = trie_walk_v4(ctx, res.v4);
+    } else {
+        if (!ctx->has_v6) { out[0] = '\0'; return QZDB_ERR_NOT_FOUND; }
+        row_id = trie_walk_v6(ctx, res.v6);
     }
+    if (row_id == 0) { out[0] = '\0'; return QZDB_ERR_NOT_FOUND; }
+
+    uint32_t geo_id, asn_id, usage_id;
+    int err = read_ip_row(ctx, row_id, &geo_id, &asn_id, &usage_id);
+    if (err != QZDB_OK) { out[0] = '\0'; return err; }
+    uint16_t mask = gi < ctx->actual_groups ? ctx->group_dim_masks[gi] : 0;
+    uint32_t entry_id = geo_id;
+    if (mask & 0x02) entry_id = asn_id;
+    else if (mask & 0x04) entry_id = usage_id;
+    if (entry_id == 0) { out[0] = '\0'; return QZDB_ERR_NOT_FOUND; }
+
+    int cnt = 0;
+    char* pipe = NULL;
+    if (geo_cache_lookup(ctx, gi, entry_id, &cnt, &pipe) && pipe) {
+        size_t plen = strlen(pipe);
+        if (plen >= out_size) plen = out_size - 1;
+        memcpy(out, pipe, plen);
+        out[plen] = '\0';
+        return QZDB_OK;
+    }
+
+    /* Cache miss / OOM degrade: decode from the already-resolved entry_id. */
     qzdb_geo_info_t info;
-    int result = qzdb_find(ctx, ip_str, &info);
-    if (result != QZDB_OK) { if (out_size > 0) out[0] = '\0'; return result; }  /* preserve error code */
+    int result = get_geo_info(ctx, entry_id, gi, &info);
+    if (result != QZDB_OK) { out[0] = '\0'; return result; }
     size_t pos = 0;
-    int field_count = ctx->group_field_counts[ctx->group_index];
+    int field_count = ctx->group_field_counts[gi];
     for (int i = 0; i < field_count && i < QZDB_MAX_FIELDS; i++) {
         if (i > 0 && pos < out_size - 1) out[pos++] = '|';
         const char* val = info.values[i] ? info.values[i] : "";
