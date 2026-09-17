@@ -439,6 +439,28 @@ dotnet add package QQZeng.Qzdb --version x.y.z
 
 - NuGet 包、程序集和 C# 命名空间统一为 `QQZeng.Qzdb`。
 - 目标框架支持 `net8.0` / `net9.0` / `net10.0` / `net11.0`。
+- `net11.0` 需要 .NET 11 SDK/targeting pack；在 SDK 尚未安装的机器上默认
+  不参与构建。安装后可用 `-p:IncludeNet11=true` 显式加入目标框架。
+
+### 14.5 .NET 10/11 性能对比
+
+基准程序位于 `../netcore.bench`，使用固定查询流、FNV-1a 校验、冷/热
+分离、P50/P95/P99 和 1/2/4/8/16 线程测试。吞吐测量与延迟采样分两次
+回放同一查询流，避免 `Stopwatch` 采样开销污染 QPS。
+
+```bash
+# 当前稳定 SDK
+BENCH_OPS=200000 dotnet run --project ../netcore.bench -c Release --no-restore
+
+# 安装 .NET 11 SDK 后，显式构建/运行 net10 与 net11
+BENCH_OPS=200000 dotnet run --project ../netcore.bench -c Release \
+  -p:IncludeNet11=true --framework net10.0 --no-restore
+BENCH_OPS=200000 dotnet run --project ../netcore.bench -c Release \
+  -p:IncludeNet11=true --framework net11.0 --no-restore
+```
+
+不要把不同 CPU、数据库 edition、命中率或 `BENCH_OPS` 的结果直接相减；
+应比较同一报告中的 `environment`、`db`、查询流校验和及 `hit_rate`。
 
 ---
 
@@ -472,5 +494,3 @@ dotnet add package QQZeng.Qzdb --version x.y.z
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: netcore: C# .NET SDK（内存映射与高并发查询） sync=1789295619 -->

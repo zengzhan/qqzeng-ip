@@ -2220,12 +2220,20 @@ public sealed class QzdbReader : IDisposable
         return false;
     }
 
-    private static readonly byte[] HexLUT = new byte[128];
-    static QzdbReader()
-    {
-        for (int i = 0; i < 10; i++) HexLUT[48 + i] = (byte)i;
-        for (int i = 0; i < 6; i++) { HexLUT[97 + i] = (byte)(10 + i); HexLUT[65 + i] = (byte)(10 + i); }
-    }
+    private static ReadOnlySpan<byte> HexLUT =>
+    [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9,
+        0, 0, 0, 0, 0, 0, 0,
+        10, 11, 12, 13, 14, 15,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        10, 11, 12, 13, 14, 15,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0
+    ];
 
     private static bool TryParseV4(ReadOnlySpan<char> s, out uint v4, out bool hasColon)
     {
