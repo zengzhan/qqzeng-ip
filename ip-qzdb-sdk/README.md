@@ -183,4 +183,4 @@ MIT
 
 <!-- commit description sync 1787122549 -->
 
-<!-- commit: ip-qzdb-sdk: QZDB 多语言 SDK（Rust/C/Go/Java/C#/Node.js/PHP/Python） sync=1789610636 -->
+<!-- commit: ip-qzdb-sdk: 👑 下一代 QZDB 极速 IP 解析引擎多语言 SDK (支持 Rust/C/Go/Java/C#/Node/PHP/Python) sync=1789753734 -->
