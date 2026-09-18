@@ -100,3 +100,90 @@ jobs:
       - name: C — syntax check
         working-directory: ip-qzdb-sdk/c
         run: cc -fsyntax-only -std=c11 qzdb_reader.c
+
+  php-version-matrix:
+    name: PHP ${{ matrix.php }} — lint + 零告警类加载
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # 与 composer.json 的 "php": ">=7.4" 一一对应。
+        # 7.4 是最低支持版本，必须实测；8.5 是当前最新稳定版。
+        php: ['7.4', '8.0', '8.1', '8.2', '8.3', '8.4', '8.5']
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up PHP ${{ matrix.php }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '${{ matrix.php }}'
+          coverage: none
+          ini-values: error_reporting=E_ALL, display_errors=On
+
+      - name: PHP — lint
+        run: php -l ip-qzdb-sdk/php/QzdbReader.php
+
+      - name: PHP — 类加载与最小查询（E_ALL 下必须零告警）
+        run: |
+          set -o pipefail
+          out=$(php -d error_reporting=E_ALL -d display_errors=On -r '
+            require "ip-qzdb-sdk/php/QzdbReader.php";
+            $r = new Qqzeng\Ip\QzdbReader();
+            $b = Qqzeng\Ip\QzdbBuilder::bytes(str_repeat("\0", 256));
+            echo "load-ok\n";
+          ' 2>&1)
+          echo "$out"
+          # 弃用告警必须当失败处理：功能测试抓不到它，而它会在开发环境污染响应体。
+          # 历史案例：GeoInfo::offsetGet() 缺 mixed 返回类型，PHP 8.1+ 每次类加载都发
+          # E_DEPRECATED，但全部功能测试仍是绿的。
+          if echo "$out" | grep -qiE 'deprecat|warning|notice|fatal'; then
+            echo "::error::PHP ${{ matrix.php }} 下出现告警/弃用输出"
+            exit 1
+          fi
+          echo "$out" | grep -q 'load-ok'
+
+  php-compatibility:
+    name: PHPCompatibility — 跨版本静态兼容性
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up PHP 8.3
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          coverage: none
+
+      # 用 phar + 源码 tarball 而非 composer：PHPCompatibility 10.x 只在
+      # develop 分支上（GitHub 的 latest release 停在 2019 年的 9.3.5），
+      # 且它要求 PHP_CodeSniffer 4.x（3.x 缺 Tokens::EMPTY_TOKENS）与 PHPCSUtils。
+      - name: 安装 PHP_CodeSniffer 4.x + PHPCompatibility + PHPCSUtils
+        run: |
+          mkdir -p /tmp/pcstandards
+          curl -sSL -o /tmp/phpcs.phar \
+            https://github.com/PHPCSStandards/PHP_CodeSniffer/releases/download/4.0.4/phpcs.phar
+          curl -sSL -o /tmp/pc.tar.gz \
+            https://github.com/PHPCompatibility/PHPCompatibility/archive/refs/heads/develop.tar.gz
+          curl -sSL -o /tmp/pcu.tar.gz \
+            https://github.com/PHPCSStandards/PHPCSUtils/archive/refs/heads/develop.tar.gz
+          mkdir -p /tmp/pc /tmp/pcu
+          tar -xzf /tmp/pc.tar.gz  -C /tmp/pc  --strip-components=1
+          tar -xzf /tmp/pcu.tar.gz -C /tmp/pcu --strip-components=1
+          cp -R /tmp/pc/PHPCompatibility /tmp/pcstandards/
+          cp -R /tmp/pcu/PHPCSUtils     /tmp/pcstandards/
+          cp /tmp/pc/PHPCSAliases.php   /tmp/pcstandards/
+
+      # 区间上限取 8.6：composer 的 ">=7.4" 不设上限，而 PHP 8.6 改变了
+      # trim() 的默认字符集（新增 \f）——不显式写死字符集就会跨版本漂移。
+      - name: PHPCompatibility (testVersion 7.4-8.6)
+        run: |
+          php /tmp/phpcs.phar \
+            --runtime-set installed_paths /tmp/pcstandards \
+            --standard=PHPCompatibility \
+            --runtime-set testVersion 7.4-8.6 \
+            --report=full --report-width=140 \
+            ip-qzdb-sdk/php/QzdbReader.php

@@ -516,4 +516,4 @@ cargo update -p qzdb
 
 [MIT](https://opensource.org/licenses/MIT)
 
-<!-- commit: rust: Rust SDK（mmap 只读映射，内存安全） sync=1789610636 -->
+<!-- commit: rust: Rust SDK（mmap 只读映射，内存安全） sync=1789751970 -->

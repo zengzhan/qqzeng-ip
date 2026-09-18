@@ -134,6 +134,179 @@
 - C# T11 归因过程中否决：Resolve 边界检查、批量路径大方法、仅摘 `AggressiveInlining`
   保留 unrolled。根因是「大 unrolled 方法 + 强制内联」的组合，详见 `docs/ROADMAP.md` T11。
 
+## [2026-09-19] - PHP 1.2.0
+
+仅 PHP 发版（Packagist `qqzeng/qzdb` 1.1.0 → 1.2.0）。tag 形态为**不带 `v` 的 `1.2.0`**，
+不命中任何 `v[0-9]*` 发布 workflow，其余语言本次无版本变更（PUBLISHING.md §0）。
+
+### 发布前验证（全部通过）
+
+本轮改动了 PHP 的**输出路径**（`trim()` 字符集、`Fail-Closed` 闸门、分页 LRU），
+而 PHP 输出受**跨语言逐字节契约**约束，因此必须重跑跨语言对拍。三个维度、8 语言全覆盖：
+
+| 对拍脚本 | 覆盖维度 | 结果 |
+|----------|----------|------|
+| `cross_lang_verify.py` | pipe 输出（`find`） | **441/441** × Python/Node/PHP/C/Rust/Java/C#/Go |
+| `cross_api_verify.py` | `lookup_cidr` + `lookup_row_id` | **882/882** × 同上 8 语言 |
+| `cross_lang_verify_v6.py` | IPv6 | **48/48** × Python/Node/PHP/C/Java |
+
+> 复现注意：`cross_lang_verify.py` 用裸 `php` 调用，而本机 PATH 里没有 php —— 需
+> `export PATH="/opt/homebrew/opt/php/bin:$PATH"`，否则 PHP 会被静默 SKIP
+> （输出 `[SKIP PHP: No such file or directory: 'php']`），**恰好跳过最该验证的那个语言**。
+> 同理 C 腿需要 `export DEVELOPER_DIR=/Library/Developer/CommandLineTools`，
+> 否则 `cc --version` 因 Xcode license 返回 69 而被跳过。
+
+### 静态分析（PHPStan 2.2.14）
+
+| level | 结果 |
+|-------|------|
+| 0 / 1 / 3 | **零错误** |
+| 5 | 3 条（全部为冗余但无害的防御性检查，见下） |
+
+首跑即抓到并已清理 **1 处真实死代码**：`QzdbReader::parseIpv6Raw()`。
+它是 v1.1.0 修复 `lookupCidr` 的 IPv4-mapped 降级缺陷时留下的遗留——`lookupCidr`
+改走 `fastParseIp` 统一分流后，该方法不再有任何调用方，但 docblock 仍写着
+「仅用于 CIDR」。已删除（全仓库搜索确认无引用，含反射路径）。
+
+剩余 3 条均为**刻意保留的防御性检查**，不是缺陷：
+
+| 位置 | 警告 | 为何保留 |
+|------|------|----------|
+| `loadStream()` | `isset($stat['size'])` 恒存在 | `fstat` 失败时返回 `false`，已由 `$stat &&` 覆盖；显式 `isset` 防的是未来 stub 变化 |
+| `loadStream()` | `$meta &&` 左侧恒真 | 上游已 `is_resource()` 校验；保留以防 `stream_get_meta_data` 行为变化 |
+| `fastParseIp()` | `$gl === 0` 恒假 | 上游循环已拒绝空组；保留以防该前置校验被后续重构移除 |
+
+> 若要给 CI 加 PHPStan 门禁：**level 3 可零配置直接上**；level 5 需为上述 3 条写
+> `ignoreErrors`（带原因注释）或生成 baseline。
+
+### Added
+
+- **PHP 静态跨版本兼容性验证（PHPCompatibility）**。工具链：
+  PHP_CodeSniffer **4.0.4** phar + PHPCompatibility(`develop`) + PHPCSUtils(`develop`)。
+  两个必须知道的坑：PHPCompatibility 的 GitHub latest release 停在 2019 年的 **9.3.5**
+  （10.x 只在 develop 分支）；且它要求 **PHPCS 4.x**（3.x 缺 `Tokens::EMPTY_TOKENS`，
+  直接 Fatal）。另需把 `PHPCSAliases.php` 放到标准目录的**上一级**（ruleset 里写的是
+  `./../PHPCSAliases.php`）。
+
+  区间扫描结果：
+
+  | `testVersion` | 结果 |
+  |---------------|------|
+  | `7.4-8.5` | 零问题 |
+  | `7.4-8.6` | 零问题（修复 `trim()` 后；修复前 6 处错误） |
+  | `8.0-8.6` | 零问题 |
+
+  这条工具链把「本机没有 PHP 7.4、无法真机验证」从**能力缺口**降级为**已知残余风险**：
+  静态层面已证明 SDK 未使用任何 7.4 之后才有的语法 / 函数 / 常量 / ini 指令。
+  真机验证仍建议由 CI 矩阵补（见下条）。
+
+- **发布仓库 CI 新增两个 PHP 门禁**（`.github/workflows/ci.yml`，手工维护，不随
+  `sync_to_github.py` 覆盖）：
+  - `php-version-matrix`：PHP **7.4 / 8.0 / 8.1 / 8.2 / 8.3 / 8.4 / 8.5** 七档矩阵，
+    每档跑 `php -l` + 在 `error_reporting=E_ALL` 下做类加载，**出现任何
+    deprecat / warning / notice / fatal 即判失败**。历史教训：`offsetGet()` 弃用告警
+    发生时全部功能测试仍是绿的，只有 `E_ALL` 类加载能抓到它。
+  - `php-compatibility`：PHPCompatibility `testVersion 7.4-8.6`。上限取 8.6 而非 8.5，
+    因为 `composer.json` 的 `>=7.4` 不设上限，而 8.6 恰好改变了 `trim()` 默认字符集。
+
+- **PHP SDK：`declare(strict_types=1)`**。PHP 的 `strict_types` 是 **per-call-site** 语义——
+  只约束 `QzdbReader.php` **文件内部**发起的调用，不改变消费者调用本 SDK 公开方法时的宽松
+  转换，因此对使用者零破坏。实测 7 套测试全绿；热路径无性能代价（std_china `find`：
+  2.49–2.57M QPS，与关闭时同处噪声区间，各跑 3 轮）。
+
+- **PHP SDK：流式/低内存模式的 Fail-Closed 完整性闸门**（`streamPage()`）。
+  流式句柄打开后若底层文件被截断/替换（NFS 抖动、存储故障、被其它进程重写），此前
+  `readBytes()` 短读返回 `''` 会被 `poolString()` 当作"空字段"继续拼接，产出
+  **地理字段正确、ISP/ASN 字段为空的伪命中记录**。用未截断库做基准逐条对拍实测
+  （`max_global` 截断到 35% 后查 6000 次）：5582 次抛异常、**329 次返回与基准不符的记录**。
+  现改为：页起始位置本应落在 `fileSize` 内、却读不满一整页且未抵达文件末尾 ⇒ 抛
+  `QzdbException(ERROR_CORRUPTED)`。真·越界（`pageOffset >= fileSize`，或短页恰好收在
+  EOF）仍保持返回空串的原语义。修复后错值 **329 → 0**，异常 5582 → 5966。
+
+- **PHP 黄金测试前置条件门禁**（`tier2_golden.php`）。新增 `goldenPrecondition()`：
+  向量文件不存在 / 不可读 / JSON 非法 / 空对象 / 引用了无对应数据库的库 / 最终
+  `TOTAL === 0` 六类情形一律硬失败（exit 1）。此前这些情形会输出
+  `TOTAL=0 FAIL=0` + `TIER2_OK` 并 **exit 0**——数据路径写错、CI 未检出向量文件都会被
+  伪装成"黄金校验通过"。空跑通过比失败更危险。四种故障场景已逐一实测退出码为 1。
+
+### Changed
+
+- **PHP SDK 流式/低内存模式查询吞吐提升 5.8–18.2×**（`QzdbReader.php`）。
+  分页缓存由「单页 256KB」改为「**有界多页 LRU**」（`STREAM_PAGE_SIZE` 64KB ×
+  `STREAM_PAGE_CACHE_PAGES` 64 页 = **4MB 硬上限**）。根因：一次 `resolveGeo` 要触达
+  Trie 跳表、节点表、IP 行表、geo 条目表以及多张池的偏移表与字符串区，这些区域在文件里
+  彼此远离，单页缓存下几乎每次访问都退化成 `fseek`+`fread`。实测（50k 次随机 IPv4）：
+
+  | 库 | 缓冲模式 | 流式（修复前） | 流式（修复后） | 提升 |
+  |----|----------|----------------|----------------|------|
+  | `std_china` 8.2 MB | 2.28M QPS | 112K QPS | 652K QPS | 5.8× |
+  | `max_global` 111.7 MB | 0.37M QPS | 1.5K QPS | 25.7K QPS | **16.4×** |
+  | `ult_global` 116.6 MB | 0.78M QPS | 0.97K QPS | 17.7K QPS | **18.2×** |
+
+  定位过程（三组补丁分别验证）：池偏移表常驻内存仅 +40%（非主因）；16 页 LRU +296%
+  （主因确认）。顺带否证「加大页」方案——256KB→1MB 反而从 1617 掉到 457 QPS，
+  因为每次缺页拷贝成本变大而缺页次数未减少，**必须是多页而非大页**。
+  淘汰用插入序队列（刻意不用 PHP 7.3 才有的 `array_key_first()`，与 7.4 下限一致）。
+  缓冲模式（`$this->data !== null`）路径零改动。**等价性对拍：20,019 条输入 × 4 个库，
+  MISMATCH=0**（含非法 IP / 边界地址 / CIDR 反查 / 全部元信息接口 / `toJson` / `toPipe`）。
+
+- **PHP 最低版本声明由 `>=8.1` 下调为 `>=7.4`**（根 `composer.json` +
+  `tools/publish_meta/composer.json`）。此前 README 承诺 7.2+ 而 `composer.json` 声明
+  `>=8.1`，**Packagist 只读 `composer.json`**，导致 7.2–8.0 环境 `composer require` 被直接
+  拒绝。经 `token_get_all()` 逐项核对全部 56 个内置函数调用，SDK 无任何 PHP 8 专属语法，
+  静态最低门槛为 **PHP 7.1**（`private const` / `?Type` / `iterable` / `void` /
+  `unpack` 带 offset）。取 7.4 作下限以避开已 EOL 的 7.2/7.3。
+  同时补上被遗漏的扩展依赖 `ext-filter`（`filter_var`，IPv4 校验）与 `ext-hash`
+  （`hash_init('crc32b')`，CRC 校验）——原文档写「仅需 Core / json」，但 `json_encode`
+  实际未被使用。已过 `composer validate --strict`。
+
+### Fixed
+
+- **PHP SDK：`trim()` 隐式默认字符集导致跨版本行为漂移（PHP 8.6 隐患）**。
+  6 处裸 `trim($s)` 改为显式传入字符集常量（`UsageType::TRIM_CHARS` /
+  `QzdbReader::TRIM_CHARS = " \n\r\t\v\x00"`，即 PHP 8.6 **之前**的默认值）。
+  PHP 8.6 起 `trim()` 默认字符集新增换页符 `\f`（0x0C），裸调用会让同一份输入在
+  8.5 与 8.6 上产生不同结果——破坏跨版本行为确定性，而跨语言逐字节契约正建立在此之上。
+  显式写死后在 ≤8.5 上是**纯 no-op**（字符集与默认值完全相同），全量 7 套测试无变化。
+  由 PHPCompatibility 检出，详见下方「静态兼容性验证」。
+
+- **PHP SDK：PHP 8.1+ 每次类加载抛 `E_DEPRECATED`**（`GeoInfo::offsetGet()`）。
+  `ArrayAccess::offsetGet()` 在 8.1+ 声明了 `mixed` 返回类型，缺声明即触发弃用告警；
+  写 `: mixed` 会把最低版本抬到 8.0，与 7.4 下限冲突。恢复 v1.1.0 已发布版本中存在的
+  `#[\ReturnTypeWillChange]`——**独占一行的属性在 PHP < 8.0 会被整行当作行注释忽略**
+  （`#` 是行注释符，见 php.watch/versions/8.0/attributes），是唯一两头兼顾的写法。
+  修复后 `E_ALL` 下零告警输出。开发环境（`display_errors=On`）此前该告警会直接打进
+  响应体，可能污染 JSON 输出。
+
+- **PHP `tier1_test.php` 兼容门禁判据错误**。原判据为 `strpos($source, '#[') === false`，
+  注释称「PHP 8 属性语法会在旧版本解析阶段直接失败」——该前提不成立：只有**行内**属性
+  （`f(#[A] $x)`）才 Parse error，且 `#[A] function f(){}` 虽不报错但会把整行注释掉，
+  造成**静默的函数丢失**。新判据只拦截「属性前后还有其它代码」的行，允许独占一行的单行
+  属性。正反向自检通过（注入行内属性可正确报 FAIL 并给出行号）。
+
+- **PHP `test.php` 死代码**：`if (version_compare(PHP_VERSION, '8.1.0', '<')) { $m->setAccessible(true); }`
+  写在 `$m` 定义之前，在 PHP < 8.1 上会因未定义变量中断；且
+  `ReflectionMethod::setAccessible()` 自 8.1 起已是空操作（8.5 起本身被弃用）。已删除。
+
+- **PHP 文档版本表述统一**：README 第 8/37 行的「推荐 8.1+」与第 623 行的「建议 8.2+」
+  不一致，统一为「最低 7.4 / 推荐 8.2+」；扩展依赖说明由「Core / json」更正为
+  「Core / filter / hash」；流式性能说明（原文称"每一步子节点读取都对应一次
+  fseek+fread 系统调用"）与内存模式章节按本轮实测数据重写。
+- **`composer.json` 的 `branch-alias` 修正**：`dev-main` 由 `1.0.x-dev` 改为 `1.2.x-dev`。
+  原值落后两个 minor（最新 tag 已是 v1.1.0，本次发 1.2.0），导致 `dev-main` 在
+  `^1.2@dev` 类约束下无法解析。
+
+### 已知限制（未解决，非本次回归）
+
+- **PHP 7.4 尚未真机跑过**：本机只有 PHP 8.5.10。本次已用 PHPCompatibility 做静态
+  区间验证（7.4–8.6 零问题），并把 `php-version-matrix`（7.4–8.5 七档）加进发布仓库 CI，
+  但**矩阵的首次真实运行要等这次推送触发后才有结果**。在 CI 首次全绿之前，
+  `>=7.4` 应视为「静态已验证、运行时待确认」。
+- **`toJson()` 与 `json_encode` 存在两处行为差异**：不转义 `/`（`json_encode` 默认输出
+  `<\/script>`，因此可安全内联进 HTML `<script>` 块）；非法 UTF-8 字段值会产出无效 JSON
+  （`json_encode` 此时返回 `false`，至少失败得响亮）。两者都受**跨语言逐字节契约**约束，
+  需 8 个语言一起改并重跑跨语言对拍，属独立议题。
+
 ## [2026-09-07] - Rust 2.0.0 / PHP 1.1.0 / C# 1.0.8 / Java 1.0.7 / Python 1.0.6 / Go 1.0.6 多平台集成版发布
 
 ### Added

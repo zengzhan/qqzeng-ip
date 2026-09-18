@@ -25,9 +25,15 @@
  *   - 浮点原生格式 = 6 位小数（整数值无小数点，NaN/Inf 返回 ""）。
  *   - SENTINEL 高位哨兵位在解析前剥离。
  *   - IPv4-Mapped IPv6 自动降级走 V4 Trie。
- *   - Fail-Closed：Magic / HeaderVersion / CRC / 截断 构造即拒绝。
+ *   - Fail-Closed：Magic / HeaderVersion / CRC / 截断 构造即拒绝；流式句柄打开后
+ *     文件被截断同样抛错，绝不退化成"字段为空的伪命中"。
  *   - 流式模式（文件过大走 fseek/fread）与缓冲模式共用 readBytes 单一读取入口，行为逐字节一致。
  */
+
+// 严格类型：只约束**本文件内部**发起的调用（PHP 的 strict_types 是 per-call-site 语义），
+// 不会改变外部消费者调用本 SDK 公开方法的宽松转换行为，因此对使用者零破坏。
+// 实测对本 SDK 热路径无性能影响（std_china find：2.49~2.57M QPS，与关闭时同处噪声区间）。
+declare(strict_types=1);
 
 namespace Qqzeng\Ip;
 
@@ -47,6 +53,18 @@ class QzdbException extends \Exception
  * =========================================================================== */
 abstract class UsageType
 {
+    /**
+     * `trim()` 的显式字符集 —— 等于 PHP 8.6 **之前**的默认值 `" \n\r\t\v\x00"`。
+     *
+     * PHP 8.6 起 `trim()` 的默认字符集新增了换页符 `\f`（0x0C）。裸调用 `trim($s)`
+     * 会让同一份输入在 8.5 与 8.6 上产生不同结果，破坏本 SDK 跨版本行为确定性
+     * （也是跨语言逐字节契约的前提）。显式写死字符集后，在所有版本上行为一致，
+     * 且在 ≤8.5 上是纯 no-op。
+     *
+     * 由 PHPCompatibility（testVersion 7.4-8.6）检出，勿改回裸 `trim()`。
+     */
+    protected const TRIM_CHARS = " \n\r\t\v\x00";
+
     /** 原始编码字符串（如 "Broadband" / "Cloud"） */
     abstract public function rawValue(): string;
 
@@ -68,7 +86,7 @@ abstract class UsageType
      */
     public static function fromString(string $raw): UsageType
     {
-        $raw = trim($raw);
+        $raw = trim($raw, self::TRIM_CHARS);
         if ($raw === '') {
             return KnownUsageType::fromRaw('Unknown') ?? new UnknownUsageType('');
         }
@@ -163,7 +181,7 @@ class KnownUsageType extends UsageType
     public static function fromRaw(string $raw): ?KnownUsageType
     {
         self::init();
-        return self::$RAW_MAP[strtolower(trim($raw))] ?? null;
+        return self::$RAW_MAP[strtolower(trim($raw, self::TRIM_CHARS))] ?? null;
     }
 
     public function rawValue(): string { return $this->rawValue; }
@@ -334,6 +352,11 @@ class GeoInfo implements \ArrayAccess
         return $this->fieldIndex((string)$offset) !== null;
     }
 
+    // ArrayAccess::offsetGet() 在 PHP 8.1+ 声明了 `mixed` 返回类型；此处不能直接写
+    // `: mixed`（会抬高最低版本到 8.0），也不能不写（PHP 8.1 起每次类加载都发
+    // E_DEPRECATED）。用「独占一行的单行 attribute」压制：PHP 7.x 把井号开头的整行
+    // 当注释解析，因此对 PHP 7.1+ 完全透明（见 tier1_test.php 的兼容门禁）。
+    // v1.1.0 已发布版本带本属性，勿再删除。
     #[\ReturnTypeWillChange]
     public function offsetGet($offset)
     {
@@ -567,6 +590,8 @@ class GeoInfo implements \ArrayAccess
  * =========================================================================== */
 class QzdbReader
 {
+    public const MEMORY_BALANCED = 'balanced';
+    public const MEMORY_LOW = 'low';
     // 错误码（契约 §7）
     public const ERROR_NOT_FOUND = 1;
     public const ERROR_CORRUPTED = 2;
@@ -580,6 +605,13 @@ class QzdbReader
     const SENTINEL_MASK_24 = 0x7FFFFF;
     const SENTINEL_MASK_31 = 0x7FFFFFFF;
     const FLOAT_FIELDS = ['longitude' => true, 'latitude' => true];
+
+    /**
+     * `trim()` 的显式字符集 —— 等于 PHP 8.6 **之前**的默认值。
+     * 见 `UsageType::TRIM_CHARS` 的说明；PHP 8.6 起默认字符集新增 `\f`，
+     * 裸 `trim()` 会造成跨版本行为漂移。由 PHPCompatibility 检出，勿改回裸调用。
+     */
+    const TRIM_CHARS = " \n\r\t\v\x00";
 
     // -----------------------------------------------------------------------
     // 版本档次与字段名的自描述契约（FORMAT §10.3）
@@ -656,15 +688,34 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     // 数据源
     private $data = null;        // 缓冲模式：完整文件字节
     private $stream = null;      // 流式模式：fopen 句柄（大文件）
-    private const STREAM_PAGE_SIZE = 256 * 1024;  // 256KB 分页，流式模式下减少 fseek/fread 次数
-    private $streamPageOffset = -1;
-    private $streamPageData = '';
+    private const STREAM_PAGE_SIZE = 64 * 1024;
+    /**
+     * 流式模式的有界页缓存容量（页数）。
+     *
+     * 历史实现只缓存「1 页」，在「一次查询要跨多个互不相邻区域」时必然抖动：
+     * 一次 resolveGeo 要触达 v4/v6 跳表、trie 节点、IP 行、geo 条目，以及多张池的
+     * 偏移表与字符串区 —— 这些区域在文件里彼此远离，单页缓存下几乎每次访问都是
+     * fseek+fread。实测 max_global（111MB）流式查询仅 1548 QPS。
+     *
+     * 改为有界 LRU 后命中率大幅提升，常驻上限固定为
+     * STREAM_PAGE_SIZE * STREAM_PAGE_CACHE_PAGES = 64KB × 64 = 4MB，
+     * 与「低内存模式」的承诺相容（相对 111MB 的库仍是 1/28）。
+     * 淘汰用插入序队列（不用 array_key_first，保持 PHP 7.x 可用）。
+     */
+    private const STREAM_PAGE_CACHE_PAGES = 64;
+    /** pageOffset(int) => pageData(string)，有界 LRU */
+    private $streamPages = [];
+    /** pageOffset(int) => true，插入序即 LRU 序（队首最旧） */
+    private $streamPageOrder = [];
     private $fileSize = 0;
     /** $this->dataLen 的缓存：热路径原语读取免每次 strlen。 */
     private $dataLen = 0;
     private $ownsStream = true;  // 是否负责关闭 $this->stream（外部句柄非接管时不关闭）
     private $verifyCrc = true;
     private $closed = false;
+    private $memoryMode = self::MEMORY_BALANCED;
+    private $geoCacheEnabled = true;
+    private $poolCacheEnabled = true;
 
     // 加载参数
     private $groupIndex = 0;
@@ -797,8 +848,8 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             $this->mmapFd = -1;
         }
         $this->stream = null;
-        $this->streamPageOffset = -1;
-        $this->streamPageData = '';
+        $this->streamPages = [];
+        $this->streamPageOrder = [];
         $this->data = null;
         $this->dataLen = 0;
         $this->closed = true;
@@ -810,6 +861,39 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     public function isClosed(): bool
     {
         return $this->closed;
+    }
+
+    /**
+     * Select the memory/performance trade-off before loading a database.
+     *
+     * In low mode, path loads use paged I/O, pool offset tables stay on disk,
+     * and decoded-value caches are disabled. This avoids PHP hash-table
+     * amplification and is intended for FPM workers with a tight memory_limit.
+     */
+    public function setMemoryMode(string $mode): void
+    {
+        if ($mode !== self::MEMORY_BALANCED && $mode !== self::MEMORY_LOW) {
+            throw new QzdbException('Unsupported memory mode: ' . $mode, self::ERROR_INVALID_PARAM);
+        }
+        $this->memoryMode = $mode;
+        $this->geoCacheEnabled = $mode !== self::MEMORY_LOW;
+        $this->poolCacheEnabled = $mode !== self::MEMORY_LOW;
+        if ($mode === self::MEMORY_LOW) {
+            $this->geoCache = [];
+            $this->poolCache = [];
+            $this->poolCacheOrder = [];
+        }
+    }
+
+    public function getMemoryMode(): string
+    {
+        return $this->memoryMode;
+    }
+
+    /** True when the resident representation avoids PHP-sized offset tables/caches. */
+    private function usesLowResidentMemory(): bool
+    {
+        return $this->memoryMode === self::MEMORY_LOW || $this->stream !== null;
     }
 
     // ------------------------------------------------------------------
@@ -839,33 +923,27 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         // 自适应存储：文件大于内存上限一半时走流式（fseek/fread，O(1) 内存）；
         // 否则缓冲到内存（速度更快）。两条路径都经 readBytes()，解析结果逐字节一致。
         $memLimit = $this->parseMemoryLimitBytes();
-        if ($memLimit > 0 && $size > (int)($memLimit * 0.5)) {
+        if ($this->memoryMode === self::MEMORY_LOW
+            || ($memLimit > 0 && $size > (int)($memLimit * 0.5))) {
             $this->stream = @fopen($dbPath, 'rb');
             if ($this->stream === false || $this->stream === null) {
                 throw new QzdbException("Cannot open database file: " . $dbPath, self::ERROR_INVALID_PARAM);
             }
             $this->data = null;
             $this->dataLen = 0;
-            $this->streamPageOffset = -1;
-            $this->streamPageData = '';
+            $this->streamPages = [];
+            $this->streamPageOrder = [];
         } else {
-            // 使用 fopen/fread 分块读取，避免 file_get_contents 对超大文件的一次性分配
-            $this->data = '';
-            $fh = @fopen($dbPath, 'rb');
-            if ($fh === false) {
-                throw new QzdbException("Cannot read database file: " . $dbPath, self::ERROR_INVALID_PARAM);
-            }
-            while (!@feof($fh)) {
-                $this->data .= @fread($fh, 1 << 20);
-            }
-            @fclose($fh);
-            if ($this->data === '') {
+            // 该分支已经通过 memory_limit 阈值判断，直接一次读取可避免 PHP
+            // 对 "$data .= fread(...)" 反复扩容和复制；超大文件仍走上面的流式路径。
+            $this->data = @file_get_contents($dbPath);
+            if ($this->data === false || $this->data === '') {
                 throw new QzdbException("Cannot read database file: " . $dbPath, self::ERROR_INVALID_PARAM);
             }
             $this->dataLen = strlen($this->data);
             $this->stream = null;
-            $this->streamPageOffset = -1;
-            $this->streamPageData = '';
+            $this->streamPages = [];
+            $this->streamPageOrder = [];
         }
 
         $this->parseHeader();
@@ -900,8 +978,8 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $this->data = $bytes;
         $this->dataLen = strlen($bytes);
         $this->stream = null;
-        $this->streamPageOffset = -1;
-        $this->streamPageData = '';
+        $this->streamPages = [];
+        $this->streamPageOrder = [];
         $this->parseHeader();
         if ($this->verifyCrc && !$this->rawVerifyCrc()) {
             throw new QzdbException('CRC32 checksum mismatch — the .qzdb buffer is corrupted or truncated', self::ERROR_CORRUPTED);
@@ -939,6 +1017,11 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
                 throw new QzdbException('Streaming mode requested but stream is not seekable', self::ERROR_INVALID_PARAM);
             }
             $useStreaming = true;
+        } elseif ($this->memoryMode === self::MEMORY_LOW) {
+            if (!$seekable) {
+                throw new QzdbException('Low memory mode requires a seekable stream', self::ERROR_INVALID_PARAM);
+            }
+            $useStreaming = true;
         } elseif ($streaming === null) {
             // 自适应：可寻址且已知文件大小大于内存上限一半时走流式
             if ($seekable && $size > 0 && $memLimit > 0 && $size > (int)($memLimit * 0.5)) {
@@ -962,8 +1045,8 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             $this->ownsStream = $takeOwnership;
             $this->data = null;
             $this->dataLen = 0;
-            $this->streamPageOffset = -1;
-            $this->streamPageData = '';
+            $this->streamPages = [];
+            $this->streamPageOrder = [];
 
             $this->parseHeader();
             if ($this->verifyCrc && !$this->rawVerifyCrc()) {
@@ -1035,7 +1118,9 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     public function reload($dbPath): void
     {
         // 构造完整新快照；成功后再替换（本实现单线程，整体赋值即原子）。
-        $snap = new QzdbReader($dbPath, $this->groupIndex, true); // 强制 CRC
+        $snap = new QzdbReader(null, $this->groupIndex, true);
+        $snap->setMemoryMode($this->memoryMode);
+        $snap->load($dbPath, true); // 强制 CRC
         $snap->warmup();
         $this->assign($snap);
     }
@@ -1049,6 +1134,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $this->data = null;
         $this->dataLen = 0;
         $snap = new QzdbReader(null, $this->groupIndex, true);
+        $snap->setMemoryMode($this->memoryMode);
         $snap->loadBytes($bytes, true);
         $snap->warmup();
         $this->assign($snap);
@@ -1297,7 +1383,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     {
         if ($this->closed) return null;
         if ($ipStr === null || $ipStr === '') return null;
-        $ip = trim($ipStr);
+        $ip = trim($ipStr, self::TRIM_CHARS);
         if ($ip === '') return null;
         if (strpos($ip, ':') !== false || preg_match('/^\d+\.\d+\.\d+\.\d+$/', $ip)) {
             // 与 find() 相同的解析分流:fastParseIp 会在解析期把 IPv4-mapped
@@ -1740,7 +1826,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $edition = self::editionFromMask($mask);
         $source = self::EDITION_SOURCE_VERSION_MASK;
         if ($edition === '') {
-            $edition = trim($this->primaryVersion);
+            $edition = trim($this->primaryVersion, self::TRIM_CHARS);
             if ($edition === '') {
                 $tokens = array_values(array_filter(array_map('trim', explode(',', $this->versionName)),
                     static function ($s) { return $s !== ''; }));
@@ -1816,7 +1902,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $mask = (isset($this->groupIds[$g]) && $this->groupIds[$g]) ? $this->groupIds[$g] : $this->versionMask;
         $edition = self::editionFromMask($mask);
         if ($edition === '') {
-            $edition = trim($this->primaryVersion);
+            $edition = trim($this->primaryVersion, self::TRIM_CHARS);
             if ($edition === '') {
                 $tokens = array_values(array_filter(array_map('trim', explode(',', $this->versionName)),
                     static function ($s) { return $s !== ''; }));
@@ -1929,19 +2015,34 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
                     continue;
                 }
                 $poolCursor = $dataBase + $totalLen;
-                // 偏移表物化：一次性 unpack 出 (count+1) 个 u32（含末项总长），
-                // 热路径 poolString 每 2 次 safeReadU32 → 2 次数组下标。
-                // 限制偏移表大小，防止伪造池头创建超大 PHP 数组导致 OOM。
-                if (($count + 1) > self::MAX_POOL_OFFSET_ENTRIES) {
-                    $groupDescs[] = null;
-                    continue;
+                if ($this->usesLowResidentMemory()) {
+                    // Keep the offset table in the database and read only the
+                    // two offsets needed by the current lookup. A PHP array
+                    // would amplify each 32-bit offset to tens of bytes.
+                    $groupDescs[] = [
+                        'ot' => $offsetTableBase,
+                        'db' => $dataBase,
+                        'count' => $count,
+                        'total' => $totalLen,
+                    ];
+                } else {
+                    if (($count + 1) > self::MAX_POOL_OFFSET_ENTRIES) {
+                        $groupDescs[] = null;
+                        continue;
+                    }
+                    $offs = unpack('V*', $this->readBytes($offsetTableBase, ($count + 1) * 4));
+                    if ($offs === false) {
+                        $groupDescs[] = null;
+                        continue;
+                    }
+                    $groupDescs[] = [
+                        'ot' => $offsetTableBase,
+                        'db' => $dataBase,
+                        'count' => $count,
+                        'total' => $totalLen,
+                        'offs' => $offs,
+                    ];
                 }
-                $offs = unpack('V*', $this->readBytes($offsetTableBase, ($count + 1) * 4));
-                if ($offs === false) {
-                    $groupDescs[] = null;
-                    continue;
-                }
-                $groupDescs[] = ['ot' => $offsetTableBase, 'db' => $dataBase, 'count' => $count, 'total' => $totalLen, 'offs' => $offs];
             }
             $this->groupPoolDescs[$g] = $groupDescs;
         }
@@ -1956,31 +2057,44 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         if ($idx < 0 || $idx >= $desc['count']) return '';
         // 构造整型复合缓存键：g(8位) | f(12位) | idx(28位)，避免热路径字符串分配与散列
         $cacheKey = ($g << 40) | ($f << 28) | $idx;
-        if (isset($this->poolCache[$cacheKey])) {
+        $cacheEnabled = $this->poolCacheEnabled && !$this->usesLowResidentMemory();
+        if ($cacheEnabled && isset($this->poolCache[$cacheKey])) {
             // 移到队尾（LRU）
             unset($this->poolCacheOrder[$cacheKey]);
             $this->poolCacheOrder[$cacheKey] = true;
             return $this->poolCache[$cacheKey];
         }
-        $offs = $desc['offs'];
-        // unpack('V*') 返回 1-based 数组
-        $start = $offs[$idx + 1];
-        $end = $offs[$idx + 2];
+        if (isset($desc['offs'])) {
+            // unpack('V*') 返回 1-based 数组
+            $start = $desc['offs'][$idx + 1];
+            $end = $desc['offs'][$idx + 2];
+        } else {
+            $start = $this->safeReadU32($desc['ot'] + $idx * 4);
+            $end = $this->safeReadU32($desc['ot'] + ($idx + 1) * 4);
+        }
         // 偏移表是累积结构，末项为总长度；越界/逆序项一律降级为空串（§Fail-Closed）
         if ($end < $start || $end > $desc['total']) return '';
         $length = $end - $start;
         if ($length <= 0) return '';
         $val = $this->readBytes($desc['db'] + $start, $length);
         // 写入 LRU 缓存（超过容量时淘汰最久未使用）
-        if (count($this->poolCache) >= self::POOL_CACHE_LIMIT) {
-            $oldest = array_key_first($this->poolCacheOrder);
+        if ($cacheEnabled && count($this->poolCache) >= self::POOL_CACHE_LIMIT) {
+            // array_key_first() was added in PHP 7.3; keep the SDK usable on
+            // PHP 7.2 without changing the LRU ordering semantics.
+            $oldest = null;
+            foreach ($this->poolCacheOrder as $key => $_) {
+                $oldest = $key;
+                break;
+            }
             if ($oldest !== null) {
                 unset($this->poolCache[$oldest]);
                 unset($this->poolCacheOrder[$oldest]);
             }
         }
-        $this->poolCache[$cacheKey] = $val;
-        $this->poolCacheOrder[$cacheKey] = true;
+        if ($cacheEnabled) {
+            $this->poolCache[$cacheKey] = $val;
+            $this->poolCacheOrder[$cacheKey] = true;
+        }
         return $val;
     }
 
@@ -2175,10 +2289,13 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         // 槽位散列对 entryId 做高位折叠再叠加组偏移；刻意不用 2654435761 这类大乘数，
         // 以免在 32 位 PHP 上溢出成 float 再被 & 隐式转换。entryId 稠密且 < 65536 时
         // 退化为恒等映射（零碰撞），这正是绝大多数库的实际形态。
-        $slot = (($entryId ^ ($entryId >> 16)) + ($groupIndex << 13)) & self::GEO_CACHE_MASK;
-        $hit = $this->geoCache[$slot] ?? null;
-        if ($hit !== null && $hit[0] === $groupIndex && $hit[1] === $entryId) {
-            return $hit[2];
+        $cacheEnabled = $this->geoCacheEnabled && !$this->usesLowResidentMemory();
+        if ($cacheEnabled) {
+            $slot = (($entryId ^ ($entryId >> 16)) + ($groupIndex << 13)) & self::GEO_CACHE_MASK;
+            $hit = $this->geoCache[$slot] ?? null;
+            if ($hit !== null && $hit[0] === $groupIndex && $hit[1] === $entryId) {
+                return $hit[2];
+            }
         }
 
         $this->ensurePoolsLoaded();
@@ -2227,7 +2344,9 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
 
         // 写入有界缓存：直接映射，碰撞就覆盖这一个槽。
         // 表容量由 slot 下标本身封顶，无需容量计数器，更不需要整表清空。
-        $this->geoCache[$slot] = [$groupIndex, $entryId, $info];
+        if ($cacheEnabled) {
+            $this->geoCache[$slot] = [$groupIndex, $entryId, $info];
+        }
 
         return $info;
     }
@@ -2373,7 +2492,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
      */
     private function parseMemoryLimitBytes(): int
     {
-        $raw = trim((string)ini_get('memory_limit'));
+        $raw = trim((string)ini_get('memory_limit'), self::TRIM_CHARS);
         if ($raw === '' || $raw === '-1') {
             return 0;
         }
@@ -2387,38 +2506,85 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         return $num;
     }
 
+    /**
+     * 取流式分页（有界 LRU）。命中直接返回，未命中则 fseek+fread 一页后入队，
+     * 超容时淘汰队首（最久未使用）。读取失败返回 ''，调用方按越界处理。
+     *
+     * 淘汰用「插入序队列 + 队首出队」而非 array_key_first()：后者 PHP 7.3 才有，
+     * 而本 SDK 的兼容下限低于它。
+     */
+    private function streamPage(int $pageOffset): string
+    {
+        if (isset($this->streamPages[$pageOffset])) {
+            // 命中：把该页移到队尾（LRU 序刷新）
+            unset($this->streamPageOrder[$pageOffset]);
+            $this->streamPageOrder[$pageOffset] = true;
+            return $this->streamPages[$pageOffset];
+        }
+        if (@fseek($this->stream, $pageOffset, SEEK_SET) !== 0) return '';
+        $page = @fread($this->stream, self::STREAM_PAGE_SIZE);
+        $got = ($page === false) ? 0 : strlen($page);
+        // Fail-Closed 完整性闸门：该页起始位置本应落在文件内，却读不满一整页、
+        // 且未抵达文件末尾 —— 说明文件在句柄打开后被截断 / 替换（NFS 抖动、
+        // 存储故障、被其它进程重写）。
+        //
+        // 为什么必须抛错而不是返回空串：readBytes 的空串会被 poolString() 当成
+        // "空字段"继续往下拼，最终产出一条地理字段正确、ISP/ASN 字段为空的
+        // **伪命中记录**。实测（max_global 截断到 35% 后查 6000 次）：5582 次抛
+        // 异常、329 次返回与基准不符的记录。返回错值比抛异常危险得多。
+        //
+        // 真·越界（pageOffset >= fileSize，或短页恰好收在 EOF）仍按原语义返回空串。
+        if ($pageOffset < $this->fileSize
+            && $got < self::STREAM_PAGE_SIZE
+            && $pageOffset + $got < $this->fileSize
+        ) {
+            throw new QzdbException(
+                'Database file shrank or was replaced while open: short read at offset '
+                . $pageOffset . ' (got ' . $got . ' of ' . self::STREAM_PAGE_SIZE . ' bytes)',
+                self::ERROR_CORRUPTED
+            );
+        }
+        if ($page === false || $page === '') return '';
+        if (count($this->streamPages) >= self::STREAM_PAGE_CACHE_PAGES) {
+            foreach ($this->streamPageOrder as $oldest => $_) {
+                unset($this->streamPages[$oldest], $this->streamPageOrder[$oldest]);
+                break;
+            }
+        }
+        $this->streamPages[$pageOffset] = $page;
+        $this->streamPageOrder[$pageOffset] = true;
+        return $page;
+    }
+
     private function readBytes($off, $len)
     {
         if ($len <= 0) return '';
         if ($this->stream !== null) {
             if ($off < 0) return '';
-            // 快速路径：请求完全落在当前分页缓存内，直接 substr 零 fseek
+            // 快速路径：请求完全落在同一页内（绝大多数 readBytes 都是 2/4/8 字节的小读）
             $pageOffset = intdiv($off, self::STREAM_PAGE_SIZE) * self::STREAM_PAGE_SIZE;
-            if ($pageOffset === $this->streamPageOffset) {
-                $within = $off - $pageOffset;
-                $available = strlen($this->streamPageData) - $within;
-                if ($available >= $len) {
-                    return substr($this->streamPageData, $within, $len);
+            $within = $off - $pageOffset;
+            if ($within + $len <= self::STREAM_PAGE_SIZE) {
+                $page = $this->streamPage($pageOffset);
+                if ($page === '') return '';
+                if ($within + $len <= strlen($page)) {
+                    return substr($page, $within, $len);
                 }
+                // 落在文件尾部未读满的页上：退回跨页循环取余下部分
             }
-            // 慢速路径：跨页或缓存未命中，按需加载分页
+            // 慢速路径：跨页，按页拼装
             $out = '';
             $remaining = $len;
             $pos = $off;
             while ($remaining > 0) {
                 $pageOffset = intdiv($pos, self::STREAM_PAGE_SIZE) * self::STREAM_PAGE_SIZE;
-                if ($pageOffset !== $this->streamPageOffset) {
-                    if (@fseek($this->stream, $pageOffset, SEEK_SET) !== 0) return '';
-                    $page = @fread($this->stream, self::STREAM_PAGE_SIZE);
-                    if ($page === false || $page === '') return '';
-                    $this->streamPageOffset = $pageOffset;
-                    $this->streamPageData = $page;
-                }
+                $page = $this->streamPage($pageOffset);
+                if ($page === '') return '';
                 $within = $pos - $pageOffset;
-                $available = strlen($this->streamPageData) - $within;
+                $available = strlen($page) - $within;
                 if ($available <= 0) return '';
                 $take = min($remaining, $available);
-                $out .= substr($this->streamPageData, $within, $take);
+                $out .= substr($page, $within, $take);
                 $pos += $take;
                 $remaining -= $take;
             }
@@ -2457,20 +2623,15 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             if ($off < 0 || $off >= $this->dataLen) return 0;
             return ord($this->data[$off]);
         }
-        // 流式模式：直接访问分页缓存，避免 readBytes → substr 的分配开销
+        // 流式模式：直接访问有界 LRU 分页缓存，避免 readBytes → substr 的分配开销
         if ($this->stream !== null) {
             if ($off < 0) return 0;
             $pageOffset = intdiv($off, self::STREAM_PAGE_SIZE) * self::STREAM_PAGE_SIZE;
-            if ($pageOffset !== $this->streamPageOffset) {
-                if (@fseek($this->stream, $pageOffset, SEEK_SET) !== 0) return 0;
-                $page = @fread($this->stream, self::STREAM_PAGE_SIZE);
-                if ($page === false || $page === '') return 0;
-                $this->streamPageOffset = $pageOffset;
-                $this->streamPageData = $page;
-            }
+            $page = $this->streamPage($pageOffset);
+            if ($page === '') return 0;
             $within = $off - $pageOffset;
-            if ($within >= strlen($this->streamPageData)) return 0;
-            return ord($this->streamPageData[$within]);
+            if ($within >= strlen($page)) return 0;
+            return ord($page[$within]);
         }
         return 0;
     }
@@ -2791,14 +2952,6 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         return array(null, $buf);
     }
 
-    /** 仅用于 CIDR：返回 16 字节二进制（非法返回 null；不降级，调用方自行判断 mapped）。 */
-    private static function parseIpv6Raw($s)
-    {
-        $r = self::fastParseIp($s);
-        if ($r === null || $r[1] === null) return null;
-        return $r[1];
-    }
-
     // 当前正在 CIDR 深度遍历的 V4 整数（walkV4Depth 使用）
     private $curV4 = 0;
 }
@@ -2816,6 +2969,7 @@ class QzdbBuilder
     private $takeOwnership = false;
     private $groupIndex = 0;
     private $verifyCrc = true;
+    private $memoryMode = QzdbReader::MEMORY_BALANCED;
 
     public static function path(string $path): self
     {
@@ -2867,9 +3021,23 @@ class QzdbBuilder
         return $this;
     }
 
+    /**
+     * Use MEMORY_LOW for FPM/CLI processes with strict memory limits.
+     * Path sources then use paged reads and avoid PHP array materialization.
+     */
+    public function memoryMode(string $mode): self
+    {
+        if ($mode !== QzdbReader::MEMORY_BALANCED && $mode !== QzdbReader::MEMORY_LOW) {
+            throw new QzdbException('Unsupported memory mode: ' . $mode, QzdbReader::ERROR_INVALID_PARAM);
+        }
+        $this->memoryMode = $mode;
+        return $this;
+    }
+
     public function build(): QzdbReader
     {
         $reader = new QzdbReader(null, $this->groupIndex, $this->verifyCrc);
+        $reader->setMemoryMode($this->memoryMode);
         if ($this->source === 'path') {
             $reader->load($this->path, $this->verifyCrc);
         } elseif ($this->source === 'bytes') {
@@ -3137,7 +3305,11 @@ class ChainedReader
 
     public function editions(): array
     {
-        return array_map(fn($r) => $r->getEdition(), $this->readers);
+        $editions = [];
+        foreach ($this->readers as $reader) {
+            $editions[] = $reader->getEdition();
+        }
+        return $editions;
     }
 
     public function getEditions(): array
@@ -3147,7 +3319,11 @@ class ChainedReader
 
     public function scopes(): array
     {
-        return array_map(fn($r) => $r->getScope(), $this->readers);
+        $scopes = [];
+        foreach ($this->readers as $reader) {
+            $scopes[] = $reader->getScope();
+        }
+        return $scopes;
     }
 
     public function getScopes(): array
@@ -3157,7 +3333,11 @@ class ChainedReader
 
     public function dataMonths(): array
     {
-        return array_map(fn($r) => $r->getDataMonth(), $this->readers);
+        $dataMonths = [];
+        foreach ($this->readers as $reader) {
+            $dataMonths[] = $reader->getDataMonth();
+        }
+        return $dataMonths;
     }
 
     public function getDataMonths(): array

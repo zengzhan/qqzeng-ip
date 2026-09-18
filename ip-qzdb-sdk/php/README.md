@@ -5,7 +5,7 @@
 - **官方命名空间**：`Qqzeng\Ip`（与参考实现 Java `com.qqzeng.qzdb` / .NET 包 `Qzdb` 保持跨语言品牌一致）
 - **定位**：离线解析 `.qzdb` 二进制数据库文件，不依赖任何外部网络请求
 - **架构**：不可变快照（immutable snapshot）——并发查询互不阻塞，`reload` 原子切换
-- **运行要求**：**PHP 8.1+**（推荐 8.5.x；使用了返回类型声明、只读快照、`\Generator` 等特性）
+- **运行要求**：**PHP 7.4+**（推荐 8.2+；SDK 核心无任何 PHP 8 专属语法，`composer.json` 的 `require.php` 与本节声明保持一致）
 - **许可**：MIT
 
 ---
@@ -34,8 +34,8 @@
 
 | 项 | 要求 |
 |----|------|
-| PHP | **8.1 或更高**（推荐 8.5.x） |
-| 扩展 | 仅需标准 `Core` / `json`（`json` 随 PHP 默认编译）；无第三方扩展依赖 |
+| PHP | **7.4 或更高**（推荐 8.2+；与 `composer.json` 的 `"php": ">=7.4"` 一致） |
+| 扩展 | 仅需标准 `Core` / `filter`（`filter_var`，IPv4 校验）与 `hash`（`crc32b`，CRC 校验）；两者均为 PHP 默认编译且 `hash` 自 7.4 起无法关闭。**无第三方扩展依赖** |
 | 操作系统 | Windows / Linux / macOS 均可 |
 | 数据库文件 | `.qzdb` 格式（由官方数据构建工具生成，含所需分组的二进制数据） |
 | 依赖 | **无任何第三方运行时依赖**（单文件 `QzdbReader.php`，零 Composer 依赖） |
@@ -149,12 +149,26 @@ $reader = QzdbBuilder::bytes($bytes)->build();
 
 // 已打开的流句柄（fopen 返回的资源；内部按需 fseek/fread，适合超大文件）
 $fh = fopen('qqzeng_ip_std_china.qzdb', 'rb');
-// 默认缓冲加载；若库文件超过百兆或内存受限，可开启 streaming(true) 走分页流式读取（常驻内存仅几十 KB）：
+// 默认缓冲加载；若库文件超过百兆或内存受限，可开启 streaming(true) 走分页流式读取：
 $reader = QzdbBuilder::stream($fh)
     ->streaming(true)         // 强制开启分页流式模式（fseek/fread，极低常驻内存）
     ->takeOwnership(true)     // 由 reader 负责在 close/destruct 时关闭句柄
     ->build();
 ```
+
+**低内存部署（FPM 推荐）**
+
+```php
+$reader = QzdbBuilder::path('/data/qqzeng_ip_ult_global.qzdb')
+    ->memoryMode(QzdbReader::MEMORY_LOW)
+    ->build();
+```
+
+`MEMORY_LOW` 会自动使用可寻址文件的分页读取，不会把字符串池偏移表
+`unpack()` 成 PHP 数组，也不会建立 GeoInfo / 字符串缓存。它把常驻内存从“数据库大小
+加 PHP 数组放大”降到“分页窗口加少量 SDK 状态”，代价是每次未命中缓存的字段读取
+需要额外的文件定位。该模式应使用本地 SSD；高 QPS 场景优先使用 Go 常驻服务或
+支持 mmap 的 C/Rust 服务，避免每个 FPM worker 各自持有一份 PHP 数据结构。
 
 ### 4.3 关于分组（GroupIndex）
 
@@ -177,7 +191,9 @@ $reader = QzdbBuilder::stream($fh)
 
 PHP SDK 会根据文件大小与 `memory_limit` 自动选择加载方式：
 
-- **触发条件**：`filesize(db) > memory_limit * 0.5`（且 `memory_limit` 非 `-1` 无限制）时，自动切换为**流式模式**（`fopen` + 按需 `fseek`/`fread`）；否则一次性 `file_get_contents` 读入内存（**缓冲模式**）。
+- **触发条件**：`MEMORY_LOW` 强制使用流式模式；平衡模式下仅当
+  `filesize(db) > memory_limit * 0.5`（且 `memory_limit` 非 `-1` 无限制）时自动切换为
+  流式模式，否则一次性 `file_get_contents` 读入内存（**缓冲模式**）。
 - **两种模式解析结果完全一致**，共用同一套 `readBytes()` 读取入口，唯一区别是性能特征。
 
 ```php
@@ -186,12 +202,93 @@ PHP SDK 会根据文件大小与 `memory_limit` 自动选择加载方式：
 $reader = new QzdbReader('qqzeng_ip_ult_global.qzdb');
 ```
 
-**性能提示**：流式模式下，Trie 遍历的**每一步子节点读取都对应一次 `fseek`+`fread` 系统调用**（IPv4 最多 16 步、IPv6 最多 `v6_jump_bits` 之后 128-N 步），相比缓冲模式（纯内存访问）会有**数量级级别**的延迟差距。
+**性能提示**：流式模式**不是**「每读一个字节就一次 `fseek`+`fread`」。SDK 内置有界多页
+LRU 分页缓存（`STREAM_PAGE_SIZE` = 64KB × `STREAM_PAGE_CACHE_PAGES` = 64 页，常驻上限
+**4MB**），同一页内的 Trie 步进、池偏移读取都命中缓存，不产生系统调用。只有跨页访问
+才会触发一次 64KB `fread`。
+
+实测（Apple M4 Max / PHP 8.5.10 / 本地 SSD，`find()` 随机 IPv4，50k 次）：
+
+| 库 | 大小 | 缓冲模式 | 流式/低内存模式 | 流式常驻内存 |
+|----|------|----------|------------------|--------------|
+| `std_china` | 8.2 MB | 2.28M QPS | 0.65M QPS | ~8 MB |
+| `max_global` | 111.7 MB | 0.37M QPS | 0.026M QPS | ~10 MB |
+
+即：流式模式比缓冲模式慢 5.6 倍（小库）到 14 倍（大库），代价是常驻内存从 1.0× 文件
+大小降到约 1/11（大库）～ 1/1（小库，4MB 页缓存本身成为下限）。**两者解析结果逐字节
+一致**（20k 输入 × 4 个库对拍，0 差异）。
 
 **生产环境建议**：
-1. 如果部署环境允许，优先调高 `memory_limit`，让常用数据库文件走缓冲模式；
-2. 如果必须使用流式模式（容器内存受限等场景），务必提前用 `php` 自带的 `microtime()` 或 `hrtime()` 对目标数据库文件做一次真实 QPS 基准测试，确认延迟是否满足业务 SLA，不要直接照搬本文档缓冲模式下的性能数字做容量规划；
-3. 流式模式更适合**低频、单次查询**的脚本化场景（如 CLI 批处理工具），持续高 QPS 服务场景建议评估是否能保证走缓冲模式。
+1. FPM worker 较多或 `memory_limit` 较小时，使用 `MEMORY_LOW`，不要仅依赖自动阈值；
+2. 流式读取必须用本地 SSD，并用真实 QPS/延迟压测；它会以 I/O 换内存；
+3. 持续高 QPS 且需要多 worker 共享数据库时，优先采用 Go 常驻服务，PHP 通过 Unix Socket/HTTP 调用；
+4. 生产上不要用 `QzdbBuilder::bytes(file_get_contents(...))` 做低内存加载，这会先在调用方制造完整字节副本。
+
+### 4.6 PHP-FPM 内存规划（必须阅读）
+
+PHP-FPM 的每个 worker 都是独立进程。一个 worker 加载一次数据库，不能假设
+所有 worker 会共享 PHP 数组、字符串池或 `GeoInfo` 缓存。因此总内存应按下面的
+保守公式估算：
+
+```text
+总内存 ≈ FPM worker 数 × 单 worker 峰值
+       + PHP-FPM master / OPcache
+       + 业务代码与其它扩展
+       + 20%～30% 安全余量
+```
+
+以约 116 MB 的 `ult_global` 为例，`balanced` 模式单 worker 可能需要约
+125～150 MB；50 个 worker 不能按 116 MB 只预留一份，而应按 worker 数量累加。
+实际数值与 PHP 版本、数据版本、查询分布和业务代码有关，必须在目标机器实测。
+
+**推荐选择：**
+
+| 场景 | 推荐 | 取舍 |
+|------|------|------|
+| PHP 7.4 / 8.x 存量服务器、`memory_limit` 较小 | `MEMORY_LOW` | 内存最低，查询延迟约为缓冲模式的 1/5～1/15 |
+| FPM worker 少、数据库较小、追求响应速度 | `MEMORY_BALANCED` | 速度优先，单 worker 占用较高 |
+| 50+ worker 或大库高并发 | Go 常驻服务 + PHP 调用 | 共享一份数据库，部署复杂度增加 |
+
+FPM 中不要在每次请求里重复加载数据库。应在常驻生命周期中初始化一次，
+并复用同一个 reader；传统短生命周期 PHP 请求则建议使用 `MEMORY_LOW` 或改用
+Go 服务。部署后请确认 worker 重启不会造成瞬时超额，并设置合理的
+`pm.max_children`、`pm.max_requests` 和宿主机内存告警。
+
+**FPM 示例：**
+
+```php
+// bootstrap.php：每个常驻 worker 初始化一次，不要放在请求处理函数内。
+require_once __DIR__ . '/QzdbReader.php';
+
+static $reader = null;
+if ($reader === null) {
+    $reader = Qqzeng\Ip\QzdbBuilder::path('/data/qqzeng_ip_ult_global.qzdb')
+        ->memoryMode(Qqzeng\Ip\QzdbReader::MEMORY_LOW)
+        ->build();
+}
+```
+
+如果使用 Swoole、RoadRunner、FrankenPHP 等常驻 PHP，必须显式调用 `close()`，
+并在热更新时确保旧 reader 不再被请求引用后再释放；不要每次热更新都创建新 reader
+而不关闭旧实例，否则旧文件句柄、分页缓存和结果对象会长期保留。
+
+**不要这样加载：**
+
+```php
+// 错误：先在调用方分配完整数据库，再由 SDK 保留另一份引用/副本。
+$reader = QzdbBuilder::bytes(file_get_contents($path))->build();
+```
+
+低内存场景应使用 `path()`；只有数据库本来就在内存中、且内存预算明确时才使用
+`bytes()`。
+
+**上线验收建议：**
+
+1. 使用生产 PHP 版本和真实数据库，连续执行至少 10 万次 IPv4/IPv6 查询；
+2. 分别记录 `memory_get_peak_usage(true)`、P95/P99 延迟、QPS 和错误率；
+3. 逐步增加 FPM worker，确认总 RSS 没有超过宿主机可用内存的 70%～80%；
+4. 验证数据库更新失败时旧 reader 仍可查询，更新成功后新数据才生效；
+5. 验证异常输入、损坏数据库、文件权限错误都能明确失败，不得静默返回错误地理信息。
 
 ---
 
@@ -451,11 +548,31 @@ try {
 
 ## 13. 性能说明
 
+### 13.1 内存模式与基准边界
+
+`MEMORY_BALANCED` 和 `MEMORY_LOW` 返回结果完全一致，区别只在驻留内存和访问路径：
+
+- `MEMORY_BALANCED`：数据库主体读入内存，池偏移表和热点结果缓存可提高吞吐；
+- `MEMORY_LOW`：数据库通过分页读取，偏移表按需读取，关闭大缓存，适合内存受限的
+  FPM worker；
+- 自动流式：当 `filesize(db) > memory_limit * 0.5` 时触发；一旦进入流式路径，
+  SDK 同样避免展开 PHP 偏移表和启用大缓存。
+- **有界多页 LRU 分页缓存**（流式 / `MEMORY_LOW` 共用）：一次查询要触达 Trie 跳表、
+  节点表、IP 行表、geo 条目表以及多张池的偏移表与字符串区，这些区域在文件里彼此
+  远离。若只缓存 1 页，几乎每次访问都会退化成 `fseek`+`fread`。SDK 改为缓存
+  `64KB × 64 = 4MB` 的有界 LRU（淘汰用插入序队列，不用 PHP 7.3 才有的
+  `array_key_first()`），命中即零系统调用。相对旧单页实现，`max_global` 流式查询
+  吞吐由约 1.5k QPS 提升到约 26k QPS（**16×**），额外常驻内存 4MB。
+
+低内存模式不是“免费优化”：它以本地 SSD I/O 换取内存，网络文件系统、容器 overlay
+文件系统和高延迟磁盘可能导致 P99 明显升高。必须在实际存储介质上压测，不能用
+balanced 模式的 QPS 估算 low 模式容量。
+
 本 SDK 在查询热路径上采用与 Java/.NET 实现同架构的热路径优化：
 
 - **不可变快照架构**：查询只读快照引用指向的不可变状态，多请求零竞争；`reload` 重建全部状态后原子替换，旧快照在 GC 回收前继续服务。
 - **流式 / 缓冲自适应**：文件大小超过 `memory_limit * 0.5` 时自动走 `fopen` + `fseek/fread` 流式读取；否则 `file_get_contents` 缓冲。两种模式共用 `readBytes()` 单一读取入口，解析结果**逐字节一致**。
-- **per-snapshot 有界无锁 GeoInfo 缓存**：快照不可变 → 同一 `entryId` 永远解析出同一 `GeoInfo`。以 `groupIndex:entryId` 为键（开放寻址哈希），上限 `GEO_CACHE_LIMIT = 1 << 16`（约 196 KB / 快照）；**碰撞只重算、绝不返回错值**。对热点 IP（同段 / 邻近客户端、批量扫段）直接命中，减少重复字段解析与字符串分配（命中路径近零分配）。
+- **per-snapshot 有界无锁 GeoInfo 缓存**：快照不可变 → 同一 `entryId` 永远解析出同一 `GeoInfo`。槽位上限为 `GEO_CACHE_LIMIT = 1 << 16`；这是逻辑容量上限，不是 PHP 实际字节数承诺（PHP 数组会有明显结构开销）。**碰撞只重算、绝不返回错值**。低内存/流式模式关闭该缓存。
 - **零分配 IP 解析**：IPv4 直接整数运算；IPv6 严格解析（拒绝前导 0 / zone id / 双 `::`）。
 - **SENTINEL 高位哨兵位（`0x80000000` / `0x800000`）在解析前剥离**，保证 trie 遍历正确还原叶子行号 / 前缀深度。
 
@@ -503,7 +620,8 @@ $hash = $reader->getFileHash();
 ### 14.4 兼容性注意
 
 - 命名空间固定为 `Qqzeng\Ip`，升级不会造成命名空间漂移。
-- 最低 PHP 8.1；建议 8.5.x 以获得最佳性能。
+- 最低 PHP 7.4；建议 8.2+。核心 SDK 不依赖 PHP 8 专属语法或扩展；PHP 7.4
+  仅作为兼容运行目标，不代表该版本仍受 PHP 官方安全支持。
 
 ---
 
@@ -536,5 +654,3 @@ php csv_oracle_test.php                    # 独立真值校验（需源 CSV + �
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: php: PHP SDK（纯 PHP 实现，缓冲与流式双模式） sync=1789610636 -->
