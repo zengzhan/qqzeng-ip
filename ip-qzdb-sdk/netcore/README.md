@@ -494,5 +494,3 @@ BENCH_OPS=200000 dotnet run --project ../netcore.bench -c Release \
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: netcore: ⚡ C# .NET 极速解析引擎 (内存映射零分配, 整型随机最不利 3300 万+ QPS, 热点 8400 万+, 口径见 PERFORMANCE.md) sync=1789753734 -->

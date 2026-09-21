@@ -17,6 +17,15 @@ public final class GeoInfo {
     private final String[] fieldNames;
     private final String[] values;
 
+    /**
+     * 原名（canonical snake_case）→ 索引的精确映射。
+     * <p>
+     * 语义 getter 传的都是规范名（country_code / as_name / geo_id ...），
+     * 走这层可完全避开 {@link #normalizeKey} 的 StringBuilder 分配。
+     * <b>必须由快照共享</b>：热路径每个 GeoInfo 都新建 HashMap 会让
+     * 64K 槽解码缓存额外背上数十 MB 堆，直接抵消缓存的意义。
+     */
+    private final Map<String, Integer> exactMap;
     // 归一化字段索引映射 (key: lowercase without underscores -> index)
     private final Map<String, Integer> normalizedMap;
     // toJson 数值类型标记（与 fieldNames 等长；内部快路径传入，公共构造时现算）
@@ -38,6 +47,7 @@ public final class GeoInfo {
     public GeoInfo(String[] fieldNames, String[] values) {
         this.fieldNames = fieldNames != null ? fieldNames.clone() : new String[0];
         this.values = values != null ? values.clone() : new String[0];
+        this.exactMap = buildExactMap(this.fieldNames);
         this.normalizedMap = buildNormalizedMap(this.fieldNames);
         boolean[] flags = new boolean[this.fieldNames.length];
         for (int i = 0; i < this.fieldNames.length; i++) {
@@ -49,9 +59,11 @@ public final class GeoInfo {
     /**
      * 内部热路径构造函数：复用快照级归一化索引与数值标记，避免每次查询重建 HashMap。
      */
-    GeoInfo(String[] fieldNames, String[] values, Map<String, Integer> sharedNormalizedMap, boolean[] numericFlags) {
+    GeoInfo(String[] fieldNames, String[] values, Map<String, Integer> sharedNormalizedMap,
+            boolean[] numericFlags, Map<String, Integer> sharedExactMap) {
         this.fieldNames = fieldNames != null ? fieldNames : new String[0];
         this.values = values != null ? values : new String[0];
+        this.exactMap = sharedExactMap != null ? sharedExactMap : buildExactMap(this.fieldNames);
         this.normalizedMap = sharedNormalizedMap != null ? sharedNormalizedMap : buildNormalizedMap(this.fieldNames);
         this.numericFlags = numericFlags != null && numericFlags.length == this.fieldNames.length
                 ? numericFlags : buildNumericFlags(this.fieldNames);
@@ -63,6 +75,18 @@ public final class GeoInfo {
             flags[i] = isNumericFieldName(names[i]);
         }
         return flags;
+    }
+
+    /** 构造原名 → 索引映射（精确匹配，不做任何归一化）。 */
+    public static Map<String, Integer> buildExactMap(String[] fields) {
+        if (fields == null || fields.length == 0) {
+            return Collections.emptyMap();
+        }
+        Map<String, Integer> map = new HashMap<>(fields.length * 2);
+        for (int i = 0; i < fields.length; i++) {
+            if (fields[i] != null) map.putIfAbsent(fields[i], i);
+        }
+        return map;
     }
 
     /**
@@ -143,7 +167,12 @@ public final class GeoInfo {
         if (name == null || name.isEmpty()) {
             return "";
         }
-        Integer idx = normalizedMap.get(normalizeKey(name));
+        // 规范名（country_code / as_name / geo_id ...）是语义 getter 的绝对多数路径：
+        // 精确命中 → 零分配；别名（countryCode / COUNTRY-CODE）才付归一化代价。
+        Integer idx = exactMap.get(name);
+        if (idx == null) {
+            idx = normalizedMap.get(normalizeKey(name));
+        }
         if (idx != null && idx < values.length && values[idx] != null) {
             return values[idx];
         }
@@ -162,6 +191,20 @@ public final class GeoInfo {
      */
     public String[] values() {
         return values.clone();
+    }
+
+    /**
+     * 包内可见的零拷贝视图，仅供 SDK 内部只读热路径使用。
+     * 前提：构造后数组内容不再变更（内部构造函数直接持有 decodeFull 新分配的数组，
+     * 公共构造函数持有的是入参的拷贝），因此对外暴露不会破坏不可变语义。
+     */
+    String[] fieldNamesRaw() {
+        return fieldNames;
+    }
+
+    /** 同 {@link #fieldNamesRaw()}，只读、零拷贝。 */
+    String[] valuesRaw() {
+        return values;
     }
 
     /**

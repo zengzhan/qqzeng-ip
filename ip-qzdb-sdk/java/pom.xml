@@ -11,7 +11,7 @@
     -->
     <groupId>com.qqzeng</groupId>
     <artifactId>qzdb</artifactId>
-    <version>1.0.7</version>
+    <version>1.0.9</version>
     <packaging>jar</packaging>
 
     <name>QZDB Java SDK</name>
@@ -41,9 +41,31 @@
     </scm>
 
     <properties>
+        <!--
+          字节码基线刻意保持在 17：record / sealed / switch 表达式已够用，
+          17 是在用最广的 LTS 基线，同一份产物可跑 17/21/25/26/27。
+          不要因为 JDK 27 发布就抬基线——Java 27 的语言新特性全是 preview，
+          预览字节码不允许进 Maven Central 发布包。
+        -->
         <maven.compiler.release>17</maven.compiler.release>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- 仅供 mvn test 使用；test scope 不进入消费者的依赖图 -->
+        <junit.version>5.11.4</junit.version>
     </properties>
+
+    <!--
+      唯一的 test 依赖。刻意保持 runtime 依赖为零：JUnit 只用于
+      数据无关用例（src/test/java/.../DataFreeCases.java + DataFreeUnitTest.java），
+      test scope 不会出现在消费者的依赖图中。
+    -->
+    <dependencies>
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>${junit.version}</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
 
     <build>
         <sourceDirectory>src/main/java</sourceDirectory>
@@ -55,15 +77,42 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <version>3.13.0</version>
             </plugin>
-            <!-- 单元测试为 main 驱动（QzdbReaderTest），且依赖外部 test_data_202608 数据，
-                 故跳过 surefire 自动执行；手工运行：
-                 java -cp target/classes com.qqzeng.qzdb.QzdbReaderTest -->
+            <!--
+              jar manifest 补 Automatic-Module-Name：让本包在 JPMS 模块路径上有一个稳定的
+              自动模块名。不写的话模块名由文件名推导，产物改名（或下游用 shaded jar）即破坏
+              下游的 module 声明。零风险；刻意不引入 module-info.java——那会牵动测试源
+              与用户侧的模块路径。
+            -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.5.0</version>
+                <configuration>
+                    <archive>
+                        <manifestEntries>
+                            <Automatic-Module-Name>com.qqzeng.qzdb</Automatic-Module-Name>
+                        </manifestEntries>
+                    </archive>
+                </configuration>
+            </plugin>
+            <!--
+              surefire 只跑 JUnit 5 用例（src/test/java/.../*UnitTest.java）。
+              其余 4 个类是 main 驱动的分层 harness：依赖私有 test_data_202608/ 数据
+              与裸 javac classpath（无 JUnit），由 ip-qzdb-sdk/run_all_tests.sh 驱动，
+              必须显式排除——其中 QzdbReaderTest / FailClosedHostileTest 名字
+              恰好命中 surefire 默认的 **/*Test.java，不排除会被当成空测试类抓进来。
+            -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.2.5</version>
                 <configuration>
-                    <skipTests>true</skipTests>
+                    <excludes>
+                        <exclude>**/QzdbReaderTest.java</exclude>
+                        <exclude>**/FailClosedHostileTest.java</exclude>
+                        <exclude>**/FullAccuracyAndPerfTester.java</exclude>
+                        <exclude>**/DualStackBenchmark.java</exclude>
+                    </excludes>
                 </configuration>
             </plugin>
             <!--

@@ -39,7 +39,7 @@ public final class ChainedReader {
         if (readers == null || readers.isEmpty()) {
             throw new QzdbException(ErrorCode.INVALID_PARAM, "ChainedReader requires at least one QzdbReader");
         }
-        this.readers = Collections.unmodifiableList(new ArrayList<>(readers));
+        this.readers = List.copyOf(readers);
         this.mode = mode;
     }
 
@@ -57,97 +57,96 @@ public final class ChainedReader {
 
     // =========================================================================
     // 查询 API 矩阵
+    //
+    // 三个单条查询入口（find / findUint / findBytes）共用同一套「按模式遍历 reader」的
+    // 内核 resolve()，差别只在传入的单库查询函数。此前 MERGE / MERGE_OVERRIDE 模式下，
+    // findUint 会先 String.format 成点分文本、findBytes 会先经 InetAddress 转成文本，
+    // 再交给每个库重新解析一遍；现在直接调用各库的原生入口，省掉格式化与二次解析。
     // =========================================================================
 
-    public Optional<GeoInfo> find(String ipStr) {
-        if (mode == Mode.FALLBACK) {
-            for (QzdbReader reader : readers) {
-                try {
-                    Optional<GeoInfo> res = reader.find(ipStr);
-                    if (res.isPresent()) {
-                        return res;
-                    }
-                } catch (QzdbException e) {
-                    if (e.getErrorCode() == ErrorCode.INVALID_IP) {
-                        throw e; // 输入格式错误立终止
-                    }
+    /** 单个 reader 上的一次查询。 */
+    @FunctionalInterface
+    private interface Lookup {
+        Optional<GeoInfo> apply(QzdbReader reader);
+    }
+
+    private Optional<GeoInfo> resolve(Lookup lookup) {
+        return switch (mode) {
+            case FALLBACK -> fallback(lookup);
+            case MERGE, MERGE_OVERRIDE -> merge(lookup);
+        };
+    }
+
+    /** FALLBACK：首个命中即返回。输入格式错误立即终止，其余加载/内部错误跳过该库。 */
+    private Optional<GeoInfo> fallback(Lookup lookup) {
+        for (QzdbReader reader : readers) {
+            try {
+                Optional<GeoInfo> res = lookup.apply(reader);
+                if (res.isPresent()) {
+                    return res;
+                }
+            } catch (QzdbException e) {
+                if (e.getErrorCode() == ErrorCode.INVALID_IP) {
+                    throw e; // 输入格式错误立终止
                 }
             }
-            return Optional.empty();
-        } else {
-            // MERGE / MERGE_OVERRIDE 模式
-            Map<String, String> mergedMap = new LinkedHashMap<>();
+        }
+        return Optional.empty();
+    }
 
-            for (QzdbReader reader : readers) {
-                try {
-                    Optional<GeoInfo> res = reader.find(ipStr);
-                    if (res.isPresent()) {
-                        GeoInfo info = res.get();
-                        String[] fields = info.fieldNames();
-                        String[] vals = info.values();
+    /** MERGE / MERGE_OVERRIDE：逐库字段级合并（字段序为首次出现序）。 */
+    private Optional<GeoInfo> merge(Lookup lookup) {
+        Map<String, String> mergedMap = new LinkedHashMap<>();
 
-                        for (int i = 0; i < fields.length; i++) {
-                            String f = fields[i];
-                            String v = (i < vals.length && vals[i] != null) ? vals[i] : "";
+        for (QzdbReader reader : readers) {
+            try {
+                Optional<GeoInfo> res = lookup.apply(reader);
+                if (res.isPresent()) {
+                    GeoInfo info = res.get();
+                    // 只读遍历，无需拷贝（公共 API 的 clone 语义仍由 fieldNames()/values() 保持）
+                    String[] fields = info.fieldNamesRaw();
+                    String[] vals = info.valuesRaw();
 
-                            if (mode == Mode.MERGE) {
-                                // 先注册者优先：先注册库的非空值不被覆盖；
-                                // 先注册库该字段缺失/为空时，才用后面库的值补上（规范 §9.1）
-                                mergedMap.merge(f, v, (old, cur) -> old.isEmpty() ? cur : old);
-                            } else {
-                                // 后注册者覆盖：后注册库的非空值覆盖先注册库
-                                if (!v.isEmpty() || !mergedMap.containsKey(f)) {
-                                    mergedMap.put(f, v);
-                                }
-                            }
+                    for (int i = 0; i < fields.length; i++) {
+                        String f = fields[i];
+                        String v = (i < vals.length && vals[i] != null) ? vals[i] : "";
+
+                        if (mode == Mode.MERGE) {
+                            // 先注册者优先：先注册库的非空值不被覆盖；
+                            // 先注册库该字段缺失/为空时，才用后面库的值补上（规范 §9.1）
+                            mergedMap.merge(f, v, (old, cur) -> old.isEmpty() ? cur : old);
+                        } else if (!v.isEmpty() || !mergedMap.containsKey(f)) {
+                            // 后注册者覆盖：后注册库的非空值覆盖先注册库
+                            mergedMap.put(f, v);
                         }
                     }
-                } catch (QzdbException e) {
-                    if (e.getErrorCode() == ErrorCode.INVALID_IP) {
-                        throw e;
-                    }
+                }
+            } catch (QzdbException e) {
+                if (e.getErrorCode() == ErrorCode.INVALID_IP) {
+                    throw e;
                 }
             }
-
-            if (mergedMap.isEmpty()) {
-                return Optional.empty();
-            }
-
-            String[] fieldNames = mergedMap.keySet().toArray(new String[0]);
-            String[] values = mergedMap.values().toArray(new String[0]);
-            return Optional.of(new GeoInfo(fieldNames, values));
         }
+
+        if (mergedMap.isEmpty()) {
+            return Optional.empty();
+        }
+
+        String[] fieldNames = mergedMap.keySet().toArray(new String[0]);
+        String[] values = mergedMap.values().toArray(new String[0]);
+        return Optional.of(new GeoInfo(fieldNames, values));
+    }
+
+    public Optional<GeoInfo> find(String ipStr) {
+        return resolve(reader -> reader.find(ipStr));
     }
 
     public Optional<GeoInfo> findUint(int ipInt) {
-        if (mode == Mode.FALLBACK) {
-            for (QzdbReader reader : readers) {
-                Optional<GeoInfo> res = reader.findUint(ipInt);
-                if (res.isPresent()) return res;
-            }
-            return Optional.empty();
-        } else {
-            return find(String.format("%d.%d.%d.%d",
-                    (ipInt >>> 24) & 0xFF, (ipInt >>> 16) & 0xFF,
-                    (ipInt >>> 8) & 0xFF, ipInt & 0xFF));
-        }
+        return resolve(reader -> reader.findUint(ipInt));
     }
 
     public Optional<GeoInfo> findBytes(byte[] ip16) {
-        if (mode == Mode.FALLBACK) {
-            for (QzdbReader reader : readers) {
-                Optional<GeoInfo> res = reader.findBytes(ip16);
-                if (res.isPresent()) return res;
-            }
-            return Optional.empty();
-        } else {
-            try {
-                java.net.InetAddress addr = java.net.InetAddress.getByAddress(ip16);
-                return find(addr.getHostAddress());
-            } catch (Exception e) {
-                throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IP byte array", e);
-            }
-        }
+        return resolve(reader -> reader.findBytes(ip16));
     }
 
     public Optional<GeoInfo> findFields(String ipStr, String[] fields) {

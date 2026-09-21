@@ -5,7 +5,7 @@
 - **官方坐标**：`com.qqzeng:qzdb`（已发布至 Maven Central）；Java 包名即 `com.qqzeng.qzdb`
 - **定位**：离线解析 `.qzdb` 二进制数据库文件，不依赖任何外部网络请求
 - **架构**：无锁快照（lock-free snapshot）——并发查询互不阻塞，`reload` 原子切换（原子引用替换）
-- **运行要求**：JDK 17+（编译目标 `maven.compiler.release=17`，产物 bytecode 为 Java 17，兼容 17/21/25/26）
+- **运行要求**：JDK 17+（编译目标 `maven.compiler.release=17`，产物 bytecode 为 Java 17，兼容 17/21/25/26/27）
 - **许可**：MIT
 
 ---
@@ -488,7 +488,7 @@ String hash = reader.getFileHash();
 ### 14.4 兼容性注意
 
 - Java 包名与 Maven `artifactId` 一致（`com.qqzeng.qzdb` / `qzdb`），升级不会造成包名漂移。
-- 编译目标 JDK 17：引用方 JDK 至少需 17（产物为 Java 17 bytecode，17/21/25/26 均可运行）。
+- 编译目标 JDK 17：引用方 JDK 至少需 17（产物为 Java 17 bytecode，17/21/25/26/27 均可运行）。
 
 ---
 
@@ -508,11 +508,27 @@ String hash = reader.getFileHash();
 | `src/main/java/com/qqzeng/qzdb/QzdbException.java` | 异常类型与 `ErrorCode` 枚举 |
 | `pom.xml` | Maven 项目文件（JDK 17 编译目标 + 元数据） |
 
-测试 / 基准（同 `src/test/java`，依赖外部 `test_data_202608/` 数据，已跳过 surefire 自动执行）：
+测试分两层：
 
-- `QzdbReaderTest.java` —— 全功能单元测试 + 2026-08 修复回归套件（运行：`java -cp target/classes com.qqzeng.qzdb.QzdbReaderTest`）
+**数据无关层**（不需要任何 `.qzdb` 文件，`mvn test` 即可）：
+
+| 文件 | 职责 |
+|------|------|
+| `src/test/java/com/qqzeng/qzdb/DataFreeCases.java` | 数据无关用例的唯一定义源（IP 严格解析、原生浮点契约、GeoInfo 归一化、fail-closed 等 14 例） |
+| `src/test/java/com/qqzeng/qzdb/DataFreeUnitTest.java` | JUnit 5 入口，把上述用例逐个映射为动态测试 |
+
+```bash
+mvn test          # 14 tests / 106 assertions
+```
+
+**依赖私有数据层**（需要 `test_data_202608/` 或 `data/`，`main` 驱动，surefire 已排除）：
+
+- `QzdbReaderTest.java` —— Tier 1 全功能 + 2026-08 修复回归套件（B/C/R/T 各层；
+  运行：`java -cp target/classes:target/test-classes com.qqzeng.qzdb.QzdbReaderTest`）
 - `FullAccuracyAndPerfTester.java` —— 全量精度与性能基准
 - `DualStackBenchmark.java` —— 双栈吞吐基准
+
+两层共用 `DataFreeCases` 里的同一份用例定义，不存在重复维护。
 
 跨语言完整 API 规范见仓库根：`docs/QZDB_SDK_API.md`。
 
@@ -521,5 +537,3 @@ String hash = reader.getFileHash();
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: java: ⚡ Java 极速解析引擎 (堆外内存优化, 极致并发性能) sync=1789753734 -->

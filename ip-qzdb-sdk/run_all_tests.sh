@@ -198,11 +198,38 @@ find_java_home() {
     return 1
 }
 JAVA_HOME=$(find_java_home)
+
+# Maven 只用于跑数据无关的 JUnit 5 层（Java-Unit）。它不在 PATH 里时不该让整层消失，
+# 但也不该被当成通过 —— 下面会写 SKIP 状态并在汇总里显式列出。
+find_mvn() {
+    if command -v mvn >/dev/null 2>&1; then
+        command -v mvn
+        return 0
+    fi
+    local candidates=(
+        /opt/homebrew/bin/mvn
+        /usr/local/bin/mvn
+        /opt/maven/bin/mvn
+        "$HOME/.sdkman/candidates/maven/current/bin/mvn"
+    )
+    for m in "${candidates[@]}"; do
+        if [ -x "$m" ]; then
+            echo "$m"
+            return 0
+        fi
+    done
+    return 1
+}
+MVN_BIN=$(find_mvn || true)
+
 if [ -n "$JAVA_HOME" ]; then
     export JAVA_HOME
     mkdir -p java/build
-    # 编译整个源码树（main + test），v2.4 包名为 com.qqzeng.qzdb
-    if ! $JAVA_HOME/bin/javac -encoding UTF-8 -d java/build $(find java/src -name '*.java'); then
+    # 编译整个源码树（main + test），v2.4 包名为 com.qqzeng.qzdb。
+    # 排除 *UnitTest.java：那是 JUnit 5 用例，裸 javac 没有 JUnit classpath，
+    # 由下面的 Java-Unit 层经 Maven/surefire 编译并执行（两条路径共用 DataFreeCases 定义）。
+    if ! $JAVA_HOME/bin/javac -encoding UTF-8 -d java/build \
+            $(find java/src -name '*.java' -not -name '*UnitTest.java'); then
         echo "✗ Java (compile failed)" > "$RESULTS_DIR/Java.result.status"
         TEST_NAMES+=("Java")
         TEST_PIDS+=(0)
@@ -214,6 +241,16 @@ if [ -n "$JAVA_HOME" ]; then
         run_test "Java-Tier3" "$JAVA_HOME/bin/java -Xmx4g -cp java/build com.qqzeng.qzdb.DualStackBenchmark" ""
         # Gate passes only when the suite prints FAILCLOSED_OK (29/29, no genuine SDK bug).
         run_test "Java-FailClosed" "$JAVA_HOME/bin/java -Xmx2g -cp java/build com.qqzeng.qzdb.FailClosedHostileTest" "" "FAILCLOSED_OK" "0"
+    fi
+    # 数据无关层：不依赖私有数据，任何环境都应执行（此前 surefire 被 skipTests 关掉，
+    # `mvn test` 是空转，这一层等于不存在）。
+    if [ -n "$MVN_BIN" ]; then
+        run_test "Java-Unit" "$MVN_BIN -B --no-transfer-progress -f java/pom.xml test" "" "BUILD SUCCESS" "0"
+    else
+        echo "[SKIP] Java-Unit：未找到 mvn，数据无关的 JUnit 5 用例**未执行**（不是通过）"
+        echo "SKIP" > "$RESULTS_DIR/Java-Unit.result.status"
+        TEST_NAMES+=("Java-Unit")
+        TEST_PIDS+=(0)
     fi
 else
     echo "[SKIP] Java (JDK not found)"
@@ -259,6 +296,10 @@ for i in "${!TEST_NAMES[@]}"; do
         if [ "$status" = "PASS" ]; then
             echo "  ✓ $name passed"
             PASSED=$((PASSED + 1))
+        elif [ "$status" = "SKIP" ]; then
+            # SKIP 不判失败（如缺 mvn），但必须显式列出，不能伪装成通过。
+            echo "  - $name SKIPPED"
+            SKIPPED=$((SKIPPED + 1))
         else
             echo "  ✗ $name FAILED"
             FAILED=$((FAILED + 1))
@@ -270,7 +311,7 @@ for i in "${!TEST_NAMES[@]}"; do
 done
 
 echo ""
-echo "Results: $PASSED passed, $FAILED failed"
+echo "Results: $PASSED passed, $FAILED failed, $SKIPPED skipped"
 
 # --- Cleanup ---
 # 若作为 run_all.sh 的子层运行（RUN_AS_LAYER=1），不清理共享结果目录，
@@ -280,7 +321,11 @@ if [ -z "${RUN_AS_LAYER:-}" ]; then
 fi
 
 if [ "$FAILED" -eq 0 ]; then
-    echo "All tests passed!"
+    if [ "$SKIPPED" -gt 0 ]; then
+        echo "All executed tests passed ($SKIPPED layer(s) skipped — see the summary above)."
+    else
+        echo "All tests passed!"
+    fi
     exit 0
 else
     echo "Some tests FAILED!"

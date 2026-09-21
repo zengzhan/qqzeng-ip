@@ -59,6 +59,8 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      # 发布仓库只同步 src/main/java（测试源按同步规范不上公开仓），
+      # 故这里保持裸 javac 整树编译，不引入 Maven 依赖。
       - name: Java — compile source tree
         working-directory: ip-qzdb-sdk/java
         run: |

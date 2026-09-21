@@ -6,6 +6,24 @@
 
 ### Fixed
 
+- **Java SDK：`Builder.build()` 失败路径泄漏 mmap 映射**（`QzdbReader.java`）。
+  `new Snapshot(...)` 抛异常（CRC 校验失败 / 格式损坏 / 截断）时没有任何清理，`MmapSource`
+  （及其 FFM `Arena`）只剩 GC 可达性这一条释放途径——在"坏文件反复重试加载"的服务
+  （健康检查轮询、配置热更新）里映射会持续占用地址空间，Windows 上还会锁住该文件不让
+  删除/替换。现统一在失败路径 `source.close()`。同批把 `reload()` 的
+  `catch (QzdbException)` 放宽到 `Throwable`：`requireSnapshot()` 对已 close 的 reader 抛
+  `IllegalStateException`，走原路径同样会漏掉映射。
+
+- **Java SDK：`retiring` 由"晚一代"改为带宽限期的退休队列**（`QzdbReader.java`）。
+  原实现用 `AtomicReference` 只保留一个待释放快照，两次 `reload()` 紧邻发生时会在第二次
+  reload 的调用线程上**同步**释放，此时距第一次 reload 可能只过了几微秒，在途查询毫无保护
+  ——JDK 22+ 的 Arena 路径下表现为查询偶发抛 `IllegalStateException`。现为 FIFO 队列 +
+  最短 2 秒宽限期，并设 8 个快照的兜底上限（每个 Snapshot 自带 512 KB 解码缓存，不能无界
+  累积）。`close()` 仍立即排空队列。
+  注：该缺陷在 JDK 17~21 上不可复现——legacy 路径的 `Unsafe.invokeCleaner` 作用在
+  `duplicate()` 上会静默失败，映射**从未真正释放**，因此撞不上（这正是 `MmapSource`
+  要修的另一个问题）。
+
 - **C# SDK：`FindStr` 3.6x 性能回退修复**（`ip-qzdb-sdk/netcore/QzdbReader.cs`）。
   `b7015b9` 引入的手写展开 `TryParseV4`（~5.5KB）带 `[MethodImpl(AggressiveInlining)]`，
   RyuJIT 将其强制内联进 `TryParseIp` → `FindStr`/`Find` 等全部调用方，撑爆内联预算与
@@ -32,6 +50,30 @@
   `MERGE` 最早非空优先，`MERGE_OVERRIDE` 最新非空优先，字段序为首次出现序。
 
 ### Changed
+
+- **Java SDK：`BenchContract` 从 `src/main/java` 迁到 `src/test/java`**（`BenchContract.java`）。
+  ⚠️ **发布物变更**：此前它属于运行时源集，会随 Maven Central 发布包一起发给用户
+  （占 `qzdb.jar` 未压缩体积约 26%），并被 `tools/sync_to_github.py` 同步进公开仓库
+  （此前已存在于 `ip-qzdb-sdk/java/src/main/java/.../BenchContract.java`）。它是基准
+  harness、不是运行时 API，现与其余 4 个 harness 一致地放在测试源。同步脚本同步加固：
+  排除清单 + 清理发布仓库里的孤儿文件。
+  新调用方式：`mvn -q test-compile && java -cp target/classes:target/test-classes com.qqzeng.qzdb.BenchContract`。
+
+- **Java SDK：`ChainedReader` 三个查询入口共用同一内核**（`ChainedReader.java`）。
+  `find` / `findUint` / `findBytes` 统一走 `resolve(Lookup)`。此前 MERGE / MERGE_OVERRIDE
+  模式下，`findUint` 会先 `String.format` 成点分文本、`findBytes` 会先经 `InetAddress`
+  转成文本，再交给每个库重新解析一遍；现直接调用各库原生入口。
+  ⚠️ **行为变更**：MERGE 模式下 `findBytes` 此前把**任意** reader 异常都重包成
+  `INVALID_IP`；现与 `find`/`findUint` 对齐——只有 `INVALID_IP` 立即终止，其余错误跳过该库。
+  实测：3 种模式 × 3 个入口 × 15 个 IP × 2 组库 + 全部错误路径，480 行输出与改动前逐字节相同。
+
+- **Java SDK：`QzdbRegistry` 退休队列容量判断改原子计数**（`QzdbRegistry.java`）。
+  原用 `ConcurrentLinkedQueue.size()`——该方法在 CLQ 上是 O(n) 全遍历（CLQ 不维护计数），
+  而每次注册/注销都会走一遍；且判断非原子，并发 `register` 可短暂超过容量上限。
+
+- **Java SDK：jar manifest 补 `Automatic-Module-Name: com.qqzeng.qzdb`**（`pom.xml`）。
+  不写的话模块名由文件名推导，产物改名即破坏下游 `module` 声明。刻意不引入
+  `module-info.java`（那会牵动测试源与用户侧模块路径）。
 
 - **性能门禁下限重标定**（`tools/perf_gate.py`）。
   各语言 floors 从「实测 ~1/10」上调到「实测 ~1/3」，使 3x 以上回退无法静默通过。
@@ -133,6 +175,62 @@
 
 - C# T11 归因过程中否决：Resolve 边界检查、批量路径大方法、仅摘 `AggressiveInlining`
   保留 unrolled。根因是「大 unrolled 方法 + 强制内联」的组合，详见 `docs/ROADMAP.md` T11。
+
+## [2026-09-20] - Java 1.0.8
+
+仅 Java 发版（Maven Central `com.qqzeng:qzdb` 1.0.7 → 1.0.8）。tag 形态为 `v-java-1.0.8`，
+只命中 Maven Central 发布 workflow，不触发 PyPI / crates.io（PUBLISHING.md §0）。
+
+### Fixed
+
+- **Java SDK：JDK 22+ 的 mmap 释放不再依赖 `sun.misc.Unsafe.invokeCleaner`**（新增 `MmapSource`）。
+  原实现在 `Snapshot.unmapIfMapped()` 里反射调用 `sun.misc.Unsafe.invokeCleaner`；该方法正随
+  JEP 471/498 的 Unsafe 内存访问退役路线被移除，且实测在强封装 / `--illegal-access=deny`
+  环境下**直接抛异常**——即"释放失败但静默"，堆外映射泄漏。现按运行时能力探测分流：
+
+  | 运行时 | 映射 | 释放 |
+  |:---|:---|:---|
+  | JDK < 22 | `FileChannel.map` | 原 best-effort（行为不变） |
+  | JDK ≥ 22 | `FileChannel.map(mode, off, size, Arena)` | `Arena.close()` 确定性 munmap |
+
+  采用**单源码 + MethodHandles 运行时探测**而非 MRJAR：本项目 CI 与手工构建都是
+  `javac $(find src -name '*.java')` 整树一次编译 + `--release 17`，MRJAR 的第二套源码根
+  会让两份同名类一起进编译而直接失败。反射只发生在 open/close，查询热路径完全不碰。
+  显式加 `Runtime.version().feature() >= 22` 门槛——JDK 21 上 `java.lang.foreign` 是 preview，
+  反射虽可调通，但 preview 不保证跨版本稳定，不进生产依赖链。
+
+  同时修掉实施中暴露的两个问题：`asByteBuffer()` 实际返回 `DirectByteBufferR`（它是
+  `MappedByteBuffer` 的子类），故路径判定改为 `Snapshot.source != null`；
+  `close()` 二次调用加 `released` 幂等守卫，避免对已释放缓冲再调 `invokeCleaner`。
+
+- **构建/CI：`mvn test` 不再空转**。`surefire` 此前被 `skipTests=true` 关闭，CI 的 java-matrix
+  也只编译不运行——Java 在 CI 上从未执行过任何用例。现把数据无关用例迁到 JUnit 5
+  （`DataFreeCases` 为唯一定义源，`DataFreeUnitTest` 为 JUnit 入口），并让 java-matrix 在
+  **17/21/25/27** 上真正执行。新增数据无关用例 P13（伪造 magic / 截断头部 / 空缓冲 fail-closed）。
+
+- **CI 路径失效**：`publish-maven-central.yml` / `publish-pypi.yml` / `publish-crates.yml`
+  仍有 7 处 `multi-lang/...`（该目录在两个仓库都不存在）→ 全部改为 `ip-qzdb-sdk/...`；
+  `ci.yml` compile-gate 的 Java 步骤改走 `mvn test-compile`（测试源含 JUnit，裸 javac 会失败）。
+
+- **`perf_gate.py` / `cross_lang_verify.py` / `cross_lang_verify_v6.py` 的 Java 腿**：
+  原先整树编译 `java/src`，会连 JUnit 测试源一起编入而失败 → 收窄为只编 `java/src/main`。
+
+### Performance
+
+- 真实用法端到端（`find` + 8 个语义 getter）2.46 M → **8.18 M ops/s（≈3.3×）**；
+  查询 QPS 与堆占用在噪声内持平。口径与数据见 `docs/JAVA27_JAVA_SDK_ASSESSMENT.md`。
+
+### 发布前验证（全部通过）
+
+| 项 | 结果 |
+|:---|:---|
+| 本地全量门禁 `run_all_tests.sh` | **24 passed / 0 failed / 0 skipped**（新增 Java-Unit 层） |
+| 跨语言 pipe 对拍 | **441/441 一致**，8 语言（Python/Node/PHP/C/Rust/Java/C#/Go） |
+| 跨语言 cidr + row_id 对拍 | **882/882 一致**，8 语言 |
+| 跨语言 IPv6 对拍 | **48/48 一致**，5 语言 |
+| `mvn test`（数据无关 JUnit 5） | **14 passed / 0 failed**，106 断言 |
+| `QzdbReaderTest`（含私有数据） | **50 passed / 0 failed**，241 断言，`TEST_PASS` |
+| 性能门禁（java 腿） | **11.34 M QPS**，floor 3.9 M → `PERF_GATE_PASS` |
 
 ## [2026-09-19] - PHP 1.2.0
 

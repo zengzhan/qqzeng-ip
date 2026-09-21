@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * 便利管理层 (QzdbRegistry)
@@ -18,17 +19,25 @@ public class QzdbRegistry {
 
     private final Map<String, QzdbReader> registryMap = new ConcurrentHashMap<>();
     private final Queue<QzdbReader> quarantine = new ConcurrentLinkedQueue<>();
+    /**
+     * quarantine 的近似长度。刻意不调用 {@link ConcurrentLinkedQueue#size()}——它在 CLQ 上是
+     * O(n) 全遍历（CLQ 不维护计数），而这里每注册/注销一次都会走一遍容量判断。
+     * 用 {@link AtomicInteger} 维护计数；读数允许短暂偏差，容量判断只是兜底，
+     * 多留或少留一个待关闭实例都不影响正确性。
+     */
+    private final AtomicInteger quarantineSize = new AtomicInteger();
 
     private void retire(QzdbReader old) {
         if (old == null) return;
         quarantine.add(old);
-        while (quarantine.size() > QUARANTINE_CAPACITY) {
+        quarantineSize.incrementAndGet();
+        while (quarantineSize.get() > QUARANTINE_CAPACITY) {
             QzdbReader evicted = quarantine.poll();
-            if (evicted != null) {
-                try {
-                    evicted.close();
-                } catch (Exception ignored) {
-                }
+            if (evicted == null) break;
+            quarantineSize.decrementAndGet();
+            try {
+                evicted.close();
+            } catch (Exception ignored) {
             }
         }
     }
@@ -92,6 +101,7 @@ public class QzdbRegistry {
             } catch (Exception ignored) {
             }
         }
+        quarantineSize.set(0);
     }
 
     // =========================================================================
