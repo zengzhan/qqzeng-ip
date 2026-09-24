@@ -163,7 +163,12 @@ static uint32_t fnv1a(const char* s) {
     return h;
 }
 
-/* Build O(1) normalized-name → index hash table (spec §6.1 performance mandate) */
+/* Build O(1) normalized-name → index hash table (spec §6.1 performance mandate).
+ * Empty buckets are marked by hash == 0; note FNV-1a is *not* guaranteed to
+ * never yield 0 for non-empty strings (the hash is 0 iff an intermediate
+ * state equals the next input byte, since the FNV prime is odd/invertible
+ * mod 2^32) — both build and lookup map 0 -> 1, so the sentinel stays
+ * unambiguous. */
 static int norm_map_build_values(const char* const* names, int n, qzdb_norm_map_t* map) {
     if (!map || n < 0 || n > QZDB_MAX_FIELDS) return QZDB_ERR_INVALID_PARAM;
     memset(map, 0, sizeof(*map));

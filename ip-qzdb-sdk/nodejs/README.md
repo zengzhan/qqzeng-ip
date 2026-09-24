@@ -144,6 +144,10 @@ const reader3 = new QzdbReader();
 reader3.loadBuffer(bytes);
 ```
 
+> `loadBuffer` 传入 `Buffer` 时采用**零拷贝别名**（不复制，SDK 内部只读不写）：
+> reader 存续期间请勿修改该 Buffer，否则查询结果不可预期；需要隔离请传入
+> `Buffer.from(bytes)` 副本。`Uint8Array` / `ArrayBuffer` 等非 Buffer 输入仍会复制一次。
+
 ### 4.3 构造器 `Builder`（链式）
 
 ```js
@@ -498,5 +502,3 @@ node tier3_concurrent.js        # 并发安全验证
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: nodejs: Node.js SDK（BigInt 偏移解析） sync=1790240656 -->

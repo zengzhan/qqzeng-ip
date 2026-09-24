@@ -651,11 +651,19 @@ class QzdbReader {
     }
   }
 
+  /**
+   * 从内存 Buffer 加载。传入 Buffer 时采用零拷贝别名（不复制）：
+   * reader 打开期间调用方不得修改该 Buffer 内容，否则查询结果不可预期；
+   * 需要隔离请自行传入 `Buffer.from(bytes)` 副本。非 Buffer 输入
+   * （Uint8Array / ArrayBuffer 等）仍会复制一次。
+   */
   loadBuffer(bytes, verifyCrc = null) {
     if (verifyCrc !== null) this._verifyCrc = verifyCrc;
     this._resetState();
     try {
-      this._data = _copyLoadBuffer(bytes);
+      // 零拷贝：SDK 内部从不写入 _data（仅读 + 只读 typed-array 视图），
+      // 因此可直接别名调用方的 Buffer；非 Buffer 输入仍需一次拷贝成 Buffer。
+      this._data = Buffer.isBuffer(bytes) ? bytes : _copyLoadBuffer(bytes);
       this._parseHeader();
       if (this._verifyCrc && !this.verifyCrc()) {
         throw new QzdbError(

@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### Breaking changes
+
+- **Rust SDK：`FieldVal::Inline` 改为 `Inline(InlineBuf)`**（`ip-qzdb-sdk/rust/src/lib.rs`）。
+  `InlineBuf` 的字段与构造器保持私有，外部不能再直接构造任意载荷；下游若匹配旧的
+  `Inline(buf, len)` 形状，需要迁移到新的 `InlineBuf` API。
+
+- **Node.js SDK：`loadBuffer(Buffer)` 改为零拷贝别名**（`ip-qzdb-sdk/nodejs/qzdb.js`）。
+  `Buffer` 输入不再复制；Reader 存续期间调用方不得修改原始 `Buffer`，否则查询结果会随之变化。
+  `Uint8Array` / `ArrayBuffer` 等其他输入仍按原语义复制。
+
 ### Fixed
 
 - **Java SDK：`Builder.build()` 失败路径泄漏 mmap 映射**（`QzdbReader.java`）。

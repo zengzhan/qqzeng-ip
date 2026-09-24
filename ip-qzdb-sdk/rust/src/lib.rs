@@ -1056,7 +1056,35 @@ const MAX_GEO_FIELDS: usize = 64;
 #[derive(Clone, Copy, Debug)]
 pub enum FieldVal<'a> {
     Borrowed(&'a str),
-    Inline([u8; 32], u8),
+    Inline(InlineBuf),
+}
+
+/// 栈内联小字符串（≤32 字节的 ASCII 快路径，如格式化后的经纬度/整数）。
+///
+/// 字段私有 + 构造器私有：只有 `fmt_native_float_buf` / `fmt_uint_buf`
+///（只输出 ASCII 数字 / `.` / `-`）能构造 `InlineBuf`，因此 `as_str` 中
+/// `from_utf8_unchecked` 的不变量恒成立。公开枚举此前允许外部安全代码
+/// 构造任意 `(buf, len)` 再调安全方法 `as_str()`（旧 unchecked 实现下触发 UB；
+/// 现实现已改用 checked 转换，此处再以类型系统彻底封堵非法构造，并恢复
+/// unchecked 快路径）。
+#[derive(Clone, Copy, Debug)]
+pub struct InlineBuf {
+    buf: [u8; 32],
+    len: u8,
+}
+
+impl InlineBuf {
+    fn new(buf: [u8; 32], len: u8) -> Self {
+        debug_assert!((len as usize) <= buf.len());
+        InlineBuf { buf, len }
+    }
+
+    #[inline(always)]
+    fn as_str(&self) -> &str {
+        // SAFETY: 仅由 fmt_native_float_buf / fmt_uint_buf 构造，只写入 ASCII；
+        // 字段与构造器均私有，外部无法构造非法值。
+        unsafe { std::str::from_utf8_unchecked(&self.buf[..self.len as usize]) }
+    }
 }
 
 impl<'a> FieldVal<'a> {
@@ -1066,13 +1094,7 @@ impl<'a> FieldVal<'a> {
     pub fn as_str(&self) -> &str {
         match self {
             FieldVal::Borrowed(s) => s,
-            FieldVal::Inline(buf, len) => {
-                let len = *len as usize;
-                if len > buf.len() {
-                    return "";
-                }
-                std::str::from_utf8(&buf[..len]).unwrap_or("")
-            }
+            FieldVal::Inline(inline) => inline.as_str(),
         }
     }
 }
@@ -2568,12 +2590,12 @@ impl SnapshotInner {
                         let bits = safe_read_u64(d, fo).unwrap_or(0);
                         fmt_native_float_buf(f64::from_bits(bits), &mut buf)?
                     };
-                    values[i] = FieldVal::Inline(buf, len as u8);
+                    values[i] = FieldVal::Inline(InlineBuf::new(buf, len as u8));
                 } else {
                     let mut buf = [0u8; 32];
                     let val = self.read_uint_width(fo, w);
                     let len = fmt_uint_buf(val, &mut buf);
-                    values[i] = FieldVal::Inline(buf, len as u8);
+                    values[i] = FieldVal::Inline(InlineBuf::new(buf, len as u8));
                 }
             } else {
                 let idx = self.read_uint_width(fo, w) as usize;
@@ -2833,75 +2855,41 @@ impl SnapshotInner {
         self.find_shared_parsed(&ip.to_parsed_ip()?)
     }
 
+    /// 字段投影查询（API_CONTRACT §二.3，Java golden 对齐）：
+    /// 1. 输出字段名与顺序 = 调用方输入原样（含重复字段、未知字段）；
+    /// 2. 未知字段在该位置补 ""，不跳过、不报错；
+    /// 3. 重复字段保留，不去重（`get()` 取首次出现，与其他语言 setdefault 一致）；
+    /// 4. 全部未知仍返回非空 GeoInfo（值全 ""），不得返回 None；
+    /// 5. 数据从解码缓存的全字段结果切片（骑缓存，勿绕过）——投影只做
+    ///    Arc 切片，不再逐字段重解码。
     fn resolve_fields(&self, row_id: u32, fields: &[&str]) -> Option<Arc<GeoInfo>> {
-        let (geo_id, asn_id, usage_id) = self.read_ip_row(row_id);
-        let mask = *self.group_dim_masks.get(self.group_index)?;
-        let entry_id = if mask & 0x02 != 0 {
-            asn_id
-        } else if mask & 0x04 != 0 {
-            usage_id
-        } else {
-            geo_id
-        };
-        if entry_id == 0 || entry_id >= self.group_entry_counts[self.group_index] {
-            return None;
-        }
-        let gi = self.group_index;
-        let fc = self.group_field_counts[gi];
-        let entry_off = entry_off_of(
-            self.off_geo_entries,
-            self.group_entry_offsets[gi],
-            entry_id,
-            self.group_strides[gi],
-        );
-        let d = self.data.as_slice();
-        let widths = &self.group_field_widths[gi];
-        let offsets = &self.group_field_offsets[gi];
-        let natives = &self.group_field_native[gi];
-        let nat_types = &self.group_field_native_type[gi];
-        let pools = &self.pools[gi];
-
-        let mut names = Vec::with_capacity(fields.len());
-        let mut values = Vec::with_capacity(fields.len());
+        let full = self.resolve_row_id(row_id)?;
+        let mut names: Vec<String> = Vec::with_capacity(fields.len());
+        let mut values: Vec<Arc<str>> = Vec::with_capacity(fields.len());
         let mut nmap: HashMap<String, usize> = HashMap::with_capacity(fields.len());
-        let mut nidx = Vec::new();
+        let mut nidx: Vec<usize> = Vec::new();
         for f in fields {
-            let output_index = names.len();
             let key = normalize_key(f);
-            let fi = self.norm_map.get(&key).copied().filter(|&index| index < fc);
-            let val = if let Some(fi) = fi {
-                let w = widths[fi];
-                let fo = entry_off.saturating_add(offsets[fi]);
-                if natives[fi] {
-                    let t = nat_types[fi];
-                    if t == 1 {
-                        if w == 4 {
-                            let bits = safe_read_u32(d, fo).unwrap_or(0);
-                            Arc::from(fmt_native_float(f32::from_bits(bits) as f64))
-                        } else {
-                            let bits = safe_read_u64(d, fo).unwrap_or(0);
-                            Arc::from(fmt_native_float(f64::from_bits(bits)))
-                        }
-                    } else {
-                        Arc::from(self.read_uint_width(fo, w).to_string())
+            // 防御性：norm_map 索引恒落在 values 内；畸形快照下未知化而非 panic
+            let hit: Option<(usize, Arc<str>)> = full
+                .norm_map
+                .get(&key)
+                .copied()
+                .and_then(|i| full.values.get(i).map(|v| (i, v.clone())));
+            nmap.entry(key).or_insert(names.len());
+            match hit {
+                Some((i, v)) => {
+                    if is_numeric_field_name(&full.field_names[i]) {
+                        nidx.push(names.len());
                     }
-                } else {
-                    let idx = self.read_uint_width(fo, w) as usize;
-                    if fi < pools.len() && idx < pools[fi].len() {
-                        pools[fi][idx].clone()
-                    } else {
-                        Arc::from("")
-                    }
+                    names.push((*f).to_string());
+                    values.push(v);
                 }
-            } else {
-                Arc::from("")
-            };
-            nmap.insert(key, output_index);
-            if is_numeric_field_name(f) {
-                nidx.push(output_index);
+                None => {
+                    names.push((*f).to_string());
+                    values.push(Arc::from(""));
+                }
             }
-            names.push((*f).to_string());
-            values.push(val);
         }
         if names.is_empty() {
             return None;
@@ -4791,7 +4779,7 @@ fn merge_geo(base: &GeoInfo, overlay: &GeoInfo, mode: ChainMode) -> GeoInfo {
 mod tests {
     use super::{
         build_numeric_mask, fmt_native_float, is_json_number, merge_geo, norm_key_buf, parse_ip,
-        safe_read_uint_width, ChainMode, FieldVal, GeoInfo, GeoInfoRef, MAX_GEO_FIELDS,
+        safe_read_uint_width, ChainMode, FieldVal, GeoInfo, GeoInfoRef, InlineBuf, MAX_GEO_FIELDS,
     };
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -4870,6 +4858,22 @@ mod tests {
         const E300: &str = "1000000000000000052504760255204420248704468581108159154915854115511802457988908195786371375080447864043704443832883878176942523235360430575644792184786706982848387200926575803737830233794788090059368953234970799945081119038967640880074652742780142494579258788820056842838115669472196386865459400540160";
         assert_eq!(fmt_native_float(1e300), E300);
         assert_eq!(fmt_native_float(-1e300), format!("-{}", E300));
+    }
+
+    /// InlineBuf 不变量（与 `FieldVal::Inline(InlineBuf)` 变更配套）：
+    /// 构造器私有，外部无法构造非法 (buf, len)；此处（同 crate）直接验证
+    /// crate 内构造路径的 as_str() 恒正确（含满 32 字节边界）。
+    #[test]
+    fn t_inline_buf_keeps_ascii_invariant() {
+        let mut buf = [0u8; 32];
+        buf[..5].copy_from_slice(b"valid");
+        assert_eq!(InlineBuf::new(buf, 5).as_str(), "valid");
+        assert_eq!(FieldVal::Inline(InlineBuf::new(buf, 5)).as_str(), "valid");
+        // 满 32 字节：NUL 填充仍为合法 UTF-8（先绑定再借用，避免 E0716）
+        let full_buf = InlineBuf::new(buf, 32);
+        let full = full_buf.as_str();
+        assert_eq!(full.len(), 32);
+        assert!(full.starts_with("valid"));
     }
 
     /// IP 解析严格性契约（缺陷审计 + 回归守卫）：
