@@ -390,10 +390,32 @@ class GeoInfo:
             self._float_indices = {field_names[i] for i in float_indices if i < len(field_names)}
 
     def __getattr__(self, name):
-        i = self._name_idx.get(name)
+        if name.startswith('_'):
+            raise AttributeError(name)
+        try:
+            name_idx = object.__getattribute__(self, '_name_idx')
+            values = object.__getattribute__(self, '_values')
+        except AttributeError:
+            raise AttributeError(name) from None
+        i = name_idx.get(name)
         if i is not None:
-            return self._values[i] if i < len(self._values) else ''
+            return values[i] if i < len(values) else ''
         raise AttributeError(name)
+
+    def __getstate__(self):
+        return {name: object.__getattribute__(self, name) for name in self.__slots__}
+
+    def __setstate__(self, state):
+        defaults = {
+            '_field_names': [],
+            '_float_indices': set(),
+            '_name_idx': {},
+            '_norm_idx': {},
+            '_pipe': None,
+            '_values': [],
+        }
+        for name in self.__slots__:
+            object.__setattr__(self, name, state.get(name, defaults[name]))
 
     def get(self, name):
         """Field access with case/underscore/hyphen-insensitive normalization.
@@ -622,7 +644,7 @@ class GeoInfo:
         for i, fname in enumerate(self._field_names):
             val = self._values[i] if i < len(self._values) else ''
             key = json.dumps(fname, ensure_ascii=False)
-            if fname in NUMERIC_FIELDS:
+            if _norm_key(fname) in ('longitude', 'latitude', 'asn', 'geoid'):
                 if val != '' and _is_json_number(val):
                     out.append(f'{key}:{val}')
                 else:
@@ -1579,7 +1601,8 @@ class QzdbReader:
                 g_norm_idx.setdefault(_norm_key(n), i)
             self._group_name_idx[g] = g_name_idx
             self._group_norm_idx[g] = g_norm_idx
-            self._group_float_indices[g] = {i for i, n in enumerate(g_names) if n in FLOAT_FIELDS}
+            self._group_float_indices[g] = {i for i, n in enumerate(g_names)
+                                            if _norm_key(n) in ('longitude', 'latitude')}
 
         names = self._group_field_names[gi] if gi < group_count else []
         self._edition = group_editions[gi] if gi < group_count else ''
@@ -1591,7 +1614,8 @@ class QzdbReader:
         self._norm_idx = {}
         for i, n in enumerate(names):
             self._norm_idx.setdefault(_norm_key(n), i)
-        self._float_field_indices = {i for i, n in enumerate(names) if n in FLOAT_FIELDS}
+        self._float_field_indices = {i for i, n in enumerate(names)
+                                     if _norm_key(n) in ('longitude', 'latitude')}
 
     def _ensure_pools_loaded(self):
         if self._pools_loaded:
@@ -2144,8 +2168,10 @@ class QzdbReader:
                 if idx is not None:
                     field_indices[i] = idx
         values, _ = self._resolve_geo_fields(entry_id, gi, field_indices)
+        float_indices = {i for i, source_index in enumerate(field_indices)
+                         if source_index in self._float_field_indices}
         return GeoInfo(values=values, field_names=list(field_names),
-                       float_indices=self._float_field_indices)
+                       float_indices=float_indices)
 
     # ── lookup row id / ids ──────────────────────────────────────────
 
@@ -2741,7 +2767,8 @@ def _merge_geo_infos(infos, override):
     if not order:
         return None
     values = [merged[n] for n in order]
-    float_idx = {i for i, n in enumerate(order) if n in FLOAT_FIELDS}
+    float_idx = {i for i, n in enumerate(order)
+                 if _norm_key(n) in ('longitude', 'latitude')}
     name_idx = {}
     norm_idx = {}
     for i, n in enumerate(order):
@@ -2833,7 +2860,8 @@ class ChainedReader:
             if full is None:
                 return None
             values = [full.get(f) for f in fields]
-            float_idx = {i for i, f in enumerate(fields) if f in FLOAT_FIELDS}
+            float_idx = {i for i, f in enumerate(fields)
+                         if _norm_key(f) in ('longitude', 'latitude')}
             name_idx = {}
             norm_idx = {}
             for i, n in enumerate(fields):
@@ -2863,20 +2891,13 @@ class ChainedReader:
         return None
 
     def find_batch(self, ips):
-        """Per-IP first-hit across chained readers (three-state BatchResult)."""
+        """Per-IP chain query preserving hit, miss, and error states."""
         results = []
         for ip in ips:
-            gi = None
-            err = None
-            for r in self._readers:
-                try:
-                    gi = r.find(ip)
-                except QzdbError as e:
-                    err = e
-                    gi = None
-                if gi is not None:
-                    break
-            results.append(BatchResult(ip, gi, err))
+            try:
+                results.append(BatchResult(ip, self.find(ip), None))
+            except QzdbError as exc:
+                results.append(BatchResult(ip, None, exc))
         return results
 
     # ── spec-named chain factories (API contract §9.5) ──────────────

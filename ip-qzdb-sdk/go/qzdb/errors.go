@@ -2,7 +2,7 @@ package qzdb
 
 import "errors"
 
-// ErrorCode 对应 API_CONTRACT.md §7 的错误枚举。
+// ErrorCode 对应 API_CONTRACT.md §二.1 返回语义矩阵的错误分类。
 // 注意：Go 的查询语义（未命中/非法 IP）统一返回 (nil, nil)，
 // 因此这些错误码主要服务于构造期 Fail-Closed 与低级错误分类。
 type ErrorCode int

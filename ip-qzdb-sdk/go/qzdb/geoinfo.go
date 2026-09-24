@@ -235,19 +235,22 @@ func (c *geoCache) put(rowID uint32, g *GeoInfo) {
 
 // projectGeo 从全集 GeoInfo 投影出 fields 指定的子集（未知字段补空串）。
 func projectGeo(full *GeoInfo, fields []string) *GeoInfo {
-	fns := make([]string, len(fields))
+	if full == nil {
+		return nil
+	}
+	fns := append([]string(nil), fields...)
 	vals := make([]string, len(fields))
 	num := make([]bool, len(fields))
 	pm := make(map[string]int, len(fields))
 	for i, f := range fields {
-		fns[i] = f
-		pm[normalizeKey(f)] = i
-		idx := -1
-		if full.normMap != nil {
-			idx = full.normMap[normalizeKey(f)]
+		key := normalizeKey(f)
+		if _, exists := pm[key]; !exists {
+			pm[key] = i
 		}
-		if idx >= 0 && idx < len(full.Values) {
-			vals[i] = full.Values[idx]
+		if full.normMap != nil {
+			if idx, ok := full.normMap[key]; ok && idx >= 0 && idx < len(full.Values) {
+				vals[i] = full.Values[idx]
+			}
 		}
 		num[i] = isNumericFieldName(f)
 	}

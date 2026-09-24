@@ -85,10 +85,15 @@ func (g *GeoInfo) ToJson() string {
 	if g == nil {
 		return "{}"
 	}
-	// 预分配容量：键 + 值 + 标点符号
+	// 预分配容量：键 + 值 + 标点符号（FieldNames/Values 为导出字段，
+	// 手工构造的 GeoInfo 可能 len(Values) > len(FieldNames)，需防越界）。
 	var total int
 	for i, v := range g.Values {
-		total += len(g.FieldNames[i]) + len(v) + 10
+		if i < len(g.FieldNames) {
+			total += len(g.FieldNames[i]) + len(v) + 10
+		} else {
+			total += len(v) + 10
+		}
 	}
 	var b strings.Builder
 	b.Grow(total)
@@ -130,7 +135,7 @@ func (g *GeoInfo) ToJson() string {
 
 // ---------- 语义化 Getter 全集（缺失返回 "" 或 nil） ----------
 
-func (g *GeoInfo) GetCidr() string       { return "" } // CIDR 不是数据库字段（契约 §6）
+func (g *GeoInfo) GetCidr() string       { return "" } // CIDR 不是数据库字段（契约 §二.2.5 缺失字段语义）
 func (g *GeoInfo) GetCountry() string    { return g.Get("country") }
 func (g *GeoInfo) GetCountryEn() string  { return g.Get("country_en") }
 func (g *GeoInfo) GetProvince() string   { return g.Get("province") }

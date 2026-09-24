@@ -1,6 +1,6 @@
 // Package qzdb 是 QZDB 离线 IP 地理定位数据库的高性能 Go SDK。
 //
-// 设计要点（对齐 API_CONTRACT.md v2.4）：
+// 设计要点（对齐 API_CONTRACT.md v2.5）：
 //   - 不可变快照（Snapshot）+ atomic.Pointer 原子替换：查询路径无锁、对快照只读。
 //   - per-snapshot 有界无锁 GeoInfo 缓存：以 row_id 为键、开放寻址；
 //     碰撞只重算、绝不返回错值；缓存命中趋近零分配。
@@ -42,6 +42,8 @@ const (
 // 均统一 fail-closed 返回 ErrCorrupted，与畸形链路"静默未命中"划清界限。
 const v4AddrBits = 32
 const maxTrieWalkSteps = v4AddrBits + 8 // = max(32+8, 40) = 40，IPv4 路径使用
+
+var warmupDrain uint64
 
 // -----------------------------------------------------------------------------
 // 版本档次与字段名的自描述契约（FORMAT §10.3）
@@ -126,7 +128,7 @@ type Snapshot struct {
 	v6JumpBits         int
 	poolCount          int
 	poolIdxSize        int
-	rowCount           int
+	rowCount           uint64
 	v4NodeCount        uint32
 	v6NodeCount        uint32
 	ipRowSize          int
@@ -160,7 +162,6 @@ type Snapshot struct {
 	groupFieldNative     [][]bool
 	groupFieldNativeType [][]int
 	groupFieldNames      [][]string
-	groupFieldIds        [][]uint16
 	groupPools           [][][]string
 
 	// Field metadata
@@ -346,7 +347,7 @@ func (s *Snapshot) parseHeader() error {
 	if s.poolIdxSize != 2 && s.poolIdxSize != 3 {
 		return newErr(ErrCodeInvalidParam, fmt.Sprintf("poolIdxSize must be 2 or 3, got %d", s.poolIdxSize))
 	}
-	s.rowCount = int(safeReadU32(d, 20))
+	s.rowCount = uint64(safeReadU32(d, 20))
 	s.offRowSchema = safeReadU64(d, 40)
 	s.offGroupSchema = safeReadU64(d, 48)
 	s.offV4Jump = safeReadU64(d, 64)
@@ -403,7 +404,7 @@ func (s *Snapshot) parseHeader() error {
 		{s.offV4Nodes, uint64(s.v4NodeCount) * v4NodeSize, "off_v4_nodes", false},
 		{s.offV6Jump, uint64(1) << uint(s.v6JumpBits) * 4, "off_v6_jump", false},
 		{s.offV6Nodes, uint64(s.v6NodeCount) * v6NodeSize, "off_v6_nodes", false},
-		{s.offIPRow, uint64(s.rowCount) * uint64(s.ipRowSize), "off_ip_row", false},
+		{s.offIPRow, s.rowCount * uint64(s.ipRowSize), "off_ip_row", false},
 		{s.offGeoEntries, 16, "off_geo_entries", true},
 		{s.offPools, 4, "off_pools", true},
 		{s.offMeta, 4, "off_meta", true},
@@ -502,7 +503,6 @@ func (s *Snapshot) parseGroups() error {
 	s.groupFieldOffsets = make([][]int, groups)
 	s.groupFieldNative = make([][]bool, groups)
 	s.groupFieldNativeType = make([][]int, groups)
-	s.groupFieldIds = make([][]uint16, groups)
 	s.groupIds = make([]uint16, groups)
 
 	for gi := 0; gi < groups; gi++ {
@@ -525,59 +525,64 @@ func (s *Snapshot) parseGroups() error {
 		sp += 2
 		maxGs := min(gsGroupCount, groups)
 		for gi := 0; gi < maxGs; gi++ {
-			if sp+14 > uint64(len(d)) {
+			if sp+16 > uint64(len(d)) {
 				break
 			}
-			// groupId 就是该组的 one-hot 版本位掩码，与 Header.VersionMask 同一套编码
 			s.groupIds[gi] = safeReadU16(d, sp)
 			sp += 2
 			fldCount := int(safeReadU16(d, sp))
 			sp += 2
-			sp += 4 // entryCount
-			stride := int(safeReadU32(d, sp))
 			sp += 4
-			sp += 4 // flags
-			if fldCount < 0 || fldCount > 255 || sp+uint64(fldCount)*12 > uint64(len(d)) {
+			strideU := uint64(safeReadU32(d, sp))
+			sp += 4
+			sp += 4
+			if fldCount < 1 || fldCount > 255 || sp+uint64(fldCount)*12 > uint64(len(d)) {
 				break
 			}
-			s.groupStrides[gi] = stride
+			if fldCount != s.groupFieldCounts[gi] {
+				break
+			}
+			maxInt := uint64(^uint(0) >> 1)
+			if strideU < 1 || strideU > maxInt || strideU > uint64(len(d)) {
+				return newErr(ErrCodeCorrupted, fmt.Sprintf("invalid group schema stride for group %d: %d", gi, strideU))
+			}
+			stride := int(strideU)
 			widths := make([]int, fldCount)
 			offsets := make([]int, fldCount)
 			natives := make([]bool, fldCount)
 			natTypes := make([]int, fldCount)
-			fids := make([]uint16, fldCount)
 			for fi := 0; fi < fldCount; fi++ {
-				fids[fi] = safeReadU16(d, sp)
 				sp += 2
-				widths[fi] = int(d[sp])
+				width := int(d[sp])
 				sp++
-				ff := d[sp]
+				flags := d[sp]
 				sp++
-				natives[fi] = ff&0x01 != 0
-				natTypes[fi] = int((ff >> 1) & 0x03)
-				offsets[fi] = int(safeReadU32(d, sp))
+				offsetU := uint64(safeReadU32(d, sp))
 				sp += 4
-				sp += 4 // poolSectionId
-			}
-			// 安全校验（对齐 C# QzdbReader.cs）：每个字段偏移必须满足
-			// offsets[fi] + width <= stride，否则畸形文件的超大偏移会把
-			// 查询期的 fo = entryOff + offsets[i] 推出文件，触发查询路径
-			// 无法 recover 的 boundsPanic。越界即整组弃用 schema 布局，
-			// 回退到下方 poolIdxSize 默认布局（fail-closed 同效）。
-			bad := stride <= 0
-			for fi := 0; fi < fldCount && !bad; fi++ {
-				if offsets[fi] < 0 || widths[fi] <= 0 || offsets[fi]+widths[fi] > stride {
-					bad = true
+				sp += 4
+				nativeField := flags&0x01 != 0
+				nativeType := int((flags >> 1) & 0x03)
+				validWidth := false
+				if nativeField {
+					validWidth = nativeType == 0 && width >= 1 && width <= 4 ||
+						nativeType == 1 && (width == 4 || width == 8)
+				} else {
+					validWidth = width >= 1 && width <= 4
 				}
+				if !validWidth || offsetU > maxInt || offsetU+uint64(width) > strideU {
+					return newErr(ErrCodeCorrupted,
+						fmt.Sprintf("invalid group schema field %d/%d width/offset: %d/%d", gi, fi, width, offsetU))
+				}
+				natives[fi] = nativeField
+				natTypes[fi] = nativeType
+				widths[fi] = width
+				offsets[fi] = int(offsetU)
 			}
-			if bad {
-				continue
-			}
+			s.groupStrides[gi] = stride
 			s.groupFieldWidths[gi] = widths
 			s.groupFieldOffsets[gi] = offsets
 			s.groupFieldNative[gi] = natives
 			s.groupFieldNativeType[gi] = natTypes
-			s.groupFieldIds[gi] = fids
 		}
 	}
 	for g := 0; g < groups; g++ {
@@ -884,38 +889,60 @@ func (s *Snapshot) verifyCrcNow() bool {
 // Warmup 主动触碰跳表与节点内存页（按 4096 字节步长），消除冷页在首查时的抖动。
 func (s *Snapshot) Warmup() {
 	d := s.data
-	if len(d) == 0 { return }
+	if len(d) == 0 {
+		return
+	}
 	const pageSize = 4096
 	var touchSum byte
 	if s.hasV4 && s.offV4Jump > 0 {
 		start := s.offV4Jump
 		end := start + 65536*4
-		if end > uint64(len(d)) { end = uint64(len(d)) }
-		for p := start; p < end; p += pageSize { touchSum ^= d[p] }
+		if end > uint64(len(d)) {
+			end = uint64(len(d))
+		}
+		for p := start; p < end; p += pageSize {
+			touchSum ^= d[p]
+		}
 		if s.v4NodeCount > 0 && s.offV4Nodes > 0 {
 			nodeSize := uint64(8)
-			if s.v4Node24 { nodeSize = 6 }
+			if s.v4Node24 {
+				nodeSize = 6
+			}
 			nStart := s.offV4Nodes
 			nEnd := nStart + uint64(s.v4NodeCount)*nodeSize
-			if nEnd > uint64(len(d)) { nEnd = uint64(len(d)) }
-			for p := nStart; p < nEnd; p += pageSize { touchSum ^= d[p] }
+			if nEnd > uint64(len(d)) {
+				nEnd = uint64(len(d))
+			}
+			for p := nStart; p < nEnd; p += pageSize {
+				touchSum ^= d[p]
+			}
 		}
 	}
 	if s.hasV6 && s.offV6Jump > 0 {
 		start := s.offV6Jump
 		end := start + (uint64(1)<<uint(s.v6JumpBits))*4
-		if end > uint64(len(d)) { end = uint64(len(d)) }
-		for p := start; p < end; p += pageSize { touchSum ^= d[p] }
+		if end > uint64(len(d)) {
+			end = uint64(len(d))
+		}
+		for p := start; p < end; p += pageSize {
+			touchSum ^= d[p]
+		}
 		if s.v6NodeCount > 0 && s.offV6Nodes > 0 {
 			nodeSize := uint64(8)
-			if s.v6Node24 { nodeSize = 6 }
+			if s.v6Node24 {
+				nodeSize = 6
+			}
 			nStart := s.offV6Nodes
 			nEnd := nStart + uint64(s.v6NodeCount)*nodeSize
-			if nEnd > uint64(len(d)) { nEnd = uint64(len(d)) }
-			for p := nStart; p < nEnd; p += pageSize { touchSum ^= d[p] }
+			if nEnd > uint64(len(d)) {
+				nEnd = uint64(len(d))
+			}
+			for p := nStart; p < nEnd; p += pageSize {
+				touchSum ^= d[p]
+			}
 		}
 	}
-	_ = touchSum
+	atomic.StoreUint64(&warmupDrain, uint64(touchSum))
 }
 
 func (s *Snapshot) fileHashHex() string {
@@ -1060,7 +1087,7 @@ func readV6Prefix(ip [16]byte, bits int) int {
 // ---------- IPRow / GeoEntry 解析 ----------
 
 func (s *Snapshot) readIPRow(rowID uint32) (uint32, uint32, uint32) {
-	if rowID == 0 || int(rowID) >= s.rowCount {
+	if rowID == 0 || uint64(rowID) >= s.rowCount {
 		return 0, 0, 0
 	}
 	off := s.offIPRow + uint64(rowID)*uint64(s.ipRowSize)
@@ -1130,39 +1157,26 @@ func (s *Snapshot) resolveEntry(rowID uint32) (entryID uint32, entryOff uint64, 
 		return 0, 0, 0, false
 	}
 	fc = s.groupFieldCounts[gi]
-	entryOff = s.groupEntryOffsets[gi] + uint64(entryID)*uint64(s.groupStrides[gi])
-	if entryOff+uint64(s.groupStrides[gi]) > uint64(len(s.data)) {
+	stride := s.groupStrides[gi]
+	if stride <= 0 {
+		return 0, 0, 0, false
+	}
+	strideU := uint64(stride)
+	base := s.groupEntryOffsets[gi]
+	dataLen := uint64(len(s.data))
+	entryIDU := uint64(entryID)
+	if base > dataLen || strideU > dataLen || entryIDU > math.MaxUint64/strideU {
+		return 0, 0, 0, false
+	}
+	product := entryIDU * strideU
+	if base > math.MaxUint64-product {
+		return 0, 0, 0, false
+	}
+	entryOff = base + product
+	if entryOff > dataLen-strideU {
 		return 0, 0, 0, false
 	}
 	return entryID, entryOff, fc, true
-}
-
-// readFieldValue 读取单个字段的值（支持原生标量与池索引）。
-func (s *Snapshot) readFieldValue(entryOff uint64, fi int) string {
-	fo := entryOff + uint64(s.groupFieldOffsets[s.groupIndex][fi])
-	w := s.groupFieldWidths[s.groupIndex][fi]
-	natives := s.groupFieldNative[s.groupIndex]
-	if natives != nil && fi < len(natives) && natives[fi] {
-		nt := 0
-		if natTypes := s.groupFieldNativeType[s.groupIndex]; natTypes != nil && fi < len(natTypes) {
-			nt = natTypes[fi]
-		}
-		return s.readNativeValue(fo, w, nt)
-	}
-	idx := s.readUintWidth(fo, w)
-	pool := s.groupPools[s.groupIndex]
-	if pool != nil && fi < len(pool) && int(idx) < len(pool[fi]) {
-		return pool[fi][idx]
-	}
-	return ""
-}
-
-func (s *Snapshot) computeGeoInfo(rowID uint32) *GeoInfo {
-	entryID, entryOff, fc, ok := s.resolveEntry(rowID)
-	if !ok {
-		return nil
-	}
-	return s.computeGeoInfoEntry(entryID, entryOff, fc)
 }
 
 // computeGeoInfoEntry 按 entryId + 预解析偏移直接解码全字段。
@@ -1200,34 +1214,6 @@ func (s *Snapshot) computeGeoInfoEntry(entryID uint32, entryOff uint64, fc int) 
 		normMap:    s.normalizedMap,
 		numeric:    s.numericFlags,
 		pipe:       joinPipe(values),
-	}
-}
-
-// computeGeoInfoProjected 只读取 fields 指定的字段（按请求顺序），避免全字段解析。
-func (s *Snapshot) computeGeoInfoProjected(rowID uint32, fields []string) *GeoInfo {
-	_, entryOff, fc, ok := s.resolveEntry(rowID)
-	if !ok {
-		return nil
-	}
-	values := make([]string, len(fields))
-	for i, f := range fields {
-		origIdx, found := s.normalizedMap[normalizeKey(f)]
-		if !found || origIdx >= fc {
-			continue
-		}
-		values[i] = s.readFieldValue(entryOff, origIdx)
-	}
-	// 投影结果同样要带 numeric 标记（契约 §6.2）：否则 ToJson 会把
-	// longitude/latitude/asn/geo_id 输出为字符串，与 C#/PHP 分叉。
-	numeric := make([]bool, len(fields))
-	for i, f := range fields {
-		numeric[i] = isNumericFieldName(f)
-	}
-	return &GeoInfo{
-		FieldNames: fields,
-		Values:     values,
-		normMap:    buildNormalizedMap(fields),
-		numeric:    numeric,
 	}
 }
 
@@ -1424,7 +1410,7 @@ func (r *QzdbReader) FindFields(ipStr string, fields []string) (*GeoInfo, error)
 	if rowID == 0 {
 		return nil, nil
 	}
-	return s.computeGeoInfoProjected(rowID, fields), nil
+	return projectGeo(s.extractGeoInfo(rowID), fields), nil
 }
 
 // ---------- 低级行号 ----------
@@ -1497,7 +1483,7 @@ type RowIds struct {
 // LookupIds 返回 row_id 对应各维度 ID；越界返回 nil。
 func (r *QzdbReader) LookupIds(rowID uint32) *RowIds {
 	s := r.snapshot()
-	if s == nil || rowID == 0 || int(rowID) >= s.rowCount {
+	if s == nil || rowID == 0 || uint64(rowID) >= s.rowCount {
 		return nil
 	}
 	geoID, asnID, usageID := s.readIPRow(rowID)
@@ -1763,10 +1749,17 @@ func (r *QzdbReader) Warmup() {
 			}
 		}
 	}
-	_ = touchSum
+	atomic.StoreUint64(&warmupDrain, uint64(touchSum))
 }
 
 // ---------- 文件 / 字节加载 ----------
+
+func checkedMmapSize(size int64) (int, error) {
+	if size < 0 || uint64(size) > uint64(^uint(0)>>1) {
+		return 0, newErr(ErrCodeInvalidParam, "database file length is not representable for mmap")
+	}
+	return int(size), nil
+}
 
 func buildSnapshotFromFile(path string, groupIndex int, verifyCrc bool) (*Snapshot, error) {
 	f, err := os.Open(path)
@@ -1781,7 +1774,11 @@ func buildSnapshotFromFile(path string, groupIndex int, verifyCrc bool) (*Snapsh
 	if fi.Size() < 192 {
 		return nil, newErr(ErrCodeBadHeader, "file too small for QZDB header")
 	}
-	data, release, err := mmapFile(f, int(fi.Size()))
+	size, err := checkedMmapSize(fi.Size())
+	if err != nil {
+		return nil, err
+	}
+	data, release, err := mmapFile(f, size)
 	if err != nil {
 		return nil, err
 	}

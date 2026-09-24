@@ -61,7 +61,7 @@ fn map_file(path: &str) -> Result<Arc<Mmap>, QzdbError> {
 // 错误
 // ---------------------------------------------------------------------------
 
-/// 错误码（API_CONTRACT §7）。
+/// 错误码（API_CONTRACT.md 错误码约定）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
     NotFound,
@@ -98,16 +98,22 @@ impl std::error::Error for QzdbError {}
 impl From<std::io::Error> for QzdbError {
     fn from(e: std::io::Error) -> Self {
         let code = if e.kind() == std::io::ErrorKind::NotFound {
-            ErrorCode::BadMagic
+            ErrorCode::NotFound
         } else {
             ErrorCode::Corrupted
         };
-        QzdbError { code, message: e.to_string() }
+        QzdbError {
+            code,
+            message: e.to_string(),
+        }
     }
 }
 
 fn err(code: ErrorCode, msg: impl Into<String>) -> QzdbError {
-    QzdbError { code, message: msg.into() }
+    QzdbError {
+        code,
+        message: msg.into(),
+    }
 }
 
 /// 解析期边界守卫：把 `Option` 收口为 `QzdbError::OutOfBounds`，使畸形 .qzdb 文件
@@ -243,16 +249,11 @@ fn safe_read_u48(d: &[u8], off: usize) -> Option<u64> {
 #[inline(always)]
 fn safe_read_uint_width(d: &[u8], off: usize, width: usize) -> u32 {
     match width {
-        0 | 1 => {
-            if off < d.len() {
-                d[off] as u32
-            } else {
-                0
-            }
-        }
+        1 => d.get(off).copied().map(u32::from).unwrap_or(0),
         2 => safe_read_u16(d, off).map(|v| v as u32).unwrap_or(0),
         3 => safe_read_u24(d, off).unwrap_or(0),
-        _ => safe_read_u32(d, off).unwrap_or(0),
+        4 => safe_read_u32(d, off).unwrap_or(0),
+        _ => 0,
     }
 }
 
@@ -271,25 +272,79 @@ pub const EDITION_BY_BIT: [&str; 5] = ["std", "asn", "pro", "max", "ult"];
 /// 各档次的规范字段表（仅在文件未自带 Metadata field_names 时使用）。
 pub fn edition_field_names(edition: &str) -> Option<&'static [&'static str]> {
     match edition {
-        "std" => Some(&["continent", "country_code", "country", "province", "city", "isp"]),
+        "std" => Some(&[
+            "continent",
+            "country_code",
+            "country",
+            "province",
+            "city",
+            "isp",
+        ]),
         "asn" => Some(&[
-            "continent", "country_code", "country", "isp", "asn", "as_name", "as_domain",
+            "continent",
+            "country_code",
+            "country",
+            "isp",
+            "asn",
+            "as_name",
+            "as_domain",
             "usage_type",
         ]),
         "pro" => Some(&[
-            "continent", "country_code", "country", "province", "city", "district", "geo_id",
-            "longitude", "latitude", "timezone", "isp",
+            "continent",
+            "country_code",
+            "country",
+            "province",
+            "city",
+            "district",
+            "geo_id",
+            "longitude",
+            "latitude",
+            "timezone",
+            "isp",
         ]),
         "max" => Some(&[
-            "continent", "country_code", "country", "province", "city", "district", "geo_id",
-            "longitude", "latitude", "timezone", "isp", "asn", "as_name", "as_domain",
+            "continent",
+            "country_code",
+            "country",
+            "province",
+            "city",
+            "district",
+            "geo_id",
+            "longitude",
+            "latitude",
+            "timezone",
+            "isp",
+            "asn",
+            "as_name",
+            "as_domain",
             "usage_type",
         ]),
         "ult" => Some(&[
-            "continent", "continent_en", "country_code", "country_alpha3", "country",
-            "country_en", "province", "province_en", "city", "city_en", "district",
-            "district_en", "geo_id", "longitude", "latitude", "timezone", "languages",
-            "currency_code", "phone_prefix", "emoji_flag", "isp", "asn", "as_name", "as_domain",
+            "continent",
+            "continent_en",
+            "country_code",
+            "country_alpha3",
+            "country",
+            "country_en",
+            "province",
+            "province_en",
+            "city",
+            "city_en",
+            "district",
+            "district_en",
+            "geo_id",
+            "longitude",
+            "latitude",
+            "timezone",
+            "languages",
+            "currency_code",
+            "phone_prefix",
+            "emoji_flag",
+            "isp",
+            "asn",
+            "as_name",
+            "as_domain",
             "usage_type",
         ]),
         _ => None,
@@ -350,17 +405,22 @@ fn synthetic_field_names(count: usize) -> Vec<String> {
 // 字段名归一化（转小写 + 去除 `_` 与 `-`，API_CONTRACT §6）
 // ---------------------------------------------------------------------------
 
-/// 由数值字段索引列表构建位掩码（索引 < 32 才置位；MAX_GEO_FIELDS=64 恒满足）。
-fn build_numeric_mask(indices: &[usize]) -> u32 {
-    indices.iter().fold(0u32, |m, &i| if i < 32 { m | (1 << i) } else { m })
+/// 由数值字段索引列表构建位掩码（索引 < 64 才置位；MAX_GEO_FIELDS=64 恒满足）。
+fn build_numeric_mask(indices: &[usize]) -> u64 {
+    indices
+        .iter()
+        .fold(0u64, |m, &i| if i < 64 { m | (1u64 << i) } else { m })
 }
 
 /// 栈缓冲版 normalize_key：语义与 normalize_key 逐字一致（跳过 '_'/'-'，
-/// ASCII 小写，其余字符透传）。超长（>48 字节归一化结果）返回 None，调用方按 "" 处理。
-fn norm_key_buf(name: &str) -> Option<std::borrow::Cow<'_, str>> {
-    if !name.bytes().any(|b| b == b'_' || b == b'-' || b.is_ascii_uppercase()) {
+/// ASCII 小写，其余字符透传）。超长（>48 字节归一化结果）回退到 owned 分配。
+fn norm_key_buf(name: &str) -> std::borrow::Cow<'_, str> {
+    if !name
+        .bytes()
+        .any(|b| b == b'_' || b == b'-' || b.is_ascii_uppercase())
+    {
         // 快路径：已是归一化形态，直接借用原串
-        return Some(std::borrow::Cow::Borrowed(name));
+        return std::borrow::Cow::Borrowed(name);
     }
     let mut buf = [0u8; 48];
     let mut n = 0usize;
@@ -369,12 +429,12 @@ fn norm_key_buf(name: &str) -> Option<std::borrow::Cow<'_, str>> {
             continue;
         }
         if n == buf.len() {
-            return None;
+            return std::borrow::Cow::Owned(normalize_key(name));
         }
         buf[n] = b.to_ascii_lowercase();
         n += 1;
     }
-    Some(std::borrow::Cow::Owned(String::from_utf8_lossy(&buf[..n]).into_owned()))
+    std::borrow::Cow::Owned(String::from_utf8_lossy(&buf[..n]).into_owned())
 }
 
 fn normalize_key(s: &str) -> String {
@@ -393,7 +453,19 @@ fn normalize_key(s: &str) -> String {
 }
 
 fn is_numeric_field_name(name: &str) -> bool {
-    matches!(name, "geo_id" | "longitude" | "latitude" | "asn")
+    let mut key = [0u8; 9];
+    let mut len = 0usize;
+    for &byte in name.as_bytes() {
+        if byte == b'_' || byte == b'-' {
+            continue;
+        }
+        if len == key.len() {
+            return false;
+        }
+        key[len] = byte.to_ascii_lowercase();
+        len += 1;
+    }
+    matches!(&key[..len], b"geoid" | b"longitude" | b"latitude" | b"asn")
 }
 
 /// 检测 IPv4-Mapped IPv6 地址 (::ffff:a.b.c.d)。
@@ -421,22 +493,26 @@ fn fmt_native_float(f: f64) -> String {
 }
 
 /// 零分配栈缓冲区原生浮点格式化。
-fn fmt_native_float_buf(f: f64, buf: &mut [u8; 32]) -> usize {
+fn fmt_native_float_buf(f: f64, buf: &mut [u8; 32]) -> Option<usize> {
     use std::io::Write;
     if f.is_nan() || f.is_infinite() {
-        return 0;
+        return Some(0);
     }
     let mut cursor = std::io::Cursor::new(&mut buf[..]);
-    if f == f.trunc() {
+    let result = if f == f.trunc() {
         if f.abs() < 9.223_372_036_854_776e18 {
-            let _ = write!(cursor, "{}", f as i64);
+            write!(cursor, "{}", f as i64)
         } else {
-            let _ = write!(cursor, "{:.0}", f);
+            write!(cursor, "{:.0}", f)
         }
     } else {
-        let _ = write!(cursor, "{:.6}", f);
+        write!(cursor, "{:.6}", f)
+    };
+    if result.is_ok() {
+        Some(cursor.position() as usize)
+    } else {
+        None
     }
-    cursor.position() as usize
 }
 
 /// 零分配栈缓冲区无符号整数格式化。
@@ -693,9 +769,13 @@ pub struct GeoInfo {
 
 impl GeoInfo {
     /// 按字段名取值（大小写/下划线/连字符不敏感）。未匹配返回 ""，绝不 panic。
+    ///
+    /// 归一化优先在 48 字节栈缓冲完成（与 `GeoInfoRef::get` 同构），
+    /// 超长时回退到 owned 分配；常见字段名命中零堆分配。
     pub fn get(&self, name: &str) -> &str {
+        let key = norm_key_buf(name);
         self.norm_map
-            .get(&normalize_key(name))
+            .get(key.as_ref())
             .and_then(|i| self.values.get(*i))
             .map(|s| s.as_ref())
             .unwrap_or("")
@@ -714,7 +794,11 @@ impl GeoInfo {
     pub fn to_map(&self) -> HashMap<String, String> {
         let mut m = HashMap::with_capacity(self.field_names.len());
         for (i, name) in self.field_names.iter().enumerate() {
-            let v = self.values.get(i).map(|s| s.to_string()).unwrap_or_default();
+            let v = self
+                .values
+                .get(i)
+                .map(|s| s.to_string())
+                .unwrap_or_default();
             m.insert(name.clone(), v);
         }
         m
@@ -762,13 +846,27 @@ impl GeoInfo {
 
     // ---- 语义化 Getter 全集（缺失返回 "" 或 None） ----
 
-    pub fn country(&self) -> &str { self.get("country") }
-    pub fn country_en(&self) -> &str { self.get("country_en") }
-    pub fn province(&self) -> &str { self.get("province") }
-    pub fn province_en(&self) -> &str { self.get("province_en") }
-    pub fn city(&self) -> &str { self.get("city") }
-    pub fn city_en(&self) -> &str { self.get("city_en") }
-    pub fn district(&self) -> &str { self.get("district") }
+    pub fn country(&self) -> &str {
+        self.get("country")
+    }
+    pub fn country_en(&self) -> &str {
+        self.get("country_en")
+    }
+    pub fn province(&self) -> &str {
+        self.get("province")
+    }
+    pub fn province_en(&self) -> &str {
+        self.get("province_en")
+    }
+    pub fn city(&self) -> &str {
+        self.get("city")
+    }
+    pub fn city_en(&self) -> &str {
+        self.get("city_en")
+    }
+    pub fn district(&self) -> &str {
+        self.get("district")
+    }
 
     pub fn geo_id(&self) -> Option<u64> {
         let v = self.get("geo_id");
@@ -797,9 +895,15 @@ impl GeoInfo {
         }
     }
 
-    pub fn timezone(&self) -> &str { self.get("timezone") }
-    pub fn isp(&self) -> &str { self.get("isp") }
-    pub fn isp_en(&self) -> &str { self.get("isp_en") }
+    pub fn timezone(&self) -> &str {
+        self.get("timezone")
+    }
+    pub fn isp(&self) -> &str {
+        self.get("isp")
+    }
+    pub fn isp_en(&self) -> &str {
+        self.get("isp_en")
+    }
 
     pub fn asn(&self) -> Option<u64> {
         let v = self.get("asn");
@@ -810,8 +914,12 @@ impl GeoInfo {
         }
     }
 
-    pub fn as_name(&self) -> &str { self.get("as_name") }
-    pub fn as_domain(&self) -> &str { self.get("as_domain") }
+    pub fn as_name(&self) -> &str {
+        self.get("as_name")
+    }
+    pub fn as_domain(&self) -> &str {
+        self.get("as_domain")
+    }
 
     pub fn usage_type(&self) -> UsageType {
         UsageType::from_raw(self.get("usage_type"))
@@ -819,19 +927,41 @@ impl GeoInfo {
 
     // 数据集以 country_code 存储 ISO 3166-1 alpha-2（如 "CN"），并不存在 country_alpha2 字段；
     // country_alpha2 重定向到 country_code 以返回真实二字码（历史返回 "" 为字段名笔误 bug）。
-    pub fn country_alpha2(&self) -> &str { self.get("country_code") }
-    pub fn country_alpha3(&self) -> &str { self.get("country_alpha3") }
-    pub fn currency_code(&self) -> &str { self.get("currency_code") }
-    pub fn currency_name(&self) -> &str { self.get("currency_name") }
-    pub fn phone_prefix(&self) -> &str { self.get("phone_prefix") }
-    pub fn emoji_flag(&self) -> &str { self.get("emoji_flag") }
-    pub fn languages(&self) -> &str { self.get("languages") }
-    pub fn continent(&self) -> &str { self.get("continent") }
-    pub fn continent_en(&self) -> &str { self.get("continent_en") }
-    pub fn country_code(&self) -> &str { self.get("country_code") }
+    pub fn country_alpha2(&self) -> &str {
+        self.get("country_code")
+    }
+    pub fn country_alpha3(&self) -> &str {
+        self.get("country_alpha3")
+    }
+    pub fn currency_code(&self) -> &str {
+        self.get("currency_code")
+    }
+    pub fn currency_name(&self) -> &str {
+        self.get("currency_name")
+    }
+    pub fn phone_prefix(&self) -> &str {
+        self.get("phone_prefix")
+    }
+    pub fn emoji_flag(&self) -> &str {
+        self.get("emoji_flag")
+    }
+    pub fn languages(&self) -> &str {
+        self.get("languages")
+    }
+    pub fn continent(&self) -> &str {
+        self.get("continent")
+    }
+    pub fn continent_en(&self) -> &str {
+        self.get("continent_en")
+    }
+    pub fn country_code(&self) -> &str {
+        self.get("country_code")
+    }
 
     /// `getCidr()` 恒返回 ""（CIDR 非数据库字段）。真实网段用 `reader.lookup_cidr(ip)`。
-    pub fn get_cidr(&self) -> &str { self.get("cidr") }
+    pub fn get_cidr(&self) -> &str {
+        self.get("cidr")
+    }
 }
 
 impl std::fmt::Display for GeoInfo {
@@ -869,27 +999,51 @@ fn escape_json(s: &str) -> String {
 }
 
 fn is_json_number(v: &str) -> bool {
-    if v.is_empty() {
+    let bytes = v.as_bytes();
+    if bytes.is_empty() {
         return false;
     }
-    let mut chars = v.chars();
-    let mut has_digit = false;
-    let mut dot = false;
-    if let Some(c) = chars.clone().next() {
-        if c == '-' {
-            chars.next();
-        }
-    }
-    for c in chars {
-        if c.is_ascii_digit() {
-            has_digit = true;
-        } else if c == '.' && !dot {
-            dot = true;
-        } else {
+    let mut pos = 0usize;
+    if bytes[pos] == b'-' {
+        pos += 1;
+        if pos == bytes.len() {
             return false;
         }
     }
-    has_digit
+    match bytes[pos] {
+        b'0' => pos += 1,
+        b'1'..=b'9' => {
+            pos += 1;
+            while bytes.get(pos).is_some_and(u8::is_ascii_digit) {
+                pos += 1;
+            }
+        }
+        _ => return false,
+    }
+    if bytes.get(pos) == Some(&b'.') {
+        pos += 1;
+        let start = pos;
+        while bytes.get(pos).is_some_and(u8::is_ascii_digit) {
+            pos += 1;
+        }
+        if pos == start {
+            return false;
+        }
+    }
+    if matches!(bytes.get(pos), Some(b'e' | b'E')) {
+        pos += 1;
+        if matches!(bytes.get(pos), Some(b'+' | b'-')) {
+            pos += 1;
+        }
+        let start = pos;
+        while bytes.get(pos).is_some_and(u8::is_ascii_digit) {
+            pos += 1;
+        }
+        if pos == start {
+            return false;
+        }
+    }
+    pos == bytes.len()
 }
 
 // ---------------------------------------------------------------------------
@@ -908,13 +1062,17 @@ pub enum FieldVal<'a> {
 impl<'a> FieldVal<'a> {
     pub const EMPTY: Self = FieldVal::Borrowed("");
 
-    #[inline(always)]
+    #[inline]
     pub fn as_str(&self) -> &str {
         match self {
             FieldVal::Borrowed(s) => s,
-            FieldVal::Inline(buf, len) => unsafe {
-                std::str::from_utf8_unchecked(&buf[..*len as usize])
-            },
+            FieldVal::Inline(buf, len) => {
+                let len = *len as usize;
+                if len > buf.len() {
+                    return "";
+                }
+                std::str::from_utf8(&buf[..len]).unwrap_or("")
+            }
         }
     }
 }
@@ -938,7 +1096,7 @@ pub struct GeoInfoRef<'a> {
     pub(crate) field_count: usize,
     pub(crate) norm_map: &'a HashMap<String, usize>,
     /// 数值字段位掩码（bit i = 第 i 字段为数值）——to_json 热路径 O(1) 位测。
-    pub(crate) numeric_mask: u32,
+    pub(crate) numeric_mask: u64,
 }
 
 impl<'a> std::fmt::Debug for GeoInfoRef<'a> {
@@ -954,17 +1112,20 @@ impl<'a> std::fmt::Debug for GeoInfoRef<'a> {
 impl<'a> GeoInfoRef<'a> {
     /// 按字段名取值（大小写/下划线/连字符不敏感）。未匹配返回 ""，绝不 panic。
     ///
-    /// 归一化在 48 字节栈缓冲完成，零堆分配（字段名上界 32 字节）。
+    /// 归一化优先在 48 字节栈缓冲完成，超长时回退到 owned 分配。
     #[inline]
     pub fn get(&self, name: &str) -> &str {
-        let key = match norm_key_buf(name) {
-            Some(k) => k,
-            None => return "",
-        };
+        let key = norm_key_buf(name);
         self.norm_map
             .get(key.as_ref())
             .copied()
-            .and_then(|i| if i < self.field_count { self.values.get(i).map(|v| v.as_str()) } else { None })
+            .and_then(|i| {
+                if i < self.field_count {
+                    self.values.get(i).map(|v| v.as_str())
+                } else {
+                    None
+                }
+            })
             .unwrap_or("")
     }
 
@@ -1046,7 +1207,7 @@ impl<'a> GeoInfoRef<'a> {
             out.push('"');
             out.push_str(&escape_json(name));
             out.push_str("\":");
-            let numeric = i < 32 && (self.numeric_mask >> i) & 1 != 0;
+            let numeric = i < 64 && (self.numeric_mask >> i) & 1 != 0;
             if val.is_empty() {
                 out.push_str(if numeric { "null" } else { "\"\"" });
             } else if numeric {
@@ -1080,7 +1241,7 @@ impl<'a> GeoInfoRef<'a> {
         } else {
             // 无快照引用（合成实例）：从掩码重建索引列表
             let idxs: Vec<usize> = (0..self.field_count)
-                .filter(|&i| i < 32 && (self.numeric_mask >> i) & 1 != 0)
+                .filter(|&i| i < 64 && (self.numeric_mask >> i) & 1 != 0)
                 .collect();
             (
                 Arc::new(self.field_names.to_vec()),
@@ -1100,13 +1261,27 @@ impl<'a> GeoInfoRef<'a> {
 
     // ---- 语义化 Getter 全集（缺失返回 "" 或 None） ----
 
-    pub fn country(&self) -> &str { self.get("country") }
-    pub fn country_en(&self) -> &str { self.get("country_en") }
-    pub fn province(&self) -> &str { self.get("province") }
-    pub fn province_en(&self) -> &str { self.get("province_en") }
-    pub fn city(&self) -> &str { self.get("city") }
-    pub fn city_en(&self) -> &str { self.get("city_en") }
-    pub fn district(&self) -> &str { self.get("district") }
+    pub fn country(&self) -> &str {
+        self.get("country")
+    }
+    pub fn country_en(&self) -> &str {
+        self.get("country_en")
+    }
+    pub fn province(&self) -> &str {
+        self.get("province")
+    }
+    pub fn province_en(&self) -> &str {
+        self.get("province_en")
+    }
+    pub fn city(&self) -> &str {
+        self.get("city")
+    }
+    pub fn city_en(&self) -> &str {
+        self.get("city_en")
+    }
+    pub fn district(&self) -> &str {
+        self.get("district")
+    }
 
     pub fn geo_id(&self) -> Option<u64> {
         let v = self.get("geo_id");
@@ -1135,9 +1310,15 @@ impl<'a> GeoInfoRef<'a> {
         }
     }
 
-    pub fn timezone(&self) -> &str { self.get("timezone") }
-    pub fn isp(&self) -> &str { self.get("isp") }
-    pub fn isp_en(&self) -> &str { self.get("isp_en") }
+    pub fn timezone(&self) -> &str {
+        self.get("timezone")
+    }
+    pub fn isp(&self) -> &str {
+        self.get("isp")
+    }
+    pub fn isp_en(&self) -> &str {
+        self.get("isp_en")
+    }
 
     pub fn asn(&self) -> Option<u64> {
         let v = self.get("asn");
@@ -1148,24 +1329,50 @@ impl<'a> GeoInfoRef<'a> {
         }
     }
 
-    pub fn as_name(&self) -> &str { self.get("as_name") }
-    pub fn as_domain(&self) -> &str { self.get("as_domain") }
+    pub fn as_name(&self) -> &str {
+        self.get("as_name")
+    }
+    pub fn as_domain(&self) -> &str {
+        self.get("as_domain")
+    }
 
     pub fn usage_type(&self) -> UsageType {
         UsageType::from_raw(self.get("usage_type"))
     }
 
-    pub fn country_alpha2(&self) -> &str { self.get("country_code") }
-    pub fn country_alpha3(&self) -> &str { self.get("country_alpha3") }
-    pub fn currency_code(&self) -> &str { self.get("currency_code") }
-    pub fn currency_name(&self) -> &str { self.get("currency_name") }
-    pub fn phone_prefix(&self) -> &str { self.get("phone_prefix") }
-    pub fn emoji_flag(&self) -> &str { self.get("emoji_flag") }
-    pub fn languages(&self) -> &str { self.get("languages") }
-    pub fn continent(&self) -> &str { self.get("continent") }
-    pub fn continent_en(&self) -> &str { self.get("continent_en") }
-    pub fn country_code(&self) -> &str { self.get("country_code") }
-    pub fn get_cidr(&self) -> &str { self.get("cidr") }
+    pub fn country_alpha2(&self) -> &str {
+        self.get("country_code")
+    }
+    pub fn country_alpha3(&self) -> &str {
+        self.get("country_alpha3")
+    }
+    pub fn currency_code(&self) -> &str {
+        self.get("currency_code")
+    }
+    pub fn currency_name(&self) -> &str {
+        self.get("currency_name")
+    }
+    pub fn phone_prefix(&self) -> &str {
+        self.get("phone_prefix")
+    }
+    pub fn emoji_flag(&self) -> &str {
+        self.get("emoji_flag")
+    }
+    pub fn languages(&self) -> &str {
+        self.get("languages")
+    }
+    pub fn continent(&self) -> &str {
+        self.get("continent")
+    }
+    pub fn continent_en(&self) -> &str {
+        self.get("continent_en")
+    }
+    pub fn country_code(&self) -> &str {
+        self.get("country_code")
+    }
+    pub fn get_cidr(&self) -> &str {
+        self.get("cidr")
+    }
 }
 
 impl<'a> std::fmt::Display for GeoInfoRef<'a> {
@@ -1200,7 +1407,9 @@ impl<'a> PartialEq<GeoInfo> for GeoInfoRef<'a> {
     fn eq(&self, other: &GeoInfo) -> bool {
         self.field_names() == other.field_names.as_slice()
             && self.len() == other.values.len()
-            && (0..self.field_count).all(|i| self.get_value_at(i) == other.values.get(i).map(|s| s.as_ref()).unwrap_or(""))
+            && (0..self.field_count).all(|i| {
+                self.get_value_at(i) == other.values.get(i).map(|s| s.as_ref()).unwrap_or("")
+            })
     }
 }
 
@@ -1250,7 +1459,9 @@ struct CacheSlot {
 
 impl CacheSlot {
     fn empty() -> Self {
-        CacheSlot { node: ArcSwapOption::new(None) }
+        CacheSlot {
+            node: ArcSwapOption::new(None),
+        }
     }
 }
 
@@ -1406,7 +1617,10 @@ impl SnapshotInner {
 
         let hs = safe_read_u32(d, 36).unwrap();
         if hs != 192 {
-            return Err(err(ErrorCode::BadHeader, format!("unexpected header size: {}", hs)));
+            return Err(err(
+                ErrorCode::BadHeader,
+                format!("unexpected header size: {}", hs),
+            ));
         }
 
         let off_row_schema = safe_read_u64(d, 40).unwrap();
@@ -1434,7 +1648,10 @@ impl SnapshotInner {
         if !(1..=255).contains(&geo_entry_group_count) {
             return Err(err(
                 ErrorCode::InvalidParam,
-                format!("geo_entry_group_count out of range [1,255]: {}", geo_entry_group_count),
+                format!(
+                    "geo_entry_group_count out of range [1,255]: {}",
+                    geo_entry_group_count
+                ),
             ));
         }
 
@@ -1447,13 +1664,19 @@ impl SnapshotInner {
             let end = match offset.checked_add(required) {
                 Some(end) => end,
                 None => {
-                    return Err(err(ErrorCode::OutOfBounds, format!("overflow at {}", field)));
+                    return Err(err(
+                        ErrorCode::OutOfBounds,
+                        format!("overflow at {}", field),
+                    ));
                 }
             };
             if end > data_len {
                 return Err(err(
                     ErrorCode::OutOfBounds,
-                    format!("section {} out of bounds (need {}, have {})", field, end, data_len),
+                    format!(
+                        "section {} out of bounds (need {}, have {})",
+                        field, end, data_len
+                    ),
                 ));
             }
             Ok(())
@@ -1464,10 +1687,25 @@ impl SnapshotInner {
         let v6_jump_size = (1u64 << v6_jump_bits) * 4;
 
         check_offset(data_len, off_v4_jump, 65536 * 4, "off_v4_jump")?;
-        check_offset(data_len, off_v4_nodes, v4_node_count as u64 * v4_node_size, "off_v4_nodes")?;
+        check_offset(
+            data_len,
+            off_v4_nodes,
+            v4_node_count as u64 * v4_node_size,
+            "off_v4_nodes",
+        )?;
         check_offset(data_len, off_v6_jump, v6_jump_size, "off_v6_jump")?;
-        check_offset(data_len, off_v6_nodes, v6_node_count as u64 * v6_node_size, "off_v6_nodes")?;
-        check_offset(data_len, off_ip_row, row_count as u64 * ip_row_size as u64, "off_ip_row")?;
+        check_offset(
+            data_len,
+            off_v6_nodes,
+            v6_node_count as u64 * v6_node_size,
+            "off_v6_nodes",
+        )?;
+        check_offset(
+            data_len,
+            off_ip_row,
+            row_count as u64 * ip_row_size as u64,
+            "off_ip_row",
+        )?;
         if off_geo_entries > 0 {
             check_offset(data_len, off_geo_entries, 16, "off_geo_entries")?;
         }
@@ -1548,7 +1786,10 @@ impl SnapshotInner {
         if group_index >= actual_groups {
             return Err(err(
                 ErrorCode::InvalidParam,
-                format!("group_index {} out of range (groups={})", group_index, actual_groups),
+                format!(
+                    "group_index {} out of range (groups={})",
+                    group_index, actual_groups
+                ),
             ));
         }
 
@@ -1640,8 +1881,11 @@ impl SnapshotInner {
                 group_field_widths[g] = Some(vec![pool_idx_size; group_field_counts[g]]);
             }
             if group_field_offsets[g].is_none() {
-                group_field_offsets[g] =
-                    Some((0..group_field_counts[g]).map(|i| i * pool_idx_size).collect());
+                group_field_offsets[g] = Some(
+                    (0..group_field_counts[g])
+                        .map(|i| i * pool_idx_size)
+                        .collect(),
+                );
             }
             if group_field_native[g].is_none() {
                 group_field_native[g] = Some(vec![false; group_field_counts[g]]);
@@ -1658,6 +1902,30 @@ impl SnapshotInner {
         let mut group_field_native = take_all(group_field_native, "group_field_native")?;
         let mut group_field_native_type =
             take_all(group_field_native_type, "group_field_native_type")?;
+
+        for g in 0..actual_groups {
+            for fi in 0..group_field_widths[g].len() {
+                let width = group_field_widths[g][fi];
+                let valid = if group_field_native[g][fi] {
+                    match group_field_native_type[g][fi] {
+                        0 => (1..=4).contains(&width),
+                        1 => matches!(width, 4 | 8),
+                        _ => false,
+                    }
+                } else {
+                    (1..=4).contains(&width)
+                };
+                if !valid {
+                    return Err(err(
+                        ErrorCode::Corrupted,
+                        format!(
+                            "group {} field {} has invalid width {} for flags {} type {}",
+                            g, fi, width, group_field_native[g][fi], group_field_native_type[g][fi]
+                        ),
+                    ));
+                }
+            }
+        }
 
         // 关键不变量：字段数有两个来源——GEO_ENTRIES 表的 group_field_counts[g]
         // 与 GROUP_SCHEMA 的 fld_count。畸形文件可让二者不一致，而查询热路径
@@ -1750,7 +2018,11 @@ impl SnapshotInner {
                     .map(|s| s.trim())
                     .filter(|s| !s.is_empty())
                     .collect();
-                if tokens.len() == 1 { tokens[0].to_string() } else { String::new() }
+                if tokens.len() == 1 {
+                    tokens[0].to_string()
+                } else {
+                    String::new()
+                }
             }
         };
 
@@ -1758,7 +2030,11 @@ impl SnapshotInner {
             let num_fields = group_field_counts[g];
 
             // edition：先用本组自己的掩码，再回落到文件级掩码
-            let mask = if group_ids[g] != 0 { group_ids[g] } else { version_mask };
+            let mask = if group_ids[g] != 0 {
+                group_ids[g]
+            } else {
+                version_mask
+            };
             let mut edition: &'static str = edition_from_mask(mask);
             let mut source: &'static str = EDITION_SOURCE_VERSION_MASK;
             if edition.is_empty() && !meta_edition.is_empty() {
@@ -1778,9 +2054,7 @@ impl SnapshotInner {
             }
 
             // 字段名
-            let (names, names_source) = if meta.field_names.len() == num_fields
-                && num_fields > 0
-            {
+            let (names, names_source) = if meta.field_names.len() == num_fields && num_fields > 0 {
                 (meta.field_names.clone(), FIELD_NAMES_SOURCE_METADATA)
             } else {
                 match edition_field_names(edition) {
@@ -1788,7 +2062,10 @@ impl SnapshotInner {
                         canon.iter().map(|s| s.to_string()).collect(),
                         FIELD_NAMES_SOURCE_EDITION,
                     ),
-                    _ => (synthetic_field_names(num_fields), FIELD_NAMES_SOURCE_SYNTHETIC),
+                    _ => (
+                        synthetic_field_names(num_fields),
+                        FIELD_NAMES_SOURCE_SYNTHETIC,
+                    ),
                 }
             };
 
@@ -1949,7 +2226,8 @@ impl SnapshotInner {
             return 0;
         }
         if self.v4_node_24 {
-            let off = self.off_v4_nodes as usize + node_idx as usize * 6 + if bit == 0 { 0 } else { 3 };
+            let off =
+                self.off_v4_nodes as usize + node_idx as usize * 6 + if bit == 0 { 0 } else { 3 };
             let v = safe_read_u24(self.data.as_slice(), off).unwrap_or(0);
             if v & 0x800000 != 0 {
                 (v & 0x7FFFFF) | SENTINEL
@@ -1968,7 +2246,8 @@ impl SnapshotInner {
             return 0;
         }
         if self.v6_node_24 {
-            let off = self.off_v6_nodes as usize + node_idx as usize * 6 + if bit == 0 { 0 } else { 3 };
+            let off =
+                self.off_v6_nodes as usize + node_idx as usize * 6 + if bit == 0 { 0 } else { 3 };
             let v = safe_read_u24(self.data.as_slice(), off).unwrap_or(0);
             if v & 0x800000 != 0 {
                 (v & 0x7FFFFF) | SENTINEL
@@ -1997,7 +2276,13 @@ impl SnapshotInner {
         self.walk_v4_depth(ip, ptr, 16, 32)
     }
 
-    fn walk_v4_depth(&self, ip: u32, mut idx: u32, start_depth: u8, max_depth: u8) -> Option<(u32, u8)> {
+    fn walk_v4_depth(
+        &self,
+        ip: u32,
+        mut idx: u32,
+        start_depth: u8,
+        max_depth: u8,
+    ) -> Option<(u32, u8)> {
         if start_depth >= max_depth {
             return None;
         }
@@ -2033,7 +2318,10 @@ impl SnapshotInner {
             let shift = 128 - self.v6_jump_bits;
             ((u128::from_be_bytes(*bytes) >> shift) & ((1u128 << self.v6_jump_bits) - 1)) as usize
         };
-        let ptr = safe_read_u32(self.data.as_slice(), self.off_v6_jump as usize + idx_jump * 4)?;
+        let ptr = safe_read_u32(
+            self.data.as_slice(),
+            self.off_v6_jump as usize + idx_jump * 4,
+        )?;
         if ptr == 0 {
             return None;
         }
@@ -2093,7 +2381,10 @@ impl SnapshotInner {
             let shift = 128 - self.v6_jump_bits;
             ((u128::from_be_bytes(*bytes) >> shift) & ((1u128 << self.v6_jump_bits) - 1)) as usize
         };
-        let ptr = safe_read_u32(self.data.as_slice(), self.off_v6_jump as usize + idx_jump * 4)?;
+        let ptr = safe_read_u32(
+            self.data.as_slice(),
+            self.off_v6_jump as usize + idx_jump * 4,
+        )?;
         if ptr == 0 {
             return None;
         }
@@ -2217,7 +2508,10 @@ impl SnapshotInner {
             }
         }
         let geo = self.build_geo(entry_id);
-        let node = Arc::new(CacheNode { key: entry_id, val: geo });
+        let node = Arc::new(CacheNode {
+            key: entry_id,
+            val: geo,
+        });
         // 发布：整节点原子替换。旧节点由仍持有它的读者保命（Arc 引用计数语义），
         // 覆写是安全且期望的行为（与 C 侧「不可变条目永不淘汰」铁律不同——
         // Rust 返回 Arc，无生命周期问题）。
@@ -2239,7 +2533,12 @@ impl SnapshotInner {
         let fc = self.group_field_counts[gi];
         // 借用视图的内联/借用槽位上限：解析期已对 fc > MAX_GEO_FIELDS 的文件
         // fail-closed 拒绝，此断言仅为防御性 tripwire（理论不可达）。
-        debug_assert!(fc <= MAX_GEO_FIELDS, "group field count {} exceeds MAX_GEO_FIELDS {}", fc, MAX_GEO_FIELDS);
+        debug_assert!(
+            fc <= MAX_GEO_FIELDS,
+            "group field count {} exceeds MAX_GEO_FIELDS {}",
+            fc,
+            MAX_GEO_FIELDS
+        );
         let entry_off = entry_off_of(
             self.off_geo_entries,
             self.group_entry_offsets[gi],
@@ -2264,10 +2563,10 @@ impl SnapshotInner {
                     let mut buf = [0u8; 32];
                     let len = if w == 4 {
                         let bits = safe_read_u32(d, fo).unwrap_or(0);
-                        fmt_native_float_buf(f32::from_bits(bits) as f64, &mut buf)
+                        fmt_native_float_buf(f32::from_bits(bits) as f64, &mut buf)?
                     } else {
                         let bits = safe_read_u64(d, fo).unwrap_or(0);
-                        fmt_native_float_buf(f64::from_bits(bits), &mut buf)
+                        fmt_native_float_buf(f64::from_bits(bits), &mut buf)?
                     };
                     values[i] = FieldVal::Inline(buf, len as u8);
                 } else {
@@ -2506,11 +2805,32 @@ impl SnapshotInner {
     }
 
     fn find_uint_inner(&self, ip: u32) -> Option<GeoInfo> {
-        self.resolve_row_id(self.trie_row_v4(ip)?).map(|a| (*a).clone())
+        self.resolve_row_id(self.trie_row_v4(ip)?)
+            .map(|a| (*a).clone())
     }
 
     fn find_v6_bytes_inner(&self, bytes: &[u8; 16]) -> Option<GeoInfo> {
-        self.resolve_row_id(self.trie_row_v6(bytes)?).map(|a| (*a).clone())
+        self.resolve_row_id(self.trie_row_v6(bytes)?)
+            .map(|a| (*a).clone())
+    }
+
+    fn find_shared_parsed(&self, parsed: &ParsedIp) -> Option<Arc<GeoInfo>> {
+        match parsed {
+            ParsedIp::V4(ip) => self
+                .trie_row_v4(*ip)
+                .and_then(|row_id| self.resolve_row_id(row_id)),
+            ParsedIp::V6(bytes) => self
+                .trie_row_v6(bytes)
+                .and_then(|row_id| self.resolve_row_id(row_id)),
+        }
+    }
+
+    fn find_shared(&self, ip_str: &str) -> Option<Arc<GeoInfo>> {
+        self.find_shared_parsed(&parse_ip(ip_str)?)
+    }
+
+    fn find_shared_ip(&self, ip: impl ToIp) -> Option<Arc<GeoInfo>> {
+        self.find_shared_parsed(&ip.to_parsed_ip()?)
     }
 
     fn resolve_fields(&self, row_id: u32, fields: &[&str]) -> Option<Arc<GeoInfo>> {
@@ -2541,50 +2861,46 @@ impl SnapshotInner {
         let nat_types = &self.group_field_native_type[gi];
         let pools = &self.pools[gi];
 
-        let mut names = Vec::new();
-        let mut values = Vec::new();
-        let mut nmap: HashMap<String, usize> = HashMap::new();
+        let mut names = Vec::with_capacity(fields.len());
+        let mut values = Vec::with_capacity(fields.len());
+        let mut nmap: HashMap<String, usize> = HashMap::with_capacity(fields.len());
         let mut nidx = Vec::new();
         for f in fields {
-            if f.is_empty() {
-                continue;
-            }
+            let output_index = names.len();
             let key = normalize_key(f);
-            let fi = match self.norm_map.get(&key) {
-                Some(&i) if i < fc => i,
-                _ => continue,
-            };
-            if nmap.contains_key(&key) {
-                continue;
-            }
-            let w = widths[fi];
-            let fo = entry_off.saturating_add(offsets[fi]);
-            let val = if natives[fi] {
-                let t = nat_types[fi];
-                if t == 1 {
-                    if w == 4 {
-                        let bits = safe_read_u32(d, fo).unwrap_or(0);
-                        Arc::from(fmt_native_float(f32::from_bits(bits) as f64))
+            let fi = self.norm_map.get(&key).copied().filter(|&index| index < fc);
+            let val = if let Some(fi) = fi {
+                let w = widths[fi];
+                let fo = entry_off.saturating_add(offsets[fi]);
+                if natives[fi] {
+                    let t = nat_types[fi];
+                    if t == 1 {
+                        if w == 4 {
+                            let bits = safe_read_u32(d, fo).unwrap_or(0);
+                            Arc::from(fmt_native_float(f32::from_bits(bits) as f64))
+                        } else {
+                            let bits = safe_read_u64(d, fo).unwrap_or(0);
+                            Arc::from(fmt_native_float(f64::from_bits(bits)))
+                        }
                     } else {
-                        let bits = safe_read_u64(d, fo).unwrap_or(0);
-                        Arc::from(fmt_native_float(f64::from_bits(bits)))
+                        Arc::from(self.read_uint_width(fo, w).to_string())
                     }
                 } else {
-                    Arc::from(self.read_uint_width(fo, w).to_string())
+                    let idx = self.read_uint_width(fo, w) as usize;
+                    if fi < pools.len() && idx < pools[fi].len() {
+                        pools[fi][idx].clone()
+                    } else {
+                        Arc::from("")
+                    }
                 }
             } else {
-                let idx = self.read_uint_width(fo, w) as usize;
-                if fi < pools.len() && idx < pools[fi].len() {
-                    pools[fi][idx].clone()
-                } else {
-                    Arc::from("")
-                }
+                Arc::from("")
             };
-            nmap.insert(key, names.len());
-            if is_numeric_field_name(&self.field_names[fi]) {
-                nidx.push(names.len());
+            nmap.insert(key, output_index);
+            if is_numeric_field_name(f) {
+                nidx.push(output_index);
             }
-            names.push(self.field_names[fi].clone());
+            names.push((*f).to_string());
             values.push(val);
         }
         if names.is_empty() {
@@ -2755,7 +3071,11 @@ impl SnapshotInner {
             return None;
         }
         let (g, a, u) = self.read_ip_row(row_id);
-        Some(RowIds { geo_id: g, asn_id: a, usage_id: u })
+        Some(RowIds {
+            geo_id: g,
+            asn_id: a,
+            usage_id: u,
+        })
     }
 
     pub fn lookup_cidr(&self, ip_str: &str) -> Option<String> {
@@ -2811,45 +3131,62 @@ impl SnapshotInner {
     }
 
     pub fn find_str(&self, ip_str: &str) -> String {
-        self.find(ip_str).map(|g| g.to_pipe()).unwrap_or_default()
+        self.find_shared(ip_str)
+            .map(|g| g.to_pipe())
+            .unwrap_or_default()
     }
 
     pub fn find_str_ip(&self, ip: impl ToIp) -> String {
-        self.find_ip(ip).map(|g| g.to_pipe()).unwrap_or_default()
+        self.find_shared_ip(ip)
+            .map(|g| g.to_pipe())
+            .unwrap_or_default()
     }
 
     fn verify_crc_inner(&self) -> bool {
         let stored = safe_read_u32(self.data.as_slice(), 16).unwrap_or(0);
-        stored == *self.canonical_crc.get_or_init(|| compute_canonical_crc(self.data.as_slice()))
+        stored
+            == *self
+                .canonical_crc
+                .get_or_init(|| compute_canonical_crc(self.data.as_slice()))
     }
 
     /// 主动触碰跳表与节点内存页（按 4096 字节步长），消除冷页在首查时的抖动。
     /// 在 Reload 中于原子替换前调用，确保新快照的页面已预热入 OS Page Cache。
     pub fn warmup(&self) {
         let d = self.data.as_slice();
-        if d.is_empty() { return; }
+        if d.is_empty() {
+            return;
+        }
         const PAGE: usize = 4096;
         let mut touch_sum: u8 = 0;
         if self.has_v4 && self.off_v4_jump > 0 {
             let start = self.off_v4_jump as usize;
             let end = (start + 65536 * 4).min(d.len());
-            for p in (start..end).step_by(PAGE) { touch_sum ^= d[p]; }
+            for p in (start..end).step_by(PAGE) {
+                touch_sum ^= d[p];
+            }
             if self.v4_node_count > 0 && self.off_v4_nodes > 0 {
                 let node_size = if self.v4_node_24 { 6 } else { 8 };
                 let ns = self.off_v4_nodes as usize;
                 let ne = (ns + self.v4_node_count as usize * node_size).min(d.len());
-                for p in (ns..ne).step_by(PAGE) { touch_sum ^= d[p]; }
+                for p in (ns..ne).step_by(PAGE) {
+                    touch_sum ^= d[p];
+                }
             }
         }
         if self.has_v6 && self.off_v6_jump > 0 {
             let start = self.off_v6_jump as usize;
             let end = (start + (1usize << self.v6_jump_bits) * 4).min(d.len());
-            for p in (start..end).step_by(PAGE) { touch_sum ^= d[p]; }
+            for p in (start..end).step_by(PAGE) {
+                touch_sum ^= d[p];
+            }
             if self.v6_node_count > 0 && self.off_v6_nodes > 0 {
                 let node_size = if self.v6_node_24 { 6 } else { 8 };
                 let ns = self.off_v6_nodes as usize;
                 let ne = (ns + self.v6_node_count as usize * node_size).min(d.len());
-                for p in (ns..ne).step_by(PAGE) { touch_sum ^= d[p]; }
+                for p in (ns..ne).step_by(PAGE) {
+                    touch_sum ^= d[p];
+                }
             }
         }
         let _ = touch_sum;
@@ -3002,9 +3339,10 @@ fn parse_pools(
                 if end == start {
                     continue;
                 }
-                let (Some(a), Some(b)) =
-                    (string_data_start.checked_add(start), string_data_start.checked_add(end))
-                else {
+                let (Some(a), Some(b)) = (
+                    string_data_start.checked_add(start),
+                    string_data_start.checked_add(end),
+                ) else {
                     continue;
                 };
                 if b <= d.len() {
@@ -3084,7 +3422,9 @@ impl ToIp for Ipv6Addr {
     fn to_parsed_ip(&self) -> Option<ParsedIp> {
         let b = self.octets();
         if is_ipv4_mapped_v6(&b) {
-            Some(ParsedIp::V4(u32::from_be_bytes([b[12], b[13], b[14], b[15]])))
+            Some(ParsedIp::V4(u32::from_be_bytes([
+                b[12], b[13], b[14], b[15],
+            ])))
         } else {
             Some(ParsedIp::V6(b))
         }
@@ -3113,7 +3453,9 @@ impl ToIp for u128 {
     fn to_parsed_ip(&self) -> Option<ParsedIp> {
         let b = self.to_be_bytes();
         if is_ipv4_mapped_v6(&b) {
-            Some(ParsedIp::V4(u32::from_be_bytes([b[12], b[13], b[14], b[15]])))
+            Some(ParsedIp::V4(u32::from_be_bytes([
+                b[12], b[13], b[14], b[15],
+            ])))
         } else {
             Some(ParsedIp::V6(b))
         }
@@ -3131,7 +3473,9 @@ impl ToIp for [u8; 16] {
     #[inline(always)]
     fn to_parsed_ip(&self) -> Option<ParsedIp> {
         if is_ipv4_mapped_v6(self) {
-            Some(ParsedIp::V4(u32::from_be_bytes([self[12], self[13], self[14], self[15]])))
+            Some(ParsedIp::V4(u32::from_be_bytes([
+                self[12], self[13], self[14], self[15],
+            ])))
         } else {
             Some(ParsedIp::V6(*self))
         }
@@ -3142,12 +3486,16 @@ impl ToIp for [u8] {
     #[inline(always)]
     fn to_parsed_ip(&self) -> Option<ParsedIp> {
         match self.len() {
-            4 => Some(ParsedIp::V4(u32::from_be_bytes([self[0], self[1], self[2], self[3]]))),
+            4 => Some(ParsedIp::V4(u32::from_be_bytes([
+                self[0], self[1], self[2], self[3],
+            ]))),
             16 => {
                 let mut b = [0u8; 16];
                 b.copy_from_slice(self);
                 if is_ipv4_mapped_v6(&b) {
-                    Some(ParsedIp::V4(u32::from_be_bytes([b[12], b[13], b[14], b[15]])))
+                    Some(ParsedIp::V4(u32::from_be_bytes([
+                        b[12], b[13], b[14], b[15],
+                    ])))
                 } else {
                     Some(ParsedIp::V6(b))
                 }
@@ -3294,8 +3642,16 @@ fn parse_ip(s: &str) -> Option<ParsedIp> {
         Some(dc) => (&s[..dc], &s[dc + 2..]),
         None => (s, ""),
     };
-    let mut lg: Vec<&str> = if lft.is_empty() { Vec::new() } else { lft.split(':').collect() };
-    let mut rg: Vec<&str> = if rgt.is_empty() { Vec::new() } else { rgt.split(':').collect() };
+    let mut lg: Vec<&str> = if lft.is_empty() {
+        Vec::new()
+    } else {
+        lft.split(':').collect()
+    };
+    let mut rg: Vec<&str> = if rgt.is_empty() {
+        Vec::new()
+    } else {
+        rgt.split(':').collect()
+    };
     if lg.len() == 1 && lg[0].is_empty() {
         lg.clear();
     }
@@ -3380,7 +3736,9 @@ fn parse_ip(s: &str) -> Option<ParsedIp> {
         buf[15] = v4_int as u8;
     }
     if is_ipv4_mapped_v6(&buf) {
-        return Some(ParsedIp::V4(u32::from_be_bytes([buf[12], buf[13], buf[14], buf[15]])));
+        return Some(ParsedIp::V4(u32::from_be_bytes([
+            buf[12], buf[13], buf[14], buf[15],
+        ])));
     }
     Some(ParsedIp::V6(buf))
 }
@@ -3421,7 +3779,11 @@ impl QzdbReader {
     }
 
     /// 从内存字节加载。
-    pub fn from_bytes(bytes: &[u8], group_index: usize, verify_crc: bool) -> Result<QzdbReader, QzdbError> {
+    pub fn from_bytes(
+        bytes: &[u8],
+        group_index: usize,
+        verify_crc: bool,
+    ) -> Result<QzdbReader, QzdbError> {
         let data = DataStorage::Owned(Arc::new(bytes.to_vec()));
         let inner = SnapshotInner::from_bytes(data, group_index, verify_crc)?;
         Ok(QzdbReader {
@@ -3440,7 +3802,9 @@ impl QzdbReader {
     /// 原子引用计数操作，实现完全零开销遍历。
     #[inline]
     pub fn snapshot(&self) -> Snapshot {
-        Snapshot { inner: self.snap.load_full() }
+        Snapshot {
+            inner: self.snap.load_full(),
+        }
     }
 
     fn inner(&self) -> Arc<SnapshotInner> {
@@ -3477,7 +3841,8 @@ impl QzdbReader {
             if snap.v4_node_count > 0 && snap.off_v4_nodes > 0 {
                 let node_size: usize = if snap.v4_node_24 { 6 } else { 8 };
                 let n_start = snap.off_v4_nodes as usize;
-                let mut n_end = n_start.saturating_add((snap.v4_node_count as usize).saturating_mul(node_size));
+                let mut n_end =
+                    n_start.saturating_add((snap.v4_node_count as usize).saturating_mul(node_size));
                 if n_end > d.len() {
                     n_end = d.len();
                 }
@@ -3508,7 +3873,8 @@ impl QzdbReader {
             if snap.v6_node_count > 0 && snap.off_v6_nodes > 0 {
                 let node_size: usize = if snap.v6_node_24 { 6 } else { 8 };
                 let n_start = snap.off_v6_nodes as usize;
-                let mut n_end = n_start.saturating_add((snap.v6_node_count as usize).saturating_mul(node_size));
+                let mut n_end =
+                    n_start.saturating_add((snap.v6_node_count as usize).saturating_mul(node_size));
                 if n_end > d.len() {
                     n_end = d.len();
                 }
@@ -3524,7 +3890,6 @@ impl QzdbReader {
 
         std::hint::black_box(touch_sum);
     }
-
 
     // ---- 单条查询 ----
 
@@ -3610,7 +3975,11 @@ impl QzdbReader {
     }
 
     /// 使用闭包借用视图，在闭包生命周期内直接访问 `GeoInfoRef`。
-    pub fn find_ref_with<R>(&self, ip: impl ToIp, f: impl FnOnce(Option<GeoInfoRef<'_>>) -> R) -> R {
+    pub fn find_ref_with<R>(
+        &self,
+        ip: impl ToIp,
+        f: impl FnOnce(Option<GeoInfoRef<'_>>) -> R,
+    ) -> R {
         let snap = self.snap.load();
         let res = snap.find_ref(ip);
         f(res)
@@ -3643,7 +4012,11 @@ impl QzdbReader {
         unsafe { (*snap_ptr).resolve_geo_ref(entry_id, Some(snap)) }
     }
 
-    fn find_v6_bytes_ref_snap(&self, snap: Arc<SnapshotInner>, bytes: &[u8; 16]) -> Option<GeoInfoRef<'_>> {
+    fn find_v6_bytes_ref_snap(
+        &self,
+        snap: Arc<SnapshotInner>,
+        bytes: &[u8; 16],
+    ) -> Option<GeoInfoRef<'_>> {
         if !snap.has_v6 {
             return None;
         }
@@ -3694,10 +4067,15 @@ impl QzdbReader {
     }
 
     fn find_v6_bytes_inner(&self, snap: &SnapshotInner, bytes: &[u8; 16]) -> Option<GeoInfo> {
-        self.find_v6_bytes_shared_inner(snap, bytes).map(|a| (*a).clone())
+        self.find_v6_bytes_shared_inner(snap, bytes)
+            .map(|a| (*a).clone())
     }
 
-    fn find_v6_bytes_shared_inner(&self, snap: &SnapshotInner, bytes: &[u8; 16]) -> Option<Arc<GeoInfo>> {
+    fn find_v6_bytes_shared_inner(
+        &self,
+        snap: &SnapshotInner,
+        bytes: &[u8; 16],
+    ) -> Option<Arc<GeoInfo>> {
         if !snap.has_v6 {
             return None;
         }
@@ -3739,8 +4117,8 @@ impl QzdbReader {
     }
 
     /// 零拷贝共享查询：返回 `Arc<GeoInfo>`，缓存命中路径无任何堆分配
-    /// （`find()` 命中后须深拷贝整个 GeoInfo——ult 档 25 次 String 分配，
-    /// 这是热路径最大的单项分配开销）。`GeoInfo` 全部方法都是 `&self`，
+    /// （`find()` 命中后克隆整个 GeoInfo：一次 `Vec` 分配 + 每字段一次原子
+    /// 引用计数递增，这是热路径最大的单项分配开销）。`GeoInfo` 全部方法都是 `&self`，
     /// 经 `Deref` 使用与 owned 形态无差别。
     pub fn find_shared(&self, ip_str: &str) -> Option<Arc<GeoInfo>> {
         let parsed = parse_ip(ip_str)?;
@@ -3782,28 +4160,36 @@ impl QzdbReader {
         if fields.is_empty() {
             return self.find(ip_str);
         }
-        let parsed = parse_ip(ip_str)?;
+        self.find_parsed_fields(&parse_ip(ip_str)?, fields)
+    }
+
+    fn find_parsed_fields(&self, parsed: &ParsedIp, fields: &[&str]) -> Option<GeoInfo> {
         let snap = self.snap.load();
-        let row_id = match &parsed {
+        let row_id = match parsed {
             ParsedIp::V4(v4) => snap.trie_row_v4(*v4).unwrap_or(0),
-            ParsedIp::V6(b) => snap.trie_row_v6(b).unwrap_or(0),
+            ParsedIp::V6(bytes) => snap.trie_row_v6(bytes).unwrap_or(0),
         };
         if row_id == 0 {
             return None;
         }
-        snap.resolve_fields(row_id, fields).map(|a| (*a).clone())
+        snap.resolve_fields(row_id, fields)
+            .map(|geo| (*geo).clone())
     }
 
     /// 返回 `to_pipe()` 字符串；未命中/非法返回 ""。
     /// 走 find_shared（Arc 缓存命中零克隆）+ GeoInfo 内预编码 pipe，
     /// 全程免逐字段 String 克隆；与 owned 路径逐字节一致（zero_copy_ref 测试守卫）。
     pub fn find_str(&self, ip_str: &str) -> String {
-        self.find_shared(ip_str).map(|g| g.to_pipe()).unwrap_or_default()
+        self.find_shared(ip_str)
+            .map(|g| g.to_pipe())
+            .unwrap_or_default()
     }
 
     /// 支持多种 IP 类型的 `find_str`。
     pub fn find_str_ip(&self, ip: impl ToIp) -> String {
-        self.find_shared_ip(ip).map(|g| g.to_pipe()).unwrap_or_default()
+        self.find_shared_ip(ip)
+            .map(|g| g.to_pipe())
+            .unwrap_or_default()
     }
 
     // ---- 低级行号 ----
@@ -3862,10 +4248,7 @@ impl QzdbReader {
             return self.find_batch(ips);
         }
         ips.iter()
-            .map(|ip| match self.find_fields(ip, fields) {
-                Some(g) => BatchResult { ip: ip.to_string(), geo_info: Some(g), error: None },
-                None => self.batch_one(ip),
-            })
+            .map(|ip| self.batch_one_fields(ip, fields))
             .collect()
     }
 
@@ -3886,8 +4269,42 @@ impl QzdbReader {
             };
         }
         match self.find(ip) {
-            Some(g) => BatchResult { ip: ip_str, geo_info: Some(g), error: None },
-            None => BatchResult { ip: ip_str, geo_info: None, error: None },
+            Some(g) => BatchResult {
+                ip: ip_str,
+                geo_info: Some(g),
+                error: None,
+            },
+            None => BatchResult {
+                ip: ip_str,
+                geo_info: None,
+                error: None,
+            },
+        }
+    }
+
+    fn batch_one_fields(&self, ip: &str, fields: &[&str]) -> BatchResult {
+        let ip_str = ip.to_string();
+        let parsed = match parse_ip(ip) {
+            Some(parsed) => parsed,
+            None => {
+                return BatchResult {
+                    ip: ip_str,
+                    geo_info: None,
+                    error: Some(format!("invalid IP address: {:?}", ip)),
+                };
+            }
+        };
+        match self.find_parsed_fields(&parsed, fields) {
+            Some(g) => BatchResult {
+                ip: ip_str,
+                geo_info: Some(g),
+                error: None,
+            },
+            None => BatchResult {
+                ip: ip_str,
+                geo_info: None,
+                error: None,
+            },
         }
     }
 
@@ -3927,7 +4344,12 @@ impl QzdbReader {
     }
     /// CRC32 十六进制 8 位小写。
     pub fn get_file_hash(&self) -> String {
-        format!("{:08x}", self.inner().canonical_crc.get_or_init(|| compute_canonical_crc(self.inner().data.as_slice())))
+        format!(
+            "{:08x}",
+            self.inner()
+                .canonical_crc
+                .get_or_init(|| compute_canonical_crc(self.inner().data.as_slice()))
+        )
     }
     pub fn get_field_names(&self) -> Vec<String> {
         self.inner().field_names.as_slice().to_vec()
@@ -3949,7 +4371,8 @@ impl QzdbReader {
 
     pub fn reload(&self, path: &str) -> Result<(), QzdbError> {
         let group_index = self.inner().group_index;
-        let new_inner = SnapshotInner::from_bytes(DataStorage::Mapped(map_file(path)?), group_index, true)?;
+        let new_inner =
+            SnapshotInner::from_bytes(DataStorage::Mapped(map_file(path)?), group_index, true)?;
         new_inner.warmup();
         self.snap.store(Arc::new(new_inner));
         Ok(())
@@ -3957,7 +4380,11 @@ impl QzdbReader {
 
     pub fn reload_bytes(&self, bytes: &[u8]) -> Result<(), QzdbError> {
         let group_index = self.inner().group_index;
-        let new_inner = SnapshotInner::from_bytes(DataStorage::Owned(Arc::new(bytes.to_vec())), group_index, true)?;
+        let new_inner = SnapshotInner::from_bytes(
+            DataStorage::Owned(Arc::new(bytes.to_vec())),
+            group_index,
+            true,
+        )?;
         new_inner.warmup();
         self.snap.store(Arc::new(new_inner));
         Ok(())
@@ -3974,6 +4401,8 @@ fn empty_snapshot() -> SnapshotInner {
     // 构造一个最小合法（但无数据）的快照；查询在 has_v4/has_v6=false 时直接返回 None。
     let data = DataStorage::Owned(Arc::new(vec![0u8; 192]));
     // 该快照仅用于 close 后占位；CRC 等不校验。
+    // new_geo_cache 返回 (cache, mask)：直接取用，避免槽位数/掩码手工对齐漂移。
+    let (geo_cache, geo_cache_mask) = new_geo_cache(GEO_CACHE_MIN);
     SnapshotInner {
         data,
         group_index: 0,
@@ -4026,15 +4455,17 @@ fn empty_snapshot() -> SnapshotInner {
         edition_source: EDITION_SOURCE_UNKNOWN,
         field_names_source: FIELD_NAMES_SOURCE_SYNTHETIC,
         canonical_crc: OnceLock::new(),
-        geo_cache: new_geo_cache(GEO_CACHE_MIN).0,
-        geo_cache_mask: GEO_CACHE_MIN - 1,
+        geo_cache,
+        geo_cache_mask,
     }
 }
 
 // 用 OnceLock 持有空快照（close 后复用同一份）。
 static EMPTY_SNAPSHOT_HOLDER: OnceLock<Arc<SnapshotInner>> = OnceLock::new();
 fn empty_snapshot_arc() -> Arc<SnapshotInner> {
-    EMPTY_SNAPSHOT_HOLDER.get_or_init(|| Arc::new(empty_snapshot())).clone()
+    EMPTY_SNAPSHOT_HOLDER
+        .get_or_init(|| Arc::new(empty_snapshot()))
+        .clone()
 }
 
 // ---------------------------------------------------------------------------
@@ -4313,68 +4744,79 @@ impl Default for ChainedReader {
 
 /// 合并两个 GeoInfo：Merge 模式下空缺补充，MergeOverride 模式下非空覆盖。
 fn merge_geo(base: &GeoInfo, overlay: &GeoInfo, mode: ChainMode) -> GeoInfo {
-    let field_names: Arc<Vec<String>> = if base.field_names.len() >= overlay.field_names.len() {
-        Arc::clone(&base.field_names)
-    } else {
-        Arc::clone(&overlay.field_names)
-    };
-    let fc = field_names.len();
-    let mut values = Vec::with_capacity(fc);
-    let mut nmap: HashMap<String, usize> = HashMap::with_capacity(fc);
-    let mut nidx = Vec::new();
-    for (i, name) in field_names.iter().enumerate() {
-        let key = normalize_key(name);
-        nmap.insert(key, i);
-        if is_numeric_field_name(name) {
-            nidx.push(i);
+    let mut names = Vec::with_capacity(base.field_names.len() + overlay.field_names.len());
+    let mut seen: HashMap<String, ()> =
+        HashMap::with_capacity(base.field_names.len() + overlay.field_names.len());
+    for source in [&base.field_names, &overlay.field_names] {
+        for name in source.iter() {
+            if seen.insert(normalize_key(name), ()).is_none() {
+                names.push(name.clone());
+            }
         }
-        let base_val = base.norm_map.get(&normalize_key(name)).and_then(|&i| base.values.get(i));
-        let ov_val = overlay
+    }
+    let field_names = Arc::new(names);
+    let mut values = Vec::with_capacity(field_names.len());
+    let mut norm_map = HashMap::with_capacity(field_names.len());
+    let mut numeric_indices = Vec::new();
+    let non_empty = |value: Option<&Arc<str>>| value.filter(|value| !value.is_empty()).cloned();
+    for (index, name) in field_names.iter().enumerate() {
+        let key = normalize_key(name);
+        let base_value = base.norm_map.get(&key).and_then(|&i| base.values.get(i));
+        let overlay_value = overlay
             .norm_map
-            .get(&normalize_key(name))
+            .get(&key)
             .and_then(|&i| overlay.values.get(i));
-        let merged_val = match mode {
-            ChainMode::Merge => {
-                if let Some(v) = base_val {
-                    v.clone()
-                } else if let Some(v) = ov_val {
-                    v.clone()
-                } else {
-                    Arc::from("")
-                }
-            }
-            ChainMode::MergeOverride => {
-                if let Some(v) = ov_val {
-                    if !v.is_empty() {
-                        v.clone()
-                    } else if let Some(v) = base_val {
-                        v.clone()
-                    } else {
-                        Arc::from("")
-                    }
-                } else if let Some(v) = base_val {
-                    v.clone()
-                } else {
-                    Arc::from("")
-                }
-            }
+        let merged_value = match mode {
+            ChainMode::Merge => non_empty(base_value).or_else(|| non_empty(overlay_value)),
+            ChainMode::MergeOverride => non_empty(overlay_value).or_else(|| non_empty(base_value)),
             ChainMode::Fallback => unreachable!(),
-        };
-        values.push(merged_val);
+        }
+        .unwrap_or_else(|| Arc::from(""));
+        norm_map.insert(key, index);
+        if is_numeric_field_name(name) {
+            numeric_indices.push(index);
+        }
+        values.push(merged_value);
     }
     GeoInfo {
         field_names,
         values,
-        norm_map: Arc::new(nmap),
-        numeric_indices: Arc::new(nidx),
+        norm_map: Arc::new(norm_map),
+        numeric_indices: Arc::new(numeric_indices),
         pipe: Arc::from(""),
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::fmt_native_float;
-    use crate::parse_ip;
+    use super::{
+        build_numeric_mask, fmt_native_float, is_json_number, merge_geo, norm_key_buf, parse_ip,
+        safe_read_uint_width, ChainMode, FieldVal, GeoInfo, GeoInfoRef, MAX_GEO_FIELDS,
+    };
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    fn test_geo(names: &[&str], values: &[&str]) -> GeoInfo {
+        let field_names: Vec<String> = names.iter().map(|name| (*name).to_string()).collect();
+        let norm_map: HashMap<String, usize> = field_names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| (super::normalize_key(name), index))
+            .collect();
+        let numeric_indices: Vec<usize> = field_names
+            .iter()
+            .enumerate()
+            .filter(|(_, name)| super::is_numeric_field_name(name))
+            .map(|(index, _)| index)
+            .collect();
+        GeoInfo {
+            field_names: Arc::new(field_names),
+            values: values.iter().map(|value| Arc::from(*value)).collect(),
+            norm_map: Arc::new(norm_map),
+            numeric_indices: Arc::new(numeric_indices),
+            pipe: Arc::from(""),
+        }
+    }
 
     #[test]
     fn t_fmt_native_float_whole_number() {
@@ -4409,10 +4851,19 @@ mod tests {
         assert_eq!(fmt_native_float(1e16), "10000000000000000");
         assert_eq!(fmt_native_float(9.2e18), "9200000000000000000");
         // < 2^63 的最大可表示偶数整值（仍走 i64 路径）
-        assert_eq!(fmt_native_float(9223372036854774784.0), "9223372036854774784");
+        assert_eq!(
+            fmt_native_float(9223372036854774784.0),
+            "9223372036854774784"
+        );
         // 恰为 ±2^63：i64 cast 饱和会得到错误结果，必须走 {:.0} 定点分支
-        assert_eq!(fmt_native_float(9223372036854775808.0), "9223372036854775808");
-        assert_eq!(fmt_native_float(-9223372036854775808.0), "-9223372036854775808");
+        assert_eq!(
+            fmt_native_float(9223372036854775808.0),
+            "9223372036854775808"
+        );
+        assert_eq!(
+            fmt_native_float(-9223372036854775808.0),
+            "-9223372036854775808"
+        );
         // > 2^63 定点整数位
         assert_eq!(fmt_native_float(1e20), "100000000000000000000");
         // double(1e300) 精确十进制展开（str(int(1e300)) 导出，非被测函数生成）
@@ -4447,5 +4898,107 @@ mod tests {
         for s in reject {
             assert!(parse_ip(s).is_none(), "expected REJECT: {}", s);
         }
+    }
+
+    #[test]
+    fn t_uint_width_boundaries() {
+        assert_eq!(safe_read_uint_width(&[42], 0, 0), 0);
+        assert_eq!(
+            safe_read_uint_width(&[0x04, 0x03, 0x02, 0x01], 0, 4),
+            0x0102_0304
+        );
+    }
+
+    #[test]
+    fn t_json_number_grammar_is_strict() {
+        for value in ["0", "-0", "12", "-12", "1.5", "1e300", "1E+300", "1e-300"] {
+            assert!(is_json_number(value), "expected ACCEPT: {value}");
+        }
+        for value in [
+            "+1", ".5", "1.", "01", "-.5", "1e", "1e+", "1e+300x", "--1", "1.2.3", "NaN",
+            "Infinity",
+        ] {
+            assert!(!is_json_number(value), "expected REJECT: {value}");
+        }
+    }
+
+    #[test]
+    fn t_long_normalized_name_falls_back_without_changing_semantics() {
+        let name = format!("A{}", "B".repeat(64));
+        let normalized = super::normalize_key(&name);
+        assert_eq!(norm_key_buf(&name), normalized);
+        let field_names = vec![name.clone()];
+        let norm_map = HashMap::from([(normalized, 0)]);
+        let view = GeoInfoRef {
+            _snap: None,
+            field_names: &field_names,
+            values: [FieldVal::Borrowed("ok"); MAX_GEO_FIELDS],
+            field_count: 1,
+            norm_map: &norm_map,
+            numeric_mask: 0,
+        };
+        assert_eq!(view.get(&name), "ok");
+        assert_eq!(view.get(&name.to_ascii_uppercase()), "ok");
+    }
+
+    #[test]
+    fn t_numeric_mask_and_projection_metadata_cover_field_64() {
+        let indices: Vec<usize> = (0..MAX_GEO_FIELDS).collect();
+        assert_eq!(build_numeric_mask(&indices), u64::MAX);
+
+        let mut field_names: Vec<String> = (0..MAX_GEO_FIELDS)
+            .map(|index| format!("field_{index}"))
+            .collect();
+        field_names[MAX_GEO_FIELDS - 1] = "geo_id".to_string();
+        let mut values = [FieldVal::EMPTY; MAX_GEO_FIELDS];
+        values[MAX_GEO_FIELDS - 1] = FieldVal::Borrowed("42");
+        let norm_map = HashMap::from([("geo_id".to_string(), MAX_GEO_FIELDS - 1)]);
+        let view = GeoInfoRef {
+            _snap: None,
+            field_names: &field_names,
+            values,
+            field_count: MAX_GEO_FIELDS,
+            norm_map: &norm_map,
+            numeric_mask: (1u64 << 63) as _,
+        };
+
+        assert!(view.to_json().contains("\"geo_id\":42"));
+        let owned = view.to_geo_info();
+        assert_eq!(owned.numeric_indices.as_slice(), &[MAX_GEO_FIELDS - 1]);
+        assert!(owned.to_json().contains("\"geo_id\":42"));
+    }
+
+    #[test]
+    fn t_merge_uses_schema_union_and_rebuilds_indexes() {
+        let base = test_geo(&["country", "city", "geo_id"], &["中国", "", "42"]);
+        let overlay = test_geo(&["city", "as_name", "longitude"], &["上海", "AS", "121.5"]);
+        let merged = merge_geo(&base, &overlay, ChainMode::Merge);
+
+        assert_eq!(
+            merged.field_names.as_slice(),
+            ["country", "city", "geo_id", "as_name", "longitude"]
+        );
+        assert_eq!(merged.to_pipe(), "中国|上海|42|AS|121.5");
+        assert_eq!(merged.get("GEO_ID"), "42");
+        assert_eq!(merged.geo_id(), Some(42));
+        assert!(merged.to_json().contains("\"geo_id\":42"));
+        assert!(merged.to_json().contains("\"longitude\":121.5"));
+    }
+
+    #[test]
+    fn t_merge_override_uses_nonempty_overlay_without_dropping_union() {
+        let base = test_geo(&["country", "city", "geo_id"], &["中国", "", "42"]);
+        let overlay = test_geo(&["country", "city", "longitude"], &["", "上海", "121.5"]);
+        let merged = merge_geo(&base, &overlay, ChainMode::MergeOverride);
+
+        assert_eq!(
+            merged.field_names.as_slice(),
+            ["country", "city", "geo_id", "longitude"]
+        );
+        assert_eq!(merged.to_pipe(), "中国|上海|42|121.5");
+        assert_eq!(merged.get("country"), "中国");
+        assert_eq!(merged.city(), "上海");
+        assert_eq!(merged.geo_id(), Some(42));
+        assert!(merged.to_json().contains("\"longitude\":121.5"));
     }
 }

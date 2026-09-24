@@ -165,6 +165,17 @@ public sealed class QzdbReader : IDisposable
         return s!;
     }
 
+    private static void EnsureLittleEndian()
+    {
+        EnsureLittleEndian(BitConverter.IsLittleEndian);
+    }
+
+    private static void EnsureLittleEndian(bool isLittleEndian)
+    {
+        if (!isLittleEndian)
+            throw new QzdbException(ErrorCode.Unsupported, "Big-endian hosts are not supported");
+    }
+
     /// <summary>
     /// Soft-fail snapshot read for Try* APIs: same Volatile acquire discipline as
     /// <see cref="RequireSnapshot"/> (ARM64 memory-model safety), returns null when
@@ -438,6 +449,7 @@ public sealed class QzdbReader : IDisposable
         internal unsafe Snapshot(ReadOnlyMemory<byte> data, byte* dataPtr, MemoryManager<byte>? owner,
             int groupIndex, bool verifyCrc)
         {
+            EnsureLittleEndian();
             _data = data;
             _dataPtr = dataPtr;
             _dataOwner = owner;
@@ -1385,7 +1397,12 @@ public sealed class QzdbReader : IDisposable
     /// <summary>Lazily streams batch results for an enumerable of IP strings.</summary>
     public IEnumerable<BatchResult> FindStream(IEnumerable<string> ipStrs)
     {
-        if (ipStrs == null) yield break;
+        ArgumentNullException.ThrowIfNull(ipStrs);
+        return FindStreamCore(ipStrs);
+    }
+
+    private IEnumerable<BatchResult> FindStreamCore(IEnumerable<string> ipStrs)
+    {
         foreach (var ip in ipStrs) yield return FindResult(ip);
     }
 
@@ -1473,21 +1490,24 @@ public sealed class QzdbReader : IDisposable
             }
 
             // Stage 4: Process IPv6
-            for (int j = 0; j < chunk; j++)
+            if (snap._hasV6 && snap._offV6Jump > 0)
             {
-                if (isV6[j] && errs[j] == null)
+                for (int j = 0; j < chunk; j++)
                 {
-                    try
+                    if (isV6[j] && errs[j] == null)
                     {
-                        rowIds[j] = TrieWalkV6Core(snap, bp, v6Hi[j], v6Lo[j]);
-                    }
-                    catch (QzdbException e)
-                    {
-                        errs[j] = e;
-                    }
-                    catch (Exception ex)
-                    {
-                        errs[j] = new QzdbException(ErrorCode.Corrupted, "Corrupted database payload during IPv6 trie walk", ex);
+                        try
+                        {
+                            rowIds[j] = TrieWalkV6Core(snap, bp, v6Hi[j], v6Lo[j]);
+                        }
+                        catch (QzdbException e)
+                        {
+                            errs[j] = e;
+                        }
+                        catch (Exception ex)
+                        {
+                            errs[j] = new QzdbException(ErrorCode.Corrupted, "Corrupted database payload during IPv6 trie walk", ex);
+                        }
                     }
                 }
             }
@@ -2018,6 +2038,7 @@ public sealed class QzdbReader : IDisposable
     {
         if (entryId == 0) return null;
         if (entryId >= snap._groupEntryCounts[snap._groupIndex]) return null;
+        var names = (string[])fields.Clone();
 
         // API_CONTRACT §3.5: 优先从解码缓存的全字段结果切片（骑缓存，勿绕过）
         var full = ResolveGeo(snap, entryId);
@@ -2025,12 +2046,12 @@ public sealed class QzdbReader : IDisposable
 
         var normMap = snap._normMap;
         var fullValues = full.RawValues;
-        var values = new string[fields.Length];
-        var numFlags = new bool[fields.Length];
+        var values = new string[names.Length];
+        var numFlags = new bool[names.Length];
 
-        for (int i = 0; i < fields.Length; i++)
+        for (int i = 0; i < names.Length; i++)
         {
-            if (normMap.TryGetValue(GeoInfo.NormalizeKey(fields[i]), out int fi)
+            if (normMap.TryGetValue(GeoInfo.NormalizeKey(names[i]), out int fi)
                 && fi >= 0 && fi < fullValues.Length)
             {
                 values[i] = fullValues[fi];
@@ -2042,7 +2063,7 @@ public sealed class QzdbReader : IDisposable
             }
         }
 
-        return new GeoInfo(fields, values, GeoInfo.BuildNormalizedMap(fields), numFlags, takeOwnership: true);
+        return new GeoInfo(names, values, GeoInfo.BuildNormalizedMap(names), numFlags, takeOwnership: true);
     }
 
     // Bounded, lock-free per-snapshot cache of resolved GeoInfo keyed by entryId.

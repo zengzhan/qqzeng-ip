@@ -315,7 +315,7 @@ func (r *QzdbReader) FindBatchFields(ips []string, fields []string) []BatchResul
 							out[base+j] = BatchResult{IP: ip, GeoInfo: nil, Error: ErrCorrupted}
 						}
 					}()
-					g := s.computeGeoInfoProjected(rowIDs[j], fields)
+					g := projectGeo(s.extractGeoInfo(rowIDs[j]), fields)
 					out[base+j] = BatchResult{IP: ip, GeoInfo: g, Error: nil}
 				}()
 			}

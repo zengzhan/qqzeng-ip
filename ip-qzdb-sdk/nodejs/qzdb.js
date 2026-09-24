@@ -3,13 +3,17 @@
 /*
  * QZDB Node.js SDK —— 纯离线、零依赖、高性能 IP 地理定位数据库读取器。
  *
- * 严格遵循 ip-qzdb-sdk/API_CONTRACT.md（v2.4，唯一事实来源）：
- *   - SENTINEL 高位哨兵位在解析前剥离（§8.1）
- *   - 原生浮点 6 位小数格式（§8.2），toPipe 直接拼接已格式化字符串（§8.3）
- *   - IPv4-Mapped IPv6 自动降级（§8.4）
- *   - Fail-Closed：非法 Magic/Header/CRC/截断构造即拒绝（§8.5）
- *   - CIDR 由 Trie 叶子深度重建（§8.6）
- *   - 未命中/非法 IP 返回 null（Node 约定，§4）
+ * 严格遵循 ip-qzdb-sdk/API_CONTRACT.md（v2.5，唯一事实来源）：
+ *   - SENTINEL 高位哨兵位在解析前剥离（§五 跳表哨兵语义）
+ *   - 原生浮点 6 位小数格式（FORMAT §10.5 统一契约），toPipe 直接拼接已格式化字符串（§三.2）
+ *   - IPv4-Mapped IPv6 自动降级（§二.1 方法矩阵注释）
+ *   - Fail-Closed：非法 Magic/Header/CRC/截断构造即拒绝（§四）
+ *   - CIDR 由 Trie 叶子深度重建，跳表哨兵命中时从根重走求真实前缀（§五）
+ *   - 未命中/非法 IP 返回 null（Node 约定，§二.1）
+ *   - find_fields 保留请求顺序与重复、未知字段补 ''（§二.3）
+ *
+ * 说明：本 SDK 仅提供同步 API（无 Promise/async 变体）；文件加载使用
+ * fs.readFileSync，mmap 风格加载不在 Node.js 实现范围内。
  */
 
 const fs = require('fs');
@@ -25,10 +29,22 @@ const SENTINEL_MASK_24 = 0x7FFFFF;
 // IP 地址位数 + 8（root 余量）；超过即视为敌对文件，拒绝（返回 miss）
 // 是正确的 fail-closed 行为。IPv4 = max(32+8, 40) = 40，IPv6 = max(128+8, 40) = 136。
 // 本文件 V4 游走使用此上限；V6 游走由 `while (depth < 128)` 构造性有界，无需步数上限。
-const V4_ADDR_BITS = 32;
-const MAX_TRIE_WALK_STEPS = V4_ADDR_BITS + 8; // = max(32+8, 40) = 40，IPv4 路径使用
 const MAX_POOL_COUNT = 1 << 26;
 const GEO_CACHE_CAP = 1 << 16;      // per-snapshot 有界 GeoInfo 缓存容量
+const MAX_U64 = (1n << 64n) - 1n;
+const MAX_U128 = (1n << 128n) - 1n;
+
+function _isUint32(value) {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 0xFFFFFFFF;
+}
+
+function _isUint64(value) {
+  return typeof value === 'bigint' && value >= 0n && value <= MAX_U64;
+}
+
+function _isUint128(value) {
+  return typeof value === 'bigint' && value >= 0n && value <= MAX_U128;
+}
 
 // ---------------------------------------------------------------------------
 // 版本档次与字段名的自描述契约（FORMAT §10.3）
@@ -244,7 +260,7 @@ class GeoInfo {
     let s = '';
     for (let i = 0; i < key.length; i++) {
       const c = key[i];
-      if (c !== '_' && c !== '-') s += c.toLowerCase();
+      if (c !== '_' && c !== '-') s += c >= 'A' && c <= 'Z' ? c.toLowerCase() : c;
     }
     return s;
   }
@@ -521,13 +537,15 @@ class BatchResult {
 // ===========================================================================
 class QzdbReader {
   constructor(dbPath = null, groupIndex = 0, verifyCrc = true, warmup = false) {
-    this._data = Buffer.alloc(0);
     this._groupIndex = groupIndex;
     this._verifyCrc = verifyCrc;
-    this._closed = false;
     this._warmup = warmup;
+    this._resetState();
+    if (dbPath !== null) this.load(dbPath);
+  }
 
-    // 元数据
+  _resetState() {
+    this._data = Buffer.alloc(0);
     this._flags = 0;
     this._hasV4 = false;
     this._hasV6 = false;
@@ -537,7 +555,6 @@ class QzdbReader {
     this._poolCount = 0;
     this._poolIdxSize = 2;
     this._buildDate = 0;
-
     this._geoCount = 0;
     this._rowCount = 0;
     this._v4RecCount = 0;
@@ -546,8 +563,6 @@ class QzdbReader {
     this._v6NodeCount = 0;
     this._ipRowSize = 6;
     this._geoEntryGroupCount = 0;
-
-    // 偏移
     this._offV4Jump = 0;
     this._offV4Nodes = 0;
     this._offV6Jump = 0;
@@ -558,8 +573,11 @@ class QzdbReader {
     this._offMeta = 0;
     this._offRowSchema = 0;
     this._offGroupSchema = 0;
-
-    // 布局
+    this._v4JumpU32 = null;
+    this._v4NodesU32 = null;
+    this._v6JumpU32 = null;
+    this._v6NodesU32 = null;
+    this._actualGroups = 0;
     this._groupFieldCounts = [];
     this._groupEntryCounts = [];
     this._groupDimMasks = [];
@@ -574,14 +592,10 @@ class QzdbReader {
     this._groupIds = [];
     this._groupPools = null;
     this._poolsLoaded = false;
-
-    // 字段名与索引
     this._fieldNames = [];
     this._fieldNameToIdx = Object.create(null);
     this._normFieldMap = Object.create(null);
     this._floatFlags = [];
-
-    // 元数据串
     this._versionName = '';
     this._description = '';
     this._primaryVersion = '';
@@ -591,23 +605,15 @@ class QzdbReader {
     this._fieldNamesSource = FIELD_NAMES_SOURCE_SYNTHETIC;
     this._dataMonth = '';
     this._buildTimeStr = '';
-    this._metaDataMonth = ''; // Metadata TLV type=5（v2.4 权威）
-    this._scope = '';         // Metadata TLV type=6（v2.4 权威；无条目 ""）
-
-    // 行 schema
+    this._metaDataMonth = '';
+    this._scope = '';
     this._rowGeoWidth = 3;
     this._rowAsnWidth = 3;
     this._rowUsageWidth = 0;
-
-    // 有界缓存
     this._geoCache = null;
     this._geoMetaCache = [];
     this._geoCacheMask = GEO_CACHE_CAP - 1;
-
-    if (dbPath !== null) {
-      this.load(dbPath);
-      if (this._warmup) this.warmup();
-    }
+    this._closed = true;
   }
 
   static open(path, options = {}) {
@@ -617,7 +623,6 @@ class QzdbReader {
   static openBuffer(buffer, options = {}) {
     const r = new QzdbReader(null, options.groupIndex || 0, options.verifyCrc !== false, options.warmup === true);
     r.loadBuffer(buffer);
-    if (r._warmup) r.warmup();
     return r;
   }
 
@@ -626,36 +631,46 @@ class QzdbReader {
   // -------------------------------------------------------------------------
   load(dbPath, verifyCrc = null) {
     if (verifyCrc !== null) this._verifyCrc = verifyCrc;
-    const data = fs.readFileSync(dbPath);
-    this._data = data;
-    this._parseHeader();
-    if (this._verifyCrc && !this.verifyCrc()) {
-      throw new QzdbError(
-        'CRC32 checksum mismatch — the .qzdb file is corrupted or truncated',
-        QzdbError.CORRUPTED,
-      );
+    this._resetState();
+    try {
+      this._data = fs.readFileSync(dbPath);
+      this._parseHeader();
+      if (this._verifyCrc && !this.verifyCrc()) {
+        throw new QzdbError(
+          'CRC32 checksum mismatch — the .qzdb file is corrupted or truncated',
+          QzdbError.CORRUPTED,
+        );
+      }
+      this._initCache();
+      this._closed = false;
+      if (this._warmup) this.warmup();
+      return this;
+    } catch (error) {
+      this._resetState();
+      throw error;
     }
-    this._initCache();
-    this._closed = false;
-    if (this._warmup) this.warmup();
-    return this;
   }
 
   loadBuffer(bytes, verifyCrc = null) {
     if (verifyCrc !== null) this._verifyCrc = verifyCrc;
-    const data = Buffer.isBuffer(bytes) ? Buffer.from(bytes) : Buffer.from(bytes);
-    this._data = data;
-    this._parseHeader();
-    if (this._verifyCrc && !this.verifyCrc()) {
-      throw new QzdbError(
-        'CRC32 checksum mismatch — the buffer is corrupted or truncated',
-        QzdbError.CORRUPTED,
-      );
+    this._resetState();
+    try {
+      this._data = _copyLoadBuffer(bytes);
+      this._parseHeader();
+      if (this._verifyCrc && !this.verifyCrc()) {
+        throw new QzdbError(
+          'CRC32 checksum mismatch — the buffer is corrupted or truncated',
+          QzdbError.CORRUPTED,
+        );
+      }
+      this._initCache();
+      this._closed = false;
+      if (this._warmup) this.warmup();
+      return this;
+    } catch (error) {
+      this._resetState();
+      throw error;
     }
-    this._initCache();
-    this._closed = false;
-    if (this._warmup) this.warmup();
-    return this;
   }
 
   warmup() {
@@ -694,6 +709,7 @@ class QzdbReader {
       groups: new Array(GEO_CACHE_CAP).fill(-1),
       vals: new Array(GEO_CACHE_CAP).fill(null),
     };
+    this._geoMetaCache = [];
   }
 
   // -------------------------------------------------------------------------
@@ -820,18 +836,26 @@ class QzdbReader {
     const v4NodeSize = this._v4Node24 ? 6 : 8;
     const v6NodeSize = this._v6Node24 ? 6 : 8;
     const v6JumpSize = (1 << this._v6JumpBits) * 4;
-    const chk = (offset, required, field) => {
-      if (offset === 0) return;
-      if (!Number.isFinite(offset) || offset < 0 || offset > dlen || required > dlen - offset) {
+    const chk = (offset, required, field, requiredOffset = false) => {
+      if (offset === 0) {
+        if (requiredOffset) {
+          throw new QzdbError(
+            `Section ${field} out of bounds (offset=0, need=${required}, size=${dlen})`,
+            QzdbError.OUT_OF_BOUNDS,
+          );
+        }
+        return;
+      }
+      if (!Number.isFinite(offset) || offset < 192 || offset > dlen || required > dlen - offset) {
         throw new QzdbError(
           `Section ${field} out of bounds (offset=${offset}, need=${required}, size=${dlen})`,
           QzdbError.OUT_OF_BOUNDS,
         );
       }
     };
-    chk(this._offV4Jump, 65536 * 4, 'v4_jump');
+    chk(this._offV4Jump, 65536 * 4, 'v4_jump', this._hasV4);
     chk(this._offV4Nodes, this._v4NodeCount * v4NodeSize, 'v4_nodes');
-    chk(this._offV6Jump, v6JumpSize, 'v6_jump');
+    chk(this._offV6Jump, v6JumpSize, 'v6_jump', this._hasV6);
     chk(this._offV6Nodes, this._v6NodeCount * v6NodeSize, 'v6_nodes');
     chk(this._offIPRow, this._rowCount * this._ipRowSize, 'ip_row');
     // 变长 section 只校验固定头部；后续遍历每一步都会再次自检。
@@ -1294,6 +1318,7 @@ class QzdbReader {
   }
 
   _trieWalkV4(ipInt) {
+    if (!this._hasV4 || this._offV4Jump <= 0) return 0;
     const hi16 = (ipInt >>> 16) & 0xFFFF;
     const jumpU32 = this._v4JumpU32;
     const ptr = jumpU32 !== null ? jumpU32[hi16] : this.safeReadU32(this._offV4Jump + hi16 * 4);
@@ -1315,6 +1340,7 @@ class QzdbReader {
   }
 
   _trieWalkV6Buf(ipBuf) {
+    if (!this._hasV6 || this._offV6Jump <= 0) return 0;
     const jumpBits = this._v6JumpBits;
     let idxJump = 0;
     if (jumpBits <= 32 && jumpBits > 0) {
@@ -1455,34 +1481,41 @@ class QzdbReader {
   // -------------------------------------------------------------------------
   // 单条查询 API（§3）
   // -------------------------------------------------------------------------
-  find(ipStr) {
-    if (!ipStr) return null;
-    if (this._closed) return null;
-    const result = fastParseIp(ipStr);
-    if (!result) return null;
-    if (result.v4 !== null) return this.findUint(result.v4);
-    if (!this._hasV6) return null;
+  _findParsed(result) {
+    if (this._closed || result === null) return null;
+    if (result.v4 !== null) return this._findUintParsed(result.v4);
+    if (!this._hasV6 || this._offV6Jump <= 0) return null;
     const rowId = this._trieWalkV6Buf(result.v6);
     if (rowId === 0) return null;
     return this._resolveRowId(rowId, this._groupIndex);
   }
 
-  findUint(ipInt) {
-    if (this._closed || !this._hasV4) return null;
-    const rowId = this._trieWalkV4(ipInt >>> 0);
+  _findUintParsed(ipInt) {
+    if (this._closed || !this._hasV4 || this._offV4Jump <= 0) return null;
+    const rowId = this._trieWalkV4(ipInt);
     if (rowId === 0) return null;
     return this._resolveRowId(rowId, this._groupIndex);
   }
 
+  find(ipStr) {
+    if (!ipStr) return null;
+    return this._findParsed(fastParseIp(ipStr));
+  }
+
+  findUint(ipInt) {
+    if (!_isUint32(ipInt)) return null;
+    return this._findUintParsed(ipInt);
+  }
+
   findV6Uint(ipInt) {
-    if (this._closed || !this._hasV6) return null;
+    if (!_isUint128(ipInt) || this._closed || !this._hasV6 || this._offV6Jump <= 0) return null;
     const rowId = this._trieWalkV6Buf(_bigint128ToBuf(ipInt));
     if (rowId === 0) return null;
     return this._resolveRowId(rowId, this._groupIndex);
   }
 
   findV6(high, low) {
-    if (this._closed || !this._hasV6) return null;
+    if (!_isUint64(high) || !_isUint64(low) || this._closed || !this._hasV6 || this._offV6Jump <= 0) return null;
     const rowId = this._trieWalkV6Buf(_highLowToBuf(high, low));
     if (rowId === 0) return null;
     return this._resolveRowId(rowId, this._groupIndex);
@@ -1517,8 +1550,13 @@ class QzdbReader {
   // - 全部未知时仍返回 GeoInfo（字段值全为 ''）
   // - fields=null/空 等价于 find
   findFields(ipStr, fieldNames = null) {
-    if (fieldNames === null || fieldNames.length === 0) return this.find(ipStr);
-    const full = this.find(ipStr); // 未命中/非法 → null（Node 语言约定）
+    const parsed = fastParseIp(ipStr);
+    if (fieldNames === null || fieldNames.length === 0) return this._findParsed(parsed);
+    return this._findFieldsParsed(parsed, fieldNames);
+  }
+
+  _findFieldsParsed(parsed, fieldNames) {
+    const full = this._findParsed(parsed);
     if (full === null) return null;
     const norm = this._normFieldMap;
     const floatAll = this._floatFlags;
@@ -1550,10 +1588,11 @@ class QzdbReader {
     const out = [];
     for (const ip of ips) {
       try {
-        if (fastParseIp(ip) == null) {
+        const parsed = fastParseIp(ip);
+        if (parsed == null) {
           throw new QzdbError('Invalid IP: ' + ip, QzdbError.INVALID_PARAM);
         }
-        out.push(new BatchResult(ip, this.find(ip), null));
+        out.push(new BatchResult(ip, this._findParsed(parsed), null));
       } catch (e) {
         out.push(new BatchResult(ip, null, e instanceof QzdbError ? e : new QzdbError(String(e), QzdbError.CORRUPTED)));
       }
@@ -1566,10 +1605,14 @@ class QzdbReader {
     const out = [];
     for (const ip of ips) {
       try {
-        if (fastParseIp(ip) == null) {
+        const parsed = fastParseIp(ip);
+        if (parsed == null) {
           throw new QzdbError('Invalid IP: ' + ip, QzdbError.INVALID_PARAM);
         }
-        out.push(new BatchResult(ip, this.findFields(ip, fields), null));
+        const result = fields == null || fields.length === 0
+          ? this._findParsed(parsed)
+          : this._findFieldsParsed(parsed, fields);
+        out.push(new BatchResult(ip, result, null));
       } catch (e) {
         out.push(new BatchResult(ip, null, e instanceof QzdbError ? e : new QzdbError(String(e), QzdbError.CORRUPTED)));
       }
@@ -1581,10 +1624,11 @@ class QzdbReader {
     if (ips == null) return;
     for (const ip of ips) {
       try {
-        if (fastParseIp(ip) == null) {
+        const parsed = fastParseIp(ip);
+        if (parsed == null) {
           throw new QzdbError('Invalid IP: ' + ip, QzdbError.INVALID_PARAM);
         }
-        yield new BatchResult(ip, this.find(ip), null);
+        yield new BatchResult(ip, this._findParsed(parsed), null);
       } catch (e) {
         yield new BatchResult(ip, null, e instanceof QzdbError ? e : new QzdbError(String(e), QzdbError.CORRUPTED));
       }
@@ -1607,12 +1651,12 @@ class QzdbReader {
   }
 
   lookupRowIdUint(ipInt) {
-    if (this._closed || !this._hasV4) return 0;
-    return this._trieWalkV4(ipInt >>> 0);
+    if (!_isUint32(ipInt) || this._closed || !this._hasV4 || this._offV4Jump <= 0) return 0;
+    return this._trieWalkV4(ipInt);
   }
 
   lookupRowIdV6(ipInt) {
-    if (this._closed || !this._hasV6) return 0;
+    if (!_isUint128(ipInt) || this._closed || !this._hasV6 || this._offV6Jump <= 0) return 0;
     return this._trieWalkV6Buf(_bigint128ToBuf(ipInt));
   }
 
@@ -1661,9 +1705,9 @@ class QzdbReader {
   }
 
   lookupCidrUint(ipInt) {
-    if (this._closed || !this._hasV4) return null;
-    const n = this._v4PrefixLen(ipInt >>> 0);
-    return n < 0 ? null : this._formatV4Cidr(ipInt >>> 0, n);
+    if (!_isUint32(ipInt) || this._closed || !this._hasV4 || this._offV4Jump <= 0) return null;
+    const n = this._v4PrefixLen(ipInt);
+    return n < 0 ? null : this._formatV4Cidr(ipInt, n);
   }
 
   lookupCidrBytes(ipBytes) {
@@ -1805,34 +1849,30 @@ class QzdbReader {
   // -------------------------------------------------------------------------
   // 热更新与生命周期（§2）
   // -------------------------------------------------------------------------
+  // 契约：reload / reloadBuffer 构建新快照时始终强制 CRC 校验（verifyCrc=true），
+  // 与 Reader 打开时的 verifyCrc 配置无关（与 Go/PHP/Rust 对齐）。新快照先在
+  // 临时 Reader 上完整构建，成功后才整体替换；构建失败时抛错，原 Reader 状态
+  // 保持不变（旧数据继续可查）。Reader 自身的 _verifyCrc 配置不被 reload 改变。
   reload(dbPath) {
-    const tmp = new QzdbReader(null, this._groupIndex, true);
-    tmp.load(dbPath, true); // 失败抛错 → 旧快照（this）继续服务
-    tmp.warmup();
-    Object.assign(this, tmp); // 原子替换全部状态字段
+    const tmp = new QzdbReader(null, this._groupIndex, true, this._warmup);
+    tmp.load(dbPath, true);
+    const keepVerifyCrc = this._verifyCrc;
+    Object.assign(this, tmp);
+    this._verifyCrc = keepVerifyCrc;
     return this;
   }
 
   reloadBuffer(bytes) {
-    const tmp = new QzdbReader(null, this._groupIndex, true);
-    tmp.loadBuffer(bytes, true); // reload 强制 CRC
-    tmp.warmup();
+    const tmp = new QzdbReader(null, this._groupIndex, true, this._warmup);
+    tmp.loadBuffer(bytes, true);
+    const keepVerifyCrc = this._verifyCrc;
     Object.assign(this, tmp);
+    this._verifyCrc = keepVerifyCrc;
     return this;
   }
 
   close() {
-    this._data = Buffer.alloc(0);
-    this._hasV4 = false;
-    this._hasV6 = false;
-    this._poolsLoaded = false;
-    this._groupPools = null;
-    this._fieldNames = [];
-    this._normFieldMap = Object.create(null);
-    this._floatFlags = [];
-    this._geoCache = null;
-    this._geoMetaCache = [];
-    this._closed = true;
+    this._resetState();
   }
 
   // -------------------------------------------------------------------------
@@ -1885,7 +1925,10 @@ QzdbReader.Builder = class {
     this._verifyCrc = true;
     if (typeof arg === 'string') this._file = arg;
     else if (arg instanceof QzdbReader) { /* 忽略，仅接受源 */ }
-    else if (Buffer.isBuffer(arg) || arg instanceof Uint8Array) this._buffer = Buffer.from(arg);
+    else if (Buffer.isBuffer(arg) || arg instanceof Uint8Array || arg instanceof ArrayBuffer
+      || (typeof SharedArrayBuffer !== 'undefined' && arg instanceof SharedArrayBuffer)) {
+      this._buffer = _copyLoadBuffer(arg);
+    }
   }
   groupIndex(i) { this._groupIndex = i; return this; }
   verifyCrc(b) { this._verifyCrc = b; return this; }
@@ -1901,16 +1944,30 @@ QzdbReader.Builder = class {
 // ===========================================================================
 // 大整数辅助
 // ===========================================================================
+function _copyLoadBuffer(bytes) {
+  if (Buffer.isBuffer(bytes)) return Buffer.from(bytes);
+  const tag = Object.prototype.toString.call(bytes);
+  if (tag === '[object ArrayBuffer]' || tag === '[object SharedArrayBuffer]') {
+    return Buffer.from(new Uint8Array(bytes));
+  }
+  if (ArrayBuffer.isView(bytes)) {
+    return Buffer.from(new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+  }
+  return Buffer.from(bytes);
+}
+
 function _bigint128ToBuf(ipInt) {
+  if (!_isUint128(ipInt)) return null;
   const buf = Buffer.allocUnsafe(16);
-  buf.writeBigUInt64BE(BigInt(ipInt) >> 64n, 0);
-  buf.writeBigUInt64BE(BigInt(ipInt) & 0xFFFFFFFFFFFFFFFFn, 8);
+  buf.writeBigUInt64BE(ipInt >> 64n, 0);
+  buf.writeBigUInt64BE(ipInt & MAX_U64, 8);
   return buf;
 }
 function _highLowToBuf(high, low) {
+  if (!_isUint64(high) || !_isUint64(low)) return null;
   const buf = Buffer.allocUnsafe(16);
-  buf.writeBigUInt64BE(BigInt(high), 0);
-  buf.writeBigUInt64BE(BigInt(low) & 0xFFFFFFFFFFFFFFFFn, 8);
+  buf.writeBigUInt64BE(high, 0);
+  buf.writeBigUInt64BE(low, 8);
   return buf;
 }
 function isV4MappedBuf(b) {
@@ -2181,7 +2238,10 @@ class ChainedReader {
     return new GeoInfo(values, fieldNames, fieldNames.map((n) => GeoInfo.isNumericFieldName(n)), null);
   }
 
-  findUint(ipInt) { return this.find(uintToStr(ipInt)); }
+  findUint(ipInt) {
+    if (!_isUint32(ipInt)) return null;
+    return this.find(uintToStr(ipInt));
+  }
   findBytes(ip16) {
     if (this._mode === 'FALLBACK') {
       for (const r of this._readers) {

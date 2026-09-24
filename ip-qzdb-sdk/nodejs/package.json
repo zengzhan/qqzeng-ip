@@ -13,7 +13,6 @@
     "qzdb",
     "ip-geolocation",
     "ip-location",
-    "mmap",
     "offline"
   ],
   "author": {

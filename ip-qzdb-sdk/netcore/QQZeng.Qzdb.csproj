@@ -85,6 +85,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="RegressionTests/**/*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!--
         net8.0/net9.0 对 SDK 10 包验证工具已属"不再受支持"的框架，跨 TFM 与基线比对会产生 PKV006 噪音。
         忽略这两个基线框架，仅对 net10.0 与基线 1.0.5 做真实 API 兼容校验。

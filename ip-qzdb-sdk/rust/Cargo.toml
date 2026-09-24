@@ -2,9 +2,9 @@
 name = "qzdb"
 version = "2.0.0"
 edition = "2021"
-rust-version = "1.74"
+rust-version = "1.80"
 authors = ["qqzeng <qzdb@qqzeng.com>"]
-description = "Offline, zero-runtime-dependency reader for .qzdb IP geolocation databases (IPv4 / IPv6 dual-stack)."
+description = "Offline reader for .qzdb IP geolocation databases (IPv4 / IPv6 dual-stack). Runtime deps: arc-swap (lock-free snapshot swap), memmap2 (zero-copy file mapping)."
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/zengzhan/qqzeng-ip"

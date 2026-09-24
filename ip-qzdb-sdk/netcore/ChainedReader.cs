@@ -198,7 +198,12 @@ public sealed class ChainedReader : IDisposable
     /// <summary>Lazily streams batch results for an enumerable of IP strings.</summary>
     public IEnumerable<BatchResult> FindStream(IEnumerable<string> ipStrs)
     {
-        if (ipStrs == null) yield break;
+        ArgumentNullException.ThrowIfNull(ipStrs);
+        return FindStreamCore(ipStrs);
+    }
+
+    private IEnumerable<BatchResult> FindStreamCore(IEnumerable<string> ipStrs)
+    {
         foreach (var ip in ipStrs) yield return FindResult(ip);
     }
 
@@ -218,8 +223,8 @@ public sealed class ChainedReader : IDisposable
 
     private void MergeInfo(Dictionary<string, int> indexes, List<string> names, List<string> values, GeoInfo info)
     {
-        var fields = info.FieldNames;
-        var vals = info.Values;
+        var fields = info.RawFieldNames;
+        var vals = info.RawValues;
         for (int i = 0; i < fields.Length; i++)
         {
             var f = fields[i];

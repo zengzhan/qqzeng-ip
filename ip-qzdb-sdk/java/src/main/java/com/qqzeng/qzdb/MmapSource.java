@@ -90,41 +90,49 @@ final class MmapSource implements AutoCloseable {
      * @throws IllegalArgumentException 文件超过 {@link Integer#MAX_VALUE}（ByteBuffer 上限）
      */
     static MmapSource open(Path path) throws IOException {
-        long size = java.nio.file.Files.size(path);
-        if (size > Integer.MAX_VALUE) {
+        try (FileChannel ch = FileChannel.open(path, StandardOpenOption.READ)) {
+            return open(ch);
+        }
+    }
+
+    /**
+     * Maps a caller-owned channel after obtaining its size from that same channel.
+     *
+     * @param channel channel to map
+     * @return mapped source
+     * @throws IOException if mapping fails
+     */
+    static MmapSource open(FileChannel channel) throws IOException {
+        long size = channel.size();
+        if (size < 0 || size > Integer.MAX_VALUE) {
             throw new IllegalArgumentException("File too large for single mapped buffer: " + size + " bytes");
         }
         if (FFM_AVAILABLE) {
             try {
-                return openWithArena(path, size);
-            } catch (Throwable t) {
-                // FFM 意外失败（安全策略、非 HotSpot 实现等）→ 回落 legacy，不因释放机制影响可用性
+                return openWithArena(channel, size);
+            } catch (Throwable ignored) {
             }
         }
-        return openLegacy(path, size);
+        return openLegacy(channel, size);
     }
 
-    private static MmapSource openWithArena(Path path, long size) throws Throwable {
+    private static MmapSource openWithArena(FileChannel channel, long size) throws Throwable {
         Object arena = ARENA_OF_SHARED.invoke();
-        ByteBuffer view;
-        try (FileChannel ch = FileChannel.open(path, StandardOpenOption.READ)) {
-            Object segment = MAP_WITH_ARENA.invoke(ch, FileChannel.MapMode.READ_ONLY, 0L, size, arena);
-            view = (ByteBuffer) AS_BYTE_BUFFER.invoke(segment);
+        try {
+            Object segment = MAP_WITH_ARENA.invoke(channel, FileChannel.MapMode.READ_ONLY, 0L, size, arena);
+            ByteBuffer view = (ByteBuffer) AS_BYTE_BUFFER.invoke(segment);
+            return new MmapSource(view, arena);
         } catch (Throwable t) {
             try {
                 ARENA_CLOSE.invoke(arena);
             } catch (Throwable ignored) {
-                // 已经失败，忽略二次异常
             }
             throw t;
         }
-        return new MmapSource(view, arena);
     }
 
-    private static MmapSource openLegacy(Path path, long size) throws IOException {
-        try (FileChannel ch = FileChannel.open(path, StandardOpenOption.READ)) {
-            return new MmapSource(ch.map(FileChannel.MapMode.READ_ONLY, 0, size), null);
-        }
+    private static MmapSource openLegacy(FileChannel channel, long size) throws IOException {
+        return new MmapSource(channel.map(FileChannel.MapMode.READ_ONLY, 0, size), null);
     }
 
     /** 映射视图；只读，生命周期与本对象一致。 */

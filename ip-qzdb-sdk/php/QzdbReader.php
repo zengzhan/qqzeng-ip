@@ -438,51 +438,35 @@ class GeoInfo implements \ArrayAccess
         return $map;
     }
 
-    /** toJson：数值字段输出为 JSON 数字（保留 6 位小数格式），键名保持原始 snake_case（契约 §6.2）。 */
+    public function getFieldNames(): array
+    {
+        return $this->fieldNames;
+    }
+
     public function toJson(): string
     {
         $sb = '{';
         $first = true;
+        $flags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE;
         foreach ($this->fieldNames as $i => $name) {
             if ($name === null) continue;
             $val = ($i < count($this->values)) ? $this->values[$i] : null;
             if (!$first) { $sb .= ','; }
             $first = false;
-            $sb .= '"' . $name . '":';
-            $numeric = self::isNumericFieldName($name);
+            $encodedName = json_encode((string)$name, $flags);
+            $sb .= ($encodedName === false ? '""' : $encodedName) . ':';
+            $numeric = self::isNumericFieldName((string)$name);
             if ($val === null || $val === '') {
                 $sb .= $numeric ? 'null' : '""';
             } elseif ($numeric) {
-                $sb .= self::isJsonNumber($val) ? $val : 'null';
+                $text = (string)$val;
+                $sb .= self::isJsonNumber($text) ? $text : 'null';
             } else {
-                $sb .= '"' . self::fastEscapeJson($val) . '"';
+                $encodedValue = json_encode((string)$val, $flags);
+                $sb .= $encodedValue === false ? '""' : $encodedValue;
             }
         }
         return $sb . '}';
-    }
-
-    private static function fastEscapeJson(string $s): string
-    {
-        // 快速 JSON 转义：仅处理需转义的 7 种字符，其余原样输出
-        if (!strpbrk($s, "\"\\\b\f\n\r\t\x00..\x1F")) return $s;
-        $out = '';
-        $len = strlen($s);
-        for ($i = 0; $i < $len; $i++) {
-            $c = $s[$i];
-            switch ($c) {
-                case '"':  $out .= '\\"'; break;
-                case '\\': $out .= '\\\\'; break;
-                case "\b": $out .= '\\b'; break;
-                case "\f": $out .= '\\f'; break;
-                case "\n": $out .= '\\n'; break;
-                case "\r": $out .= '\\r'; break;
-                case "\t": $out .= '\\t'; break;
-                default:
-                    $o = ord($c);
-                    $out .= ($o < 0x20) ? sprintf('\\u%04x', $o) : $c;
-            }
-        }
-        return $out;
     }
 
     private static function isJsonNumber(string $val): bool
@@ -648,6 +632,13 @@ class QzdbReader
     const FIELD_NAMES_SOURCE_METADATA  = 'metadata';
     const FIELD_NAMES_SOURCE_EDITION   = 'edition';
     const FIELD_NAMES_SOURCE_SYNTHETIC = 'synthetic';
+
+    public static function assertSupportedPlatform(): void
+    {
+        if (PHP_INT_SIZE < 8) {
+            throw new QzdbException('QZDB PHP SDK requires a 64-bit PHP runtime', self::ERROR_UNSUPPORTED);
+        }
+    }
 
     /** one-hot 版本位掩码 -> 档次名；非 one-hot 返回 '' */
     public static function editionFromMask(int $mask): string
@@ -842,7 +833,9 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         if ($this->mmapPtr !== null && $this->mmapFd >= 0) {
             if (extension_loaded('ffi') && isset($this->ffi)) {
                 try { $this->ffi->munmap($this->mmapPtr, $this->mmapSize); } catch (\Throwable $e) {}
-                @fclose($this->mmapFd);
+                // $mmapFd 恒为 int(-1)（mmap 路径当前桩实现）；未来接通时必为 resource，
+                // 此处守卫避免 fclose(int) 在 PHP 8 抛 TypeError
+                if (is_resource($this->mmapFd)) { @fclose($this->mmapFd); }
             }
             $this->mmapPtr = null;
             $this->mmapFd = -1;
@@ -850,6 +843,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $this->stream = null;
         $this->streamPages = [];
         $this->streamPageOrder = [];
+        $this->ownsStream = false;
         $this->data = null;
         $this->dataLen = 0;
         $this->closed = true;
@@ -861,6 +855,17 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     public function isClosed(): bool
     {
         return $this->closed;
+    }
+
+    private function releaseOwnedStream(): void
+    {
+        if ($this->stream !== null && is_resource($this->stream) && $this->ownsStream) {
+            @fclose($this->stream);
+        }
+        $this->stream = null;
+        $this->streamPages = [];
+        $this->streamPageOrder = [];
+        $this->ownsStream = false;
     }
 
     /**
@@ -900,57 +905,74 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     // 加载入口
     // ------------------------------------------------------------------
 
-    /** 兼容旧用法：从文件路径加载（默认校验 CRC）。 */
     public function load($dbPath, bool $verifyCrc = true, bool $warmup = false): void
     {
+        self::assertSupportedPlatform();
         $this->verifyCrc = $verifyCrc;
         $size = @filesize($dbPath);
         if ($size === false) {
             throw new QzdbException("Cannot stat database file: " . $dbPath, self::ERROR_INVALID_PARAM);
         }
-        $this->fileSize = $size;
 
-        // FFI mmap 零拷贝加载（需要 PHP FFI 扩展）：将文件直接映射到进程内存，
-        // 避免 file_get_contents 的额外拷贝，显著降低大文件内存占用。
         if ($this->tryMmapLoad($dbPath)) {
+            $this->releaseOwnedStream();
+            $this->fileSize = $size;
             $this->parseHeader();
             if ($this->verifyCrc && !$this->rawVerifyCrc()) {
                 throw new QzdbException('CRC32 checksum mismatch — the .qzdb file is corrupted or truncated', self::ERROR_CORRUPTED);
             }
             $this->geoCache = [];
+            $this->poolCache = [];
+            $this->poolCacheOrder = [];
+            $this->closed = false;
             return;
         }
-        // 自适应存储：文件大于内存上限一半时走流式（fseek/fread，O(1) 内存）；
-        // 否则缓冲到内存（速度更快）。两条路径都经 readBytes()，解析结果逐字节一致。
+
         $memLimit = $this->parseMemoryLimitBytes();
-        if ($this->memoryMode === self::MEMORY_LOW
-            || ($memLimit > 0 && $size > (int)($memLimit * 0.5))) {
-            $this->stream = @fopen($dbPath, 'rb');
-            if ($this->stream === false || $this->stream === null) {
+        $useStreaming = $this->memoryMode === self::MEMORY_LOW
+            || ($memLimit > 0 && $size > (int)($memLimit * 0.5));
+        $newStream = null;
+        $newData = null;
+        $newOwnsStream = false;
+        if ($useStreaming) {
+            $newStream = @fopen($dbPath, 'rb');
+            if ($newStream === false || $newStream === null) {
                 throw new QzdbException("Cannot open database file: " . $dbPath, self::ERROR_INVALID_PARAM);
+            }
+            $newOwnsStream = true;
+        } else {
+            $newData = @file_get_contents($dbPath);
+            if ($newData === false || $newData === '') {
+                throw new QzdbException("Cannot read database file: " . $dbPath, self::ERROR_INVALID_PARAM);
+            }
+        }
+
+        $this->releaseOwnedStream();
+        $this->fileSize = $size;
+        $this->data = $newData;
+        $this->dataLen = $newData === null ? 0 : strlen($newData);
+        $this->stream = $newStream;
+        $this->ownsStream = $newOwnsStream;
+        $this->geoCache = [];
+        $this->poolCache = [];
+        $this->poolCacheOrder = [];
+        try {
+            $this->parseHeader();
+            if ($this->verifyCrc && !$this->rawVerifyCrc()) {
+                throw new QzdbException('CRC32 checksum mismatch — the .qzdb file is corrupted or truncated', self::ERROR_CORRUPTED);
+            }
+        } catch (\Throwable $e) {
+            if ($this->stream !== null && is_resource($this->stream) && $this->ownsStream) {
+                @fclose($this->stream);
+                $this->stream = null;
             }
             $this->data = null;
             $this->dataLen = 0;
-            $this->streamPages = [];
-            $this->streamPageOrder = [];
-        } else {
-            // 该分支已经通过 memory_limit 阈值判断，直接一次读取可避免 PHP
-            // 对 "$data .= fread(...)" 反复扩容和复制；超大文件仍走上面的流式路径。
-            $this->data = @file_get_contents($dbPath);
-            if ($this->data === false || $this->data === '') {
-                throw new QzdbException("Cannot read database file: " . $dbPath, self::ERROR_INVALID_PARAM);
-            }
-            $this->dataLen = strlen($this->data);
-            $this->stream = null;
-            $this->streamPages = [];
-            $this->streamPageOrder = [];
-        }
-
-        $this->parseHeader();
-        if ($this->verifyCrc && !$this->rawVerifyCrc()) {
-            throw new QzdbException('CRC32 checksum mismatch — the .qzdb file is corrupted or truncated', self::ERROR_CORRUPTED);
+            $this->closed = true;
+            throw $e;
         }
         $this->geoCache = [];
+        $this->closed = false;
         if ($warmup) {
             $this->warmup();
         }
@@ -970,21 +992,31 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     }
 
 
-    /** 从内存字节加载（拷贝语义）。 */
     public function loadBytes(string $bytes, bool $verifyCrc = true, bool $warmup = false): void
     {
+        self::assertSupportedPlatform();
         $this->verifyCrc = $verifyCrc;
+        $this->releaseOwnedStream();
         $this->fileSize = strlen($bytes);
         $this->data = $bytes;
         $this->dataLen = strlen($bytes);
-        $this->stream = null;
-        $this->streamPages = [];
-        $this->streamPageOrder = [];
-        $this->parseHeader();
-        if ($this->verifyCrc && !$this->rawVerifyCrc()) {
-            throw new QzdbException('CRC32 checksum mismatch — the .qzdb buffer is corrupted or truncated', self::ERROR_CORRUPTED);
+        $this->ownsStream = false;
+        $this->geoCache = [];
+        $this->poolCache = [];
+        $this->poolCacheOrder = [];
+        try {
+            $this->parseHeader();
+            if ($this->verifyCrc && !$this->rawVerifyCrc()) {
+                throw new QzdbException('CRC32 checksum mismatch — the .qzdb buffer is corrupted or truncated', self::ERROR_CORRUPTED);
+            }
+        } catch (\Throwable $e) {
+            $this->data = null;
+            $this->dataLen = 0;
+            $this->closed = true;
+            throw $e;
         }
         $this->geoCache = [];
+        $this->closed = false;
         if ($warmup) {
             $this->warmup();
         }
@@ -1000,6 +1032,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
      */
     public function loadStream($handle, bool $verifyCrc = true, ?bool $streaming = null, bool $takeOwnership = false): void
     {
+        self::assertSupportedPlatform();
         $this->verifyCrc = $verifyCrc;
         if (!is_resource($handle)) {
             throw new QzdbException('Invalid stream handle', self::ERROR_INVALID_PARAM);
@@ -1009,7 +1042,6 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $size = ($stat && isset($stat['size']) && $stat['size'] >= 0) ? (int)$stat['size'] : -1;
         $meta = @stream_get_meta_data($handle);
         $seekable = ($meta && !empty($meta['seekable']));
-
         $memLimit = $this->parseMemoryLimitBytes();
         $useStreaming = false;
         if ($streaming === true) {
@@ -1017,21 +1049,25 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
                 throw new QzdbException('Streaming mode requested but stream is not seekable', self::ERROR_INVALID_PARAM);
             }
             $useStreaming = true;
+        } elseif ($streaming === false) {
+            $useStreaming = false;
         } elseif ($this->memoryMode === self::MEMORY_LOW) {
             if (!$seekable) {
                 throw new QzdbException('Low memory mode requires a seekable stream', self::ERROR_INVALID_PARAM);
             }
             $useStreaming = true;
         } elseif ($streaming === null) {
-            // 自适应：可寻址且已知文件大小大于内存上限一半时走流式
             if ($seekable && $size > 0 && $memLimit > 0 && $size > (int)($memLimit * 0.5)) {
                 $useStreaming = true;
             }
         }
 
+        if (!$useStreaming && !$seekable) {
+            throw new QzdbException('Buffered mode requires a seekable stream', self::ERROR_INVALID_PARAM);
+        }
+
         if ($useStreaming) {
             if ($size < 0) {
-                // 如果 fstat 未提供 size，尝试 seek 获取
                 $cur = @ftell($handle);
                 @fseek($handle, 0, SEEK_END);
                 $size = @ftell($handle);
@@ -1040,29 +1076,56 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
                     throw new QzdbException('Cannot determine stream size for streaming mode', self::ERROR_INVALID_PARAM);
                 }
             }
+            $this->releaseOwnedStream();
             $this->fileSize = $size;
             $this->stream = $handle;
             $this->ownsStream = $takeOwnership;
             $this->data = null;
             $this->dataLen = 0;
-            $this->streamPages = [];
-            $this->streamPageOrder = [];
-
-            $this->parseHeader();
-            if ($this->verifyCrc && !$this->rawVerifyCrc()) {
-                throw new QzdbException('CRC32 checksum mismatch — the .qzdb stream is corrupted or truncated', self::ERROR_CORRUPTED);
+            $this->geoCache = [];
+            $this->poolCache = [];
+            $this->poolCacheOrder = [];
+            try {
+                $this->parseHeader();
+                if ($this->verifyCrc && !$this->rawVerifyCrc()) {
+                    throw new QzdbException('CRC32 checksum mismatch — the .qzdb stream is corrupted or truncated', self::ERROR_CORRUPTED);
+                }
+            } catch (\Throwable $e) {
+                if ($this->stream !== null && is_resource($this->stream) && $this->ownsStream) {
+                    @fclose($this->stream);
+                    $this->stream = null;
+                }
+                $this->data = null;
+                $this->dataLen = 0;
+                $this->closed = true;
+                throw $e;
             }
             $this->geoCache = [];
-        } else {
-            $bytes = stream_get_contents($handle);
-            if ($bytes === false) {
-                throw new QzdbException('Failed to read from stream', self::ERROR_INVALID_PARAM);
-            }
+            $this->closed = false;
+            return;
+        }
+
+        $position = @ftell($handle);
+        if (@fseek($handle, 0, SEEK_SET) !== 0) {
             if ($takeOwnership) {
                 @fclose($handle);
             }
-            $this->loadBytes($bytes, $verifyCrc);
+            throw new QzdbException('Cannot seek stream to file header', self::ERROR_INVALID_PARAM);
         }
+        $bytes = stream_get_contents($handle);
+        if ($bytes === false) {
+            if ($takeOwnership) {
+                @fclose($handle);
+            }
+            throw new QzdbException('Failed to read from stream', self::ERROR_INVALID_PARAM);
+        }
+        if (!$takeOwnership && $position !== false) {
+            @fseek($handle, $position, SEEK_SET);
+        }
+        if ($takeOwnership) {
+            @fclose($handle);
+        }
+        $this->loadBytes($bytes, $verifyCrc);
     }
 
     // ------------------------------------------------------------------
@@ -1117,26 +1180,34 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
 
     public function reload($dbPath): void
     {
-        // 构造完整新快照；成功后再替换（本实现单线程，整体赋值即原子）。
+        self::assertSupportedPlatform();
         $snap = new QzdbReader(null, $this->groupIndex, true);
         $snap->setMemoryMode($this->memoryMode);
-        $snap->load($dbPath, true); // 强制 CRC
+        $snap->load($dbPath, true);
         $snap->warmup();
         $this->assign($snap);
     }
 
     public function reloadBuffer(string $bytes): void
     {
+        self::assertSupportedPlatform();
         if ($bytes === '') {
             throw new QzdbException('Reload buffer cannot be empty', self::ERROR_INVALID_PARAM);
         }
-        // 先显式释放旧快照的大内存块（$this->data），再构建新快照，避免双倍内存峰值
+        $oldData = $this->data;
+        $oldDataLen = $this->dataLen;
         $this->data = null;
         $this->dataLen = 0;
-        $snap = new QzdbReader(null, $this->groupIndex, true);
-        $snap->setMemoryMode($this->memoryMode);
-        $snap->loadBytes($bytes, true);
-        $snap->warmup();
+        try {
+            $snap = new QzdbReader(null, $this->groupIndex, true);
+            $snap->setMemoryMode($this->memoryMode);
+            $snap->loadBytes($bytes, true);
+            $snap->warmup();
+        } catch (\Throwable $e) {
+            $this->data = $oldData;
+            $this->dataLen = $oldDataLen;
+            throw $e;
+        }
         $this->assign($snap);
     }
 
@@ -1147,16 +1218,14 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         // 同时释放 mmap 资源
         if ($this->mmapPtr !== null && $this->mmapFd >= 0 && isset($this->ffi)) {
             try { $this->ffi->munmap($this->mmapPtr, $this->mmapSize); } catch (\Throwable $e) {}
-            @fclose($this->mmapFd);
+            // 同 close()：$mmapFd 未来接通时方为 resource，守卫避免 fclose(int) TypeError
+            if (is_resource($this->mmapFd)) { @fclose($this->mmapFd); }
         }
         $this->mmapPtr = null;
         $this->mmapFd = -1;
         $this->data = null;
         $this->dataLen = 0;
-        // 2. 先回收本实例旧句柄，避免 fd 泄漏
-        if ($this->stream !== null && is_resource($this->stream) && $this->ownsStream) {
-            @fclose($this->stream);
-        }
+        $this->releaseOwnedStream();
         // 3. 拷贝快照状态（跳过静态单例与共享表）
         // 先清空旧缓存，避免 reload 期间旧池字符串内存滞留
         $this->poolCache = [];
@@ -1176,7 +1245,34 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     // 单条查询 API（契约 §3）
     // ------------------------------------------------------------------
 
-    /** 字符串查询：IPv4 / IPv6 / IPv4-Mapped 均可。未命中或非法 IP 返回 null（契约 §4）。 */
+    public static function parseQueryIp($ipStr)
+    {
+        return self::fastParseIp($ipStr);
+    }
+
+    private function findParsed($v4, $v6)
+    {
+        if ($v4 !== null) return $this->findUint($v4);
+        if (!$this->hasV6) return null;
+        return $this->findV6Bin($v6);
+    }
+
+    private function findFieldsParsed($v4, $v6, $fieldNames)
+    {
+        if ($fieldNames === null || (is_array($fieldNames) && count($fieldNames) === 0)) {
+            return $this->findParsed($v4, $v6);
+        }
+        $info = $this->findParsed($v4, $v6);
+        if ($info === null) return null;
+        $projNames = [];
+        $projValues = [];
+        foreach ($fieldNames as $f) {
+            $projNames[] = $f;
+            $projValues[] = $info->get($f);
+        }
+        return new GeoInfo($projValues, $projNames);
+    }
+
     public function find($ipStr)
     {
         if ($this->closed) return null;
@@ -1184,9 +1280,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $result = self::fastParseIp($ipStr);
         if ($result === null) return null;
         list($v4, $v6) = $result;
-        if ($v4 !== null) return $this->findUint($v4);
-        if (!$this->hasV6) return null;
-        return $this->findV6Bin($v6);
+        return $this->findParsed($v4, $v6);
     }
 
     /** IPv4 整数（主机序，最高字节在前）查询。 */
@@ -1237,21 +1331,14 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         return $info === null ? '' : $info->toPipe();
     }
 
-    /** 字段投影：只返回指定字段。fields 为空等价于 find（契约 §3）。 */
     public function findFields($ipStr, $fieldNames = null)
     {
-        if ($fieldNames === null || (is_array($fieldNames) && count($fieldNames) === 0)) {
-            return $this->find($ipStr);
-        }
-        $info = $this->find($ipStr);
-        if ($info === null) return null;
-        $projNames = [];
-        $projValues = [];
-        foreach ($fieldNames as $f) {
-            $projNames[] = $f;
-            $projValues[] = $info->get($f);
-        }
-        return new GeoInfo($projValues, $projNames);
+        if ($this->closed) return null;
+        if ($ipStr === null || $ipStr === '') return null;
+        $result = self::fastParseIp($ipStr);
+        if ($result === null) return null;
+        list($v4, $v6) = $result;
+        return $this->findFieldsParsed($v4, $v6, $fieldNames);
     }
 
     // ------------------------------------------------------------------
@@ -1314,20 +1401,20 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     // 批量 / 流式 API（契约 §5）
     // ------------------------------------------------------------------
 
-    /** 批量字符串查询，逐条容错，保留三态（契约 §4）。 */
     public function findBatch(array $ips): array
     {
         $out = [];
         foreach ($ips as $ip) {
             $s = (string)$ip;
             try {
-                if (self::fastParseIp($s) === null) {
+                $parsed = self::fastParseIp($s);
+                if ($parsed === null) {
                     throw new QzdbException('Invalid IP: ' . $s, self::ERROR_INVALID_PARAM);
                 }
-                $info = $this->find($s);
-                $out[] = new BatchResult($s, $info, null); // info===null ⇒ 合法 IP 但未命中
+                list($v4, $v6) = $parsed;
+                $out[] = new BatchResult($s, $this->findParsed($v4, $v6), null);
             } catch (QzdbException $e) {
-                $out[] = new BatchResult($s, null, $e); // 非法 IP / 底层故障 ⇒ error 态
+                $out[] = new BatchResult($s, null, $e);
             }
         }
         return $out;
@@ -1339,11 +1426,12 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         foreach ($ips as $ip) {
             $s = (string)$ip;
             try {
-                if (self::fastParseIp($s) === null) {
+                $parsed = self::fastParseIp($s);
+                if ($parsed === null) {
                     throw new QzdbException('Invalid IP: ' . $s, self::ERROR_INVALID_PARAM);
                 }
-                $info = $this->findFields($s, $fields);
-                $out[] = new BatchResult($s, $info, null);
+                list($v4, $v6) = $parsed;
+                $out[] = new BatchResult($s, $this->findFieldsParsed($v4, $v6, $fields), null);
             } catch (QzdbException $e) {
                 $out[] = new BatchResult($s, null, $e);
             }
@@ -1351,17 +1439,17 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         return $out;
     }
 
-    /** 流式查询：惰性产出，内存恒定（Generator）。 */
     public function findStream(iterable $ips): \Generator
     {
         foreach ($ips as $ip) {
             $s = (string)$ip;
             try {
-                if (self::fastParseIp($s) === null) {
+                $parsed = self::fastParseIp($s);
+                if ($parsed === null) {
                     throw new QzdbException('Invalid IP: ' . $s, self::ERROR_INVALID_PARAM);
                 }
-                $info = $this->find($s);
-                yield new BatchResult($s, $info, null);
+                list($v4, $v6) = $parsed;
+                yield new BatchResult($s, $this->findParsed($v4, $v6), null);
             } catch (QzdbException $e) {
                 yield new BatchResult($s, null, $e);
             }
@@ -2658,34 +2746,48 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             if ($off < 0 || $off + 4 > $this->dataLen) {
                 throw new QzdbException('Out of bounds reading U32 at offset ' . $off, self::ERROR_OUT_OF_BOUNDS);
             }
+            if (PHP_INT_SIZE >= 8) {
+                return ord($this->data[$off])
+                    | (ord($this->data[$off + 1]) << 8)
+                    | (ord($this->data[$off + 2]) << 16)
+                    | (ord($this->data[$off + 3]) << 24);
+            }
             return unpack('V', $this->data, $off)[1];
         }
         $b = $this->readBytes($off, 4);
         if (strlen($b) < 4) {
             throw new QzdbException('Out of bounds reading U32 at offset ' . $off, self::ERROR_OUT_OF_BOUNDS);
         }
+        if (PHP_INT_SIZE >= 8) {
+            return ord($b[0]) | (ord($b[1]) << 8) | (ord($b[2]) << 16) | (ord($b[3]) << 24);
+        }
         return unpack('V', $b)[1];
     }
 
     private function safeReadU64($off)
     {
+        self::assertSupportedPlatform();
         if ($this->data !== null) {
             if ($off < 0 || $off + 8 > $this->dataLen) {
                 throw new QzdbException('Out of bounds reading U64 at offset ' . $off, self::ERROR_OUT_OF_BOUNDS);
             }
-            $v = unpack('P', $this->data, $off)[1];
+            $low = unpack('V', $this->data, $off)[1];
+            $high = unpack('V', $this->data, $off + 4)[1];
         } else {
             $b = $this->readBytes($off, 8);
             if (strlen($b) < 8) {
                 throw new QzdbException('Out of bounds reading U64 at offset ' . $off, self::ERROR_OUT_OF_BOUNDS);
             }
-            $v = unpack('P', $b)[1];
+            $low = unpack('V', $b, 0)[1];
+            $high = unpack('V', $b, 4)[1];
         }
-        // 无符号 64 位高位符号位置位（值 ≥ 2^63）时，unpack('P') 会返回负数，
-        // 使后续 'off > 0' 判据为 false 而跳过整段边界校验（Fail-Closed 失效）。
-        // 对任意真实 .qzdb 文件（偏移远小于 2^63）这必为损坏，归一为超大正数，
-        // 使边界校验能正常触发拒绝。
-        if ($v < 0) {
+        // unpack('P') 是机器字节序，大端平台会读错；用两个小端 u32 拼装
+        //（已要求 64 位 PHP，2^63 以内无溢出）。
+        $v = $low + $high * 4294967296;
+        // 无符号 64 位值 ≥ 2^63 时 PHP 整数溢出为 float：对任意真实 .qzdb 文件
+        //（偏移远小于 2^63）这必为损坏，归一为超大正数，使后续 'off > 0' 判据
+        // 不会为 false 而跳过整段边界校验（Fail-Closed 失效）。
+        if (!is_int($v) || $v < 0) {
             return PHP_INT_MAX;
         }
         return $v;
@@ -2708,6 +2810,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
 
     private function safeReadU48($off)
     {
+        self::assertSupportedPlatform();
         if ($this->data !== null) {
             if ($off < 0 || $off + 6 > $this->dataLen) {
                 throw new QzdbException('Out of bounds reading U48 at offset ' . $off, self::ERROR_OUT_OF_BOUNDS);
@@ -2727,32 +2830,34 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
 
     private function safeReadF32($off): float
     {
+        self::assertSupportedPlatform();
         if ($this->data !== null) {
             if ($off < 0 || $off + 4 > $this->dataLen) {
                 throw new QzdbException('Out of bounds reading float32 at offset ' . $off, self::ERROR_OUT_OF_BOUNDS);
             }
-            return unpack('f', $this->data, $off)[1];
+            return unpack('g', $this->data, $off)[1];
         }
         $b = $this->readBytes($off, 4);
         if (strlen($b) < 4) {
             throw new QzdbException('Out of bounds reading float32 at offset ' . $off, self::ERROR_OUT_OF_BOUNDS);
         }
-        return unpack('f', $b)[1];
+        return unpack('g', $b)[1];
     }
 
     private function safeReadF64($off): float
     {
+        self::assertSupportedPlatform();
         if ($this->data !== null) {
             if ($off < 0 || $off + 8 > $this->dataLen) {
                 throw new QzdbException('Out of bounds reading float64 at offset ' . $off, self::ERROR_OUT_OF_BOUNDS);
             }
-            return unpack('d', $this->data, $off)[1];
+            return unpack('e', $this->data, $off)[1];
         }
         $b = $this->readBytes($off, 8);
         if (strlen($b) < 8) {
             throw new QzdbException('Out of bounds reading float64 at offset ' . $off, self::ERROR_OUT_OF_BOUNDS);
         }
-        return unpack('d', $b)[1];
+        return unpack('e', $b)[1];
     }
 
     private function safeReadUintWidth($off, $width)
@@ -3036,6 +3141,7 @@ class QzdbBuilder
 
     public function build(): QzdbReader
     {
+        QzdbReader::assertSupportedPlatform();
         $reader = new QzdbReader(null, $this->groupIndex, $this->verifyCrc);
         $reader->setMemoryMode($this->memoryMode);
         if ($this->source === 'path') {
@@ -3176,41 +3282,30 @@ class ChainedReader
         return new self($readers, self::MODE_MERGE_OVERRIDE);
     }
 
-    public function find($ipStr)
+    private function resolve(callable $lookup)
     {
         if ($this->mode === self::MODE_FALLBACK) {
             foreach ($this->readers as $reader) {
-                try {
-                    $res = $reader->find($ipStr);
-                    if ($res !== null) return $res;
-                } catch (QzdbException $e) {
-                    // PHP 不抛 INVALID_IP（返回 null），其它异常透传
-                    throw $e;
-                }
+                $res = $lookup($reader);
+                if ($res !== null) return $res;
             }
             return null;
         }
-        // MERGE / MERGE_OVERRIDE
+
         $merged = [];
         foreach ($this->readers as $reader) {
-            try {
-                $res = $reader->find($ipStr);
-            } catch (QzdbException $e) {
-                throw $e;
-            }
+            $res = $lookup($reader);
             if ($res === null) continue;
             $fields = $res->getFieldNames();
             $values = $res->toMap();
-            foreach ($fields as $f) {
-                $v = $values[$f] ?? '';
+            foreach ($fields as $field) {
+                $value = $values[$field] ?? '';
                 if ($this->mode === self::MODE_MERGE) {
-                    if (!isset($merged[$f]) || $merged[$f] === '') {
-                        $merged[$f] = $v;
+                    if (!isset($merged[$field]) || $merged[$field] === '') {
+                        $merged[$field] = $value;
                     }
-                } else {
-                    if ($v !== '' || !isset($merged[$f])) {
-                        $merged[$f] = $v;
-                    }
+                } elseif ($value !== '' || !isset($merged[$field])) {
+                    $merged[$field] = $value;
                 }
             }
         }
@@ -3218,54 +3313,72 @@ class ChainedReader
         return new GeoInfo(array_values($merged), array_keys($merged));
     }
 
+    private function findParsed($v4, $v6)
+    {
+        return $this->resolve(function (QzdbReader $reader) use ($v4, $v6) {
+            return $v4 !== null ? $reader->findUint($v4) : $reader->findV6Bin($v6);
+        });
+    }
+
+    public function find($ipStr)
+    {
+        $parsed = QzdbReader::parseQueryIp($ipStr);
+        if ($parsed === null) return null;
+        list($v4, $v6) = $parsed;
+        return $this->findParsed($v4, $v6);
+    }
+
     public function findUint(int $ipInt)
     {
-        if ($this->mode === self::MODE_FALLBACK) {
-            foreach ($this->readers as $reader) {
-                $res = $reader->findUint($ipInt);
-                if ($res !== null) return $res;
-            }
-            return null;
-        }
-        return $this->find(self::uintToIpv4($ipInt));
+        return $this->resolve(function (QzdbReader $reader) use ($ipInt) {
+            return $reader->findUint($ipInt);
+        });
     }
 
     public function findBytes(string $bytes)
     {
-        if ($this->mode === self::MODE_FALLBACK) {
-            foreach ($this->readers as $reader) {
-                $res = $reader->findBytes($bytes);
-                if ($res !== null) return $res;
-            }
-            return null;
-        }
-        return $this->find(self::bytesToIpString($bytes));
+        return $this->resolve(function (QzdbReader $reader) use ($bytes) {
+            return $reader->findBytes($bytes);
+        });
     }
 
-    public function findFields($ipStr, $fields)
+    private function findFieldsParsed($v4, $v6, $fields)
     {
-        $full = $this->find($ipStr);
+        $full = $this->findParsed($v4, $v6);
         if ($full === null || $fields === null || (is_array($fields) && count($fields) === 0)) {
             return $full;
         }
         $projNames = [];
         $projValues = [];
-        foreach ($fields as $f) {
-            $projNames[] = $f;
-            $projValues[] = $full->get($f);
+        foreach ($fields as $field) {
+            $projNames[] = $field;
+            $projValues[] = $full->get($field);
         }
         return new GeoInfo($projValues, $projNames);
+    }
+
+    public function findFields($ipStr, $fields)
+    {
+        $parsed = QzdbReader::parseQueryIp($ipStr);
+        if ($parsed === null) return null;
+        list($v4, $v6) = $parsed;
+        return $this->findFieldsParsed($v4, $v6, $fields);
     }
 
     public function findBatch(array $ips): array
     {
         $out = [];
         foreach ($ips as $ip) {
+            $s = (string)$ip;
             try {
-                $info = $this->find($ip);
-                $out[] = new BatchResult((string)$ip, $info, null);
+                $parsed = QzdbReader::parseQueryIp($s);
+                if ($parsed === null) {
+                    throw new QzdbException('Invalid IP: ' . $s, QzdbReader::ERROR_INVALID_PARAM);
+                }
+                list($v4, $v6) = $parsed;
+                $out[] = new BatchResult($s, $this->findParsed($v4, $v6), null);
             } catch (QzdbException $e) {
-                $out[] = new BatchResult((string)$ip, null, $e);
+                $out[] = new BatchResult($s, null, $e);
             }
         }
         return $out;
@@ -3275,11 +3388,16 @@ class ChainedReader
     {
         $out = [];
         foreach ($ips as $ip) {
+            $s = (string)$ip;
             try {
-                $info = $this->findFields($ip, $fields);
-                $out[] = new BatchResult((string)$ip, $info, null);
+                $parsed = QzdbReader::parseQueryIp($s);
+                if ($parsed === null) {
+                    throw new QzdbException('Invalid IP: ' . $s, QzdbReader::ERROR_INVALID_PARAM);
+                }
+                list($v4, $v6) = $parsed;
+                $out[] = new BatchResult($s, $this->findFieldsParsed($v4, $v6, $fields), null);
             } catch (QzdbException $e) {
-                $out[] = new BatchResult((string)$ip, null, $e);
+                $out[] = new BatchResult($s, null, $e);
             }
         }
         return $out;
@@ -3288,11 +3406,16 @@ class ChainedReader
     public function findStream(iterable $ips): \Generator
     {
         foreach ($ips as $ip) {
+            $s = (string)$ip;
             try {
-                $info = $this->find($ip);
-                yield new BatchResult((string)$ip, $info, null);
+                $parsed = QzdbReader::parseQueryIp($s);
+                if ($parsed === null) {
+                    throw new QzdbException('Invalid IP: ' . $s, QzdbReader::ERROR_INVALID_PARAM);
+                }
+                list($v4, $v6) = $parsed;
+                yield new BatchResult($s, $this->findParsed($v4, $v6), null);
             } catch (QzdbException $e) {
-                yield new BatchResult((string)$ip, null, $e);
+                yield new BatchResult($s, null, $e);
             }
         }
     }

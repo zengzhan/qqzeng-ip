@@ -494,5 +494,3 @@ BENCH_OPS=200000 dotnet run --project ../netcore.bench -c Release \
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: netcore: C# .NET SDK（内存映射与高并发查询） sync=1789984192 -->

@@ -158,6 +158,7 @@ func (c *ChainedReader) findFallback(ip string, rs []*QzdbReader) (*GeoInfo, err
 // 先注册库的字段在前，后注册库独有的新字段依次追加。
 func (c *ChainedReader) findMerge(ip string, rs []*QzdbReader, mode ChainMode) (*GeoInfo, error) {
 	var fields []string
+	numeric := make([]bool, 0)
 	fieldVals := make(map[string]string)
 
 	for _, r := range rs {
@@ -178,6 +179,7 @@ func (c *ChainedReader) findMerge(ip string, rs []*QzdbReader, mode ChainMode) (
 			}
 			if _, exists := fieldVals[name]; !exists {
 				fields = append(fields, name)
+				numeric = append(numeric, isNumericFieldName(name))
 				fieldVals[name] = val
 				continue
 			}
@@ -205,6 +207,7 @@ func (c *ChainedReader) findMerge(ip string, rs []*QzdbReader, mode ChainMode) (
 		FieldNames: fields,
 		Values:     values,
 		normMap:    buildNormalizedMap(fields),
+		numeric:    numeric,
 	}, nil
 }
 
@@ -472,7 +475,7 @@ func (reg *QzdbRegistry) Names() []string {
 // Find 按注册顺序查询，返回首个非空的 GeoInfo；全未命中返回 (nil, nil)。
 func (reg *QzdbRegistry) Find(ip string) (*GeoInfo, error) {
 	reg.mu.RLock()
-	order := reg.order
+	order := slices.Clone(reg.order)
 	reg.mu.RUnlock()
 	for _, r := range order {
 		if r == nil {

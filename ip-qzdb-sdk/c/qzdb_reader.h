@@ -7,7 +7,8 @@ extern "C" {
 
 #include <stdint.h>
 #include <stddef.h>
-#include <pthread.h>
+/* 注意：本头文件不依赖 pthread 类型（qzdb_registry_t 为不透明类型），
+ * 故不在此引入 <pthread.h>；多线程同步细节仅存在于 qzdb_reader.c 内部。 */
 
 #define QZDB_MAX_FIELDS 32
 /* FORMAT §10.5：原生浮点整值定点展开最长 ~309 位（1e308）+ 符号 + NUL，取 512 留余量 */
@@ -61,6 +62,7 @@ typedef struct {
     size_t   data_size;
     int      data_is_heap;   /* 1 if data was malloc'd (qzdb_init_buffer), else mmap'd */
     int      data_is_borrowed; /* 1 if data points into caller-owned buffer (qzdb_init_buffer_borrowed): skip free/munmap in qzdb_free */
+    void*    numeric_locale; /* private POSIX locale_t handle; opaque in the public ABI */
     int      group_index;
 
     // Header fields
@@ -165,7 +167,9 @@ typedef struct {
 typedef struct {
     char*    values[QZDB_MAX_FIELDS];
     uint32_t values_mask;  /* bit i = 1 if values[i] is heap-owned and must be freed */
-    int      value_count;  /* actual number of valid entries in values[] (≤ group_field_count) */
+    int      value_count;  /* valid entries in values[]; projection follows request order */
+    int8_t   field_indices[QZDB_MAX_FIELDS]; /* schema index per output slot, -1 for unknown */
+    uint8_t  projection_mode; /* 1 when values[] is a requested-field projection */
 } qzdb_geo_info_t;
 
 typedef struct {

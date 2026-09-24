@@ -537,5 +537,3 @@ mvn test          # 14 tests / 106 assertions
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: java: Java SDK（堆外内存与 Builder API） sync=1789984192 -->

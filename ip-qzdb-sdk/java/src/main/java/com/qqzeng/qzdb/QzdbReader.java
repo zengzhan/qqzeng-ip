@@ -536,38 +536,52 @@ public final class QzdbReader implements AutoCloseable {
                 int maxGsGroups = Math.min(gsGroupCount, groups);
                 for (int gi = 0; gi < maxGsGroups; gi++) {
                     if (sp + 16 > dataLen) break;
-                    // groupId 是本组的 one-hot 档次位掩码（FORMAT §3.1），是该组权威的档次信号，
-                    // 不能跳过——parseMetadata() 依赖它。
                     groupIds[gi] = readU16(data, sp);
                     sp += 2;
                     int fldCount = readU16(data, sp);
                     sp += 2;
-                    sp += 4; // entryCount
-                    int stride = readU32(data, sp);
                     sp += 4;
-                    sp += 4; // flags
-                    if (fldCount < 0 || fldCount > 255 || sp + (long) fldCount * 12 > dataLen) break;
+                    long stride = readU32(data, sp) & 0xFFFFFFFFL;
+                    sp += 4;
+                    sp += 4;
+                    if (fldCount < 1 || fldCount > 255 || sp + (long) fldCount * 12 > dataLen) break;
+                    if (fldCount != groupFieldCounts[gi]) break;
 
                     schemaFldCounts[gi] = fldCount;
-                    groupStrides[gi] = stride;
+                    if (stride < 1 || stride > Integer.MAX_VALUE || stride > dataLen) {
+                        throw new QzdbException(ErrorCode.CORRUPTED,
+                                "Invalid GROUP_SCHEMA stride for group " + gi + ": " + stride);
+                    }
                     int[] widths = new int[fldCount];
                     int[] offsets = new int[fldCount];
                     boolean[] natives = new boolean[fldCount];
                     int[] natTypes = new int[fldCount];
                     for (int fi = 0; fi < fldCount; fi++) {
-                        // fieldId 只是槽位序号（0..N-1），不带跨档语义，读过即丢。
                         sp += 2;
                         int w = data.get(sp) & 0xFF;
                         sp += 1;
                         int fieldFlags = data.get(sp) & 0xFF;
                         sp += 1;
-                        natives[fi] = (fieldFlags & 0x01) != 0;
-                        natTypes[fi] = (fieldFlags >> 1) & 0x03;
-                        offsets[fi] = readU32(data, sp);
+                        long offset = readU32(data, sp) & 0xFFFFFFFFL;
                         sp += 4;
-                        sp += 4; // poolSectionId
+                        sp += 4;
+                        boolean nativeField = (fieldFlags & 0x01) != 0;
+                        int nativeType = (fieldFlags >> 1) & 0x03;
+                        boolean validWidth = nativeField
+                                ? (nativeType == 0 ? w >= 1 && w <= 4
+                                : nativeType == 1 && (w == 4 || w == 8))
+                                : w >= 1 && w <= 4;
+                        if (!validWidth || offset > Integer.MAX_VALUE || offset + w > stride) {
+                            throw new QzdbException(ErrorCode.CORRUPTED,
+                                    "Invalid GROUP_SCHEMA field " + gi + "/" + fi
+                                            + " width/offset: " + w + "/" + offset);
+                        }
+                        natives[fi] = nativeField;
+                        natTypes[fi] = nativeType;
                         widths[fi] = w;
+                        offsets[fi] = (int) offset;
                     }
+                    groupStrides[gi] = (int) stride;
                     groupFieldWidths[gi] = widths;
                     groupFieldOffsets[gi] = offsets;
                     groupFieldNative[gi] = natives;
@@ -1223,9 +1237,10 @@ public final class QzdbReader implements AutoCloseable {
     }
 
     /**
-     * 查询 16 字节 IP 地址（IPv6 或 IPv4-mapped IPv6）的地理信息。
+     * 查询字节数组形式的 IP 地址的地理信息。
      *
-     * @param ip16 16 字节网络序地址；前 10 字节为 0 且第 10-11 字节为 0xFF 时按 IPv4-mapped 降级
+     * @param ip16 4 字节 IPv4 网络序地址，或 16 字节网络序地址（IPv6；
+     *             前 10 字节为 0 且第 10-11 字节为 0xFF 时按 IPv4-mapped 降级）
      * @return 查询结果；未找到返回 {@link Optional#empty()}
      * @throws QzdbException 数组为 null 或长度非法时抛出
      */
@@ -1541,6 +1556,9 @@ public final class QzdbReader implements AutoCloseable {
      * 热替换正在服务的数据文件。构建完整新快照后原子替换引用，旧数据在替换失败时保持不变。
      * <p>
      * 强制 CRC 校验（不可关闭），校验失败抛异常且旧数据不动。
+     * <p>
+     * Windows 可能锁定仍被映射的旧文件；发布更新时应使用新的版本化路径调用本方法，
+     * 或先准备字节后调用 {@link #reloadBuffer(byte[])}，不要覆盖仍在使用的旧文件。
      *
      * @param path 新数据库文件路径
      * @throws QzdbException 文件不存在/CRC 失败/格式错误时抛出
@@ -1754,7 +1772,12 @@ public final class QzdbReader implements AutoCloseable {
             }
             result = (result << 8) | val;
             parts++;
-            if (i < len) i++; // skip '.'
+            if (i < len) {
+                i++;
+                if (i == len) {
+                    throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv4 format: " + ip);
+                }
+            }
         }
         if (parts != 4) {
             throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv4 format: " + ip);
@@ -2242,6 +2265,9 @@ public final class QzdbReader implements AutoCloseable {
         if (width <= 1) return d.get(off) & 0xFF;
         if (width == 2) return d.getShort(off) & 0xFFFF;
         if (width == 3) return (d.get(off) & 0xFF) | ((d.getShort(off + 1) & 0xFFFF) << 8);
+        // 宽度 4 返回原始 32 位（值 ≥ 2^31 时为负 int）：内部调用方只做
+        // entryId <= 0 / 越界比较，负值与无符号大值的判定结果一致（均为 miss）；
+        // 对外暴露的 RowIds 另提供 *Unsigned() 无符号视图。
         return d.getInt(off);
     }
 

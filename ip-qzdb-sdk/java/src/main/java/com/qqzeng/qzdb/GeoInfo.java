@@ -126,7 +126,10 @@ public final class GeoInfo {
         for (int i = 0; i < n; i++) {
             char c = key.charAt(i);
             if (c != '_' && c != '-') {
-                sb.append(Character.toLowerCase(c));
+                if (c >= 'A' && c <= 'Z') {
+                    c = (char) (c + ('a' - 'A'));
+                }
+                sb.append(c);
             }
         }
         return sb.toString();
