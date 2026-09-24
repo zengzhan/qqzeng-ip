@@ -23,4 +23,4 @@
 > - 目前在用的经典版请见 **[`../ip-classic-sdk`](../ip-classic-sdk)**。
 > - 全新高性能生产环境强烈推荐使用最新旗舰 **[`../ip-qzdb-sdk`](../ip-qzdb-sdk)**。
 
-<!-- commit: ip-history-sdk: 历史版本与工具（3.0~5.0 演进与桌面查询工具） sync=1790240188 -->
+<!-- commit: ip-history-sdk: 历史版本与工具（3.0~5.0 演进与桌面查询工具） sync=1790240656 -->
