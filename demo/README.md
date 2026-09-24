@@ -8,6 +8,4 @@
 - 调用时注意版本对应：ult 档字段顺序为
   `continent|continent_en|country|country_code|country_en|country_alpha3|province|province_en|city|city_en|district|geo_id|longitude|latitude|timezone|languages|currency_code|phone_prefix|emoji_flag|isp|asn|as_name|as_domain|usage_type`。**不要用 std/asn/pro/max 的字段数去解析**，否则列会错位。
 
-<!-- commit description sync 1787122549 -->
-
-<!-- commit: demo: 归属地与号段 CSV/TXT 及 QZDB 演示样本数据 sync=1789984192 -->
+<!-- commit: demo: 归属地与号段 CSV/TXT 及 QZDB 演示样本数据 sync=1790240188 -->
