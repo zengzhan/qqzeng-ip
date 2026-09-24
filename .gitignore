@@ -5,7 +5,10 @@
 *.dat
 *.db
 *.qzdb
+*.csv
 data/
+!demo/*.qzdb
+!demo/*.csv
 
 # Python cache
 __pycache__/
