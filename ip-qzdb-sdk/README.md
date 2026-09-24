@@ -181,4 +181,4 @@ The QZDB engine uses a custom **two-phase Patricia Trie search algorithm**:
 
 MIT
 
-<!-- commit: ip-qzdb-sdk: QZDB 多语言 SDK（Rust/C/Go/Java/C#/Node.js/PHP/Python） sync=1790240188 -->
+<!-- commit: ip-qzdb-sdk: QZDB 多语言 SDK（Rust/C/Go/Java/C#/Node.js/PHP/Python） sync=1790240656 -->
