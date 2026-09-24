@@ -23,4 +23,4 @@
 2. **多语言原生支持**：覆盖 C++、Rust、Go、Java、Python、PHP、Node.js、.NET 全语言栈。
 3. **高并发缓存支持**：提供 Redis 快速批量导入脚本与热点缓存方案，轻松应对千万级 QPS。
 
-<!-- commit: phone-location-sdk: 手机号段归属地 DAT 解析 SDK（2.0~6.0 全版本多语言） sync=1790240188 -->
+<!-- commit: phone-location-sdk: 手机号段归属地 DAT 解析 SDK（2.0~6.0 全版本多语言） sync=1790240656 -->
