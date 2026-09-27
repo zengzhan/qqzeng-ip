@@ -118,6 +118,11 @@ run_test "Node-NativeFloat" "node native_float_test.js" "nodejs" "NATIVE_FLOAT_O
 # 严格性必须由该表驱动测试钉死（对齐 C-IpStrict / PHP-IpStrict）。
 run_test "Node-IpStrict" "node ip_strict_test.js" "nodejs" "IP_STRICT_OK"
 
+# 32 位 Trie 节点 + typed-array 极速通道（DB-free，自建合成库）：仓库内所有 .qzdb
+# 的 v4Node24 都置位，_v4NodesU32 永不构建，V4 极速通道在真实库上无法被执行。
+# 该测试在内存里造 32 位节点库把它与 V6 一并拉起来跑。
+run_test "Node-TrieTypedArray" "node trie_typedarray_test.js" "nodejs" "TRIE_TYPEDARRAY_OK"
+
 # PHP
 run_test "PHP" "php test.php" "php"
 

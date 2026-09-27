@@ -61,6 +61,18 @@
 
 ### Changed
 
+- **Node.js SDK：`_trieWalkV4` / `_trieWalkV6Buf` 增加 typed-array 极速通道**
+  （`ip-qzdb-sdk/nodejs/qzdb.js`）。节点段是 32 位（8 字节 `{u32 left, u32 right}`）、
+  section 偏移 4 字节对齐、宿主小端时，直接在 `_v4NodesU32` / `_v6NodesU32` 上寻址，
+  省掉每步的 `_getV4Child` / `_getV6Child` 方法调用、24 位分支判断与 try/catch。
+  语义与原路径逐位等价（含 `idx >= nodeCount` 上界守卫、128/16 步数上界、
+  叶子值按 `SENTINEL_MASK_31` 剥离）。在 `qqzeng_ip_max_global.qzdb`（唯一
+  仓库内 v6Node24=0 的库之一）上实测 V6 Trie 游走 13.6ms → 12.3ms（~10%）。
+  与 21 个 `.qzdb` × 294 万次 V4/V6 查询对拍，rowId 零差异。
+  ⚠️ V4 侧仅在 32 位节点库上生效，而仓库内所有 `.qzdb` 的 `v4Node24` 均置位，
+  故该分支此前无任何测试执行——本次补 `nodejs/trie_typedarray_test.js`（DB-free，
+  内存自建 32 位节点库）并接入 `run_all_tests.sh`。
+
 - **Java SDK：`BenchContract` 从 `src/main/java` 迁到 `src/test/java`**（`BenchContract.java`）。
   ⚠️ **发布物变更**：此前它属于运行时源集，会随 Maven Central 发布包一起发给用户
   （占 `qzdb.jar` 未压缩体积约 26%），并被 `tools/sync_to_github.py` 同步进公开仓库

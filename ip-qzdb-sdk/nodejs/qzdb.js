@@ -1335,6 +1335,26 @@ class QzdbReader {
 
     let idx = ptr;
     let suffix = (ipInt & 0xFFFF) << 16;
+    const nodesU32 = this._v4NodesU32;
+    const nodeCount = this._v4NodeCount;
+
+    // typed-array 极速通道：直接寻址，省掉每步的 _getV4Child 方法调用、24 位分支
+    // 与 try/catch。仅 32 位节点 + 4 字节对齐 + 小端时命中（见 _v4NodesU32 构建处），
+    // 其余走下方原路径。idx 上界守卫与 _getV4Child 的 nodeIdx >= nodeCount 等价，
+    // 视图长度即 chk 校验过的段长，故索引恒在界内。
+    if (nodesU32 !== null) {
+      for (let step = 0; step < 16; step++) {
+        if (idx >= nodeCount) return 0;
+        const bit = (suffix >>> 31) & 1;
+        const child = nodesU32[(idx << 1) | bit];
+        if (child === 0) return 0;
+        if (child & SENTINEL) return child & SENTINEL_MASK_31;
+        idx = child;
+        suffix <<= 1;
+      }
+      return 0;
+    }
+
     // 有界 for：jump 表命中内节点后最多再走 16 步（16 位 jump + 16 位后缀；Java 同构，Go 为等价步数上界），免每步步数分支
     for (let step = 0; step < 16; step++) {
       const bit = (suffix >>> 31) & 1;
@@ -1372,6 +1392,25 @@ class QzdbReader {
     const w2 = ipBuf.readUInt32BE(8), w3 = ipBuf.readUInt32BE(12);
     let idx = ptr;
     let depth = jumpBits;
+    const nodesU32 = this._v6NodesU32;
+    const nodeCount = this._v6NodeCount;
+
+    // typed-array 极速通道：同 _trieWalkV4，仅 32 位节点 + 4 字节对齐 + 小端时命中。
+    // 每步语义与下方 _getV6Child 路径逐位等价（含 idx 上界守卫与 128 深度上界）。
+    if (nodesU32 !== null) {
+      while (depth < 128) {
+        if (idx >= nodeCount) return 0;
+        const word = depth <= 31 ? w0 : depth <= 63 ? w1 : depth <= 95 ? w2 : w3;
+        const bit = (word >>> (31 - (depth & 31))) & 1;
+        const child = nodesU32[(idx << 1) | bit];
+        if (child === 0) return 0;
+        if (child & SENTINEL) return child & SENTINEL_MASK_31;
+        idx = child;
+        depth += 1;
+      }
+      return 0;
+    }
+
     while (depth < 128) {
       const word = depth <= 31 ? w0 : depth <= 63 ? w1 : depth <= 95 ? w2 : w3;
       const bit = (word >>> (31 - (depth & 31))) & 1;
