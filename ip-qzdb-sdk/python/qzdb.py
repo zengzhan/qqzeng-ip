@@ -2077,7 +2077,9 @@ class QzdbReader:
                 v4 = ((ip_bytes[12] & 0xFF) << 24 | (ip_bytes[13] & 0xFF) << 16
                       | (ip_bytes[14] & 0xFF) << 8 | (ip_bytes[15] & 0xFF))
                 return self.find_uint(v4)
-            if type(self) is QzdbReader and 'find_v6_bytes' not in self.__dict__:
+            if (type(self) is QzdbReader
+                    and 'find_v6_bytes' not in self.__dict__
+                    and QzdbReader.find_v6_bytes is _QZDB_READER_FIND_V6_BYTES):
                 return self._find_v6_bytes(ip_bytes)
             return self.find_v6_bytes(ip_bytes)
         return None
@@ -2597,6 +2599,9 @@ class QzdbReader:
         if len(d) > 20:
             crc = zlib.crc32(mv[20:], crc)
         return stored == (crc & 0xFFFFFFFF)
+
+
+_QZDB_READER_FIND_V6_BYTES = QzdbReader.find_v6_bytes
 
 
 # Named result of lookup_ids() — a tuple subclass (API contract appendix A.5).
