@@ -2034,6 +2034,9 @@ class QzdbReader:
             v4 = ((ip_bytes[12] & 0xFF) << 24 | (ip_bytes[13] & 0xFF) << 16
                   | (ip_bytes[14] & 0xFF) << 8 | (ip_bytes[15] & 0xFF))
             return self.find_uint(v4)
+        return self._find_v6_bytes(ip_bytes)
+
+    def _find_v6_bytes(self, ip_bytes):
         row_id = self._trie_walk_v6_bytes(ip_bytes)
         if row_id == 0:
             return None
@@ -2074,6 +2077,8 @@ class QzdbReader:
                 v4 = ((ip_bytes[12] & 0xFF) << 24 | (ip_bytes[13] & 0xFF) << 16
                       | (ip_bytes[14] & 0xFF) << 8 | (ip_bytes[15] & 0xFF))
                 return self.find_uint(v4)
+            if type(self) is QzdbReader and 'find_v6_bytes' not in self.__dict__:
+                return self._find_v6_bytes(ip_bytes)
             return self.find_v6_bytes(ip_bytes)
         return None
 
