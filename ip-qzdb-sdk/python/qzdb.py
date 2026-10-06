@@ -895,46 +895,49 @@ class QzdbReader:
         self._group_pools = None
         self._pools_loaded = False
         self._pools_lock = threading.Lock()
+        # 串行化 load / reload / reload_buffer：并发热更新只允许一个构建者在跑，
+        # 避免两个线程各自基于旧状态构建、互相覆盖（后发先至）。读路径不碰此锁。
+        self._reload_lock = threading.RLock()
 
         if db_path is not None:
-            self.load(db_path)
-            if self._warmup:
-                self.Warmup()
+            self.load(db_path)  # load() 内部已按 warmup 选项预热，这里不再重复
 
-    def load(self, db_path, verify_crc=None, warmup=None):
-        if verify_crc is not None:
-            self._verify_crc = verify_crc
-        if warmup is not None:
-            self._warmup = warmup
+    @staticmethod
+    def _open_source(path, not_found_msg, io_msg, map_msg):
+        """打开文件并返回 (data, is_mmap)；load / reload 共用，异常统一翻译为 QzdbError。"""
         try:
-            f = open(db_path, 'rb')
+            f = open(path, 'rb')
         except FileNotFoundError:
-            raise QzdbError(f'Database file not found: {db_path}', QzdbError.NOT_FOUND)
+            raise QzdbError(not_found_msg, QzdbError.NOT_FOUND)
         except OSError as exc:
-            raise QzdbError(f'Failed to read database file: {exc}', QzdbError.CORRUPTED) from exc
-
-        # `with f:` 保证 f 在这个块的任何退出路径（正常返回或异常）都恰好关闭一次；
-        # 之前手写 except 分支里关一次、外层 finally 又关一次的写法虽然安全
-        # （Python 文件对象的 close() 是幂等的，重复调用不会出错），但属于多余的
-        # 双重关闭。改用 with 是 Python 官方推荐的资源管理写法（PEP 8 / ruff SIM115）。
+            raise QzdbError(io_msg, QzdbError.CORRUPTED) from exc
         with f:
             try:
                 fsize = os.fstat(f.fileno()).st_size
                 if fsize >= 1024 * 1024:  # 1MB threshold → mmap for lazy loading
-                    data = mmap.mmap(f.fileno(), fsize, access=mmap.ACCESS_READ)
-                    is_mmap = True
-                else:
-                    data = f.read()
-                    is_mmap = False
+                    return mmap.mmap(f.fileno(), fsize, access=mmap.ACCESS_READ), True
+                return f.read(), False
             except OSError as exc:
-                raise QzdbError(f'Failed to memory-map database: {exc}', QzdbError.CORRUPTED) from exc
+                raise QzdbError(f'{map_msg}: {exc}', QzdbError.CORRUPTED) from exc
 
-        shadow = self._build_shadow(data, is_mmap)
-        self._publish(shadow)
-        if self._warmup:
-            self.Warmup()
+    def load(self, db_path, verify_crc=None, warmup=None):
+        with self._reload_lock:
+            if verify_crc is not None:
+                self._verify_crc = verify_crc
+            if warmup is not None:
+                self._warmup = warmup
+            data, is_mmap = self._open_source(
+                db_path,
+                f'Database file not found: {db_path}',
+                f'Failed to read database file: {db_path}',
+                'Failed to memory-map database')
+            # 已有快照在服务时（reload 语义）预载词表；首次打开保持懒加载，启动更快。
+            shadow = self._build_shadow(data, is_mmap, eager_pools=len(self._data) > 0)
+            self._publish(shadow)
+            if self._warmup:
+                self.Warmup()
 
-    def _build_shadow(self, data, is_mmap):
+    def _build_shadow(self, data, is_mmap, verify_crc=None, eager_pools=False):
         """Build a fully-parsed shadow snapshot from raw bytes (file or buffer).
 
         A partial load never mutates the live instance, so a parse failure leaves
@@ -947,7 +950,10 @@ class QzdbReader:
         shadow.__dict__.update(self.__dict__)
         shadow._data = data
         shadow._is_mmap = is_mmap
-        shadow._verify_crc = self._verify_crc
+        # reload 路径显式传 verify_crc=True，而不是临时改写 self._verify_crc：
+        # 旧写法在构建抛错时不会还原，会把用户的 verify_crc=False 永久翻成 True，
+        # 且两个并发 reload 会互相污染保存值。
+        shadow._verify_crc = self._verify_crc if verify_crc is None else verify_crc
         shadow._group_index = self._group_index
         shadow._warmup = self._warmup
         # Reset lazy-pool flags so the new file rebuilds its own pools.
@@ -964,6 +970,10 @@ class QzdbReader:
                     'CRC32 checksum mismatch — the .qzdb file is corrupted or truncated',
                     QzdbError.CORRUPTED,
                 )
+            if eager_pools:
+                # 热更新产生的快照在发布前就把词表解码完：发布后读者只读不写，
+                # 不存在「在已被替换的旧对象上懒加载」的窗口。
+                shadow._ensure_pools_loaded()
         except Exception:
             # Shadow failed — close its mmap if it opened one, then re-raise.
             if shadow._is_mmap and hasattr(shadow._data, 'close'):
@@ -975,22 +985,25 @@ class QzdbReader:
         return shadow
 
     def _publish(self, shadow):
-        """Atomically swap in a fully-built shadow snapshot (API contract §2/§3)."""
-        old_data = self._data
+        """Atomically swap in a fully-built shadow snapshot (API contract §2/§3).
+
+        旧快照的 mmap **不在此处显式 close()**：正在执行的查询在入口处已把
+        ``self._data`` 绑定到局部变量，显式 close 会让它们在下一次读取时抛出
+        ``ValueError: mmap closed or invalid``（8 线程查询 + 持续 reload 可稳定复现）。
+        这里只丢弃引用；最后一个读者返回后 CPython 引用计数归零，mmap 对象析构时
+        自动 munmap——与 Go 版「读者持引用即免 munmap」语义一致（契约 §五.6）。
+        """
         # Atomic swap: build the new dict first, then replace in one step.
         # This avoids the window between clear() and update() where concurrent
         # readers would see an empty __dict__ and raise AttributeError.
         new_dict = dict(shadow.__dict__)
         new_dict['_closed'] = False
-        self.__dict__ = new_dict
+        # 等旧快照上进行中的懒加载写完再换 __dict__，保证它的赋值落在旧快照上。
+        with self._pools_lock:
+            self.__dict__ = new_dict
         # Disarm shadow so its destructor cannot close the mmap we took over.
         shadow._is_mmap = False
         shadow._data = b''
-        if hasattr(old_data, 'close'):
-            try:
-                old_data.close()
-            except OSError:
-                pass
 
     def Warmup(self):
         d = self._data
@@ -1029,43 +1042,25 @@ class QzdbReader:
         """
         if not os.path.exists(path) or not os.access(path, os.R_OK):
             raise QzdbError(f'Reload file does not exist: {path}', QzdbError.NOT_FOUND)
-        saved_verify = self._verify_crc
-        self._verify_crc = True  # reload forces CRC regardless of open option
-        try:
-            f = open(path, 'rb')
-        except OSError as exc:
-            self._verify_crc = saved_verify
-            raise QzdbError(f'Failed to read reload file: {path}', QzdbError.CORRUPTED) from exc
-        with f:
-            try:
-                fsize = os.fstat(f.fileno()).st_size
-                if fsize >= 1024 * 1024:
-                    data = mmap.mmap(f.fileno(), fsize, access=mmap.ACCESS_READ)
-                    is_mmap = True
-                else:
-                    data = f.read()
-                    is_mmap = False
-            except OSError as exc:
-                self._verify_crc = saved_verify
-                raise QzdbError(f'Failed to memory-map reload file: {exc}', QzdbError.CORRUPTED) from exc
-        shadow = self._build_shadow(data, is_mmap)
-        self._verify_crc = saved_verify
-        shadow.Warmup()
-        self._publish(shadow)
+        with self._reload_lock:
+            data, is_mmap = self._open_source(
+                path,
+                f'Reload file does not exist: {path}',
+                f'Failed to read reload file: {path}',
+                'Failed to memory-map reload file')
+            shadow = self._build_shadow(data, is_mmap, verify_crc=True, eager_pools=True)
+            shadow.Warmup()
+            self._publish(shadow)
 
     def reload_buffer(self, buffer):
         """Hot-swap to a new in-memory buffer (copy semantics). CRC forced."""
         if buffer is None or len(buffer) == 0:
             raise QzdbError('Reload buffer cannot be null or empty', QzdbError.INVALID_PARAM)
-        saved_verify = self._verify_crc
-        self._verify_crc = True
         data = bytes(buffer)  # copy protection
-        try:
-            shadow = self._build_shadow(data, False)
-        finally:
-            self._verify_crc = saved_verify
-        shadow.Warmup()
-        self._publish(shadow)
+        with self._reload_lock:
+            shadow = self._build_shadow(data, False, verify_crc=True, eager_pools=True)
+            shadow.Warmup()
+            self._publish(shadow)
 
     @staticmethod
     def open_buffer(buffer, group_index=0, verify_crc=True):
@@ -1625,9 +1620,13 @@ class QzdbReader:
                 return
 
             group_count = len(self._group_field_counts)
-            self._group_pools = [None] * group_count
+            # 局部构建、末尾一次性赋值：不再把半成品 [None]*n 暴露到 self 上。
+            # 否则并发 reload 替换 __dict__ 后，下面的逐项填充会落到新快照里。
+            pools = [None] * group_count
 
             if self._off_pools <= 0:
+                self._group_pools = pools
+                self._pools_loaded = True
                 return
 
             pool_cursor = self._off_pools
@@ -1697,8 +1696,9 @@ class QzdbReader:
                                 'utf-8', errors='replace')
                     pool_cursor += tail
                     group_pool_list.append(strings)
-                self._group_pools[g] = group_pool_list
+                pools[g] = group_pool_list
 
+            self._group_pools = pools
             self._pools_loaded = True
 
     # PERF-03: Inlined child reads. Called in hot path, so manual inlining avoids
