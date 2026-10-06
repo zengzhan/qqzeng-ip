@@ -10,11 +10,14 @@ data/
 !demo/*.qzdb
 !demo/*.csv
 
-# Python cache
+# Python cache & build artifacts
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+# wheel / sdist 与 egg-info 不入库：由 tools/sync_to_github.py 的 clean_and_verify() 清理
+dist/
+*.egg-info/
 
 # Node.js
 node_modules/
