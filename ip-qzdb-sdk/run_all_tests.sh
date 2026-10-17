@@ -99,7 +99,15 @@ run_test "Python" "$PYTHON_BIN test.py" "python"
 
 # Independent CSV oracle (the old verify_csv.py entrypoint was removed; this
 # oracle compares the SDK with the authoritative range CSV directly).
+# It only ever pairs a .qzdb with a _range.csv from the SAME snapshot directory,
+# so a database build can never be judged against another build's ground truth.
 run_test "CSV Oracle" "$PYTHON_BIN test_csv_oracle.py" "python" "CSV_ORACLE_OK"
+
+# Test-data provenance gate: every repo .qzdb must trace to a release build
+# (matched by canonical CRC32) and every frozen snapshot must be single-build
+# and ground-truthed. Without this, refreshing data/ independently of
+# test_data_<period>/ silently invalidates the oracle above.
+run_test "Data-Sync" "$PYTHON_BIN tools/verify_data_sync.py" "." "OK: every repo" "0"
 
 # Hostile-vector conformance (consumes tools/hostile_vectors.json; skips
 # gracefully when the base DB is absent).
@@ -185,24 +193,49 @@ if command -v gcc &> /dev/null || command -v clang &> /dev/null; then
 fi
 
 # Java (v2.4 API: com.qqzeng.qzdb.QzdbReader + QzdbReaderTest)
+#
+# JDK 解析顺序（与 cross_lang_verify.py:_find_java_home 保持一致）：
+#   1) 显式且有效的 JAVA_HOME —— CI / 容器 / 需要钉住 JDK 版本时用这个；
+#   2) 否则按常见安装路径探测，LTS(21) 优先于最新版。
+#
+# 三点不要"顺手简化"，每一条都有具体的坏掉方式：
+#   ① 本函数在本文件里**故意逐字重复**，不要抽成 `source tools/java_env.sh`。
+#      sync_to_github.py:266 把 run_all_tests.sh 原样拷进发布仓库，但不同步
+#      ip-qzdb-sdk/tools/ 下的辅助脚本 —— 抽出去会让发布仓那份直接 source 失败。
+#      tools/build_all.sh:56 里有第二份副本，改一处必须同时改另一处。
+#   ② 原来写的是 `JAVA_HOME=$(find_java_home)`（无条件覆盖），把调用方显式设置的
+#      JAVA_HOME 静默丢掉 —— 于是 `JAVA_HOME=<jdk28> ./run_all_tests.sh` 跑的其实是
+#      探测到的 JDK 27，而日志里根本看不出来。显式设置必须优先。
+#   ③ 路径必须加引号。原来的 `for f in $h/bin/javac` 没加引号，任何**含空格的
+#      JDK 路径**（macOS 上很常见）会被 word split 成几个不存在的片段，探测恒失败。
 find_java_home() {
-    local homes=(
-        /opt/homebrew/Cellar/openjdk@21/*/libexec/openjdk.jdk/Contents/Home
-        /opt/homebrew/opt/openjdk@21
-        /opt/homebrew/opt/openjdk
-        /Library/Java/JavaVirtualMachines/*/Contents/Home
-    )
-    for h in "${homes[@]}"; do
-        for f in $h/bin/javac; do
-            if [ -x "$f" ]; then
-                echo "$(cd "$h" && pwd)"
-                return 0
-            fi
-        done
+    if [ -n "${JAVA_HOME:-}" ]; then
+        if [ -x "${JAVA_HOME}/bin/javac" ]; then
+            (cd "${JAVA_HOME}" && pwd)
+            return 0
+        fi
+        # 设了却不可用属于调用方错误：明确告警，而不是静默换一个 JDK，
+        # 否则"以为自己钉住了版本"的人永远不知道自己没测到。
+        echo "WARN: JAVA_HOME=$JAVA_HOME 下没有 bin/javac，回退到安装路径探测" >&2
+    fi
+    local h
+    # 未匹配的 glob 在 bash 下保持字面量，后续 -x 判定自然为假，无需 nullglob。
+    for h in \
+        /opt/homebrew/Cellar/openjdk@21/*/libexec/openjdk.jdk/Contents/Home \
+        /opt/homebrew/opt/openjdk@21 \
+        /opt/homebrew/opt/openjdk \
+        /Library/Java/JavaVirtualMachines/*/Contents/Home \
+        "${HOME}/.sdkman/candidates/java/current" \
+        /usr/lib/jvm/default-java
+    do
+        if [ -x "${h}/bin/javac" ]; then
+            (cd "${h}" && pwd)
+            return 0
+        fi
     done
     return 1
 }
-JAVA_HOME=$(find_java_home)
+JAVA_HOME="$(find_java_home || true)"
 
 # Maven 只用于跑数据无关的 JUnit 5 层（Java-Unit）。它不在 PATH 里时不该让整层消失，
 # 但也不该被当成通过 —— 下面会写 SKIP 状态并在汇总里显式列出。
@@ -229,6 +262,9 @@ MVN_BIN=$(find_mvn || true)
 
 if [ -n "$JAVA_HOME" ]; then
     export JAVA_HOME
+    # 把实际用的 JDK 打出来：CI 日志里能一眼看出"想测的版本"与"真跑的版本"是否一致，
+    # 避免探测逻辑悄悄换掉版本而无人察觉（这正是 ② 那个 bug 能长期潜伏的原因）。
+    echo "  Java JDK: $($JAVA_HOME/bin/javac -version 2>&1) [$JAVA_HOME]"
     mkdir -p java/build
     # 编译整个源码树（main + test），v2.4 包名为 com.qqzeng.qzdb。
     # 排除 *UnitTest.java：那是 JUnit 5 用例，裸 javac 没有 JUnit classpath，

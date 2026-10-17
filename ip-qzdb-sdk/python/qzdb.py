@@ -1,13 +1,22 @@
+import functools
 import ipaddress
 import json
 import mmap
 import os
 import socket
 import struct
+import sys
 import threading
 import zlib
 from collections import namedtuple
 from enum import Enum
+
+if sys.version_info < (3, 10):
+    raise SystemExit(
+        "ERROR: qzdb requires Python 3.10+ (running %s). "
+        "Use python3.12+ or run via ip-qzdb-sdk/run_all_tests.sh, "
+        "which auto-selects a supported interpreter." % sys.version.split()[0]
+    )
 
 SENTINEL = 0x80000000
 SENTINEL_MASK_24 = 0x7FFFFF
@@ -780,22 +789,74 @@ class UsageType(str, Enum):
 UsageType._KNOWN = {m.value.lower(): m for m in UsageType}
 
 
+def _on_snapshot(fn):
+    """把公开查询入口**整条调用链**派发到当前快照对象上执行（契约 §一.3 / §五.6）。
+
+    一次查询会跨 ``find`` → ``find_uint`` → ``_trie_walk_v4`` → ``_resolve_row_id``
+    多次读取实例状态。若只在入口读一次 ``self._snap``、内部仍走 ``self``，换快照时
+    仍会「拿旧库的 row_id 去新库的偏移表解码」——混用窗口只是变窄，并未消失。
+
+    因此入口必须把整条链路交给**同一个**快照执行：门面持有当前快照（``self._snap``），
+    快照自身的 ``_snap`` 恒为 ``None`` 并就地执行，于是链路内所有 ``self.*`` 都落在
+    同一个快照上，一次查询要么整体读到旧库、要么整体读到新库，绝无混合。
+
+    ⚠️ 快照**不能自指**（``shadow._snap = shadow``）：那会形成引用环，旧快照就无法靠
+    引用计数释放，mmap 只能等循环 GC —— 频繁热更新时映射持续堆积，Windows 上还会
+    占住文件不让替换。``None`` + 就地执行在语义上等价于自指，但不构成环。
+
+    代价是每次查询多一层函数调用。为压低它，包装器按参数个数**特化**：热路径上
+    ``*args`` 每次会多分配一个元组、``**kwargs`` 再多分配一个 dict，在 750K QPS
+    量级上是可测的开销，而公开查询入口的签名是已知的（1 个或 2 个位置参数）。
+    ``functools.wraps`` 保留 ``__name__`` / ``__doc__``，便于自省与报错定位。
+    """
+    nargs = fn.__code__.co_argcount  # 含 self
+    if nargs == 2:                   # self + 1（find / find_uint / lookup_cidr / ...）
+        @functools.wraps(fn)
+        def wrapper(self, a):
+            snap = self._snap
+            return fn(snap if snap is not None else self, a)
+    elif nargs == 3:                 # self + 2（find_fields 的 field_names 带默认值）
+        @functools.wraps(fn)
+        def wrapper(self, a, b=None):
+            snap = self._snap
+            return fn(snap if snap is not None else self, a, b)
+    else:                            # 兜底：将来新增更宽签名的入口
+        @functools.wraps(fn)
+        def wrapper(self, *args, **kwargs):
+            snap = self._snap
+            return fn(snap if snap is not None else self, *args, **kwargs)
+    return wrapper
+
+
 class QzdbReader:
     # No singleton. v2.4 removed get_instance() in every language: a process-wide
     # mutable instance made "which file am I querying?" unanswerable under
     # concurrency. Construct readers directly (they are cheap and thread-safe for
     # reads) and use QzdbRegistry when you want process-wide sharing by path.
 
-    def close(self):
-        """Release mapped file resources. Idempotent — safe to call multiple times."""
-        if hasattr(self, '_is_mmap') and self._is_mmap and hasattr(self._data, 'close'):
+    @staticmethod
+    def _release(obj):
+        """关闭 obj 持有的 mmap 并清空引用（幂等）。"""
+        if getattr(obj, '_is_mmap', False) and hasattr(obj._data, 'close'):
             try:
-                self._data.close()
+                obj._data.close()
             except OSError:
                 pass
-        self._data = b''
-        self._is_mmap = False
+        obj._data = b''
+        obj._is_mmap = False
+
+    def close(self):
+        """Release mapped file resources. Idempotent — safe to call multiple times.
+
+        查询实际在 ``self._snap`` 上执行，所以关闭状态必须**传播到快照**：只在门面上
+        置 ``_closed`` 的话，派发过去的查询仍会继续服务已关闭的 reader。
+        """
         self._closed = True
+        snap = self.__dict__.get('_snap')
+        if snap is not None and snap is not self:
+            snap._closed = True
+            self._release(snap)
+        self._release(self)
 
     def __enter__(self):
         """Context-manager entry (API contract appendix A.5)."""
@@ -812,6 +873,12 @@ class QzdbReader:
     def __init__(self, db_path=None, group_index=0, verify_crc=True, warmup=False):
         self._data = b''
         self._is_mmap = False
+        # 当前快照句柄：公开查询入口经 _on_snapshot 派发到它。未加载时为 None
+        # （此时 self 本身就是当前状态，装饰器会回退到 self）；加载/热更新后由
+        # _publish 指向新的 shadow。**快照自身的 _snap 恒为 None** —— 若让它自指就
+        # 形成引用环，旧快照无法靠引用计数释放，mmap 要等循环 GC 才回收（实测 10 次
+        # reload 会滞留 11 个旧快照，每个都攥着一份 mmap；Windows 上还会占住文件）。
+        self._snap = None
         self._group_index = group_index
         self._warmup = warmup
         # §10.6: CRC32 verification is ON by default at open time. Pass
@@ -963,6 +1030,9 @@ class QzdbReader:
         # Fresh per-snapshot GeoInfo cache (old snapshot's cache is dropped).
         shadow._geo_cache = {}
         shadow._closed = False
+        # 快照自身的 _snap 必须是 None：上面的 update 把门面的 _snap 也带过来了，要清掉。
+        # 装饰器对「_snap is None」的 self 就地执行，语义等价于自指，但不构成引用环。
+        shadow._snap = None
         try:
             shadow._parse_header()
             if shadow._verify_crc and not shadow.verify_crc():
@@ -985,25 +1055,29 @@ class QzdbReader:
         return shadow
 
     def _publish(self, shadow):
-        """Atomically swap in a fully-built shadow snapshot (API contract §2/§3).
+        """发布一个构建完毕的快照（契约 §2/§3、§五.6）。
 
-        旧快照的 mmap **不在此处显式 close()**：正在执行的查询在入口处已把
-        ``self._data`` 绑定到局部变量，显式 close 会让它们在下一次读取时抛出
-        ``ValueError: mmap closed or invalid``（8 线程查询 + 持续 reload 可稳定复现）。
-        这里只丢弃引用；最后一个读者返回后 CPython 引用计数归零，mmap 对象析构时
-        自动 munmap——与 Go 版「读者持引用即免 munmap」语义一致（契约 §五.6）。
+        发布后，公开查询入口一律经 ``_on_snapshot`` 派发到 ``self._snap``，于是整条
+        调用链都在**同一个**快照对象上执行 —— 换快照不会让一次查询混用两代数据。
+
+        - **不再 disarm shadow**：旧实现把 shadow 的 ``_data`` 清空、``_is_mmap`` 置假，
+          是因为那时真正持有 mmap 的是门面。现在 shadow 自己就是查询执行的对象，
+          必须继续持有 mmap。
+        - **不再显式 close 旧快照的 mmap**：在途查询正以它为 ``self``，显式 close 会让
+          它们下一次读取时抛 ``ValueError: mmap closed or invalid``（8 线程查询 + 持续
+          reload 可稳定复现）。这里只丢弃引用；最后一个读者返回后引用计数归零，
+          mmap 随对象析构自动 munmap —— 与 Go 版「读者持引用即免 munmap」一致。
+        - **不再等待 ``_pools_lock``**：读路径已全部走快照，门面不会再被并发地懒加载写入，
+          原先「等旧快照上的懒加载写完再换 __dict__」的窗口不复存在。
+        - 门面 ``__dict__`` 仍整体替换：元数据 getter 未加装饰器、直接读门面字段，
+          必须保持最新；先构建新 dict 再一步替换，也不会出现空 __dict__ 的 AttributeError 窗口。
         """
-        # Atomic swap: build the new dict first, then replace in one step.
-        # This avoids the window between clear() and update() where concurrent
-        # readers would see an empty __dict__ and raise AttributeError.
         new_dict = dict(shadow.__dict__)
         new_dict['_closed'] = False
-        # 等旧快照上进行中的懒加载写完再换 __dict__，保证它的赋值落在旧快照上。
-        with self._pools_lock:
-            self.__dict__ = new_dict
-        # Disarm shadow so its destructor cannot close the mmap we took over.
-        shadow._is_mmap = False
-        shadow._data = b''
+        # 门面持有当前快照的**强引用**；快照自己不自指，故不形成引用环 —— 旧快照在
+        # 最后一个在途查询返回后引用计数即归零，mmap 随析构立刻 munmap。
+        new_dict['_snap'] = shadow
+        self.__dict__ = new_dict
 
     def Warmup(self):
         d = self._data
@@ -1996,6 +2070,7 @@ class QzdbReader:
 
     # ── find / lookup ────────────────────────────────────────────────
 
+    @_on_snapshot
     def find(self, ip_str):
         if self._closed:
             return None
@@ -2009,6 +2084,7 @@ class QzdbReader:
             return self.find_uint(v4)
         return self.find_v6_bytes(v6)
 
+    @_on_snapshot
     def find_uint(self, ip_int):
         if self._closed:
             return None
@@ -2019,6 +2095,7 @@ class QzdbReader:
             return None
         return self._resolve_row_id(row_id & SENTINEL_MASK_31, self._group_index)
 
+    @_on_snapshot
     def find_v6_bytes(self, ip_bytes):
         """IPv6 lookup using 16-byte packed representation (zero BigInteger alloc).
 
@@ -2043,6 +2120,7 @@ class QzdbReader:
         # FIX: strip sentinel bit (same as find_uint for V4)
         return self._resolve_row_id(row_id & SENTINEL_MASK_31, self._group_index)
 
+    @_on_snapshot
     def find_v6_uint(self, ip_int):
         if self._closed:
             return None
@@ -2054,6 +2132,7 @@ class QzdbReader:
         # FIX: strip sentinel bit (same as find_uint for V4)
         return self._resolve_row_id(row_id & SENTINEL_MASK_31, self._group_index)
 
+    @_on_snapshot
     def find_bytes(self, ip_bytes):
         """Lookup by raw address bytes: 4 bytes → IPv4, 16 bytes → IPv6.
 
@@ -2126,6 +2205,7 @@ class QzdbReader:
             resolved_names.append(self._field_names[i] if i < len(self._field_names) else f'field_{i}')
         return values, resolved_names
 
+    @_on_snapshot
     def find_fields(self, ip_str, field_names=None):
         """Field-projection query (API contract §9.6, aligned to Java golden).
 
@@ -2182,6 +2262,7 @@ class QzdbReader:
 
     # ── lookup row id / ids ──────────────────────────────────────────
 
+    @_on_snapshot
     def lookup_row_id(self, ip_str):
         if self._closed:
             return 0
@@ -2195,6 +2276,7 @@ class QzdbReader:
             return self.lookup_row_id_uint(v4)
         return self.lookup_row_id_v6_bytes(v6)
 
+    @_on_snapshot
     def lookup_row_id_uint(self, ip_int):
         if self._closed or not self._has_v4:
             return 0
@@ -2205,18 +2287,21 @@ class QzdbReader:
         rid = self._trie_walk_v4(ip_int)
         return (rid & SENTINEL_MASK_31) if rid != 0 else 0
 
+    @_on_snapshot
     def lookup_row_id_v6(self, ip_int):
         if self._closed or not self._has_v6:
             return 0
         rid = self._trie_walk_v6(ip_int)
         return (rid & SENTINEL_MASK_31) if rid != 0 else 0
 
+    @_on_snapshot
     def lookup_row_id_v6_bytes(self, ip_bytes):
         if self._closed or not self._has_v6:
             return 0
         rid = self._trie_walk_v6_bytes(ip_bytes)
         return (rid & SENTINEL_MASK_31) if rid != 0 else 0
 
+    @_on_snapshot
     def lookup_ids(self, row_id):
         if self._closed:
             return None
@@ -2224,6 +2309,7 @@ class QzdbReader:
             return None
         return RowIds(*self._read_ip_row(row_id))
 
+    @_on_snapshot
     def find_str(self, ip_str):
         if self._closed:
             return ''
@@ -2391,6 +2477,7 @@ class QzdbReader:
         net = ip_int & mask
         return f'{ipaddress.IPv6Address(net)}/{prefix}'
 
+    @_on_snapshot
     def lookup_cidr(self, ip_str):
         if self._closed or not ip_str:
             return None
@@ -2409,6 +2496,7 @@ class QzdbReader:
             return None
         return self._format_cidr_v6(v6_int, prefix)
 
+    @_on_snapshot
     def lookup_cidr_uint(self, ip_int):
         if self._closed or not self._has_v4:
             return None
@@ -2417,6 +2505,7 @@ class QzdbReader:
             return None
         return self._format_cidr_v4(ip_int, prefix)
 
+    @_on_snapshot
     def lookup_cidr_bytes(self, ip_bytes):
         if self._closed or ip_bytes is None:
             return None

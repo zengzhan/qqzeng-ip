@@ -19,7 +19,7 @@
 
 </div>
 
-> **QZDB (qqzeng IP Database)** 是一款专为企业级高并发、云原生架构打造的下一代 IP 地理位置与号段归属地二进制搜索引擎。凭借**双阶段 Patricia Trie 树算法**、**`mmap` 零拷贝**以及**无锁并发设计**，编译语言单次检索延迟低至纳秒级、单机吞吐达亿级 QPS（口径与复现见 docs/PERFORMANCE.md）。
+> **QZDB (qqzeng IP Database)** 是一款专为企业级高并发、云原生架构打造的下一代 IP 地理位置与号段归属地二进制搜索引擎。凭借**双阶段 Patricia Trie 树算法**、**`mmap` 零拷贝**以及**无锁并发设计**，单机支持 500 万+ QPS（C/Rust 原生可达 1000 万+ QPS，延迟低至纳秒级，多线程缓存扩展下吞吐可达数千万至亿级，口径与复现见 docs/PERFORMANCE.md）。
 
 ---
 

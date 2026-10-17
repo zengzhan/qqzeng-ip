@@ -6,6 +6,28 @@
 
 ### Breaking changes
 
+- **Rust SDK：值表示去共享化，`GeoData.values` 从 `Box<[Arc<str>]>` 改为
+  `Box<[FieldVal<'static>]>`**（`ip-qzdb-sdk/rust/src/lib.rs`）。查询结果在命中与构造全程
+  零共享原子 RMW，16 线程热流 QPS 与 Go 基线追平（hot.v4 216.8M vs Go 212M，
+  hot.mixed 242.4M vs Go 227M），random.v4 单线程建行成本 225ns → 159ns。连带变更：
+
+  - `GeoInfo::field_names_arc()` 移除：字段名表与 norm_map / 数值索引随快照装载固定为
+    进程级生命期（`&'static`），`field_names()` 直接返回 `&'static [String]`。同 reader
+    实例的跨查询共享由指针相等保证（`std::ptr::eq`，替代 `Arc::ptr_eq`）。
+  - `GeoInfo::values()` 返回 `&[FieldVal<'static>]`：池字段是装载期 `Box::leak` 的
+    `&'static str` 借用（指针复制），数字/浮点/pipe 是 32B 栈缓冲内联值。下游若对旧
+    `Arc<str>` 元素做匹配，需迁移到 `FieldVal::as_str()`（`PartialEq` 按字符串语义比较，
+    大多数下游仅需改为 `.as_str()` / 直接 `[u8]` 解引用）。
+  - 实例逃逸语义放宽：`GeoInfo` / `GeoInfoRef::to_geo_info()` 的值与元信息不再锚定
+    reader 的存活（'static 值不受快照替换影响），借用约束仅由 `find_ref(&self)` 的
+    `'_` 生命周期体现。此前「必须持有 reader 才能读值」的隐性约束不再需要。
+  - **进程级内存生命期**：池字符串与元信息块在每次 `load` 时 leak（KB×代数级常量，
+    reload 不回收，仅进程退出时归还）。这是用常量内存换零 RMW 的有意取舍——重度
+    热更新（每秒 reload）场景不适合依赖它释放内存。
+  - 线程本地解码缓存从直映射升级为 **4 路组相联**（16384 行 × 4 路 + splitmix 乘法散列）：
+    基准热池 miss% 从结构性对撞驱逐降到 0.006%（600M ops 实测），并对错开 seed 的
+    混发流同样有效。
+
 - **Rust SDK：`FieldVal::Inline` 改为 `Inline(InlineBuf)`**（`ip-qzdb-sdk/rust/src/lib.rs`）。
   `InlineBuf` 的字段与构造器保持私有，外部不能再直接构造任意载荷；下游若匹配旧的
   `Inline(buf, len)` 形状，需要迁移到新的 `InlineBuf` API。
@@ -15,6 +37,25 @@
   `Uint8Array` / `ArrayBuffer` 等其他输入仍按原语义复制。
 
 ### Fixed
+
+- **测试脚本：显式 `JAVA_HOME` 被静默丢弃**（`run_all_tests.sh` / `tools/build_all.sh` /
+  `run_batch_test_suite.py` / `cross_lang_verify_v6.py`）。四处各自实现了一份 JDK 探测，
+  其中三处写成 `JAVA_HOME=$(find_java_home)` —— **无条件覆盖**，于是
+  `JAVA_HOME=<jdk28> ./run_all_tests.sh` 实际跑的是探测到的另一套 JDK，而日志里完全看不出来。
+  CI 想钉版本、容器里想选发行版时都会踩到。现统一为「显式且有效的 `JAVA_HOME` 优先，
+  否则按安装路径探测」，与 `cross_lang_verify.py:_find_java_home` 的既有约定一致；
+  设了却不可用时向 stderr 告警而不是静默换一套（否则以为自己钉住了版本的人永远不知道）。
+  `cross_lang_verify_v6.py` 原是第 5 份副本且漏掉 `JAVA_HOME` 分支，现改为直接
+  `from cross_lang_verify import _find_java_home`（与 `cross_api_verify.py` 同一做法），
+  运行时可验证二者是同一个函数对象。
+  另修两处连带问题：① 原 `for f in $h/bin/javac` 未加引号，任何**含空格的 JDK 路径**
+  （macOS 常见）会被 word split 成几个不存在的片段，探测恒失败；②
+  `run_batch_test_suite.py` 在同一行里把 `_find_java_home()` 调了两次。
+  验证：有效 / 无效 / 未设置 / 含空格路径 / 告警走 stderr 共 5 种 shell 情形 +
+  3 个 Python 入口逐一实测；`JAVA_HOME=<jdk28> ./run_all_tests.sh` 日志现在打印
+  `Java JDK: javac 28-ea [...]`，Java 五层（Java / Tier2 / Tier3 / FailClosed / Unit）全过。
+  ⚠️ 两处 shell 副本**故意保持重复**：`sync_to_github.py` 会把 `run_all_tests.sh` 原样拷进
+  发布仓库但不同步 `ip-qzdb-sdk/tools/`，抽成 `source tools/*.sh` 会让发布仓那份直接坏掉。
 
 - **Java SDK：`Builder.build()` 失败路径泄漏 mmap 映射**（`QzdbReader.java`）。
   `new Snapshot(...)` 抛异常（CRC 校验失败 / 格式损坏 / 截断）时没有任何清理，`MmapSource`
@@ -58,6 +99,67 @@
   `chain_merge_override` 只是反转列表——字段级并集完全缺失。契约 §9.5 的典型场景
   「CN-pro 链 Global-ASN」会静默丢失 ASN 字段。现对齐 Node/Go/Java/C#/Rust/C：
   `MERGE` 最早非空优先，`MERGE_OVERRIDE` 最新非空优先，字段序为首次出现序。
+
+- **Python SDK：`reload()` 打断正在执行的并发读**（`ip-qzdb-sdk/python/qzdb.py`）。
+  契约 §一.3 承诺「热更新不阻塞、不打断正在执行的并发读」，但 `_publish()` 在换快照时
+  **显式 close 旧 mmap**。公开查询方法在入口处已把 `self._data` 绑到局部变量，于是
+  在途查询的下一次读取就抛 `ValueError: mmap closed or invalid`
+  （8 线程查询 + 持续 `reload()` 可稳定复现）。现改为只丢弃引用，由 CPython 引用计数
+  在最后一个读者返回后自动 `munmap` —— 与 Go 版「读者持引用即免 munmap」语义一致（契约 §五.6）。
+  同批修掉三处相关问题：
+
+  - **词表懒加载竞态**：`_ensure_pools_loaded()` 此前先把半成品 `[None] * n` 写到 `self`
+    再逐项填充。此时并发 `reload()` 若整体替换 `__dict__`，后续赋值会落到**新快照**上，
+    轻则 `TypeError`，重则把旧文件的词表写进新快照，造成静默错数据。现改为在局部变量里
+    构建、末尾一次性赋值；`reload()` 产生的快照在发布前预载词表；`_publish()` 会等
+    进行中的懒加载写完再换。首次打开仍保持懒加载，启动速度不变。
+
+  - **`verify_crc` 选项被永久改写**：`reload()` 临时把 `self._verify_crc` 置为 `True` 却不保证
+    还原，一次失败的 reload 就会把用户设置的 `verify_crc=False` 永久翻成 `True`，
+    两个并发 reload 还会互相污染。现改为给 `_build_shadow()` 显式传参，不再改写 `self`。
+
+  - **并发 `reload()` 未串行化**：新增 `_reload_lock`（读路径不碰此锁），并抽出
+    `_open_source()` 去掉 `load` / `reload` 里重复的 mmap 打开逻辑，删掉构造函数里
+    重复的二次 `Warmup()`。
+
+  新增 `python/tests/test_reload_concurrency.py`（4 个用例，含一个不依赖线程时序的
+  确定性 mmap 生命周期用例：原版稳定抛 `mmap closed or invalid`，新版通过）。
+  新旧差分：20,035 条输入 × `find` / `find_str` / `lookup_cidr` / `lookup_row_id`
+  共 80,140 个结果逐字节一致。
+
+- **Python SDK：查询改为「整条调用链派发到不可变快照」**（`ip-qzdb-sdk/python/qzdb.py`）。
+  上一条只保证「换快照时不崩」，但没有保证「一次查询不混用两代数据」：`find` →
+  `find_uint` → `_trie_walk_v4` → `_resolve_row_id` 每一层各读一次 `self._data` 与偏移表，
+  若 `reload()` 落在链路中途，就会**拿旧库的 row_id 去新库的偏移表解码** —— 静默返回错数据。
+  实测（demo 库 + `data/qqzeng_ip_std_global.qzdb`，两者布局不同）：在 `_trie_walk_v4`
+  返回之后注入一次 `reload`，改动前查询 `9.142.128.0` 返回
+  `亚洲|TH|泰国|叻武里府||Ntplc`，而正确结果是
+  `北美洲|North America|US|USA|美国|…|Astound|6079|RCN|astound.com|Broadband`。
+
+  现 `QzdbReader` 增加 `_snap` 句柄：**门面持有当前快照**，快照自身的 `_snap` 恒为 `None`
+  （装饰器对 `_snap is None` 的 self 就地执行）。用 `_on_snapshot` 装饰器把 15 个公开
+  查询入口（`find*` / `lookup_row_id*` / `lookup_ids` / `lookup_cidr*`）**整条调用链**
+  派发到当前快照上执行，链路内所有 `self.*` 都落在同一个快照。
+  `_publish()` 相应简化：不再 disarm shadow（它现在就是查询执行的对象）、不再显式 close
+  旧快照的 mmap、不再需要为词表懒加载等待 `_pools_lock`；`close()` 会把关闭状态传播到快照。
+  元数据 getter 不变，仍读门面字段（`_publish` 依旧整体替换门面 `__dict__` 以保持最新）。
+
+  ⚠️ **快照不能自指。** 最初写成 `shadow._snap = shadow`，那是个引用环：旧快照无法靠引用
+  计数释放，「读者持引用即免 munmap」的前提（最后一个读者返回后计数归零）就不成立，旧 mmap
+  只能等循环 GC —— 实测在 `gc.disable()` 下 10 次 reload 会滞留 **11 个旧快照**，每个都攥着
+  一份 mmap（Windows 上还会占住文件不让替换）。改为 `None` + 就地执行后，同一测量存活实例
+  **13 → 2**，旧快照每次都在最后一次引用消失时立刻 `munmap`。
+
+  ⚠️ **性能代价**（M 系列单线程，新旧交替两轮取最优）：`find_uint` −5.1%、`find` −5.5%、
+  `find_str` −9.1%、`lookup_row_id` −6.1%、`lookup_cidr` −1.3%；`tools/perf_gate.py`
+  的 63-IP 口径 **−2.5%**（322,851 → 314,768 QPS，floor 110,000 仍有 2.9x 余量）。
+  包装器按 `co_argcount` 特化以省掉 `*args`/`**kwargs` 的元组与 dict 分配 ——
+  不特化时同一批测量是 perf_gate −8.5%、`find_str` 微基准 −16.4%。
+
+  验证：新旧全语料对拍 20,036 输入 × 11 个 API = **220,396 个结果逐字节一致**；
+  新增 `test_query_never_mixes_two_snapshots`（在链路中途注入 reload，改动前稳定失败）与
+  `test_reload_releases_old_snapshots_without_gc`（`gc.disable()` 下要求旧快照立刻释放，
+  改动前第 1 次 reload 即失败）；`run_all_tests.sh` 25/25；跨语言对拍 441 + 882 + 48 全过。
 
 ### Changed
 
@@ -175,6 +277,25 @@
 
 ### Added
 
+- **`ip-qzdb-sdk/tools/verify_data_sync.py`：测试数据来源与配对门禁**（新增 `Data-Sync` 层）。
+  按 **canonical CRC32**（FORMAT：整文件 CRC，header 16~19 字节视作 0；本工具用
+  `zlib.crc32` 独立实现，实测与 8 个语言 SDK 的 `getFileHash()` 逐位相同）把仓库里每个
+  `.qzdb` 对回发行库 `/Users/zengxiangzhan/ZengData/qqzeng-data/<period>/`，检查三件事：
+  ① 每个 `.qzdb` 能否追溯到某个发行构建；② 冻结快照 `test_data_*` 内**不得混期**；
+  ③ 快照里的 `.qzdb` 必须有同目录 `*_range.csv`。
+  分级按「数据目录性质」定而非一刀切：`data/` 是 gitignore 的滚动本地数据
+  （`.gitignore:3 *.qzdb`；`bench_contract.py:62` 明确记录它「比固定 fixture 更新」），
+  其混期与缺 ground truth 只报 NOTE —— 对它判死刑会让任何新克隆直接失败；
+  快照的不变量才是 FATAL。三类故障均已构造用例验证确实 exit 1，干净仓库 exit 0。
+
+- **`ip-qzdb-sdk/python/test_csv_oracle.py` 覆盖面从 2 个目标扩到 10 个**（新增全球版）。
+  改为**发现式配对**：任何同时含 `<name>.qzdb` 与 `<name>_range.csv` 的目录即为目标，
+  不再硬编码路径 —— 这从结构上杜绝了跨目录/跨期配对。1.9 GB 的全球 CSV 不再整表载入：
+  按字节前缀估算行宽后跨全文件**等距采样**约 4 万行做字段比对，同时用 `array('Q')`
+  只保留完整 IPv4 行区间（约 8 B/行）做全空间存在性探测 —— 内存有界，10 个目标
+  46 秒跑完。比对改为「CSV 列 ∩ 库字段」的全字段交集，逐 edition 自适应
+  （asn 无 province/city、ult 25 字段），比原先硬编码的 4 元组更强也更通用。
+
 - `ip-qzdb-sdk/nodejs/ip_strict_test.js`：759 条表驱动断言（含空白对 v4/v6 逐位置注入），
   钉死单遍解析与「删除空白预扫描」后的严格性；已注册进 `run_all_tests.sh` 的 `Node-IpStrict`。
 - `ip-qzdb-sdk/php/ip_strict_test.php`：119 条表驱动断言，钉死 `filter_var` 方案的严格性；
@@ -238,6 +359,27 @@
   原先整树编译 `java/src`，会连 JUnit 测试源一起编入而失败 → 收窄为只编 `java/src/main`。
 
 ### Performance
+
+- **Java SDK：IPv6 解析单遍零分配**（`QzdbReader.java`）。原 `parseIPv6Bytes` 走
+  `substring` + `ArrayList` + `String[]` 拼出 16 字节，实测 IPv6 查询路径
+  **404 B/op**，且 `lookupRowId` 端到端耗时 ≈ 该解析单独耗时 —— trie 遍历几乎不花钱，
+  **整条 IPv6 链路的时间就是解析**（对照 IPv4 入口 0 B/op）。现改为单遍扫描直接写入
+  调用方缓冲（`parseIPv6Into` + 每线程 `ThreadLocal<byte[]>` 暂存），分配降到 0；
+  点分四元组尾段复用区间版 IPv4 解析器，同样不 `substring`。
+  本机（Apple Silicon / JDK 27 GA / 117 MB `max_global` / 交错 A/B + min-of-N）：
+  `lookupRowId` IPv6 **188.9 ns → 94.3 ns（2.00×）**，**404 B/op → 0 B/op**；
+  项目自带双栈 50/50 混合压测 **+20.5%~24.2% QPS**；IPv4 路径对照组 80.98 → 80.53 ns
+  **无回归**。语义等价性以「旧实现逐字快照 vs 新实现」对拍 **602,358 个输入**
+  （合法地址结构穷举 + 40 万 fuzz + 20 万结构化拼接；逐一比较接受/拒绝、16 输出字节、
+  异常消息文本，并用填 `0xAB` 的脏缓冲复验）证明 —— 该对拍在开发期真实抓到 6 个
+  复用路径缺陷，进一步用 6 路变异测试确认对拍全部捕获，全部固化为常驻回归用例。
+  **新增 `warmup(boolean full)`**（opt-in；`warmup()` 行为不变，评估文档 §11.5 #1 的建议）。
+
+- **Java SDK：canonical CRC32 不再整文件拷贝**（`QzdbReader.java`）。原实现按 1 MB 分块
+  `duplicate.get(byte[])` 再喂 CRC，等于把整个 `.qzdb` 在加载期完整复制一遍到堆上。
+  改用 `CRC32.update(ByteBuffer)` 就地消费映射缓冲，117 MB 库加载
+  **77.1–78.7 ms → 70.2–71.3 ms（−9%）**，并省掉一整轮拷贝；9 个数据集的
+  `getFileHash()` 逐一相同。
 
 - 真实用法端到端（`find` + 8 个语义 getter）2.46 M → **8.18 M ops/s（≈3.3×）**；
   查询 QPS 与堆占用在噪声内持平。口径与数据见 `docs/JAVA27_JAVA_SDK_ASSESSMENT.md`。

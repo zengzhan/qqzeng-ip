@@ -5,7 +5,7 @@
 - **官方坐标**：`com.qqzeng:qzdb`（已发布至 Maven Central）；Java 包名即 `com.qqzeng.qzdb`
 - **定位**：离线解析 `.qzdb` 二进制数据库文件，不依赖任何外部网络请求
 - **架构**：无锁快照（lock-free snapshot）——并发查询互不阻塞，`reload` 原子切换（原子引用替换）
-- **运行要求**：JDK 17+（编译目标 `maven.compiler.release=17`，产物 bytecode 为 Java 17，兼容 17/21/25/26/27）
+- **运行要求**：JDK 17+（编译目标 `maven.compiler.release=17`，产物 bytecode 为 Java 17，兼容 17/21/25/26/27/28）
 - **许可**：MIT
 
 ---
@@ -34,7 +34,7 @@
 
 | 项 | 要求 |
 |----|------|
-| JDK | **17 或更高**（SDK 编译目标 `release=17`，使用了 `record`、`sealed interface`、`switch` 表达式、`Stream` 等 Java 17 特性） |
+| JDK | **17 或更高**（SDK 编译目标 `release=17`，使用了 `record`、`sealed interface`、`switch` 表达式、`Stream` 等 Java 17 特性）。已在 17 / 21 / 25 / 26 / 27 上验证；JDK 28 已在 EA build 20 上实测通过（GA 预计 2027-03，届时复核） |
 | 构建工具 | Maven 3.6+（也可直接用 `javac` 编译 `src/main/java`） |
 | 操作系统 | Windows / Linux / macOS 均可 |
 | 数据库文件 | `.qzdb` 格式（由官方数据构建工具生成，含所需分组的二进制数据） |
@@ -410,6 +410,20 @@ reader.reloadBuffer(newBytes);
 - **`close()` 幂等**：可重复调用，多次 `close()` 安全。
 - **并发安全**：多个线程可同时调用任意查询方法，互不阻塞（无锁读取快照）。已 `close()` 的 reader 再查询会抛出 `IllegalStateException`。
 
+### 11.3 预热（消除首次查询的缺页延迟）
+
+mmap 映射后文件页仍在磁盘上，前若干次查询会因 major page fault 产生尖刺延迟。
+`warmup()` 按页触碰查询最频繁的区段（V4/V6 Jump Table 与 Trie 节点区），把磁盘页拉进物理内存：
+
+```java
+reader.warmup();        // 只触碰 Jump Table + Trie 节点区（历史行为，默认）
+reader.warmup(true);    // 额外触碰 IPRow / GeoEntry / String Pool 三段
+```
+
+`warmup(true)` 更彻底，但代价是把**整个文件**读进物理内存（117 MB 库即 ~117 MB RSS），
+因此默认不做进 `reload()` 路径 —— 是否全量由调用方决定。刚 `reload()` 完就要承接高 QPS 时用 `true`。
+两个版本都只是预热，**不改变任何查询结果**；对内存模式的数据库与已 `close()` 的 reader 都是空操作。
+
 ---
 
 ## 12. 错误处理
@@ -438,7 +452,11 @@ try {
 - **mmap 内存映射**：文件通过 `FileChannel.map(READ_ONLY)` 直接映射，避免整文件堆内拷贝；内存模式则用 `ByteBuffer.wrap` + 拷贝语义。
 - **零分配 trie 遍历**：基于 `ByteBuffer` 绝对定位读取（无 `position` 副作用、线程安全），单次查询不分配托管对象。
 - **不可变快照缓存**：快照不可变 → 同一 `entryId` 永远解析出同一 `GeoInfo`。对热点 IP（同段 / 邻近客户端、批量扫段）直接命中，减少重复字段解析分配。
-- **零拷贝 IP 解析**：IPv4 整数解析、IPv6 严格解析（拒绝前导 0 / zone id / 双 `::`），无 DNS、无外部依赖。
+- **零分配 IP 解析**：IPv4 整数解析、IPv6 严格解析（拒绝前导 0 / zone id / 双 `::`），无 DNS、无外部依赖。
+  IPv6 为**单遍扫描**写入调用方缓冲，不产生任何中间对象 —— **IPv4 与 IPv6 查询路径均为 0 B/op**
+  （旧实现 IPv6 为 404 B/op，仅解析就占满整条链路的时间）。
+- **加载期零整文件拷贝**：`canonical CRC32` 直接就地消费映射缓冲（`CRC32.update(ByteBuffer)`），
+  不再把整个 `.qzdb` 分块复制到堆上。
 
 ### 参考性能（同架构理论量级，实际随 JVM / CPU / 数据规模 / 查询分布而变）
 
@@ -447,6 +465,16 @@ try {
 | 整型查询 · 50 万随机散布 IP（缓存最不利） | 74.9M QPS | 省级 8.6MB 库，单线程，口径 A（docs/PERFORMANCE.md）；字符串口径 find_str 11.9M QPS |
 | 多线程并发 | 安全无锁 | 16 线程并发查询 / 热重载零异常、无竞争退化 |
 | 热点 IP 重复查询 | 吞吐进一步放大、分配趋零 | 同 IP 重复查询，GC 压力显著下降 |
+
+本机实测（Apple Silicon macOS / JDK 27 GA / 117 MB `max_global` / 交错 A/B、min-of-3，
+完整方法学与全部原始数字见**开发仓** `docs/JAVA_PERF_OPTIMIZATION.md`）：
+
+| 指标 | 基线 | 当前 | 收益 |
+|------|------|------|------|
+| `lookupRowId` IPv6 | 188.9 ns / 404 B | **94.3 ns / 0 B** | **2.00×** |
+| `lookupRowId` IPv4 | 81.0 ns / 0 B | 80.5 ns / 0 B | 无回归 |
+| 双栈 50/50 混合 QPS | 3.09–3.10 M | **3.73–3.85 M** | **+20.5% ~ +24.2%** |
+| `open(verifyCrc=true)` 加载 | 77.1–78.7 ms | **70.2–71.3 ms** | **−9%** |
 
 > 上述数字用于说明量级，非 SLA；以你自身环境的基准测试为准。
 
@@ -488,7 +516,10 @@ String hash = reader.getFileHash();
 ### 14.4 兼容性注意
 
 - Java 包名与 Maven `artifactId` 一致（`com.qqzeng.qzdb` / `qzdb`），升级不会造成包名漂移。
-- 编译目标 JDK 17：引用方 JDK 至少需 17（产物为 Java 17 bytecode，17/21/25/26/27 均可运行）。
+- 编译目标 JDK 17：引用方 JDK 至少需 17（产物为 Java 17 bytecode，17/21/25/26/27/28 均可运行）。
+  JDK 28 的字节码与 JDK 27 编译产物**逐字节相同**（`--release 17`，40/40 class 文件一致），
+  运行时 4 个测试层在 JDK 28 EA build 20 上全部通过。
+  完整实测记录见**开发仓**（非发布仓）`docs/JAVA28_JAVA_SDK_ASSESSMENT.md`。
 
 ---
 
@@ -537,5 +568,3 @@ mvn test          # 14 tests / 106 assertions
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: java: Java SDK（堆外内存与 Builder API） sync=1791283157 -->

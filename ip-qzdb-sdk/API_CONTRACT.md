@@ -60,7 +60,7 @@ Go/Rust/C# 经 batch 二进制 `--cidr` 模式)+ `ip-qzdb-sdk/cross_lang_verify.
 6. **IP 语义**：未命中/非法 IP 的返回与 `find` 完全一致（各语言沿用自身单条口径）。
 
 ### 4. 零拷贝共享查询（语言扩展层，非强制）
-- **Rust**：`find_shared() -> Option<Arc<GeoInfo>>`（缓存命中零堆分配）、`find_ref() -> Option<GeoInfoRef>`（借用视图，字段串直接指向快照池；`_snap` Arc 保活，reader reload 不影响已返回引用）与 `ToIp` 惯用入参族（`Ipv4Addr`/`Ipv6Addr`/`IpAddr`/`u32`/`u128`/`str`）。
+- **Rust**：`find_shared() -> Option<Arc<GeoInfo>>`（缓存命中零堆分配）、`find_ref() -> Option<GeoInfoRef>`（借用视图；`_snap` Arc 保活快照，reader reload 不影响已返回引用。字段值自 v2.5 起为 `'static`：池串是装载期 leaked 副本、数字/浮点是内联栈值，`to_geo_info()` 退化为纯拷贝）与 `ToIp` 惯用入参族（`Ipv4Addr`/`Ipv6Addr`/`IpAddr`/`u32`/`u128`/`str`）。
 - **强制约束**：扩展 API 的 `to_pipe()` / `to_json()` 输出必须与 owned `find()` 结果**逐字节一致**（由 `tests/zero_copy_ref.rs` parity 断言背书）。
 - **ChainedReader::find_ref**：仅 Fallback 模式可用；Merge/MergeOverride 模式因跨库合并需所有权拼接，不支持零拷贝视图（计划 v1.0.7 起改为显式 panic，避免与"未命中"混淆）。
 

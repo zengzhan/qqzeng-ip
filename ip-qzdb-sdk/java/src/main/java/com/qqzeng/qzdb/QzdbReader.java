@@ -8,6 +8,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -38,13 +39,31 @@ public final class QzdbReader implements AutoCloseable {
     private static final int SENTINEL_MASK_31 = 0x7FFFFFFF;
     /** poolIdxSize ≤ 3 → 池索引最大 2^24-1，count 超出即视为损坏（防 OOM 护栏）。 */
     private static final int MAX_POOL_COUNT = 1 << 24;
-    /** 流式 CRC 分块大小（避免整文件堆内拷贝）。 */
-    private static final int CRC_CHUNK = 1 << 20;
     private static final byte[] ZERO4 = new byte[4];
+    /**
+     * 每个十六进制字符的数值查表；非十六进制字符为 -1。
+     * <p>
+     * <b>刻意保留这张表，不换 {@code java.util.HexFormat}：</b>IPv6 解析热路径每个
+     * 十六进制位都要查一次，{@code HexFormat} 是字符级 API（{@code isHexDigit} /
+     * {@code parseHex}），拿不到"char → value"这一步的一次数组读。
+     * {@code parseHex} 还要建 String，是净损失。JDK 27 评估 §6 P2 建议换掉的
+     * 是 {@code fileHashHex()} 那类冷路径的手写表，不包括本表。
+     */
     private static final int[] HEX_DIGITS = new int[128];
     private static final ThreadLocal<java.text.DecimalFormat> FLOAT6 =
             ThreadLocal.withInitial(() -> new java.text.DecimalFormat("0.000000",
                     java.text.DecimalFormatSymbols.getInstance(Locale.US)));
+    /**
+     * IPv6 解析用的每线程 16 字节暂存缓冲。
+     * <p>
+     * 语义：<b>仅在单次调用内使用，绝不逃逸出调用栈</b>（不写入缓存、不返回给调用方、
+     * 不跨调用持有），因此复用是安全的；{@link #parseIPv6Into} 入口整体清零，
+     * 复用残留不会泄漏到结果里。
+     * <p>
+     * 代价：每线程 16 字节 + 一个 ThreadLocal 条目，线程池化场景下可忽略。
+     * 收益：IPv6 查询路径 404 B/op → 0 B/op。
+     */
+    private static final ThreadLocal<byte[]> V6_SCRATCH = ThreadLocal.withInitial(() -> new byte[16]);
 
     /** FORMAT §10.5 统一契约：整数值无小数点、非整数固定 6 位小数、NaN/Inf 为 ""。 */
     static String formatNativeFloat(float v) {
@@ -250,13 +269,12 @@ public final class QzdbReader implements AutoCloseable {
         private static final int GEO_CACHE_CAP = 1 << 16;
         private final AtomicReferenceArray<CacheEntry> geoCache = new AtomicReferenceArray<>(GEO_CACHE_CAP);
 
-        private static final class CacheEntry {
-            final int entryId;
-            final GeoInfo value; // 全字段解码结果（未投影）；不可变，可安全跨线程共享
-            CacheEntry(int entryId, GeoInfo value) {
-                this.entryId = entryId;
-                this.value = value;
-            }
+        /**
+         * 解码缓存条目。两个字段全 final、语义不可变 → 用 record 表达，
+         * 少一层手写构造器，且 {@code equals} 天然按值语义（原本也没有覆盖 equals，
+         * 这里刻意<b>不</b>需要它：缓存只做身份比较与内容读取，不参与查找）。
+         */
+        private record CacheEntry(int entryId, GeoInfo value) {
         }
 
         Snapshot(ByteBuffer buffer, int groupIndex, boolean verifyCrc, MmapSource source) throws QzdbException {
@@ -918,8 +936,8 @@ public final class QzdbReader implements AutoCloseable {
         private GeoInfo decodeFullCached(int entryId) {
             int slot = (entryId & 0x7FFFFFFF) & (GEO_CACHE_CAP - 1);
             CacheEntry cached = geoCache.get(slot);
-            if (cached != null && cached.entryId == entryId) {
-                return cached.value;
+            if (cached != null && cached.entryId() == entryId) {
+                return cached.value();
             }
             GeoInfo decoded = decodeFull(entryId);
             if (decoded != null) {
@@ -1000,6 +1018,11 @@ public final class QzdbReader implements AutoCloseable {
                     }
                 }
             }
+            // 刻意保留 String.format 而非换成 java.util.HexFormat（见 JDK 27 评估 §6 P2）：
+            // HexFormat 在 Java 17 只有 byte[] 重载，没有"最小宽度补零"也没有
+            // formatHex(long)，要凑出等价的 8 位小写补零得手写左补或再分配 8 字节数组。
+            // 本方法每次 open 只算一次（结果记忆化在 canonicalCrc），换掉没有任何
+            // 可测收益，却要承担输出格式漂移的风险。
             return String.format(Locale.US, "%08x", crc);
         }
 
@@ -1299,7 +1322,8 @@ public final class QzdbReader implements AutoCloseable {
 
         int rowId;
         if (ip.indexOf(':') >= 0) {
-            byte[] bytes = parseIPv6Bytes(ip);
+            byte[] bytes = V6_SCRATCH.get();
+            parseIPv6Into(ip, bytes);
             rowId = isV4MappedBytes(bytes)
                     ? lookupRowIdUintInternal(snap, v4FromMappedBytes(bytes))
                     : lookupV6Bytes(snap, bytes);
@@ -1418,7 +1442,8 @@ public final class QzdbReader implements AutoCloseable {
         Snapshot snap = requireSnapshot();
         try {
             if (ip.indexOf(':') >= 0) {
-                byte[] bytes = parseIPv6Bytes(ip);
+                byte[] bytes = V6_SCRATCH.get();
+                parseIPv6Into(ip, bytes);
                 return isV4MappedBytes(bytes)
                         ? lookupRowIdUintInternal(snap, v4FromMappedBytes(bytes))
                         : lookupV6Bytes(snap, bytes);
@@ -1498,7 +1523,8 @@ public final class QzdbReader implements AutoCloseable {
         }
         Snapshot snap = requireSnapshot();
         if (ip.indexOf(':') >= 0) {
-            byte[] bytes = parseIPv6Bytes(ip);
+            byte[] bytes = V6_SCRATCH.get();
+            parseIPv6Into(ip, bytes);
             if (isV4MappedBytes(bytes)) {
                 int v4 = v4FromMappedBytes(bytes);
                 int n = lookupV4PrefixLen(snap, v4);
@@ -1626,8 +1652,26 @@ public final class QzdbReader implements AutoCloseable {
      * <p>
      * 对非 mmap 的堆内 ByteBuffer 无副作用（已是堆内存，无 page fault），
      * 对已关闭的 reader 为空操作。
+     * <p>
+     * 等价于 {@code warmup(false)}。本方法<b>不触碰</b> {@code offIPRow} /
+     * {@code offGeoEntries} / {@code offPools} —— 这三段是查询结果解码的输入，
+     * 触碰它们会把整个文件读进物理内存（117 MB 库即 117 MB RSS），代价由调用方决定，
+     * 故不做进默认行为。需要"彻底预热"（例如刚 {@code reload()} 完就要承接高 QPS）
+     * 的场景显式调用 {@link #warmup(boolean)} 传 {@code true}。
      */
     public void warmup() {
+        warmup(false);
+    }
+
+    /**
+     * 可选深度的 mmap 预热。
+     *
+     * @param full {@code true} 时额外触碰 {@code offIPRow} / {@code offGeoEntries} /
+     *             {@code offPools} 三段（查询结果解码真正要读的区段）。
+     *             {@code false} 时只触碰 V4/V6 Jump Table 与 Trie 节点区，
+     *             与历史 {@link #warmup()} 行为完全一致。
+     */
+    public void warmup(boolean full) {
         Snapshot snap = activeSnapshot.get();
         if (snap == null || snap.data == null) return;
         ByteBuffer buf = snap.data;
@@ -1664,7 +1708,29 @@ public final class QzdbReader implements AutoCloseable {
                 touchSum ^= buf.get((int) p) & 0xFFL;
             }
         }
+        if (full) {
+            // 结果解码的三段输入。区间右界一律夹到 dataLen，不信任 header 里的偏移
+            // 与计数的乘积（损坏文件会把越界读取变成 fail-open 的错误页读取）。
+            touchSum ^= touchRange(buf, snap.offIPRow, (long) snap.rowCount * snap.ipRowSize);
+            touchSum ^= touchRange(buf, snap.offGeoEntries, -1L);
+            touchSum ^= touchRange(buf, snap.offPools, -1L);
+        }
         warmupDrain = touchSum;
+    }
+
+    /**
+     * 触碰 {@code [off, off+len)} 的每个页面；{@code len < 0} 表示"到 dataLen 为止"。
+     * 返回读到的字节异或和（供调用方写进 volatile 防止 JIT 消除循环）。
+     */
+    private static long touchRange(ByteBuffer buf, long off, long len) {
+        if (off <= 0) return 0L;
+        final int PAGE = 4096;
+        long end = (len < 0) ? buf.capacity() : Math.min(buf.capacity(), off + len);
+        long sum = 0;
+        for (long p = off; p < end; p += PAGE) {
+            sum ^= buf.get((int) p) & 0xFFL;
+        }
+        return sum;
     }
 
     /** 防止 JIT 将 warmup 循环优化为空操作（volatile 写不可被消除）。 */
@@ -1748,39 +1814,50 @@ public final class QzdbReader implements AutoCloseable {
 
     /** 严格 IPv4 点分十进制解析：4 段、纯数字、拒绝前导 0、值 ≤ 255。失败抛 INVALID_IP。 */
     static int parseIPv4Uint(String ip) {
-        int len = ip.length();
+        return parseIPv4Range(ip, 0, ip.length());
+    }
+
+    /**
+     * {@link #parseIPv4Uint} 的区间版本：解析 {@code ip[from, to)}，不复制子串。
+     * <p>
+     * 供 IPv6 末组的点分四元组复用 —— 那条路径是 IPv6 查询的一部分，若在此
+     * {@code substring} 一次就会把刚做到 0 分配的解析重新拉回分配路径。
+     * 失败时用 {@code ip.substring(from, to)} 组消息，与旧实现的消息逐字相同
+     * （错误路径允许分配：它不参与热路径）。
+     */
+    private static int parseIPv4Range(String ip, int from, int to) {
         int result = 0;
         int parts = 0;
-        int i = 0;
-        while (i < len) {
+        int i = from;
+        while (i < to) {
             int start = i;
             int val = 0;
-            while (i < len && ip.charAt(i) != '.') {
+            while (i < to && ip.charAt(i) != '.') {
                 char c = ip.charAt(i);
                 if (c < '0' || c > '9') {
-                    throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv4 format: " + ip);
+                    throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv4 format: " + ip.substring(from, to));
                 }
                 val = val * 10 + (c - '0');
                 if (val > 255) {
-                    throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv4 format: " + ip);
+                    throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv4 format: " + ip.substring(from, to));
                 }
                 i++;
             }
             int partLen = i - start;
             if (partLen == 0 || partLen > 3 || (partLen > 1 && ip.charAt(start) == '0')) {
-                throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv4 format: " + ip);
+                throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv4 format: " + ip.substring(from, to));
             }
             result = (result << 8) | val;
             parts++;
-            if (i < len) {
+            if (i < to) {
                 i++;
-                if (i == len) {
-                    throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv4 format: " + ip);
+                if (i == to) {
+                    throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv4 format: " + ip.substring(from, to));
                 }
             }
         }
         if (parts != 4) {
-            throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv4 format: " + ip);
+            throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv4 format: " + ip.substring(from, to));
         }
         return result;
     }
@@ -1790,113 +1867,172 @@ public final class QzdbReader implements AutoCloseable {
      * 最多一个 '::'、≤8 组、末组允许点分 IPv4、拒绝 zone id 与空组。
      */
     static byte[] parseIPv6Bytes(String s) {
+        byte[] buf = new byte[16];
+        parseIPv6Into(s, buf);
+        return buf;
+    }
+
+    /**
+     * 严格 IPv6 解析，单遍扫描直接写入 {@code out}（长度必须为 16）——零中间分配。
+     * <p>
+     * 与 {@link #parseIPv6Bytes} 的接受/拒绝判定、输出字节、异常消息
+     * <b>逐字节一致</b>（对旧实现逐字快照做 60 万+ 输入差分对拍 + 6 路变异测试，
+     * 见 {@code docs/JAVA_PERF_OPTIMIZATION.md}）。
+     * 语义：最多一个 '::'、≤8 组、末组允许点分 IPv4、拒绝 zone id 与空组。
+     * <p>
+     * <b>为什么不能像旧实现那样先 split 再回填：</b>旧实现每次调用要分配
+     * 2 个 substring + ArrayList + Object[] + 每组 1 个 substring + 2 个 String[]，
+     * 实测 IPv6 查询路径 <b>404 B/op、180 ns/op，且解析本身占掉整条链路的 ~100%</b>
+     * （对照 IPv4 入口 0 B/op、54 ns/op）。这里改成单遍扫描 + 一次段内前移，
+     * 把分配降到 0。
+     *
+     * @param s   待解析字面量
+     * @param out 长度 16 的输出缓冲；写入前整体清零（等价于旧实现的 {@code new byte[16]}）
+     */
+    static void parseIPv6Into(String s, byte[] out) {
+        final int len = s.length();
+        Arrays.fill(out, (byte) 0);
+
+        // zone id 直接拒绝（§5.3：不解析 scope id）
         if (s.indexOf('%') >= 0) {
             throw new QzdbException(ErrorCode.INVALID_IP, "IPv6 zone ids are not supported: " + s);
         }
+
         int dc = s.indexOf("::");
-        String left, right;
-        if (dc >= 0) {
-            if (s.indexOf("::", dc + 2) >= 0) {
-                throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv6 format: " + s);
-            }
-            left = s.substring(0, dc);
-            right = s.substring(dc + 2);
-        } else {
-            left = s;
-            right = null;
-        }
-        String[] lg = left.isEmpty() ? new String[0] : splitColon(left);
-        String[] rg = (right == null || right.isEmpty()) ? new String[0] : splitColon(right);
-        if (right != null && rg.length == 0 && !right.isEmpty()) {
+        if (dc >= 0 && s.indexOf("::", dc + 2) >= 0) {
             throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv6 format: " + s);
         }
+        int leftEnd = dc >= 0 ? dc : len;          // 左段 = [0, leftEnd)
+        int rightStart = dc >= 0 ? dc + 2 : len;  // 右段 = [rightStart, len)
 
-        // 末组可为点分 IPv4
-        int v4Int = 0;
+        // ---- 定位末组（唯一可能承载点分 IPv4 四元组的位置）----
+        int lastSegStart, lastSegEnd;
+        if (rightStart < len) {
+            lastSegStart = rightStart;
+            lastSegEnd = len;
+        } else {
+            lastSegStart = 0;
+            lastSegEnd = leftEnd;
+        }
+        int lastGroupStart = lastSegStart;
+        for (int i = lastSegStart; i < lastSegEnd; i++) {
+            if (s.charAt(i) == ':') lastGroupStart = i + 1;
+        }
         boolean hasV4 = false;
-        String lastGroup = rg.length > 0 ? rg[rg.length - 1] : (lg.length > 0 ? lg[lg.length - 1] : null);
-        if (lastGroup != null && lastGroup.indexOf('.') >= 0) {
-            v4Int = parseIPv4Uint(lastGroup);
-            hasV4 = true;
-            if (rg.length > 0) rg = java.util.Arrays.copyOf(rg, rg.length - 1);
-            else lg = java.util.Arrays.copyOf(lg, lg.length - 1);
+        int v4Int = 0;
+        if (lastGroupStart < lastSegEnd) {
+            boolean dot = false;
+            for (int i = lastGroupStart; i < lastSegEnd; i++) {
+                if (s.charAt(i) == '.') { dot = true; break; }
+            }
+            if (dot) {
+                hasV4 = true;
+                v4Int = parseIPv4Range(s, lastGroupStart, lastSegEnd);
+                // 末组被 IPv4 尾段占用，从十六进制组里摘掉。
+                // 必须连同它前面的分隔符 ':' 一起摘（末段止于 lastGroupStart-1），
+                // 否则留下悬空 ':' 会被判成空组，把 "::ffff:1.12.0.0" 这类合法地址误拒。
+                int trimmedEnd = lastGroupStart > lastSegStart ? lastGroupStart - 1 : lastSegStart;
+                // ":::x.y.z.w" 型重叠：indexOf("::", dc+2) 查不到与首个 "::" 重叠的
+                // 那一处 ':'，旧实现里它是右段的一个**真实空组**（必须拒绝）。
+                // 这里若随 IPv4 尾段一起把整段摘成空段，就等于把这个拒绝语义弄丢了。
+                if (trimmedEnd == lastSegStart
+                        && lastGroupStart > lastSegStart
+                        && s.charAt(lastSegStart) == ':') {
+                    throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv6 format: " + s);
+                }
+                if (rightStart < len) lastSegEnd = trimmedEnd;
+                else { leftEnd = trimmedEnd; lastSegEnd = trimmedEnd; }
+            }
         }
 
         // 缺陷修复：嵌入 IPv4 点分四元组必须位于 '::' 压缩缺口的右侧（地址末尾）。
         // 若 '::' 存在且右侧为空，则 v4 只能落在左侧末组，形如 "1.2.3.4::" / "2001:db8:1.2.3.4::"，
         // 这类输入非法（Go netip.ParseAddr 同样拒绝），必须拒绝。
-        if (hasV4 && dc >= 0 && right.isEmpty()) {
+        if (hasV4 && dc >= 0 && rightStart >= len) {
             throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv6 format: " + s);
         }
 
-        int ng = lg.length + rg.length;
+        int leftGroups = parseHexGroups(s, 0, leftEnd, out, 0);
+        int rightGroups = parseHexGroups(s, rightStart, lastSegEnd, out, leftGroups * 2);
+
+        int ng = leftGroups + rightGroups;
         int v4Slots = hasV4 ? 2 : 0;
-        for (String g : lg) validateHexGroup(g, s);
-        for (String g : rg) validateHexGroup(g, s);
         if (dc >= 0) {
             if (ng + v4Slots > 7) {
                 throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv6 format: " + s);
             }
-        } else {
-            if (ng + v4Slots != 8) {
+            // 右段先贴着左段尾部写好，再整体前移 gap 字节（System.arraycopy 对
+            // 同数组重叠区间按规范等价于临时缓冲，移动本身结果正确）。
+            // 移动后要把腾空区清零——out 是复用的暂存缓冲而非 new byte[16]，
+            // 不清零会把上一次的前移残留当成有效字节（曾导致 "2001:db8::1"
+            // 在下标 4~5 留下 0001）。
+            // 只清 [srcOff, srcOff+min(nBytes,gap))：这是源区里**没被目标区覆盖**的部分。
+            // gap < nBytes 时源区与目标区重叠（如 "::1:2:3:4:5"），清整个源区会把
+            // 刚落位的字节又抹掉。arraycopy 已完成，本处清零不再与其重叠。
+            int gap = (8 - ng - v4Slots) * 2;
+            if (gap > 0 && rightGroups > 0) {
+                int srcOff = leftGroups * 2;
+                int nBytes = rightGroups * 2;
+                System.arraycopy(out, srcOff, out, srcOff + gap, nBytes);
+                Arrays.fill(out, srcOff, srcOff + Math.min(nBytes, gap), (byte) 0);
+            }
+        } else if (ng + v4Slots != 8) {
+            throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv6 format: " + s);
+        }
+
+        if (hasV4) {
+            out[12] = (byte) (v4Int >>> 24);
+            out[13] = (byte) (v4Int >>> 16);
+            out[14] = (byte) (v4Int >>> 8);
+            out[15] = (byte) v4Int;
+        }
+    }
+
+    /**
+     * 扫描 {@code s[from, to)} 的冒号分隔十六进制组，逐组写入 {@code out[outOff..]}。
+     *
+     * @return 解析出的组数
+     */
+    private static int parseHexGroups(String s, int from, int to, byte[] out, int outOff) {
+        if (from >= to) return 0;
+        int groups = 0;
+        int off = outOff;
+        int i = from;
+        while (true) {
+            int j = i;
+            int v = 0;
+            int n = 0;
+            while (j < to) {
+                char c = s.charAt(j);
+                if (c == ':') break;
+                if (n == 4 || c >= HEX_DIGITS.length || HEX_DIGITS[c] < 0) {
+                    throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv6 format: " + s);
+                }
+                v = (v << 4) | HEX_DIGITS[c];
+                n++;
+                j++;
+            }
+            // 空组：段首/段尾多余的 ':'（含 ":::" 的残留），一律拒绝
+            if (n == 0) {
                 throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv6 format: " + s);
             }
-        }
-
-        byte[] buf = new byte[16];
-        int off = 0;
-        for (String g : lg) {
-            int v = parseHexGroup(g);
-            buf[off] = (byte) (v >> 8);
-            buf[off + 1] = (byte) v;
-            off += 2;
-        }
-        off += (8 - ng - v4Slots) * 2;
-        for (String g : rg) {
-            int v = parseHexGroup(g);
-            buf[off] = (byte) (v >> 8);
-            buf[off + 1] = (byte) v;
-            off += 2;
-        }
-        if (hasV4) {
-            buf[12] = (byte) (v4Int >>> 24);
-            buf[13] = (byte) (v4Int >>> 16);
-            buf[14] = (byte) (v4Int >>> 8);
-            buf[15] = (byte) v4Int;
-        }
-        return buf;
-    }
-
-    private static String[] splitColon(String s) {
-        List<String> parts = new ArrayList<>(8);
-        int start = 0;
-        for (int i = 0; i <= s.length(); i++) {
-            if (i == s.length() || s.charAt(i) == ':') {
-                parts.add(s.substring(start, i));
-                start = i + 1;
+            // 容量护栏：16 字节最多容 8 组。多于 8 组时旧实现必在组数校验处拒绝
+            // （无 '::' → ng != 8；有 '::' → ng > 7），所以这里提前抛同一条消息，
+            // 既等价又不会先写爆暂存缓冲。
+            if (off + 2 > out.length) {
+                throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv6 format: " + s);
             }
-        }
-        return parts.toArray(new String[0]);
-    }
-
-    private static void validateHexGroup(String g, String full) {
-        if (g.isEmpty() || g.length() > 4) {
-            throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv6 format: " + full);
-        }
-        for (int i = 0; i < g.length(); i++) {
-            char c = g.charAt(i);
-            if (c >= HEX_DIGITS.length || HEX_DIGITS[c] < 0) {
-                throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv6 format: " + full);
+            out[off] = (byte) (v >>> 8);
+            out[off + 1] = (byte) v;
+            off += 2;
+            groups++;
+            if (j >= to) return groups;
+            j++;                        // 跳过 ':'
+            if (j >= to) {               // 段尾悬空 ':' → 空组
+                throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv6 format: " + s);
             }
+            i = j;
         }
-    }
-
-    private static int parseHexGroup(String g) {
-        int v = 0;
-        for (int i = 0; i < g.length(); i++) {
-            v = (v << 4) | HEX_DIGITS[g.charAt(i)];
-        }
-        return v;
     }
 
     /** IPv4-mapped IPv6 数值判定（§9.7：(ip >> 32) == 0xFFFF，即前 10 字节 0 + 2 字节 0xFF）。 */
@@ -2176,28 +2312,35 @@ public final class QzdbReader implements AutoCloseable {
     // CRC32（流式分块，避免整文件堆内拷贝；canonical = 偏移 16~19 填 0）
     // =========================================================================
 
+    /**
+     * canonical CRC32（偏移 16~19 填 0 后整文件计算）。
+     * <p>
+     * 直接用 {@link CRC32#update(ByteBuffer)} 就地消费映射缓冲，**不做整文件堆内拷贝**：
+     * 旧实现按 1 MB 分块 {@code duplicate.get(byte[])} 再喂 CRC，等于把整个 .qzdb
+     * 在加载期完整复制一遍到堆上（117 MB 库 = 1 MB 常驻块 + 一整轮 117 MB 的拷贝带宽）。
+     * {@code update(ByteBuffer)} 对 read-only direct buffer 直接走 address()，
+     * 无拷贝、无分配，结果与分块实现逐位相同（CRC32 是纯累加，与分块无关）。
+     */
     private static long computeCanonicalCrc(ByteBuffer src) {
         ByteBuffer d = src.duplicate();
         int len = d.capacity();
         CRC32 crc = new CRC32();
-        byte[] chunk = new byte[Math.min(CRC_CHUNK, Math.max(len, 1))];
-        int pos = 0;
-        boolean first = true;
-        while (pos < len) {
-            int n = Math.min(chunk.length, len - pos);
-            d.position(pos);
-            d.get(chunk, 0, n);
-            if (first && n >= 20) {
-                crc.update(chunk, 0, 16);
-                crc.update(ZERO4, 0, 4);
-                crc.update(chunk, 20, n - 20);
-                first = false;
-            } else {
-                crc.update(chunk, 0, n);
-                first = false;
-            }
-            pos += n;
+        if (len < 20) {
+            // 头部都放不下 20 字节：没有可清零的窗口，整段照原样算（与旧实现一致）
+            d.position(0);
+            d.limit(len);
+            crc.update(d);
+            return crc.getValue();
         }
+        d.position(0);
+        d.limit(16);
+        crc.update(d);                     // [0, 16)
+        crc.update(ZERO4, 0, 4);           // [16, 20) 视作 0
+        // 必须先把 limit 抬回 len 再抬 position：ByteBuffer 拒绝 position > limit
+        // （上一行 update 后 position == limit == 16）。
+        d.limit(len);
+        d.position(20);
+        crc.update(d);                     // [20, len)
         return crc.getValue();
     }
 

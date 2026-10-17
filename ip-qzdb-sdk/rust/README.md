@@ -443,7 +443,16 @@ match QzdbReader::from_file("ip_china.qzdb") {
 
 - **无锁快照架构**：查询只读 `ArcSwap` 快照引用，多线程零竞争；`reload` 用原子替换切换。
 - **只读 mmap 加载 + 懒解析**：文件路径加载（`from_file`/`reload`/`Builder::build(path)`）通过 `memmap2` 只读内存映射，可在多进程间共享物理页；unsafe 仅隔离在 `map_file()` 一处（配 SAFETY 注释说明不变式），crate 其余部分仍是安全代码。内存字节入口（`from_bytes`/`reload_bytes`）保持拷贝语义（`Vec<u8>`）。字段解析按需切片，不做整库反序列化。
-- **per-snapshot 有界无锁缓存**：GeoInfo 解码缓存为固定 **16384 槽位**（`1 << 14`）、只填不淘汰的开放寻址表。快照不可变 → 同一 `entry_id` 永远解析出同一 `GeoInfo`。对热点 IP（同段 / 邻近客户端、批量扫段）直接命中缓存，**命中路径零分配**。超出容量后新查询到的条目走非缓存路径解码，不影响正确性但会降低该条目的吞吐；如数据库 distinct 地理条目数明显超过该值，命中率会相应下降。
+- **per-snapshot 有界无锁缓存（4 路组相联）**：GeoInfo 解码缓存为 **16384 行 × 4 路**
+  （`1 << 14` 行、splitmix 乘法散列布位、轮转替换）。快照不可变 → 同一 `entry_id` 永远
+  解析出同一 `GeoData`。4 路设计消除直映射下结构性对撞驱逐：热池 miss% 0.006%
+  （600M ops 实测），超大型 distinct 条目库（顺序/随机流）命中率也显著优于直映射。
+  **命中路径零分配、零共享原子写**；缓存在每线程懒建（`LOCAL_GEO_LINES` 行槽位表），
+  快照 `gen` 变化自动换表，跨快照不串行。
+- **值表示去共享化**：字段值不再用 `Arc<str>` 计数——池字段是装载期
+  `Box::leak` 的 `&'static str`（构造 = 指针复制），数字/浮点是 32B 栈缓冲内联值。
+  构建/命中/克隆全程无共享状态写入，多核扩展不再受共享引用计数 ping-pong 限制。
+  每次 reload 的旧数据池不回收（进程级生命期，见 CHANGELOG）。
 - **SENTINEL 位即时剥离**：Trie 返回的 row_id / index 在遍历时即剥离哨兵位（`& 0x7FFFFFFF`），无需调用方处理。
 - **IPv4 映射地址自动降级**：`::ffff:a.b.c.d` 在解析阶段即降级到 V4 Trie，双栈查询统一路径。
 
@@ -516,4 +525,4 @@ cargo update -p qzdb
 
 [MIT](https://opensource.org/licenses/MIT)
 
-<!-- commit: rust: Rust SDK（mmap 只读映射，内存安全） sync=1791283157 -->
+<!-- commit: rust: Rust 极速解析引擎 (mmap + 最小 unsafe surface, 整型随机最不利 4300 万+ QPS, 口径见 docs/PERFORMANCE.md) -->
