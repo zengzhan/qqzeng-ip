@@ -64,6 +64,22 @@ jobs:
           distribution: temurin
           java-version: '21'
           cache: maven
+
+      # 规避 Maven 3.10.0 回归：3.10.0 生成的 central-bundle 布局变化，Central
+      # 会误报 "Bundle has content that does NOT have a .pom file"（即使 POM 已打进
+      # bundle）。上游 issue：mavenplugins/central-publishing-maven-plugin#78
+      # （2026-10-02）。GitHub runner 自带 Maven 已升到 3.10.0，故显式安装 3.9.16
+      # 并置于 PATH 最前，只影响本 job 的 mvn 命令。
+      - name: Pin Maven 3.9.16
+        if: steps.guard.outputs.exists == 'false'
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/apache-maven-3.9.16-bin.tar.gz \
+            https://archive.apache.org/dist/maven/maven-3/3.9.16/binaries/apache-maven-3.9.16-bin.tar.gz
+          sudo tar -xzf /tmp/apache-maven-3.9.16-bin.tar.gz -C /opt
+          echo "/opt/apache-maven-3.9.16/bin" >> "$GITHUB_PATH"
+          /opt/apache-maven-3.9.16/bin/mvn -v
+
       - name: Configure Maven settings.xml
         if: steps.guard.outputs.exists == 'false'
         run: |
