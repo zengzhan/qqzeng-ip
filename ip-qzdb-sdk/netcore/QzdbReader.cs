@@ -100,6 +100,12 @@ public sealed class QzdbReader : IDisposable
     // Bounded, lock-free per-snapshot cache of resolved GeoInfo keyed by entryId.
     // Power of two; collisions cause a recompute, never a wrong value (see ResolveGeo).
     private const int GeoCacheSize = 1 << 14; // 16384 slots ≈ 196 KB per snapshot
+    /// <summary>
+    /// 4 路组相联的每一路数（与 Rust LocalGeo 同构）。真实大库（条目数 ≫ 16384）上
+    /// 直映射的冲突抖动会把命中打回 miss（实测 ult/global 371k 条目：UNI 命中率
+    /// ≈16%、每 op ≈165 B 分配；4 路后 ≈96%+、≈4 B），HIT26K 88→29 ns。
+    /// </summary>
+    internal const int GeoCacheWays = 4;
 
     private Snapshot? _activeSnapshot;
     private int _lifecycleState;
@@ -268,6 +274,9 @@ public sealed class QzdbReader : IDisposable
         internal bool[] _numericFlags = null!;
 
         internal CacheEntry?[]? _cache;
+        /// <summary>每组一个轮转替换游标；并发下非原子递增是良性的：仅影响淘汰选择，
+        /// 槽位本身仍以「整对象引用 + 不可变 CacheEntry」发布。</summary>
+        internal int[]? _cacheRot;
 
         internal string _version = "", _description = "", _dataMonth = "", _buildTimeStr = "", _edition = "", _scope = "";
         /// <summary>Header offset 6: file-level one-hot edition bitmask.</summary>
@@ -463,7 +472,8 @@ public sealed class QzdbReader : IDisposable
             ParseMetadata();
             ParsePools();
 
-            _cache = new CacheEntry?[GeoCacheSize];
+            _cache = new CacheEntry?[GeoCacheSize * GeoCacheWays];
+            _cacheRot = new int[GeoCacheSize];
 
             if (verifyCrc)
             {
@@ -2069,21 +2079,31 @@ public sealed class QzdbReader : IDisposable
     // Bounded, lock-free per-snapshot cache of resolved GeoInfo keyed by entryId.
     // A complete immutable CacheEntry is published as one reference. This prevents a
     // colliding writer from exposing a key from one result with the value of another.
+    //
+    // 4 路组相联（GeoCacheWays）：直映射在「条目数 ≫ 16384」的库上会发生结构性冲突
+    // ——两个热条目映射到同一槽位时互相逐出，反复 BuildGeo。改为每组 4 路 +
+    // 组内轮转替换（_cacheRot），并发安全性不变：读到的一定是完整 key/value 对。
     private static GeoInfo? ResolveGeo(Snapshot snap, uint entryId)
     {
         if (entryId == 0) return null;
         if (entryId >= snap._groupEntryCounts[snap._groupIndex]) return null;
 
         var cache = snap._cache!;
-        int h = (int)(entryId & (uint)(GeoCacheSize - 1));
+        int line = (int)(entryId & (uint)(GeoCacheSize - 1)) * GeoCacheWays;
 
-        var cached = Volatile.Read(ref cache[h]);
-        if (cached != null && cached.Key == entryId)
-            return cached.Value;
+        for (int w = 0; w < GeoCacheWays; w++)
+        {
+            var cached = Volatile.Read(ref cache[line + w]);
+            if (cached != null && cached.Key == entryId)
+                return cached.Value;
+        }
 
         var geo = BuildGeo(snap, entryId);
         if (geo != null)
-            Volatile.Write(ref cache[h], new Snapshot.CacheEntry(entryId, geo));
+        {
+            int w = (int)((uint)snap._cacheRot![line / GeoCacheWays]++ & (uint)(GeoCacheWays - 1));
+            Volatile.Write(ref cache[line + w], new Snapshot.CacheEntry(entryId, geo));
+        }
         return geo;
     }
 

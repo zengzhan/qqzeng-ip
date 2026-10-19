@@ -180,10 +180,58 @@ function _formatNativeFloat(fw, d, off) {
     if (Math.abs(num) < 9007199254740992) return String(Math.trunc(num));
     return _doubleToExactBigInt(num).toString();
   }
-  return num.toFixed(6);
+  return _toFixed6HalfEven(num);
 }
 
 // IEEE754 位解码：把整数数值的 finite double 精确转换为 BigInt（§10.5 大整值分支专用）
+// 6 位小数定点字符串,精确十进制 + round-half-even(FORMAT §10.5 统一契约)。
+// 不用 num.toFixed(6):V8 对 dyadic 半数边界(f32 编码常见的 ……5,如 114.5390625)
+// 四舍五入进位(114.539063),而 C %.6f / Python / Rust / Java / C# / Go 的
+// 精确舍入都是 ties-to-even(114.539062),toPipe 须与 7 种语言逐字一致。
+function _toFixed6HalfEven(v) {
+  // 快路径:|v| < 1e8 时 v×1e6 < 2^53,Number 乘法在 double 网格内精确,
+  // 用跳变的误差界判断"离半数安全"——仅精确 tie / 近 tie 才落 BigInt 慢路径。
+  // geo 值域(±360)的 f32 格距 ≥ 2^-17×1e6 ≈ 7.6(缩放空间),远大于 ulp 界,
+  // 非 tie 判定与精确路径恒一致。
+  if (v !== 0 && v < 1e8 && v > -1e8) {
+    const av = v < 0 ? -v : v;
+    const scaled = av * 1000000;
+    const base = Math.floor(scaled);
+    const t = scaled - base;
+    if (Math.abs(t - 0.5) > Math.abs(scaled) * 1.1e-15 + 1e-15) {
+      const r = base + (t > 0.5 ? 1 : 0);          // < 2^53,Number 精确
+      const intPart = Math.floor(r / 1000000);
+      const frac = r - intPart * 1000000;          // 分母整乘 < 2^53,精确
+      const s = intPart + '.' + frac.toString().padStart(6, '0');
+      return v < 0 ? '-' + s : s;
+    }
+  }
+  const b = Buffer.alloc(8);
+  b.writeDoubleLE(v, 0);
+  const bits = b.readBigUInt64LE(0);
+  const neg = ((bits >> 63n) & 1n) === 1n;
+  let exp = Number((bits >> 52n) & 0x7FFn);
+  const frac = bits & ((1n << 52n) - 1n);
+  const mant = exp > 0 ? frac | (1n << 52n) : frac;
+  const e2 = exp > 0 ? exp - 1075 : -1074;
+  let scaled;
+  if (e2 >= 0) {
+    scaled = mant * 1000000n << BigInt(e2);
+  } else {
+    const k = BigInt(-e2);
+    const numr = mant * 1000000n;
+    const base = numr >> k;
+    const rem = numr & ((1n << k) - 1n);
+    const half = 1n << (k - 1n);
+    if (rem > half) scaled = base + 1n;
+    else if (rem === half) scaled = base + (base & 1n);
+    else scaled = base;
+  }
+  const s = (scaled / 1000000n).toString() + '.' +
+    (scaled % 1000000n).toString().padStart(6, '0');
+  return neg ? '-' + s : s;
+}
+
 function _doubleToExactBigInt(v) {
   const b = Buffer.alloc(8);
   b.writeDoubleLE(v, 0);

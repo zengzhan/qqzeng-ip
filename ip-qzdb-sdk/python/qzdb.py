@@ -789,9 +789,31 @@ class UsageType(str, Enum):
 UsageType._KNOWN = {m.value.lower(): m for m in UsageType}
 
 
+def _on_snapshot_find_bytes(fn):
+    """find_bytes 专用：快照派发必须让位给方法覆盖契约（§10.2 鸭子类型派发）。
+
+    泛型 ``_on_snapshot`` 会把整条链路派到 shadow 上执行，而 shadow 的 ``__dict__``
+    是**构建时刻**从门面复制的 —— 用户在构建之后给门面打的实例级补丁
+    （``r.find_v6_bytes = ...``）对 shadow 不可见，``find_bytes`` 就会走
+    ``shadow._find_v6_bytes`` 真查，绕过覆盖。因此派发决策必须用**门面**的
+    ``__dict__`` 做：无覆盖 → 快照快路径；有覆盖（实例级或类级）→ 链路落在
+    门面上，``self.find_v6_bytes`` 自然解析到补丁后的函数。V4 / mapped 分支
+    不受影响：无论目标是谁，``find_uint`` 链都完整落在同一个对象上。
+    """
+    @functools.wraps(fn)
+    def find_bytes(self, ip_bytes):
+        snap = self._snap
+        if snap is not None:
+            if (type(self) is QzdbReader
+                    and 'find_v6_bytes' not in self.__dict__
+                    and QzdbReader.find_v6_bytes is _QZDB_READER_FIND_V6_BYTES):
+                return fn(snap, ip_bytes)
+        return fn(self, ip_bytes)
+    return find_bytes
+
+
 def _on_snapshot(fn):
     """把公开查询入口**整条调用链**派发到当前快照对象上执行（契约 §一.3 / §五.6）。
-
     一次查询会跨 ``find`` → ``find_uint`` → ``_trie_walk_v4`` → ``_resolve_row_id``
     多次读取实例状态。若只在入口读一次 ``self._snap``、内部仍走 ``self``，换快照时
     仍会「拿旧库的 row_id 去新库的偏移表解码」——混用窗口只是变窄，并未消失。
@@ -2132,7 +2154,7 @@ class QzdbReader:
         # FIX: strip sentinel bit (same as find_uint for V4)
         return self._resolve_row_id(row_id & SENTINEL_MASK_31, self._group_index)
 
-    @_on_snapshot
+    @_on_snapshot_find_bytes
     def find_bytes(self, ip_bytes):
         """Lookup by raw address bytes: 4 bytes → IPv4, 16 bytes → IPv6.
 

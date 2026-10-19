@@ -1,8 +1,8 @@
 [package]
 name = "qzdb"
 version = "2.0.0"
-edition = "2021"
-rust-version = "1.80"
+edition = "2024"
+rust-version = "1.85"
 authors = ["qqzeng <qzdb@qqzeng.com>"]
 description = "Offline reader for .qzdb IP geolocation databases (IPv4 / IPv6 dual-stack). Runtime deps: arc-swap (lock-free snapshot swap), memmap2 (zero-copy file mapping)."
 license = "MIT"
@@ -30,6 +30,7 @@ exclude = [
 
 [dependencies]
 arc-swap = "1"
+crc32fast = "1"
 memmap2 = "0.9"
 
 [dev-dependencies]
