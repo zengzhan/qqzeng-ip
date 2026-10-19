@@ -101,14 +101,8 @@
     <None Include="README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 
-  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0'">
-    <PackageReference Include="System.IO.Hashing" Version="8.0.0" />
-  </ItemGroup>
-
-  <!-- net9.0/net10.0/net11.0: System.IO.Hashing is expected to be built into the shared
-       framework, but the targeting packs for these TFMs do not expose it,
-       so the package is referenced explicitly to keep all 4 TFMs compiling. -->
-  <ItemGroup Condition="'$(TargetFramework)' == 'net9.0' or '$(TargetFramework)' == 'net10.0' or '$(TargetFramework)' == 'net11.0'">
+  <!-- System.IO.Hashing 包含 Crc32，未内置于各目标框架的共享运行时框架中，需显式引用。 -->
+  <ItemGroup>
     <PackageReference Include="System.IO.Hashing" Version="8.0.0" />
   </ItemGroup>
 

@@ -28,6 +28,9 @@
     基准热池 miss% 从结构性对撞驱逐降到 0.006%（600M ops 实测），并对错开 seed 的
     混发流同样有效。
 
+- **Rust SDK：`ErrorCode` 枚举增加 `#[non_exhaustive]`**（`ip-qzdb-sdk/rust/src/lib.rs`）。
+  防止未来新增错误码时破坏下游的穷举 `match`，下游必须提供通配分支 `_ => ...`。
+
 - **Rust SDK：`FieldVal::Inline` 改为 `Inline(InlineBuf)`**（`ip-qzdb-sdk/rust/src/lib.rs`）。
   `InlineBuf` 的字段与构造器保持私有，外部不能再直接构造任意载荷；下游若匹配旧的
   `Inline(buf, len)` 形状，需要迁移到新的 `InlineBuf` API。

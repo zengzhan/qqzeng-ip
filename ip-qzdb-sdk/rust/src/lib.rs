@@ -22,6 +22,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::File;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
@@ -76,7 +77,7 @@ impl DataStorage {
     }
 }
 
-fn map_file(path: &str) -> Result<Arc<Mmap>, QzdbError> {
+fn map_file(path: impl AsRef<Path>) -> Result<Arc<Mmap>, QzdbError> {
     let file = File::open(path)?;
     // SAFETY: the mapping is read-only, the File is kept alive by the OS mapping,
     // and DataStorage owns the Mmap until every immutable snapshot is dropped.
@@ -89,6 +90,7 @@ fn map_file(path: &str) -> Result<Arc<Mmap>, QzdbError> {
 // ---------------------------------------------------------------------------
 
 /// 错误码（API_CONTRACT.md 错误码约定）。
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorCode {
     NotFound,
@@ -2849,16 +2851,28 @@ impl SnapshotInner {
                     Some(len) => FieldVal::Inline(InlineBuf::new(buf, len as u8)),
                     None => {
                         // 缓冲装不下（仅当 {:.6}/{:.0} 大值浮点 >32B；合法数据
-                        // 不可达，坏数据/hostile 构造）。契约（failclosed
-                        // oversized_native_floats）要求 owned 路径给全量字符串
-                        // 不截断、ref 路径拒绝：此处回退一次堆格式化并 'static
-                        // 化借用，每实例一次 leak，保住 owned 全量语义。
+                        // 不可达，坏数据/hostile 构造）。契约（FORMAT §10.5 原生标量
+                        // 浮点与零拷贝视图 fail-closed 约定）要求 owned 路径给全量字符串
+                        // 不截断、ref 路径拒绝：此处回退一次堆格式化，并接入
+                        // POOL_INTERNER 驻留去重，避免恶意数据反复查询引发无界内存泄漏。
                         let f = if w == 4 {
                             f32::from_bits(safe_read_u32(d, fo).unwrap_or(0)) as f64
                         } else {
                             f64::from_bits(safe_read_u64(d, fo).unwrap_or(0))
                         };
-                        FieldVal::Borrowed(Box::leak(fmt_native_float(f).into_boxed_str()))
+                        let text = fmt_native_float(f);
+                        let mut interner = POOL_INTERNER
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        let leaked: &'static str = match interner.get(text.as_str()) {
+                            Some(&existing) => existing,
+                            None => {
+                                let l: &'static str = Box::leak(text.into_boxed_str());
+                                interner.insert(l);
+                                l
+                            }
+                        };
+                        FieldVal::Borrowed(leaked)
                     }
                 }
             } else {
@@ -3810,7 +3824,7 @@ impl std::fmt::Debug for QzdbReader {
 
 impl QzdbReader {
     /// 从文件路径加载（默认 CRC 校验开启）。
-    pub fn from_file(path: &str) -> Result<QzdbReader, QzdbError> {
+    pub fn from_file(path: impl AsRef<Path>) -> Result<QzdbReader, QzdbError> {
         // 文件路径使用只读 mmap；内存字节入口仍保持拷贝语义。
         let inner = SnapshotInner::from_bytes(DataStorage::Mapped(map_file(path)?), 0, true)?;
         Ok(QzdbReader {
@@ -4478,7 +4492,7 @@ impl QzdbReader {
 
     // ---- 热更新（原子替换，强制 CRC；失败旧快照继续服务） ----
 
-    pub fn reload(&self, path: &str) -> Result<(), QzdbError> {
+    pub fn reload(&self, path: impl AsRef<Path>) -> Result<(), QzdbError> {
         let group_index = self.inner().group_index;
         let new_inner =
             SnapshotInner::from_bytes(DataStorage::Mapped(map_file(path)?), group_index, true)?;
