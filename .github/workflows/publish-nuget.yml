@@ -1,0 +1,78 @@
+name: Publish C# to NuGet
+
+# 打 v-net-* tag 或手动 workflow_dispatch 时，构建并发布 .NET SDK 到 NuGet.org。
+# 认证走 NuGet.org Trusted Publishing（OIDC），无需任何长期 API key / secret：
+#   https://www.nuget.org/account/trustedpublishing
+#   策略 qzdb-github-actions：
+#     Package Owner=qqzeng-ip, Provider=GitHub Actions,
+#     Repository Owner=zengzhan, Repository=qqzeng-ip,
+#     Workflow File=publish-nuget.yml（本文件）, Environment 留空,
+#     Scope=Push new packages and package versions, Glob Patterns=QQZeng.Qzdb
+# 临时 API key 由 NuGet/login 现场换取（约 15 分钟有效、一次性），不再使用 NUGET_API_KEY secret。
+#
+# 手动触发时 dry_run 默认 true：只验证 OIDC 登录（换到临时 key 但不推送），
+# 用于验证策略链路；要真正发布时把 dry_run 改为 false（版本需未发布过）。
+on:
+  push:
+    tags:
+      - 'v-net-*'      # 仅 .NET/C# 发版，避免与 v-rust-*/v-java-*/v-python-* 互相误触发
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: '只验证 OIDC 登录（不推送）'
+        type: boolean
+        default: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # NuGet Trusted Publishing (OIDC) 必需
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 幂等保护：本仓库是多语言 monorepo，tag 重推 / workflow 重跑时，
+      # 同名版本再次上传会被 NuGet 拒绝（409）并把 workflow 打成红叉。
+      # 先查 NuGet 上该版本是否已存在，存在则跳过，保持绿色。
+      - name: Resolve version and check NuGet
+        id: guard
+        run: |
+          set -euo pipefail
+          VER=$(grep -oP '(?<=<Version>)[^<]+' ip-qzdb-sdk/netcore/QQZeng.Qzdb.csproj | head -1 | tr -d '[:space:]')
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          if curl -fsS "https://api.nuget.org/v3-flatcontainer/qqzeng.qzdb/$VER/qqzeng.qzdb.$VER.nupkg" -o /dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::QQZeng.Qzdb $VER 已存在于 NuGet，跳过发布（幂等保护）"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::QQZeng.Qzdb $VER 尚未发布，继续"
+          fi
+
+      - name: Set up .NET
+        if: steps.guard.outputs.exists == 'false'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Pack
+        if: steps.guard.outputs.exists == 'false'
+        run: dotnet pack ip-qzdb-sdk/netcore/QQZeng.Qzdb.csproj -c Release -o artifacts
+
+      - name: NuGet login (OIDC -> 临时 API key)
+        if: steps.guard.outputs.exists == 'false' || inputs.dry_run
+        id: login
+        uses: NuGet/login@v1
+        with:
+          user: qqzeng-ip
+
+      - name: Dry-run notice
+        if: inputs.dry_run
+        run: echo "::notice::dry_run=true：OIDC 登录成功，临时 API key 已签发但未使用"
+
+      - name: Push to NuGet
+        if: steps.guard.outputs.exists == 'false' && !inputs.dry_run
+        run: |
+          dotnet nuget push "artifacts/*.nupkg" --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
+          dotnet nuget push "artifacts/*.snupkg" --api-key "${{ steps.login.outputs.NUGET_API_KEY }}" --source https://api.nuget.org/v3/index.json --skip-duplicate
