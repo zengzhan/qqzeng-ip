@@ -462,7 +462,7 @@ try {
 
 | 场景 | 量级 | 说明 |
 |------|------|------|
-| 整型查询 · 50 万随机散布 IP（缓存最不利） | 74.9M QPS | 省级 8.6MB 库，单线程，口径 A（docs/PERFORMANCE.md）；字符串口径 find_str 11.9M QPS |
+| 整型查询 · 50 万随机散布 IP（缓存最不利） | 48.1M QPS | 省级 8.6MB 库，单线程，口径 A（docs/PERFORMANCE.md，契约基准）；字符串口径 find_str 11.9M QPS |
 | 多线程并发 | 安全无锁 | 16 线程并发查询 / 热重载零异常、无竞争退化 |
 | 热点 IP 重复查询 | 吞吐进一步放大、分配趋零 | 同 IP 重复查询，GC 压力显著下降 |
 
@@ -568,5 +568,3 @@ mvn test          # 14 tests / 106 assertions
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: java: Java SDK（堆外内存与 Builder API） sync=1792746709 -->

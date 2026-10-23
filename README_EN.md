@@ -73,29 +73,30 @@
 
 ## 📊 SDK Benchmark Ranking
 
-Dual metrics evaluated under random integer lookups (worst-case cache penalty) and string parsing (`find_str`). Figures guarded continuously by CI gates across 8 languages. Full definitions and reproduction steps documented in [docs/PERFORMANCE.md](./docs/PERFORMANCE.md).
+Divided into two engineering tiers: **Native / Compiled High-Performance Tier** (C, Go, Rust, Java, C#) designed for extreme throughput and low latency; **Dynamic Scripting Ecosystem** (Node.js, PHP, Python) optimized for zero-compilation simplicity and lightweight integration.  
+All metrics derived from a unified, controlled environment (Apple M4 Max, single-thread, live snapshots in `ip-qzdb-sdk/bench_reports/*.json`) continuously guarded by CI test gates. See details below and in [docs/PERFORMANCE.md](./docs/PERFORMANCE.md).
 
-| Language (Click for source) | Integer Lookup¹<br>**Metric A · Worst-Case Cache** | String Lookup<br>**Metric C · With IP Parse** | Features |
-| :--- | ---: | ---: | :--- |
-| 🔥 [Node.js](./ip-qzdb-sdk/nodejs) | **99.4 M/s** | 5.5 M/s | Fastest tier in JS ecosystem |
-| 👑 [C / C++](./ip-qzdb-sdk/c) | **96.5 M/s** | 10.8 M/s | Ultra-lightweight · Zero dependencies |
-| ⚡ [Go](./ip-qzdb-sdk/go) | **74.7 M/s** | 9.2 M/s | High concurrency · Single binary deploy |
-| ☕ [Java](./ip-qzdb-sdk/java) | **74.9 M/s** | 11.9 M/s | Fastest string query throughput |
-| 🛡️ [Rust](./ip-qzdb-sdk/rust) | **43.3 M/s** | 8.4 M/s | Memory safe · Zero overhead |
-| 🚀 [C#](./ip-qzdb-sdk/netcore) | **33.1 M/s** | 11.0 M/s | Native SIMD / Float zero parsing |
-| 🐘 [PHP](./ip-qzdb-sdk/php) | **5.67 M/s** | 429 K/s | Zero extensions · Pure PHP |
-| 🐍 [Python](./ip-qzdb-sdk/python) | **0.97 M/s** | 273 K/s | Consistency baseline · Zero dependencies |
+| Language & Tier (Click for source) | Single-Thread Integer¹<br>**Metric A · Standard Contract** | 16-Thread Concurrency²<br>**Metric B · Multi-Core Limit** | String Lookup³<br>**Metric C · With IP Parse** | Features & Architecture |
+| :--- | :---: | :---: | :---: | :--- |
+| 👑 [C / C++](./ip-qzdb-sdk/c) | **96.5 M/s** | **506 M/s** | 12.6 M/s | Ultra-lightweight · Zero dependencies · Zero-copy mmap |
+| ⚡ [Go](./ip-qzdb-sdk/go) | **97.3 M/s** | **719 M/s** | 12.1 M/s | High concurrency Goroutines · Single binary deploy |
+| 🛡️ [Rust](./ip-qzdb-sdk/rust) *(Oct Refactor)* | **82.6 M/s** | **233 M/s** | 11.5 M/s | Value semantics · 4-way set-associative cache |
+| ☕ [Java](./ip-qzdb-sdk/java) | **48.1 M/s** *(v4: 101M)* | **136 M/s** | **11.9 M/s** | Off-heap memory views · Fastest full string parse |
+| 🚀 [C#](./ip-qzdb-sdk/netcore) | **46.9 M/s** | **550 M/s** | **20.9 M/s** | Native memory mapping · Industry-leading string throughput |
+| ───────── | ───────── | ───────── | ───────── | *Dynamic Scripting & Application Ecosystem* |
+| 🔥 [Node.js](./ip-qzdb-sdk/nodejs) | **8.22 M/s** *(Probe: 99M)⁴* | Process cluster | 10.3 M/s | BigInt offset parsing · JS ecosystem top tier |
+| 🐘 [PHP](./ip-qzdb-sdk/php) | **5.67 M/s** *(Probe)⁴* | FPM pool | 470 K/s | Pure PHP zero extensions · Dual-mode buffering |
+| 🐍 [Python](./ip-qzdb-sdk/python) | **1.30 M/s** | Multiprocessing | 273 K/s | Zero dependencies · Quick analytics & data science |
 
 <details>
 <summary>📐 Metric Definitions, Test Environment, and Reproduction</summary>
 
-- **Metric A | Random Integer (Worst-case cache)**: Integer input, 500,000 scattered random IPs, 8.6MB provincial database, single-threaded — conservative baseline for capacity planning.
-- **Metric C | String `find_str`**: String IP input (including IP parsing overhead), demo database — identical to CI test suite for cross-language comparison.
-- **Environment**: Apple M4 Max (14 cores), single-thread best-of-3; x86 environments typically measure 2~4x lower; 122MB global database Metric A is approximately 1/3 of provincial database.
-- **Single Lookup Latency (Metric A average)**: Compiled languages 10~30 ns, PHP ≈176 ns, Python ≈1.0 µs.
-- ¹ Node / Java / PHP Metric A figures are measured with equivalent direct probes matching the contract scenario.
-- Hot-cache repeated lookups reach **46M ~ 100M QPS** (Metric B); 16-thread lock-free scaling scales up to **730M QPS**.
-- Full definitions and run commands in [docs/PERFORMANCE.md](./docs/PERFORMANCE.md).
+- **Metric A | Single-Thread Random Integer (Worst-case cache)**: Integer input, 500,000 scattered random IPs, 8.6MB provincial database, single-threaded — conservative baseline for capacity planning; compiled languages achieve 10~25 ns per lookup;
+- **Metric B | 16-Thread Concurrency**: Total multi-core throughput under read-only mmap and immutable snapshots across 16 worker threads;
+- **Metric C | String `find_str`**: String IP input (including IP parsing and format validation), demo database — identical to CI test suite for cross-language comparison;
+- **⁴ Contract Benchmark vs Direct Probe**: The standard contract executes PRNG progression and FNV fingerprint cross-validation; Node.js and PHP measure 8.22M and 0.72M under full contract, and reach 99.4M and 5.67M under minimal direct loop probes;
+- **Environment & Scale Effect**: Apple M4 Max (14 cores), single-thread best-of-3; x86 environments typically measure 2~4x lower; 122MB global database Metric A is approximately 1/3 of provincial database due to CPU L3 cache boundary (physical hardware reality);
+- Full definitions and reproduction commands in [docs/PERFORMANCE.md](./docs/PERFORMANCE.md). Aside from C/C++ source compilation, the other 7 languages install in one command via package managers (see Quick Start below).
 
 </details>
 
@@ -312,24 +313,36 @@ flowchart LR
    - Traverses right/left along the nodes using Longest Prefix Match (LPM). All routing pointers and leaf nodes are flattened and stored contiguously in the binary file for maximum CPU cache locality.
    - Upon a match, the SDK reads the final text from the preloaded read-only string pool in $\mathcal{O}(1)$ via physical byte offset, eliminating critical section locks completely.
 
-| Dimension / Metric | Complexity | Technical Details & Advantages |
+| Dimension / Metric | Steps & Physical Characteristics | Technical Details & Architectural Mechanism |
 | :--- | :--- | :--- |
-| **Lookup Time Complexity** | $\mathcal{O}(W - K)$ | Where $W$ is total IP bit width (32 for IPv4, 128 for IPv6), $K$ is the jump table width (e.g. 16 bits). On average, only ~16 comparisons complete the lookup. |
-| **Space Complexity** | Ultra-compact | Prefix compaction keeps each Trie node at only 6~8 bytes; tens of millions of global IP prefixes occupy < 20MB. |
-| **Memory Overhead** | $\mathcal{O}(0)$ | Compiled languages (Rust/C/Go) leverage OS `mmap` for zero-copy addressing with zero heap allocation and no GC pause. |
+| **Lookup Step Composition** | 16-bit Jump Table direct jump + Patricia bifurcation node walk | Initial $2^{16}$ static jump table bypasses the top 16 tree levels; remaining bits traverse only branching nodes in the compressed Patricia tree. Worst-case steps $\le 16$ (IPv4) / $\le 120$ (IPv6), completely decoupled from database record volume. |
+| **Space Complexity** | Ultra-compact (Trie topology compaction) | Prefix compaction keeps each Trie node at only 6~8 bytes; tens of millions of global IP prefixes occupy < 20MB. |
+| **Memory Overhead** | $\mathcal{O}(0)$ zero heap allocation | Compiled languages (Rust/C/Go) leverage OS `mmap` for zero-copy addressing and direct reads with zero heap object allocation and no GC pause. |
 
 ---
 
 ## ⚖️ Binary Format Comparison
 
-Objective comparison between QZDB and standard industry binary IP formats (detailed benchmark report in [`docs/benchmark-comparison.md`](./docs/benchmark-comparison.md)):
+Objective comparison between QZDB and standard industry binary IP formats in lookup path, record representation, and storage drivers (detailed benchmark reports in [`docs/benchmark-comparison.md`](./docs/benchmark-comparison.md) and [`docs/PERFORMANCE.md`](./docs/PERFORMANCE.md)):
 
-| Format | Lookup Complexity | File Size | QZDB Advantage |
-| :--- | :--- | :--- | :--- |
-| Nested Tree `.mmdb` | O(W) + deserialization | Large | 16-bit Jump Table + Schema leaf physical offset, zero heap allocation |
-| Flat Range Binary Search `.bin` | O(log N) multi-round | Medium | Trie naturally compacts overlapping ranges, significantly shorter lookup path |
-| Partition Vector Index `.xdb` | O(W) / O(log N) | Very Small | Global RowSchema two-phase tree provides superior full-field extensibility |
-| Proprietary Prefix Tree `.ipdb` | O(W) multiple hops | Small | Multi-language read-only string pool + completely lock-free concurrency |
+| Format | Lookup Path (Step Composition) | Record Representation | Size Driver | Objective Limitation |
+| :--- | :--- | :--- | :--- | :--- |
+| **QZDB (qqzeng)** | 16-bit Jump Table direct jump + Patricia branching walk; **steps decoupled from record volume** | Field dictionary pool + IPRow indirection, records store integer IDs, direct offset read without decoding | Index + data scale, dictionary deduplication ratio | Modern format, ecosystem centered on official 8-language SDKs with continuous consistency verification |
+| **.mmdb (MaxMind)** | Bit-by-bit search tree, ≤32 hops (v4) / ≤128 hops (v6) | Typed Map, nestable; values pointer-deduplicated, **keys re-encoded per record** | Node count × record bit width + data section encoding (including type tags and nested hierarchy) | Whole record must be decoded upon hit; deserialization and object materialization costs scale with field count |
+| **.db (ip2region legacy)** | Full-table range binary search, ~$\log_2(\text{ranges})$ random memory hops | Single concatenated string | Range count × index entry + total string payload | IPv4 only; no field typing or schema (superseded by xdb) |
+| **.xdb (current)** | Vector index $\mathcal{O}(1)$ bucket direct jump + bucket binary search $\mathcal{O}(\log M)$ | Delimiter-concatenated string, whole-string deduplication | 512KB fixed vector index + range count × 14B (v4) + total string payload | No field-level typing or dictionary; expanding fields requires lengthening concatenated string and splitting on read |
+| **.ipdb (IPIP)** | Bit-by-bit binary tree, ≤32 hops (v4) / ≤128 hops (v6), fixed 8B nodes | Tab-delimited string indexed by metadata field table | Node count × 8B + total string payload | No field-level dictionary (identical strings repeated across records); binary spec and generator toolchain closed-source |
+
+<details>
+<summary>🔍 In-Depth Format Mechanism Breakdown (Click to expand)</summary>
+
+- **`QZDB` (Two-Phase Compressed Prefix Tree)**: Phase 1 utilizes a 16-bit static jump table for an instant $O(1)$ leap to the target subtree; Phase 2 traverses only branching nodes in the Patricia tree (worst-case $\le 16$ hops for IPv4), decoupling lookup paths from total record volume. Employs independent field dictionary pools with integer row IDs; SDKs read target fields directly via RowSchema byte offsets without full-record deserialization or string splitting.
+- **`.mmdb` (MaxMind Generic Typed Nested Tree)**: Binary bit tree traversed bit-by-bit (IPv4 ≤32 hops, IPv6 ≤128 hops). While values support pointer deduplication, dictionary key names are redundantly encoded within each map; matching leaves require recursive deserialization, incurring heap allocation and object materialization overhead that scales linearly with field count in high-level runtimes.
+- **`.db` (ip2region v1 legacy, Range Binary Search)**: Pre-flattens prefixes into non-overlapping start/end ranges at build time. Binary searching across the entire index incurs ~$\log_2(N)$ random memory accesses, which is unfriendly to CPU caches. IPv4 only, without structured field typing.
+- **`.xdb` (ip2region v2 current, Partitioned Vector Index)**: First 2 bytes index directly via a 512KB vector index table into an isolated bucket, followed by $O(\log M)$ binary search over 14B fixed-size segment records. Payloads are concatenated raw strings; supports whole-string deduplication, but lacks field-level typing or dictionary pools—field extensions require lengthening the string payload and runtime string splitting.
+- **`.ipdb` (IPIP Proprietary Prefix Tree)**: Fixed 8-byte nodes traversed bit-by-bit. Record sections store tab-delimited strings without field-level dictionary deduplication (duplicate text repeated across records). Official multi-language readers are mature, but the binary specification and generation toolchain remain closed-source.
+
+</details>
 
 ---
 
