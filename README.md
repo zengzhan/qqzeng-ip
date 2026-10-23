@@ -2,6 +2,12 @@
 
 <div align="center">
 
+[English](./README_EN.md) | **简体中文**
+
+</div>
+
+<div align="center">
+
 [![Verification](https://img.shields.io/badge/Verification-100%25%20Passed-brightgreen.svg)](https://github.com/zengzhan/qqzeng-ip)
 [![Latency](https://img.shields.io/badge/Latency-%3C0.08%C2%B5s-purple.svg)](https://github.com/zengzhan/qqzeng-ip)
 [![Languages](https://img.shields.io/badge/Languages-Rust%20%7C%20C%20%7C%20Go%20%7C%20Java%20%7C%20C%23%20%7C%20Node%20%7C%20PHP%20%7C%20Python-blue.svg)](https://github.com/zengzhan/qqzeng-ip)
@@ -58,6 +64,10 @@
 | 🗄️ **关系型数据库脚本** | **海量入库 DDL**：针对 IP 网段与号段优化的建表、前缀索引与批量高速入库脚本 | 🐬 MySQL · 🐘 PostgreSQL · 🪟 SQL Server | 👉 [**`database-sql/`**](./database-sql) |
 | 🗂️ **IP 历史版本与工具** | **演进留档**：IP 3.0~5.0 早期版本解析、Big DAT 与 Windows 离线查询工具 | v3.0~v5.0 源码 · 桌面查询工具 | 👉 [**`ip-history-sdk/`**](./ip-history-sdk) |
 | 📋 **脱敏测试样本数据** | **演示样例**：IP 归属地与号段 CSV / TXT / QZDB 样例数据 | 全国/全球 IP 样例 · 号段样例 | 👉 [**`demo/`**](./demo) |
+
+> 💰 **获取完整数据**：仓库内为脱敏演示样本。五大版本（标准 ¥299 起 / 专业 ¥499 / ASN ¥399 / 旗舰 ¥699 / 至尊 ¥999），中国版/全球版可选；买断永久可用，包年更新每月 1 日自动推送（比单次更新省 40%+）。
+> - 🛒 产品与价格：https://www.qqzeng.com/service/
+> - 🔍 先在线验数据：https://www.qqzeng.com/ip/
 
 ---
 
@@ -431,6 +441,7 @@ QZDB 最新版支持动态字段拓扑（Schema），各版本通过标准的 CS
 ![Image text](./ip-history-sdk/qqzeng-ip-查询工具/qqzeng-ip-trace-2026.webp)
 
 * **在线演示**：https://www.qqzeng.com/ip
+* **产品购买**：https://www.qqzeng.com/service/
 * **统计分析**：https://www.qqzeng.com/tongji.html
 * **官方网站**：https://www.qqzeng.com
 
