@@ -4,6 +4,19 @@
 
 ## [Unreleased]
 
+## [2026-10-24] - v1.2.2 (Go 1.0.8 / .NET 1.0.10 / Java 1.0.10 / Python 1.0.8 / Node 1.0.8 / PHP 1.2.2 / Rust 2.0.2)
+
+### Bug Fixes & Optimizations
+- **Go**: 修复无锁缓存并发写入时的键值错配竞态（改用单指针发布）；修复 Registry 按 name 定位槽位；补齐 `parseHexGroup` 辅助函数；IPv6 采用单趟零分配解析（延迟 -84%）。
+- **.NET**: 为 `MmapManager` 补充终结器与 `GC.KeepAlive`，彻底修复每次 `Reload()` 永久泄露 mmap 映射与文件句柄的缺陷；修复 reload 序号比较机制。
+- **C**: 修复 `qzdb_free()` 误释放外部借用缓冲导致 SIGSEGV 的重大缺陷；修复 macOS 15 及更早系统下缺少 `<xlocale.h>` 头文件的问题；修复段头边界越界读。
+- **Java**: `swapIn()` 引入 CAS 循环，杜绝 `close()` 与 `reload()` 并发时已释放实例复活；堆内快照取消不必要的退役宽限期；优化 `GeoInfo` 小表投影构建与内存开销。
+- **Python**: 修复 IPv6 解析非 ASCII 字符（如 `::中`）抛 `IndexError` 导致整批崩溃的问题；优化整数字符串组装与 24 位子节点解包。
+- **Node.js**: 修复 `ChainedReader` 批量与流式查询把非法 IP 误当作未命中的契约不符问题；保持记忆表冻结记录。
+- **PHP**: 统一 `lookupCidr` 走严格校验；缓冲模式 Trie 树遍历内联子节点读取，避开深层方法调用，遍历提速 25%~38%。
+- **Rust**: 修复 3 处 clippy 冗余引用与切片警告。
+
+
 ### Breaking changes
 
 - **Rust SDK：值表示去共享化，`GeoData.values` 从 `Box<[Arc<str>]>` 改为

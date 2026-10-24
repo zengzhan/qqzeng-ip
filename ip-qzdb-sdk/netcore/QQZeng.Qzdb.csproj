@@ -46,19 +46,21 @@
     <PackageId>QQZeng.Qzdb</PackageId>
     <RootNamespace>QQZeng.Qzdb</RootNamespace>
     <AssemblyName>QQZeng.Qzdb</AssemblyName>
-    <Version>1.0.9</Version>
+    <Version>1.0.10</Version>
 
     <!--
         SDK 内建包验证（无需额外 NuGet 包）：EnablePackageValidation + PackageValidationBaselineVersion
         使 dotnet pack 在打包后自动运行 Microsoft.DotNet.ApiCompat 校验，把当前程序集公开 API 与
-        上一已发布基线包 1.0.8 对比——任何删除/改名/改签名的破坏性变更都会让 pack 失败。
-        基线包从 NuGet 还原（qqzeng.qzdb/1.0.8 已发布于 nuget.org）。
+        上一已发布基线包 1.0.9 对比——任何删除/改名/改签名的破坏性变更都会让 pack 失败。
+        基线包从 NuGet 还原（qqzeng.qzdb/1.0.9 已发布于 nuget.org）。
     -->
     <EnablePackageValidation>true</EnablePackageValidation>
-    <PackageValidationBaselineVersion>1.0.8</PackageValidationBaselineVersion>
-    <PackageReleaseNotes>1.0.9:
-- Dependency cleanup: Consolidate System.IO.Hashing (8.0.0) reference across all target frameworks.
-- Analysis &amp; Quality: CA analysis and documentation clean; 100% API compatibility with 1.0.8.</PackageReleaseNotes>
+    <PackageValidationBaselineVersion>1.0.9</PackageValidationBaselineVersion>
+    <PackageReleaseNotes>1.0.10:
+- Memory leak fix: add finalizer to MmapManager with GC.KeepAlive to prevent mmap leak on Reload().
+- Reload atomicity: compare against _publishedEpoch instead of in-flight _reloadEpoch.
+- IPv6 performance: zero-alloc single-pass address decoding (-41% latency).
+- 100% backward compatible with 1.0.9.</PackageReleaseNotes>
 
     <!-- 作者 / 公司 / 描述 -->
     <Authors>QQZeng</Authors>

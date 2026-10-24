@@ -46,25 +46,25 @@
 
 ### 2.1 Maven / Gradle 坐标
 
-已发布至 **Maven Central**，构建工具会自动拉取 `qzdb-1.0.9.jar` 及其 `-sources.jar` / `-javadoc.jar`，**无需克隆本仓库源码**。
+已发布至 **Maven Central**，构建工具会自动拉取 `qzdb-1.0.10.jar` 及其 `-sources.jar` / `-javadoc.jar`，**无需克隆本仓库源码**。
 
 ```xml
 <!-- Maven -->
 <dependency>
     <groupId>com.qqzeng</groupId>
     <artifactId>qzdb</artifactId>
-    <version>1.0.9</version>
+    <version>1.0.10</version>
 </dependency>
 ```
 
 ```groovy
 // Gradle (Groovy DSL)
-implementation 'com.qqzeng:qzdb:1.0.9'
+implementation 'com.qqzeng:qzdb:1.0.10'
 ```
 
 ```kotlin
 // Gradle (Kotlin DSL)
-implementation("com.qqzeng:qzdb:1.0.9")
+implementation("com.qqzeng:qzdb:1.0.10")
 ```
 
 > 若需本地构建：在 `ip-qzdb-sdk/java/` 执行 `mvn install` 安装到本地仓库；或直接把 `src/main/java/com/qqzeng/qzdb/` 目录加入你的源码树编译。
@@ -569,4 +569,4 @@ mvn test          # 14 tests / 106 assertions
 
 [MIT](https://opensource.org/licenses/MIT)
 
-<!-- commit: java: Java SDK（堆外内存与 Builder API） sync=1792831228 -->
+<!-- commit: java: Java SDK（堆外内存与 Builder API） sync=1792769155 -->
