@@ -389,8 +389,12 @@ func (reg *QzdbRegistry) Register(name string, r *QzdbReader) {
 	reg.mu.Lock()
 	defer reg.mu.Unlock()
 	if old, exists := reg.readers[name]; exists {
-		if i := slices.Index(reg.order, old); i >= 0 {
-			reg.order[i] = r
+		// names 与 order 一一平行：按 name 的下标定位，而不是按 reader 指针
+		// （同一实例注册在多个名字下时，按指针会替换到别的名字的槽位）。
+		if i := slices.Index(reg.names, name); i >= 0 {
+			order := slices.Clone(reg.order) // copy-on-write：Find 持有的旧切片不被改写
+			order[i] = r
+			reg.order = order
 		}
 		reg.retireLocked(old)
 	} else {
@@ -412,9 +416,7 @@ func (reg *QzdbRegistry) Unregister(name string) {
 	delete(reg.readers, name)
 	if i := slices.Index(reg.names, name); i >= 0 {
 		reg.names = slices.Delete(reg.names, i, i+1)
-	}
-	if i := slices.Index(reg.order, old); i >= 0 {
-		reg.order = slices.Delete(reg.order, i, i+1)
+		reg.order = slices.Delete(slices.Clone(reg.order), i, i+1) // copy-on-write
 	}
 	reg.retireLocked(old)
 }
@@ -422,7 +424,10 @@ func (reg *QzdbRegistry) Unregister(name string) {
 // retireLocked 把 old 放入退休队列；超出容量时关闭最早退休的 reader。
 // 调用方必须已持有 reg.mu 的写锁。
 func (reg *QzdbRegistry) retireLocked(old *QzdbReader) {
-	if old == nil {
+	// 同一 reader 仍以任一名字在册（重复 Register 同一实例、或同一实例注册在
+	// 多个名字下只注销其一）时绝不能进退休队列——否则日后被挤出队列时会被
+	// Close，在册 reader 的查询将毫无预兆地返回 ErrClosed。
+	if old == nil || slices.Contains(reg.order, old) {
 		return
 	}
 	reg.quarantine = append(reg.quarantine, old)
@@ -474,8 +479,10 @@ func (reg *QzdbRegistry) Names() []string {
 
 // Find 按注册顺序查询，返回首个非空的 GeoInfo；全未命中返回 (nil, nil)。
 func (reg *QzdbRegistry) Find(ip string) (*GeoInfo, error) {
+	// order 采用 copy-on-write（Register/Unregister 从不原地改写已发布的切片；
+	// 追加只写 len 之外），这里直接取切片头即可，查询路径免一次堆分配。
 	reg.mu.RLock()
-	order := slices.Clone(reg.order)
+	order := reg.order
 	reg.mu.RUnlock()
 	for _, r := range order {
 		if r == nil {

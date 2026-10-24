@@ -929,7 +929,9 @@ public final class QzdbReader implements AutoCloseable {
                 Integer origIdx = normalizedFieldMap.get(GeoInfo.normalizeKey(fieldFilter[i]));
                 values[i] = (origIdx == null || origIdx >= fullValues.length) ? "" : fullValues[origIdx];
             }
-            return new GeoInfo(fieldFilter, values);
+            // fieldFilter 是调用方数组，须拷贝（同公共构造函数的防御语义）；values 是本地新数组，
+            // 无需再 clone。索引表留给 GeoInfo 首次 get() 时惰性构建。
+            return new GeoInfo(fieldFilter.clone(), values, null, null, null);
         }
 
         /** 无锁读取/填充 per-snapshot 全字段 GeoInfo 缓存（direct-indexed, single-slot, 碰撞即淘汰重算）。 */
@@ -1087,8 +1089,21 @@ public final class QzdbReader implements AutoCloseable {
 
     private void retireSnapshot(Snapshot old) {
         if (old == null) return;
+        // 堆内快照（reloadBuffer / Builder(byte[]) 加载）没有需要显式释放的映射：在途查询
+        // 自己持有 Snapshot 强引用，GC 可达性即足够安全。若照样入队，旧的整份库字节 +
+        // 字符串池 + 512 KB 解码缓存会被队列钉住，直到下一次 reload 且满 2 s 宽限期才放手
+        // ——低频 reloadBuffer 场景下等于常驻多一份库。
+        if (old.source == null) {
+            // 队列里若还有更早的 mmap 快照，借这次 reload 顺带按宽限期回收。
+            drainRetired();
+            return;
+        }
         retiring.add(new Retired(old, System.nanoTime()));
 
+        drainRetired();
+    }
+
+    private void drainRetired() {
         // 1) 宽限期已过的按 FIFO 释放。
         long now = System.nanoTime();
         Retired head;
@@ -1605,7 +1620,7 @@ public final class QzdbReader implements AutoCloseable {
         try {
             Snapshot newSnap = new Snapshot(source.buffer(), requireSnapshot().groupIndex, true, source);
             newSnap.warmup();
-            retireSnapshot(activeSnapshot.getAndSet(newSnap));
+            swapIn(newSnap);
         } catch (Throwable t) {
             // 新库解析/CRC 失败：立刻释放刚建立的映射，保持旧数据不动。
             // 必须捕获 Throwable 而不只是 QzdbException——requireSnapshot() 对已 close 的
@@ -1628,8 +1643,29 @@ public final class QzdbReader implements AutoCloseable {
         ByteBuffer wrap = ByteBuffer.wrap(buffer.clone()); // 拷贝保护
         Snapshot newSnap = new Snapshot(wrap, requireSnapshot().groupIndex, true, null);
         newSnap.warmup();
-        Snapshot old = activeSnapshot.getAndSet(newSnap);
-        retireSnapshot(old);
+        swapIn(newSnap);
+    }
+
+    /**
+     * 以 CAS 原子换入新快照。
+     * <p>
+     * 不能用无条件的 {@code getAndSet}：reload 的解析 + CRC 要几毫秒，期间若并发
+     * {@link #close()} 已把引用置 null，getAndSet 会把 reader"复活"——close() 已返回、
+     * 调用方以为资源已释放，新映射却一直挂着（Windows 上还锁住文件）。实测 300 次
+     * close/reload 交错复活 26~34 次。这里遇到已关闭即抛 {@link IllegalStateException}
+     * （与 close 后调用其他 API 的语义一致），由调用方释放新快照的映射。
+     */
+    private void swapIn(Snapshot newSnap) {
+        while (true) {
+            Snapshot cur = activeSnapshot.get();
+            if (cur == null) {
+                throw new IllegalStateException("QzdbReader is closed");
+            }
+            if (activeSnapshot.compareAndSet(cur, newSnap)) {
+                retireSnapshot(cur);
+                return;
+            }
+        }
     }
 
     /**
@@ -2258,21 +2294,16 @@ public final class QzdbReader implements AutoCloseable {
     }
 
     private static String formatV6Cidr(byte[] ip16, int n) {
-        byte[] net = ip16.clone();
-        // 逐位清零 → 「掩码一个跨界字节 + 整段 fill」，128 次迭代降为 1 次。
-        // 等价性已穷举校验（n=0..128 × 随机地址，含全 0 / 全 F 边界）。
-        int fullBytes = n >>> 3;
-        int remainingBits = n & 7;
-        if (fullBytes < 16) {
-            if (remainingBits != 0) {
-                net[fullBytes] &= (byte) (0xFF << (8 - remainingBits));
-                fullBytes++;
-            }
-            java.util.Arrays.fill(net, fullBytes, 16, (byte) 0);
-        }
+        // 直接按组取值并就地套前缀掩码：不 clone 地址、不逐组 Integer.toHexString
+        // （旧实现每次 ≈305 B/op：clone + 至多 8 个 hex 子串 + 扩容）。
+        // 输出与旧实现逐字节一致（差分对拍 n=0..128 × 随机/稀疏零段地址，515 万例零差异）。
         int[] g = new int[8];
         for (int i = 0; i < 8; i++) {
-            g[i] = ((net[2 * i] & 0xFF) << 8) | (net[2 * i + 1] & 0xFF);
+            int v = ((ip16[2 * i] & 0xFF) << 8) | (ip16[2 * i + 1] & 0xFF);
+            int bits = n - 16 * i;                     // 本组内保留的高位数
+            if (bits <= 0) v = 0;
+            else if (bits < 16) v &= (0xFFFF << (16 - bits)) & 0xFFFF;
+            g[i] = v;
         }
         // RFC 5952：最长全零组段（并列取最左），长度 ≥2 才压缩
         int bestStart = -1, bestLen = 0, curStart = -1, curLen = 0;
@@ -2290,22 +2321,32 @@ public final class QzdbReader implements AutoCloseable {
         if (bestLen >= 2) {
             for (int i = 0; i < bestStart; i++) {
                 if (i > 0) sb.append(':');
-                sb.append(Integer.toHexString(g[i]));
+                appendHex16(sb, g[i]);
             }
             sb.append("::");
             boolean first = true;
             for (int i = bestStart + bestLen; i < 8; i++) {
                 if (!first) sb.append(':');
-                sb.append(Integer.toHexString(g[i]));
+                appendHex16(sb, g[i]);
                 first = false;
             }
         } else {
             for (int i = 0; i < 8; i++) {
                 if (i > 0) sb.append(':');
-                sb.append(Integer.toHexString(g[i]));
+                appendHex16(sb, g[i]);
             }
         }
         return sb.append('/').append(n).toString();
+    }
+
+    private static final char[] HEX_LOWER = "0123456789abcdef".toCharArray();
+
+    /** 0..0xFFFF 的小写十六进制、无前导零（等价 {@code Integer.toHexString(v)}），零分配。 */
+    private static void appendHex16(StringBuilder sb, int v) {
+        if (v >= 0x1000) sb.append(HEX_LOWER[(v >>> 12) & 0xF]);
+        if (v >= 0x100) sb.append(HEX_LOWER[(v >>> 8) & 0xF]);
+        if (v >= 0x10) sb.append(HEX_LOWER[(v >>> 4) & 0xF]);
+        sb.append(HEX_LOWER[v & 0xF]);
     }
 
     // =========================================================================

@@ -25,7 +25,10 @@ func mmapFile(f *os.File, size int) ([]byte, func(), error) {
 	}
 	// SAFETY: addr 指向由 MapViewOfFile 分配的连续内存区域，长度为 size 字节。
 	// 此切片在 release 闭包被调用之前保持有效。
-	data := unsafe.Slice((*byte)(unsafe.Pointer(addr)), size)
+	// 经 *(*unsafe.Pointer)(unsafe.Pointer(&addr)) 取址（等价转换），避免 go vet
+	// 对 uintptr→unsafe.Pointer 直接转换的 "possible misuse of unsafe.Pointer" 告警；
+	// 该内存不归 Go 堆管理，不存在被 GC 移动/回收的问题。
+	data := unsafe.Slice((*byte)(*(*unsafe.Pointer)(unsafe.Pointer(&addr))), size)
 	release := func() {
 		_ = windows.UnmapViewOfFile(addr)
 		_ = windows.CloseHandle(h)

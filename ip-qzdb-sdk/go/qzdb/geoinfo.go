@@ -19,6 +19,9 @@ type GeoInfo struct {
 	// 仅在缓存解码路径一次性构建；投影/合并等按次构造的实体留空，由
 	// ToPipe 现场计算（不回写——共享实体无锁，避免写竞争）。
 	pipe string
+	// cacheKey 解码缓存键（entryId）。键与值同处一个对象、由单次原子指针
+	// 发布，缓存读者只需一次 Load + 比较，杜绝并发 put 交错导致的键值错配。
+	cacheKey uint32
 }
 
 // normalizeKey 归一化算法：小写化并移除所有 '_' 与 '-'（契约 §6）。
@@ -185,8 +188,10 @@ func (g *GeoInfo) ToMap() map[string]string {
 
 // ---------- 无锁 GeoInfo 缓存（per-snapshot，entryId 为键） ----------
 
+// 槽位只存一个原子指针；键嵌在 GeoInfo.cacheKey 里与值一起原子发布。
+// 旧实现把 key/val 拆成两个原子量（key=0 → val → key），两个碰撞 key 并发
+// put 时会交错成「key=A, val=B」，读者随后把 B 当作 A 返回（错值）。
 type geoSlot struct {
-	key atomic.Uint32
 	val atomic.Pointer[GeoInfo]
 }
 
@@ -205,30 +210,22 @@ func newGeoCache(capacity uint32) *geoCache {
 }
 
 // get 命中且键匹配时返回缓存，否则返回 nil（碰撞只重算、绝不返回错值）。
-// 采用轻量乐观读与二次检查，杜绝并发 put 时读到不一致的脏快照。
-func (c *geoCache) get(rowID uint32) *GeoInfo {
-	if rowID == 0 {
+func (c *geoCache) get(key uint32) *GeoInfo {
+	if key == 0 {
 		return nil
 	}
-	s := &c.slots[rowID&c.mask]
-	if s.key.Load() != rowID {
-		return nil
-	}
-	val := s.val.Load()
-	if s.key.Load() == rowID {
-		return val
+	if g := c.slots[key&c.mask].val.Load(); g != nil && g.cacheKey == key {
+		return g
 	}
 	return nil
 }
 
-func (c *geoCache) put(rowID uint32, g *GeoInfo) {
-	if rowID == 0 || g == nil {
+// put 发布 g；g.cacheKey 必须等于 key（由解码路径设置）。
+func (c *geoCache) put(key uint32, g *GeoInfo) {
+	if key == 0 || g == nil || g.cacheKey != key {
 		return
 	}
-	s := &c.slots[rowID&c.mask]
-	s.key.Store(0) // 先废除当前槽位 key，防止并发读者读到新旧混合状态
-	s.val.Store(g)
-	s.key.Store(rowID)
+	c.slots[key&c.mask].val.Store(g)
 }
 
 // ---------- 字段投影 ----------

@@ -5,7 +5,7 @@
 - **官方命名空间**：`Qqzeng\Ip`（与参考实现 Java `com.qqzeng.qzdb` / .NET 包 `Qzdb` 保持跨语言品牌一致）
 - **定位**：离线解析 `.qzdb` 二进制数据库文件，不依赖任何外部网络请求
 - **架构**：不可变快照（immutable snapshot）——并发查询互不阻塞，`reload` 原子切换
-- **运行要求**：**PHP 7.4+**（推荐 8.2+；SDK 核心无任何 PHP 8 专属语法，`composer.json` 的 `require.php` 与本节声明保持一致）
+- **运行要求**：**PHP 7.4+，64 位**（推荐 8.2+；SDK 核心无任何 PHP 8 专属语法，`composer.json` 的 `require.php` 与本节声明保持一致；32 位 PHP 加载时抛 `ERROR_UNSUPPORTED`）
 - **许可**：MIT
 
 ---
@@ -35,6 +35,7 @@
 | 项 | 要求 |
 |----|------|
 | PHP | **7.4 或更高**（推荐 8.2+；与 `composer.json` 的 `"php": ">=7.4"` 一致） |
+| 位宽 | **仅 64 位 PHP**（`PHP_INT_SIZE === 8`）。32 位构建在 `load()` / `loadBytes()` / `loadStream()` / `reload*()` 时抛 `QzdbException`（`ERROR_UNSUPPORTED`）：文件头的 uint64 偏移与 IPv4 无符号 32 位整数运算依赖 64 位 `int` |
 | 扩展 | 仅需标准 `Core` / `filter`（`filter_var`，IPv4 校验）与 `hash`（`crc32b`，CRC 校验）；两者均为 PHP 默认编译且 `hash` 自 7.4 起无法关闭。**无第三方扩展依赖** |
 | 操作系统 | Windows / Linux / macOS 均可 |
 | 数据库文件 | `.qzdb` 格式（由官方数据构建工具生成，含所需分组的二进制数据） |

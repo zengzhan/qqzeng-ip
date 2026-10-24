@@ -2355,21 +2355,33 @@ class ChainedReader {
     return new GeoInfo(values, fields.slice(), fields.map((f) => GeoInfo.isNumericFieldName(f)), null);
   }
 
+  // 批量/流式三态（契约 §二.2，强制）：非法 IP 必须落 error，不得降级为未命中
+  // （对齐 Java/Python ChainedReader 与 QzdbReader.findBatch）。
+  _batchOne(ip, fields, withFields) {
+    if (fastParseIp(ip) === null) {
+      return new BatchResult(ip, null, new QzdbError('Invalid IP: ' + ip, QzdbError.INVALID_PARAM));
+    }
+    try {
+      return new BatchResult(ip, withFields ? this.findFields(ip, fields) : this.find(ip), null);
+    } catch (e) {
+      return new BatchResult(ip, null, e instanceof QzdbError ? e : new QzdbError(String(e), QzdbError.CORRUPTED));
+    }
+  }
   findBatch(ips) {
     if (ips == null) return [];
     const out = [];
-    for (const ip of ips) out.push(new BatchResult(ip, this.find(ip), null));
+    for (const ip of ips) out.push(this._batchOne(ip, null, false));
     return out;
   }
   findBatchFields(ips, fields) {
     if (ips == null) return [];
     const out = [];
-    for (const ip of ips) out.push(new BatchResult(ip, this.findFields(ip, fields), null));
+    for (const ip of ips) out.push(this._batchOne(ip, fields, true));
     return out;
   }
   *findStream(ips) {
     if (ips == null) return;
-    for (const ip of ips) yield new BatchResult(ip, this.find(ip), null);
+    for (const ip of ips) yield this._batchOne(ip, null, false);
   }
 
   editions() { return this._readers.map((r) => r.getEdition()); }

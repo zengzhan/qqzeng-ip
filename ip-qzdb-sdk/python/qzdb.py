@@ -151,13 +151,8 @@ def _norm_key(name):
 
 # ── strict IP parsing (SEC-05 / CODE-03) ───────────────────────────
 
-# bytearray[256]: index-ASCII → hex value (0xFF = invalid)
-_HEX = bytearray([0xFF] * 256)
-for _i in range(10):
-    _HEX[48 + _i] = _i
-for _i in range(6):
-    _HEX[97 + _i] = 10 + _i
-    _HEX[65 + _i] = 10 + _i
+# IPv6 组字符白名单（配合 str.strip 在 C 层判定）
+_HEX_DIGITS = '0123456789abcdefABCDEF'
 
 
 # IP 字符串解析记忆表（PERF）。真实业务里 IP 高度重复（日志/风控/网关），
@@ -310,46 +305,28 @@ def _fast_parse_ipv6(s):
         if ng + v4_slots != 8:
             return None
     for g in allg:
-        gl = len(g)
-        if gl == 0 or gl > 4:
+        # 仅接受 0-9 a-f A-F；拒绝 + - _ 0x 空白、非 ASCII 等（与 Rust 逐字符白名单对齐）。
+        # str.strip 白名单在 C 层完成；旧实现逐字符查 256 项表，遇到 ord>255 的字符
+        # （如 "::中"）会抛 IndexError 穿透 find_str / lookup_* / find_batch。
+        if len(g) > 4 or g.strip(_HEX_DIGITS):
             return None
-        for c in g:
-            # 仅接受 0-9 a-f A-F；拒绝 + - _ 0x 空白等（与 Rust 逐字符白名单对齐）
-            if _HEX[ord(c)] > 15:
-                return None
     zeros = 8 - ng - v4_slots
     if zeros < 0:
         return None
-    buf = bytearray(16)
-    off = 0
+    # 组已过白名单，int(g, 16) 只会看到 1~4 位 ASCII 十六进制，不会触发其宽松语法
+    # （下划线、空白、正负号）。直接累积为 128 位整数，免去逐字符移位循环。
+    v = 0
     for g in lg:
-        v = 0
-        for c in g:
-            v = (v << 4) | _HEX[ord(c)]
-        buf[off] = v >> 8
-        buf[off + 1] = v & 0xFF
-        off += 2
-    off += zeros * 2
+        v = (v << 16) | int(g, 16)
+    v <<= zeros << 4
     for g in rg:
-        v = 0
-        for c in g:
-            v = (v << 4) | _HEX[ord(c)]
-        buf[off] = v >> 8
-        buf[off + 1] = v & 0xFF
-        off += 2
+        v = (v << 16) | int(g, 16)
     if has_v4:
-        buf[12] = (v4_int >> 24) & 0xFF
-        buf[13] = (v4_int >> 16) & 0xFF
-        buf[14] = (v4_int >> 8) & 0xFF
-        buf[15] = v4_int & 0xFF
-    v6 = bytes(buf)
-    # ::ffff:x.x.x.x → V4-mapped (bytes 0-9 zero, 10-11 = 0xFF)
-    if (v6[10] == 0xFF and v6[11] == 0xFF
-            and v6[0] == 0 and v6[1] == 0 and v6[2] == 0 and v6[3] == 0
-            and v6[4] == 0 and v6[5] == 0 and v6[6] == 0 and v6[7] == 0
-            and v6[8] == 0 and v6[9] == 0):
-        return ((v6[12] << 24) | (v6[13] << 16) | (v6[14] << 8) | v6[15], None)
-    return (None, v6)
+        v = (v << 32) | v4_int
+    # ::ffff:x.x.x.x → V4-mapped (高 80 位为 0、随后 16 位为 0xFFFF)
+    if (v >> 32) == 0xFFFF:
+        return (v & 0xFFFFFFFF, None)
+    return (None, v.to_bytes(16, 'big'))
 
 
 class QzdbError(Exception):
@@ -1829,7 +1806,10 @@ class QzdbReader:
                     return 0
                 noff = off_nodes + idx * 6
                 off = noff if bit == 0 else noff + 3
-                child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
+                try:
+                    child = _unpack_u32_from(d, off)[0] & 0xFFFFFF  # 1 次 C 调用替代 3 次下标
+                except struct.error:  # 节点区紧贴 EOF 时退回逐字节读
+                    child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
                 if child & 0x800000:
                     return child & 0x7FFFFF
                 if child == 0:
@@ -1884,7 +1864,10 @@ class QzdbReader:
                     return 0
                 noff = off_nodes + idx * 6
                 off = noff if bit == 0 else noff + 3
-                child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
+                try:
+                    child = _unpack_u32_from(d, off)[0] & 0xFFFFFF  # 1 次 C 调用替代 3 次下标
+                except struct.error:  # 节点区紧贴 EOF 时退回逐字节读
+                    child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
                 if child & 0x800000:
                     return child & 0x7FFFFF
                 if child == 0:
@@ -2066,7 +2049,10 @@ class QzdbReader:
                     return 0
                 noff = off_nodes + idx * 6
                 off = noff if bit == 0 else noff + 3
-                child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
+                try:
+                    child = _unpack_u32_from(d, off)[0] & 0xFFFFFF  # 1 次 C 调用替代 3 次下标
+                except struct.error:  # 节点区紧贴 EOF 时退回逐字节读
+                    child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
                 if child & 0x800000:
                     return child & 0x7FFFFF
                 if child == 0:
@@ -2372,7 +2358,10 @@ class QzdbReader:
                 if v4_node_24:
                     noff = off_nodes + idx * 6
                     off = noff if bit == 0 else noff + 3
-                    child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
+                    try:
+                        child = _unpack_u32_from(d, off)[0] & 0xFFFFFF  # 1 次 C 调用替代 3 次下标
+                    except struct.error:  # 节点区紧贴 EOF 时退回逐字节读
+                        child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
                     if child & 0x800000:
                         n = depth + 1
                         break
@@ -2394,7 +2383,10 @@ class QzdbReader:
                     return 0, 0
                 noff = off_nodes + idx * 6
                 off = noff if bit == 0 else noff + 3
-                child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
+                try:
+                    child = _unpack_u32_from(d, off)[0] & 0xFFFFFF  # 1 次 C 调用替代 3 次下标
+                except struct.error:  # 节点区紧贴 EOF 时退回逐字节读
+                    child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
                 if child & 0x800000:
                     return child & 0x7FFFFF, 16 + step
                 if child == 0:
@@ -2441,7 +2433,10 @@ class QzdbReader:
                 if v6_node_24:
                     noff = off_nodes + idx * 6
                     off = noff if bit == 0 else noff + 3
-                    child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
+                    try:
+                        child = _unpack_u32_from(d, off)[0] & 0xFFFFFF  # 1 次 C 调用替代 3 次下标
+                    except struct.error:  # 节点区紧贴 EOF 时退回逐字节读
+                        child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
                     if child & 0x800000:
                         n = depth + 1
                         break
@@ -2462,7 +2457,10 @@ class QzdbReader:
                     return 0, 0
                 noff = off_nodes + idx * 6
                 off = noff if bit == 0 else noff + 3
-                child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
+                try:
+                    child = _unpack_u32_from(d, off)[0] & 0xFFFFFF  # 1 次 C 调用替代 3 次下标
+                except struct.error:  # 节点区紧贴 EOF 时退回逐字节读
+                    child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
                 if child & 0x800000:
                     return child & 0x7FFFFF, depth + 1
                 if child == 0:

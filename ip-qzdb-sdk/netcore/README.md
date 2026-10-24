@@ -7,7 +7,7 @@
 - **规范版本**：QZDB API v2.4
 - **定位**：离线解析 `.qzdb` 二进制数据库文件，不依赖任何外部网络请求
 - **架构**：无锁快照（lock-free snapshot）——并发查询互不阻塞，`Reload` 原子切换（`Interlocked.Exchange`）
-- **目标框架**：`net8.0` / `net9.0` / `net10.0` / `net11.0`
+- **目标框架**：`net8.0` / `net9.0` / `net10.0`（`net11.0` 需 .NET 11 SDK，用 `-p:IncludeNet11=true` 显式加入）
 - **许可**：MIT
 
 ---
@@ -228,9 +228,9 @@ string isp     = info.Get("isp");
 ```csharp
 UsageType u = info.GetUsageType();
 bool known = u.IsKnown;            // 是否为预定义分类
-string zh = u.DisplayZh();         // 中文名：如 "云服务"
-string en = u.DisplayEn();         // 英文名：如 "Cloud"
-string desc = u.Description();     // 详细描述
+string zh = u.DisplayZh;           // 中文名：如 "云服务"（属性；亦可 u.GetDisplayZh()）
+string en = u.DisplayEn;           // 英文名：如 "Cloud"（属性；亦可 u.GetDisplayEn()）
+string desc = u.Description;       // 详细描述（属性；亦可 u.GetDescription()）
 ```
 
 预定义分类（部分）：`AICrawler`、`Backbone`、`Broadband`、`Business`、`CDN`、`Cloud`、`DNS`、`DataCenter`、`Education`、`Finance`、`Government`、`ISP`、`IoT`、`Mobile`、`Reserved`、`Satellite`、`Spider`、`Streaming`、`Unknown`、`VPN` 等。未命中预定义值时 `IsKnown == false`，`RawValue` 保留原始字符串。
@@ -438,7 +438,7 @@ dotnet add package QQZeng.Qzdb --version x.y.z
 ### 13.4 兼容性注意
 
 - NuGet 包、程序集和 C# 命名空间统一为 `QQZeng.Qzdb`。
-- 目标框架支持 `net8.0` / `net9.0` / `net10.0` / `net11.0`。
+- 目标框架默认 `net8.0` / `net9.0` / `net10.0`；`net11.0` 为可选目标（见下条）。
 - `net11.0` 需要 .NET 11 SDK/targeting pack；在 SDK 尚未安装的机器上默认
   不参与构建。安装后可用 `-p:IncludeNet11=true` 显式加入目标框架。
 
@@ -479,7 +479,7 @@ BENCH_OPS=200000 dotnet run --project ../netcore.bench -c Release \
 | `RowIds.cs` | 历史兼容的行号反查结构；规范 API 使用命名 tuple |
 | `UsageType.cs` | 用途分类枚举与中英映射 |
 | `QzdbException.cs` | 异常类型与 `ErrorCode` 枚举 |
-| `QQZeng.Qzdb.csproj` | SDK 风格项目文件（多目标 net8.0/net9.0/net10.0/net11.0 + NuGet 元数据） |
+| `QQZeng.Qzdb.csproj` | SDK 风格项目文件（多目标 net8.0/net9.0/net10.0，net11.0 经 `IncludeNet11` 可选 + NuGet 元数据） |
 
 相邻项目（同 `ip-qzdb-sdk/` 下）：
 

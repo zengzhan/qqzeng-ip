@@ -1105,6 +1105,16 @@ func (s *Snapshot) readIPRow(rowID uint32) (uint32, uint32, uint32) {
 		}
 		return geoID, asnID, usageID
 	}
+	// 无 ROW_SCHEMA 的旧布局固定读 geo24+asn24(+usage24)，可能超出 ipRowSize；
+	// 畸形文件把 IPRow 段贴到 EOF 时，查询期 readU24 会越界 panic 击穿调用方
+	// （加载期 recover 管不到查询期）。此处先判界，越界按未命中处理。
+	need := uint64(6)
+	if s.ipRowSize >= 9 {
+		need = 9
+	}
+	if off > uint64(len(s.data)) || uint64(len(s.data))-off < need {
+		return 0, 0, 0
+	}
 	geoID := s.readU24(off)
 	asnID := s.readU24(off + 3)
 	usageID := uint32(0)
@@ -1181,7 +1191,6 @@ func (s *Snapshot) resolveEntry(rowID uint32) (entryID uint32, entryOff uint64, 
 
 // computeGeoInfoEntry 按 entryId + 预解析偏移直接解码全字段。
 func (s *Snapshot) computeGeoInfoEntry(entryID uint32, entryOff uint64, fc int) *GeoInfo {
-	_ = entryID
 	// 把 per-group 切片提到循环外，避免每次字段读取都重复下标寻址 groupIndex。
 	gi := s.groupIndex
 	widths := s.groupFieldWidths[gi]
@@ -1214,6 +1223,7 @@ func (s *Snapshot) computeGeoInfoEntry(entryID uint32, entryOff uint64, fc int) 
 		normMap:    s.normalizedMap,
 		numeric:    s.numericFlags,
 		pipe:       joinPipe(values),
+		cacheKey:   entryID,
 	}
 }
 

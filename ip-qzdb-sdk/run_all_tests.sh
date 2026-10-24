@@ -38,7 +38,34 @@ if [ ${#DB_FILES[@]} -eq 0 ] || [ ! -f "${DB_FILES[0]}" ]; then
     DEMO_DB="$SCRIPT_DIR/../demo/qqzeng-ip-ult.qzdb"
     if [ -f "$DEMO_DB" ]; then
         echo "No ip-qzdb-sdk/data fixtures found; running the public demo oracle instead."
-        if "$PYTHON_BIN" "$SCRIPT_DIR/tools/demo_sample_check.py"; then
+        # 发布仓不含 tools/：此时退回内置的 demo CSV 对拍（Python SDK，管道串 + CIDR）。
+        if [ -f "$SCRIPT_DIR/tools/demo_sample_check.py" ]; then
+            DEMO_CHECK=("$PYTHON_BIN" "$SCRIPT_DIR/tools/demo_sample_check.py")
+        else
+            DEMO_CHECK=("$PYTHON_BIN" - "$SCRIPT_DIR" "$DEMO_DB")
+        fi
+        if "${DEMO_CHECK[@]}" <<'PYEOF'
+import csv, ipaddress, sys
+sdk, db = sys.argv[1], sys.argv[2]
+sys.path.insert(0, sdk + "/python")
+import qzdb
+r = qzdb.QzdbReader(db)
+lines = (l for l in open(db[:-5] + ".csv", encoding="utf-8") if not l.startswith("#"))
+rows = list(csv.reader(lines)); hdr, rows = rows[0], rows[1:]
+def fmt(v, f):
+    if f in ("longitude", "latitude") and v:
+        x = float(v); return str(int(x)) if x == int(x) else "%.6f" % x
+    return v
+bad = n = 0
+for x in rows:
+    net = ipaddress.ip_network(x[3]); exp = "|".join(fmt(v, f) for v, f in zip(x[4:], hdr[4:]))
+    for ip in (net[0], net[-1]):
+        n += 1
+        if r.find_str(str(ip)) != exp or ipaddress.ip_network(r.lookup_cidr(str(ip))) != net:
+            bad += 1; print("MISMATCH", ip)
+print("demo oracle: %d/%d OK" % (n - bad, n)); sys.exit(1 if bad else 0)
+PYEOF
+        then
             echo "Full fixture-dependent suite skipped (no private edition/scope fixtures)."
             exit 0
         fi

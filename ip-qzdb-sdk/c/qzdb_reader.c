@@ -25,6 +25,11 @@
 #include <math.h>
 #include <pthread.h>
 #include <locale.h>
+#if defined(__APPLE__)
+/* macOS 15 及更早 SDK 的 <locale.h> 不声明 locale_t/newlocale/uselocale/freelocale
+ * （直到 macOS 26 SDK 的 _locale.h 才引入 _locale_posix2008.h），需显式引入 xlocale.h。 */
+#include <xlocale.h>
+#endif
 
 /* ========================================================================
  * Error messages
@@ -1252,211 +1257,122 @@ static uint32_t v4_from_mapped(const uint8_t* b) {
 /* ========================================================================
  * IP parsing
  * ======================================================================== */
-static const uint8_t hex_lut[128] = {
-    ['0']=0,1,2,3,4,5,6,7,8,9,
-    ['a']=10,11,12,13,14,15,
-    ['A']=10,11,12,13,14,15
+/* ASCII → 十六进制值；0xFF = 非十六进制字符（含 NUL 与全部非 ASCII 字节）。 */
+static const uint8_t hex_val[256] = {
+#define X16 0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF
+    X16, X16, X16,
+    0,1,2,3,4,5,6,7,8,9,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,            /* 0x30 '0'..'9' */
+    0xFF,10,11,12,13,14,15,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF, /* 0x40 'A'..'F' */
+    X16,
+    0xFF,10,11,12,13,14,15,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF,0xFF, /* 0x60 'a'..'f' */
+    X16, X16, X16, X16, X16, X16, X16, X16, X16
+#undef X16
 };
 
-/* Strict IPv4 parse — octet-unrolled, single pass (aligned with Go fastParseIpv4).
- * Rejects: leading zeros, octet >255, non-digits, wrong segment count, empty segs.
- * Returns 1 on success. Length gate n∈[7,15] first; every subsequent index is
- * proven in-range by that gate plus the octet-length structure. */
+/* Strict IPv4 parse — single pass over a NUL-terminated string (aligned with
+ * Go fastParseIpv4 / Python _fast_parse_ipv4 accept set).
+ * Exactly 4 decimal octets of 1-3 ASCII digits, value <= 255, no leading zeros,
+ * '.' separators, nothing after the 4th octet. Every read stops at the first
+ * non-digit / non-'.' byte, so the terminating NUL is never passed.
+ * Returns 1 on success. */
 static int fast_parse_ipv4(const char* s, uint32_t* out) {
-    int n = 0; while (s[n]) n++;
-    if (n < 7 || n > 15) return 0;
-
-    /* --- Octet 0 --- */
-    uint32_t v0;
-    char c0 = s[0];
-    int idx = 0;
-    if (c0 == '0') {
-        if (s[1] != '.') return 0;
-        v0 = 0; idx = 2;
-    } else {
-        uint32_t d0 = (uint32_t)(c0 - '0');
-        if (d0 > 9) return 0;
-        if (s[1] == '.') { v0 = d0; idx = 2; }
-        else {
-            uint32_t d1 = (uint32_t)(s[1] - '0');
-            if (s[2] == '.') {
-                if (d1 > 9) return 0;
-                v0 = d0 * 10 + d1; idx = 3;
-            } else {
-                if (s[3] != '.') return 0;
-                uint32_t d2 = (uint32_t)(s[2] - '0');
-                if (d1 > 9 || d2 > 9) return 0;
-                uint32_t val = d0 * 100 + d1 * 10 + d2;
-                if (val > 255) return 0;
-                v0 = val; idx = 4;
+    uint32_t ip = 0;
+    for (int oct = 0; oct < 4; oct++) {
+        uint32_t v = (uint32_t)((unsigned char)*s - '0');
+        if (v > 9) return 0;
+        s++;
+        uint32_t d = (uint32_t)((unsigned char)*s - '0');
+        if (d <= 9) {
+            if (v == 0) return 0;               /* leading zero */
+            v = v * 10 + d; s++;
+            d = (uint32_t)((unsigned char)*s - '0');
+            if (d <= 9) {
+                v = v * 10 + d; s++;
+                if (v > 255) return 0;
             }
         }
-    }
-
-    /* --- Octet 1 --- */
-    uint32_t v1;
-    if (idx >= n) return 0;
-    c0 = s[idx];
-    if (c0 == '0') {
-        if (idx + 1 >= n || s[idx + 1] != '.') return 0;
-        v1 = 0; idx += 2;
-    } else {
-        uint32_t d0 = (uint32_t)(c0 - '0');
-        if (d0 > 9 || idx + 1 >= n) return 0;
-        if (s[idx + 1] == '.') { v1 = d0; idx += 2; }
-        else {
-            if (idx + 2 >= n) return 0;
-            uint32_t d1 = (uint32_t)(s[idx + 1] - '0');
-            if (s[idx + 2] == '.') {
-                if (d1 > 9) return 0;
-                v1 = d0 * 10 + d1; idx += 3;
-            } else {
-                if (idx + 3 >= n || s[idx + 3] != '.') return 0;
-                uint32_t d2 = (uint32_t)(s[idx + 2] - '0');
-                if (d1 > 9 || d2 > 9) return 0;
-                uint32_t val = d0 * 100 + d1 * 10 + d2;
-                if (val > 255) return 0;
-                v1 = val; idx += 4;
-            }
+        ip = (ip << 8) | v;
+        if (oct < 3) {
+            if (*s != '.') return 0;
+            s++;
         }
     }
-
-    /* --- Octet 2 --- */
-    uint32_t v2;
-    if (idx >= n) return 0;
-    c0 = s[idx];
-    if (c0 == '0') {
-        if (idx + 1 >= n || s[idx + 1] != '.') return 0;
-        v2 = 0; idx += 2;
-    } else {
-        uint32_t d0 = (uint32_t)(c0 - '0');
-        if (d0 > 9 || idx + 1 >= n) return 0;
-        if (s[idx + 1] == '.') { v2 = d0; idx += 2; }
-        else {
-            if (idx + 2 >= n) return 0;
-            uint32_t d1 = (uint32_t)(s[idx + 1] - '0');
-            if (s[idx + 2] == '.') {
-                if (d1 > 9) return 0;
-                v2 = d0 * 10 + d1; idx += 3;
-            } else {
-                if (idx + 3 >= n || s[idx + 3] != '.') return 0;
-                uint32_t d2 = (uint32_t)(s[idx + 2] - '0');
-                if (d1 > 9 || d2 > 9) return 0;
-                uint32_t val = d0 * 100 + d1 * 10 + d2;
-                if (val > 255) return 0;
-                v2 = val; idx += 4;
-            }
-        }
-    }
-
-    /* --- Octet 3 --- */
-    uint32_t v3;
-    int rem = n - idx;
-    if (rem < 1 || rem > 3) return 0;
-    c0 = s[idx];
-    if (c0 == '0') {
-        if (rem != 1) return 0;
-        v3 = 0;
-    } else {
-        uint32_t d0 = (uint32_t)(c0 - '0');
-        if (d0 > 9) return 0;
-        if (rem == 1) { v3 = d0; }
-        else if (rem == 2) {
-            uint32_t d1 = (uint32_t)(s[idx + 1] - '0');
-            if (d1 > 9) return 0;
-            v3 = d0 * 10 + d1;
-        } else { /* rem == 3 */
-            uint32_t d1 = (uint32_t)(s[idx + 1] - '0');
-            uint32_t d2 = (uint32_t)(s[idx + 2] - '0');
-            if (d1 > 9 || d2 > 9) return 0;
-            uint32_t val = d0 * 100 + d1 * 10 + d2;
-            if (val > 255) return 0;
-            v3 = val;
-        }
-    }
-
-    *out = (v0 << 24) | (v1 << 16) | (v2 << 8) | v3;
+    if (*s != '\0') return 0;
+    *out = ip;
     return 1;
-}
-
-static int split_hextets(const char* src, int src_len, char parts[][16], int max_parts) {
-    if (src_len < 0) return -1;
-    if (src_len == 0) return 0;
-    int count = 0; int i = 0;
-    while (i <= src_len) {
-        int start = i;
-        while (i < src_len && src[i] != ':') i++;
-        int seglen = i - start;
-        if (seglen == 0) return -1;
-        if (count >= max_parts) return -1;
-        if (seglen > 15) return -1;
-        memcpy(parts[count], src + start, (size_t)seglen); parts[count][seglen] = '\0'; count++;
-        if (i >= src_len) break;
-        i++;
-    }
-    return count;
 }
 
 typedef struct { uint8_t v6[16]; uint32_t v4; int is_v4; } parse_result_t;
 
+/* 单遍 IPv6 解析（取代此前 split → strncpy → 多轮扫描的实现；接受集逐条不变，
+ * 由 ~8 万条随机/敌对语料与 Python _fast_parse_ip 及旧实现差分 0 差异背书）：
+ *   - 总长 1..45，不允许空白、'%'（zone id）及任何非十六进制/':'/'.' 字符；
+ *   - 每组 1..4 个十六进制位，至多一个 "::"，且 "::" 至少替代一组；
+ *   - 嵌入 IPv4 只能是最后一组（其后到串尾必须是严格 IPv4），且不能在 "::" 左侧
+ *     （`1.2.3.4::` 非法，与 Go netip 一致）。
+ * ::ffff:a.b.c.d / ::ffff:xxxx:xxxx 映射地址归一为 IPv4。 */
 static int fast_parse_ip(const char* s, parse_result_t* res) {
     if (!s) return 0;
-    /* IPv4 极速热路径：直走严格展开解析，免去空白/冒号预扫描。
-     * fast_parse_ipv4 具有 100% 严格校验，任何带空白、带符号、带字母、
-     * 带冒号或越界的输入均会返回 0（与 Go fastParseIp 同构）。 */
+    /* IPv4 极速热路径：严格单遍解析，任何带空白、符号、字母、冒号或越界的输入
+     * 均返回 0 后落入下方 IPv6 路径（与 Go fastParseIp 同构）。 */
     {
         uint32_t v4;
         if (fast_parse_ipv4(s, &v4)) { res->v4 = v4; res->is_v4 = 1; return 1; }
     }
-    int n = 0;
-    while (s[n]) { unsigned char c = (unsigned char)s[n];
-        if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\v' || c == '\f') return 0;
-        n++; }
+    size_t n = strlen(s);
     if (n == 0 || n > 45) return 0;
+
+    uint8_t buf[16];
+    int bp = 0;          /* bytes written */
+    int dc = -1;         /* byte position of "::", -1 = none */
+    size_t i = 0;
     int has_colon = 0;
-    for (int i = 0; i < n; i++) { if (s[i] == ':') { has_colon = 1; break; } }
-    if (!has_colon) return 0;   /* IPv4 already failed above */
-    for (int i = 0; i < n; i++) { if (s[i] == '%') return 0; }
-    const char* dc_ptr = NULL;
-    for (int i = 0; i < n - 1; i++) { if (s[i] == ':' && s[i+1] == ':') { if (dc_ptr) return 0; dc_ptr = s + i; } }
-    const char* rgt = dc_ptr ? dc_ptr + 2 : s + n;
-    int lft_len = (int)(dc_ptr ? dc_ptr - s : n);
-    int rgt_len = (int)(dc_ptr ? (s + n) - (dc_ptr + 2) : 0);
-    if (lft_len >= 64 || rgt_len >= 64) return 0;
-    char lg_parts[8][16], rg_parts[8][16];
-    int lg_count = 0, rg_count = 0;
-    if (lft_len > 0) { lg_count = split_hextets(s, lft_len, lg_parts, 8); if (lg_count < 0) return 0; }
-    if (rgt_len > 0) { rg_count = split_hextets(rgt, rgt_len, rg_parts, 8); if (rg_count < 0) return 0; }
-    char allg[16][16]; int ng = 0;
-    for (int i = 0; i < lg_count; i++) { strncpy(allg[ng], lg_parts[i], 15); allg[ng][15] = 0; ng++; }
-    for (int i = 0; i < rg_count; i++) { strncpy(allg[ng], rg_parts[i], 15); allg[ng][15] = 0; ng++; }
-    int has_v4 = 0; uint32_t v4_int = 0;
-    if (ng > 0) {
-        int last = ng - 1; int has_dot = 0;
-        for (int j = 0; allg[last][j]; j++) { if (allg[last][j] == '.') { has_dot = 1; break; } }
-        if (has_dot) { if (!fast_parse_ipv4(allg[last], &v4_int)) return 0; has_v4 = 1; ng--; }
+    if (s[0] == ':') {
+        if (s[1] != ':') return 0;          /* leading single ':' */
+        dc = 0; i = 2; has_colon = 1;
     }
-    /* 缺陷修复：嵌入 IPv4 落在左侧分组、右侧 `::` 后为空（如 `1.2.3.4::`、
-     * `0.0.0.0::`、`2001:db8:1.2.3.4::`）属非法形态，Go netip.ParseAddr 与
-     * Go SDK 均拒绝；此处等价拒绝。合法形态（如 `::1.2.3.4`、右侧分组含
-     * 嵌入 v4）不受影响，因为此时 rg_count > 0。 */
-    if (has_v4 && dc_ptr && rg_count == 0) return 0;
-    int v4_slots = has_v4 ? 2 : 0;
-    if (dc_ptr) { if (ng + v4_slots > 7) return 0; } else { if (ng + v4_slots != 8) return 0; }
-    for (int i = 0; i < ng; i++) { int gl = 0; while (allg[i][gl]) gl++;
-        if (gl == 0 || gl > 4) return 0;
-        for (int j = 0; j < gl; j++) { unsigned char cc = (unsigned char)allg[i][j];
-            if (cc >= 128 || (hex_lut[cc] == 0 && cc != '0')) return 0; } }
-    int zeros = 8 - ng - v4_slots;
-    uint8_t buf[16]; memset(buf, 0, 16); int off = 0;
-    for (int i = 0; i < lg_count; i++) { uint16_t v = 0;
-        for (int j = 0; lg_parts[i][j]; j++) v = (v << 4) | hex_lut[(unsigned char)lg_parts[i][j]];
-        buf[off] = (uint8_t)(v >> 8); buf[off+1] = (uint8_t)v; off += 2; }
-    off += zeros * 2;
-    for (int i = 0; i < rg_count; i++) { uint16_t v = 0;
-        for (int j = 0; rg_parts[i][j]; j++) v = (v << 4) | hex_lut[(unsigned char)rg_parts[i][j]];
-        buf[off] = (uint8_t)(v >> 8); buf[off+1] = (uint8_t)v; off += 2; }
-    if (has_v4) { buf[12] = (uint8_t)(v4_int >> 24); buf[13] = (uint8_t)(v4_int >> 16); buf[14] = (uint8_t)(v4_int >> 8); buf[15] = (uint8_t)v4_int; }
+    while (i < n) {
+        size_t start = i;
+        uint32_t v = 0;
+        int digits = 0;
+        uint8_t h;
+        while ((h = hex_val[(unsigned char)s[i]]) != 0xFF) {
+            if (++digits > 4) return 0;
+            v = (v << 4) | h;
+            i++;
+        }
+        if (s[i] == '.') {
+            /* 嵌入 IPv4：从本组起点到串尾必须是严格 IPv4，且之后不得再有内容 */
+            uint32_t v4;
+            if (bp > 12 || !fast_parse_ipv4(s + start, &v4)) return 0;
+            buf[bp] = (uint8_t)(v4 >> 24); buf[bp + 1] = (uint8_t)(v4 >> 16);
+            buf[bp + 2] = (uint8_t)(v4 >> 8); buf[bp + 3] = (uint8_t)v4;
+            bp += 4;
+            break;
+        }
+        if (digits == 0 || bp >= 16) return 0;
+        buf[bp] = (uint8_t)(v >> 8); buf[bp + 1] = (uint8_t)v;
+        bp += 2;
+        if (i == n) break;
+        if (s[i] != ':') return 0;          /* invalid character */
+        has_colon = 1;
+        i++;
+        if (s[i] == ':') {
+            if (dc >= 0) return 0;          /* second "::" */
+            dc = bp; i++;
+        } else if (i == n) {
+            return 0;                       /* trailing single ':' */
+        }
+    }
+    if (!has_colon) return 0;
+    if (dc >= 0) {
+        if (bp > 14) return 0;              /* "::" must stand for at least one group */
+        int tail = bp - dc;
+        memmove(buf + 16 - tail, buf + dc, (size_t)tail);
+        memset(buf + dc, 0, (size_t)(16 - tail - dc));
+    } else if (bp != 16) {
+        return 0;
+    }
     if (buf[10] == 0xff && buf[11] == 0xff && buf[0] == 0 && buf[1] == 0 && buf[2] == 0 && buf[3] == 0 &&
         buf[4] == 0 && buf[5] == 0 && buf[6] == 0 && buf[7] == 0 && buf[8] == 0 && buf[9] == 0) {
         res->v4 = ((uint32_t)buf[12] << 24) | ((uint32_t)buf[13] << 16) | ((uint32_t)buf[14] << 8) | buf[15];
@@ -2160,7 +2076,11 @@ static int init_from_buffer(qzdb_reader_t* ctx, int is_heap, int verify_crc) {
         if (ctx->off_group_schema > 0) {
             if (ctx->off_group_schema > ctx->data_size || 2 > ctx->data_size - ctx->off_group_schema) { ret = QZDB_ERR_BOUNDS; goto fail; }
         }
-        if (ctx->off_row_schema > 0 && ctx->off_row_schema >= ctx->data_size) { ret = QZDB_ERR_BOUNDS; goto fail; }
+        /* 下方无条件读取 d[sp] 与 d[sp+1]（fieldCount/stride），段头至少需 2 字节；
+         * 此前只挡 off >= size，off == size-1 时越界读 1 字节（mmap 文件长度恰为页
+         * 整数倍即 SIGSEGV；CRC 在加载末尾才校验，且可被重算，无法兜底）。 */
+        if (ctx->off_row_schema > 0 &&
+            (ctx->off_row_schema > ctx->data_size || 2 > ctx->data_size - ctx->off_row_schema)) { ret = QZDB_ERR_BOUNDS; goto fail; }
         if (ctx->off_meta > 0 && ctx->off_meta > ctx->data_size) { ret = QZDB_ERR_BOUNDS; goto fail; }
     }
 
@@ -2515,7 +2435,10 @@ int qzdb_init_ex(qzdb_reader_t* ctx, const char* db_path, int verify_crc) {
     if (fd < 0) return QZDB_ERR_CORRUPTED;
     struct stat st;
     if (fstat(fd, &st) != 0) { close(fd); return QZDB_ERR_CORRUPTED; }
-    ctx->data_size = st.st_size;
+    /* 与 qzdb_init_buffer 口径一致：不足 192 字节头即 BAD_HEADER。此前 0 字节文件
+     * 走到 mmap(len=0) 失败（EINVAL）被报成 QZDB_ERR_OUT_OF_MEMORY。 */
+    if (st.st_size < 192) { close(fd); return QZDB_ERR_BAD_HEADER; }
+    ctx->data_size = (size_t)st.st_size;
     ctx->data = mmap(NULL, ctx->data_size, PROT_READ, MAP_PRIVATE, fd, 0);
     close(fd);
     if (ctx->data == MAP_FAILED) { ctx->data = NULL; return QZDB_ERR_OUT_OF_MEMORY; }
@@ -2653,9 +2576,14 @@ static void free_heap_state(qzdb_reader_t* ctx) {
 void qzdb_free(qzdb_reader_t* ctx) {
     if (!ctx) return;
     free_heap_state(ctx);
-    if (!ctx->data_is_borrowed && ctx->data_is_heap == 1) {
+    /* 借用缓冲（qzdb_init_buffer_borrowed）归调用方所有：既不 free 也不 munmap。
+     * 此前 else 分支只看 data_is_heap==0，借用缓冲也会被 munmap——调用方若传入
+     * 页对齐的 mmap 区（README §4.5 的示例用法），qzdb_free 后再访问即 SIGSEGV。 */
+    if (ctx->data_is_borrowed) {
+        /* caller-owned */
+    } else if (ctx->data_is_heap == 1) {
         free(ctx->data);
-    } else if (ctx->data_is_heap == 0 && ctx->data) {
+    } else if (ctx->data) {
         munmap(ctx->data, ctx->data_size);
     }
     memset(ctx, 0, sizeof(*ctx));

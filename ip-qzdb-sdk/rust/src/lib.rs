@@ -766,6 +766,7 @@ impl UsageType {
 /// - 内联值同 `GeoInfoRef`：数字/浮点在 32 字节栈缓冲内格式化，零分配；
 /// - `to_pipe` 惰性化：首次 `to_pipe` 才拼接（缓存 blob 专属 OnceLock），
 ///   常规 find_uint 契约路径不再为每个构造 spend pipe 预算。
+///
 /// `GeoData` 从不暴露 `&mut`。
 #[derive(Debug)]
 struct GeoData {
@@ -837,7 +838,7 @@ impl GeoInfo {
     /// 数值字段索引（to_json 数字化契约的判定来源）。
     #[inline]
     pub fn numeric_indices(&self) -> &[usize] {
-        &self.inner.numeric_indices
+        self.inner.numeric_indices
     }
 
     /// to_json 数字化位掩码。等价 `build_numeric_mask(self.numeric_indices())`。
@@ -1520,7 +1521,7 @@ impl<'a> Eq for GeoInfoRef<'a> {}
 
 impl<'a> PartialEq<GeoInfo> for GeoInfoRef<'a> {
     fn eq(&self, other: &GeoInfo) -> bool {
-        self.field_names() == &other.field_names()[..]
+        self.field_names() == other.field_names()
             && self.len() == other.values().len()
             && (0..self.field_count).all(|i| {
                 self.get_value_at(i) == other.values().get(i).map(|s| s.as_ref()).unwrap_or("")

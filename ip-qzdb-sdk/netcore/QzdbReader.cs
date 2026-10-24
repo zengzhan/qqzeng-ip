@@ -334,6 +334,7 @@ public sealed class QzdbReader : IDisposable
                 }
             }
             _ = touchSum;
+            GC.KeepAlive(this);
         }
 
         internal sealed class CacheEntry
@@ -433,11 +434,25 @@ public sealed class QzdbReader : IDisposable
             public override MemoryHandle Pin(int elementIndex = 0) => new(_ptr + elementIndex, default, this);
             public override void Unpin() { }
 
+            // Reload 换下的快照不会被显式 Dispose，只能靠 GC 回收。AcquirePointer 给
+            // SafeMemoryMappedViewHandle 多加了一次引用计数，若无人调用 ReleasePointer，
+            // 句柄自身的终结器只会把计数从 2 减到 1，永远走不到 munmap/UnmapViewOfFile：
+            // 每次 Reload 都会永久泄漏一整份文件映射（实测 50 次 Reload + 完整 GC 后
+            // /proc/self/maps 中残留 51 个映射），被 rename 覆盖的旧文件 inode/磁盘空间也随之无法释放。
+            // 终结器在 Snapshot（及本对象）不可达后归还该引用；SafeHandle 是关键终结对象，
+            // 保证晚于普通终结器运行，因此在此调用 ReleasePointer 是安全的。
+            // CA2015：本类型的 Span 只在查询方法内部短暂存在、从不外泄；所有经 _dataPtr / _data.Span
+            // 读映射内存的路径都在读完后 GC.KeepAlive(snapshot)，保证终结器不会早于最后一次读取运行。
+#pragma warning disable CA2015
+            ~MmapManager() => Dispose(false);
+#pragma warning restore CA2015
+
             protected override void Dispose(bool disposing)
             {
                 if (_disposed) return;
                 _disposed = true;
                 try { _view.SafeMemoryMappedViewHandle.ReleasePointer(); } catch { /* best effort */ }
+                if (!disposing) return; // 终结路径：句柄由各自的 SafeHandle 终结器释放
                 _view.Dispose();
                 _mmf.Dispose();
             }
@@ -1324,6 +1339,7 @@ public sealed class QzdbReader : IDisposable
         uint geoId = ReadUintWidth(span, (int)rOff, snap._rowGeoWidth);
         uint asnId = snap._rowAsnWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowGeoWidth), snap._rowAsnWidth) : 0;
         uint usageId = snap._rowUsageWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowGeoWidth + snap._rowAsnWidth), snap._rowUsageWidth) : 0;
+        GC.KeepAlive(snap);
 
         return (geoId, asnId, usageId);
     }
@@ -1365,6 +1381,7 @@ public sealed class QzdbReader : IDisposable
                     FindBatchCore(snap, bp, ipStrs, results, null);
             }
         }
+        GC.KeepAlive(snap);
         return results;
     }
 
@@ -1397,6 +1414,7 @@ public sealed class QzdbReader : IDisposable
                     FindBatchCore(snap, bp, ipStrs, results, fields);
             }
         }
+        GC.KeepAlive(snap);
         return results;
     }
 
@@ -1696,7 +1714,12 @@ public sealed class QzdbReader : IDisposable
     private static unsafe uint TrieWalkV4(Snapshot snap, uint ipInt)
     {
         if (!snap._hasV4 || snap._offV4Jump <= 0) return 0;
-        if (snap._dataPtr != null) return TrieWalkV4Core(snap, snap._dataPtr, ipInt);
+        if (snap._dataPtr != null)
+        {
+            uint r = TrieWalkV4Core(snap, snap._dataPtr, ipInt);
+            GC.KeepAlive(snap); // 裸指针遍历期间保活 mmap 属主（见 MmapManager 终结器）
+            return r;
+        }
         fixed (byte* bp = snap._data.Span) return TrieWalkV4Core(snap, bp, ipInt);
     }
 
@@ -1759,7 +1782,12 @@ public sealed class QzdbReader : IDisposable
     private static unsafe uint TrieWalkV6(Snapshot snap, ulong ipHigh, ulong ipLow)
     {
         if (!snap._hasV6 || snap._offV6Jump <= 0) return 0;
-        if (snap._dataPtr != null) return TrieWalkV6Core(snap, snap._dataPtr, ipHigh, ipLow);
+        if (snap._dataPtr != null)
+        {
+            uint r = TrieWalkV6Core(snap, snap._dataPtr, ipHigh, ipLow);
+            GC.KeepAlive(snap);
+            return r;
+        }
         fixed (byte* bp = snap._data.Span) return TrieWalkV6Core(snap, bp, ipHigh, ipLow);
     }
 
@@ -1820,7 +1848,12 @@ public sealed class QzdbReader : IDisposable
     private static unsafe int TrieWalkV4PrefixLen(Snapshot snap, uint ipInt)
     {
         if (!snap._hasV4 || snap._offV4Jump <= 0) return -1;
-        if (snap._dataPtr != null) return TrieWalkV4PrefixLenCore(snap, snap._dataPtr, ipInt);
+        if (snap._dataPtr != null)
+        {
+            int r = TrieWalkV4PrefixLenCore(snap, snap._dataPtr, ipInt);
+            GC.KeepAlive(snap);
+            return r;
+        }
         fixed (byte* bp = snap._data.Span) return TrieWalkV4PrefixLenCore(snap, bp, ipInt);
     }
 
@@ -1878,7 +1911,12 @@ public sealed class QzdbReader : IDisposable
     private static unsafe int TrieWalkV6PrefixLen(Snapshot snap, ulong ipHigh, ulong ipLow)
     {
         if (!snap._hasV6 || snap._offV6Jump <= 0) return -1;
-        if (snap._dataPtr != null) return TrieWalkV6PrefixLenCore(snap, snap._dataPtr, ipHigh, ipLow);
+        if (snap._dataPtr != null)
+        {
+            int r = TrieWalkV6PrefixLenCore(snap, snap._dataPtr, ipHigh, ipLow);
+            GC.KeepAlive(snap);
+            return r;
+        }
         fixed (byte* bp = snap._data.Span) return TrieWalkV6PrefixLenCore(snap, bp, ipHigh, ipLow);
     }
 
@@ -2168,6 +2206,7 @@ public sealed class QzdbReader : IDisposable
             }
         }
 
+        GC.KeepAlive(snap); // span 读自 mmap，读完前保活属主
         return new GeoInfo(snap._fieldNames, values, snap._normMap, snap._numericFlags, takeOwnership: true, nativeFloats);
     }
 
@@ -2278,37 +2317,41 @@ public sealed class QzdbReader : IDisposable
 
     private static bool TryParseV4(ReadOnlySpan<char> s, out uint v4, out bool hasColon)
     {
+        // 单趟解析（原实现先整串 Contains(':')，再按段二次回扫数字；热路径 ~2x）。
+        // 语义与原实现逐一等价：严格 4 段十进制、每段 1~3 位、禁前导零、<=255；
+        // 失败时 hasColon == s.Contains(':')，成功时 hasColon == false。
         v4 = 0;
+        hasColon = false;
         int n = s.Length;
-        if (n == 0) { hasColon = false; return false; }
-        hasColon = s.Contains(':');
-        if (hasColon || n > 15) return false;
+        if (n == 0) return false;
+        if (n > 15) { hasColon = s.Contains(':'); return false; }
         uint result = 0;
-        int val = 0, dots = 0, start = 0;
-        for (int i = 0; i <= n; i++)
+        int val = 0, dots = 0, digits = 0;
+        bool leadingZero = false;
+        for (int i = 0; i < n; i++)
         {
-            char c = i < n ? s[i] : '.';
-            if (c == '.')
+            char c = s[i];
+            uint d = (uint)(c - '0');
+            if (d <= 9)
             {
-                int segLen = i - start;
-                if (segLen == 0 || segLen > 3) return false;
-                if (segLen > 1 && s[start] == '0') return false;
-                val = 0;
-                for (int j = start; j < i; j++)
-                {
-                    char d = s[j];
-                    if (d < '0' || d > '9') return false;
-                    val = val * 10 + (d - '0');
-                }
-                if (val > 255) return false;
-                result = (result << 8) | (uint)val;
-                dots++;
-                start = i + 1;
+                if (leadingZero || ++digits > 3) { hasColon = s[i..].Contains(':'); return false; }
+                if (digits == 1) leadingZero = d == 0;
+                val = val * 10 + (int)d;
             }
-            else if (c < '0' || c > '9') return false;
+            else if (c == '.')
+            {
+                if (digits == 0 || val > 255 || ++dots > 3) { hasColon = s[i..].Contains(':'); return false; }
+                result = (result << 8) | (uint)val;
+                val = 0; digits = 0; leadingZero = false;
+            }
+            else
+            {
+                hasColon = c == ':' || s[i..].Contains(':');
+                return false;
+            }
         }
-        if (dots != 4) return false;
-        v4 = result;
+        if (digits == 0 || val > 255 || dots != 3) return false;
+        v4 = (result << 8) | (uint)val;
         return true;
     }
 
@@ -2323,122 +2366,88 @@ public sealed class QzdbReader : IDisposable
 
     private static V6Result TryParseV6(ReadOnlySpan<char> s)
     {
+        // 单趟解析：按 ':' 切段、记录 "::" 位置，直接写入 8 个 16 位组。
+        // 原实现每段 Contains('.')、整串 Contains('%') + 两次 IndexOf("::") + 左右两侧
+        // 分别解析再拼 16 字节，热路径开销以固定调用成本为主。接受/拒绝集合与原实现逐一等价
+        // （差分校验见审查记录）：禁 zone id（'%'）、最多一个 "::"、禁单冒号开头/结尾、
+        // 组 1~4 位十六进制、内嵌 IPv4 只能是最后一段且走严格 TryParseV4。
         V6Result r = default;
-        if (s.IsEmpty || s.Length > 45 || s.Contains('%')) return r;
+        int n = s.Length;
+        if (n < 2 || n > 45) return r;
 
-        int dc = s.IndexOf("::");
-        if (dc >= 0 && s[(dc + 2)..].IndexOf("::") >= 0) return r;
-        if (dc < 0 && (s[0] == ':' || s[^1] == ':')) return r;
+        Span<ushort> g = stackalloc ushort[8];
+        int count = 0, dc = -1, i = 0;
+        uint v4Int = 0;
+        bool hasV4 = false;
+        var lut = HexLUT;
 
-        ReadOnlySpan<char> left = dc >= 0 ? s[..dc] : s;
-        ReadOnlySpan<char> right = dc >= 0 ? s[(dc + 2)..] : ReadOnlySpan<char>.Empty;
+        if (s[0] == ':')
+        {
+            if (s[1] != ':') return r;
+            dc = 0;
+            i = 2;
+        }
+        while (i < n)
+        {
+            int start = i;
+            uint val = 0;
+            while (i < n)
+            {
+                char c = s[i];
+                if (c >= 128) break;
+                byte h = lut[c];
+                if (h == 0 && c != '0') break;
+                val = (val << 4) | h;
+                i++;
+            }
+            int len = i - start;
+            if (i < n && s[i] == '.')
+            {
+                // 内嵌 IPv4：必须延伸到串尾（其后再有 ':' 时 TryParseV4 失败），且前面至多 6 组。
+                if (count > 6 || !TryParseV4(s[start..], out v4Int, out _)) return r;
+                hasV4 = true;
+                break;
+            }
+            if (len == 0 || len > 4 || count >= 8) return r;
+            g[count++] = (ushort)val;
+            if (i == n) break;
+            if (s[i] != ':') return r;
+            i++;
+            if (i < n && s[i] == ':')
+            {
+                if (dc >= 0) return r;
+                dc = count;
+                i++;
+            }
+            else if (i == n) return r; // 单冒号结尾
+        }
 
-        Span<ushort> leftGroups = stackalloc ushort[8];
-        Span<ushort> rightGroups = stackalloc ushort[8];
-        int leftCount = ParseV6Side(left, leftGroups, allowV4: dc < 0, out bool leftHasV4, out uint leftV4);
-        if (leftCount < 0) return r;
-        int rightCount = ParseV6Side(right, rightGroups, allowV4: dc >= 0, out bool rightHasV4, out uint rightV4);
-        if (rightCount < 0 || (leftHasV4 && rightHasV4)) return r;
-        bool hasV4 = leftHasV4 || rightHasV4;
-        uint v4Int = leftHasV4 ? leftV4 : rightV4;
-
-        int totalGroups = leftCount + rightCount;
         int v4Slots = hasV4 ? 2 : 0;
-        int zeros;
-        if (dc >= 0)
-        {
-            if (totalGroups + v4Slots >= 8) return r;
-            zeros = 8 - totalGroups - v4Slots;
-        }
-        else
-        {
-            if (totalGroups + v4Slots != 8) return r;
-            zeros = 0;
-        }
+        if (dc >= 0) { if (count + v4Slots >= 8) return r; }
+        else if (count + v4Slots != 8) return r;
 
-        // Compose 16 bytes: left groups, zeros, right groups, optional IPv4 tail.
-        Span<byte> buf = stackalloc byte[16];
-        int off = 0;
-        for (int g = 0; g < leftCount; g++, off += 2)
-        {
-            buf[off] = (byte)(leftGroups[g] >> 8); buf[off + 1] = (byte)leftGroups[g];
-        }
-        off += zeros * 2;
-        for (int g = 0; g < rightCount; g++, off += 2)
-        {
-            buf[off] = (byte)(rightGroups[g] >> 8); buf[off + 1] = (byte)rightGroups[g];
-        }
-        if (hasV4)
-        {
-            buf[12] = (byte)(v4Int >> 24); buf[13] = (byte)(v4Int >> 16);
-            buf[14] = (byte)(v4Int >> 8); buf[15] = (byte)v4Int;
-        }
+        // 展开：dc 之前的组原位，dc 之后的组移到尾部（IPv4 两组之前）。
+        Span<ushort> w = stackalloc ushort[8];
+        w.Clear();
+        int head = dc >= 0 ? dc : count;
+        for (int k = 0; k < head; k++) w[k] = g[k];
+        int tail = count - head;
+        int tailStart = 8 - v4Slots - tail;
+        for (int k = 0; k < tail; k++) w[tailStart + k] = g[head + k];
+        if (hasV4) { w[6] = (ushort)(v4Int >> 16); w[7] = (ushort)v4Int; }
 
-        if (buf[10] == 0xFF && buf[11] == 0xFF &&
-            buf[0] == 0 && buf[1] == 0 && buf[2] == 0 && buf[3] == 0 &&
-            buf[4] == 0 && buf[5] == 0 && buf[6] == 0 && buf[7] == 0 &&
-            buf[8] == 0 && buf[9] == 0)
+        if (w[0] == 0 && w[1] == 0 && w[2] == 0 && w[3] == 0 && w[4] == 0 && w[5] == 0xFFFF)
         {
             r.IsMappedV4 = true;
-            r.V4 = (uint)((buf[12] << 24) | (buf[13] << 16) | (buf[14] << 8) | buf[15]);
+            r.V4 = ((uint)w[6] << 16) | w[7];
             r.Valid = true;
             return r;
         }
 
-        ulong hi = 0, lo = 0;
-        for (int i = 0; i < 8; i++) hi = (hi << 8) | buf[i];
-        for (int i = 8; i < 16; i++) lo = (lo << 8) | buf[i];
-        r.High = hi;
-        r.Low = lo;
+        r.High = ((ulong)w[0] << 48) | ((ulong)w[1] << 32) | ((ulong)w[2] << 16) | w[3];
+        r.Low = ((ulong)w[4] << 48) | ((ulong)w[5] << 32) | ((ulong)w[6] << 16) | w[7];
         r.Valid = true;
         return r;
-    }
-
-    private static int ParseV6Side(ReadOnlySpan<char> side, Span<ushort> groups, bool allowV4,
-        out bool hasV4, out uint v4)
-    {
-        hasV4 = false;
-        v4 = 0;
-        if (side.IsEmpty) return 0;
-
-        int count = 0;
-        int start = 0;
-        for (int i = 0; i <= side.Length; i++)
-        {
-            if (i != side.Length && side[i] != ':') continue;
-            int length = i - start;
-            if (length == 0) return -1;
-            var segment = side.Slice(start, length);
-            if (segment.Contains('.'))
-            {
-                if (!allowV4 || i != side.Length || hasV4 || !TryParseV4(segment, out v4, out _)) return -1;
-                hasV4 = true;
-            }
-            else
-            {
-                if (count >= groups.Length || !TryParseHexGroup(segment, out groups[count])) return -1;
-                count++;
-            }
-            start = i + 1;
-        }
-        return count;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static bool TryParseHexGroup(ReadOnlySpan<char> g, out ushort val)
-    {
-        val = 0;
-        int len = g.Length;
-        if (len == 0 || len > 4) return false;
-        for (int i = 0; i < len; i++)
-        {
-            char c = g[i];
-            if (c >= 128) return false;
-            byte h = HexLUT[c];
-            if (h == 0 && c != '0') return false;
-            val = (ushort)((val << 4) | h);
-        }
-        return true;
     }
 
     #endregion
@@ -2453,6 +2462,7 @@ public sealed class QzdbReader : IDisposable
         Span<byte> zeros = stackalloc byte[4];
         crc.Append(zeros);
         crc.Append(span.Slice(20));
+        GC.KeepAlive(snap);
         return crc.GetCurrentHashAsUInt32();
     }
 
@@ -2561,6 +2571,7 @@ public sealed class QzdbReader : IDisposable
                     touchSum ^= span[(int)p];
             }
         }
+        GC.KeepAlive(snap);
     }
 
     #endregion
@@ -2568,6 +2579,8 @@ public sealed class QzdbReader : IDisposable
     #region Lifecycle
 
     private long _reloadEpoch;
+    /// <summary>已成功发布的最新 reload 序号（仅在 _lifecycleGate 内读写）。</summary>
+    private long _publishedEpoch;
 
     // 退役快照不再主动释放（历史版本曾有一代隔离 _retiring 环）：
     // 查询线程经 RequireSnapshot() 拿到的 Snapshot 引用会 root 在其调用栈上，
@@ -2625,12 +2638,16 @@ public sealed class QzdbReader : IDisposable
                 snapshot.DisposeOwner(); // never published; nothing can be reading it yet
                 throw new ObjectDisposedException(nameof(QzdbReader));
             }
-            if (epoch > 0 && epoch < Volatile.Read(ref _reloadEpoch))
+            // latest-wins 只针对【已成功发布】的更新 reload：此前用 _reloadEpoch（含仍在加载、
+            // 乃至随后 CRC 失败的 reload）作比较，导致较早发起、已校验通过的 reload 被静默丢弃、
+            // Reload() 却正常返回，读者停留在旧数据上（实测 8/40 次交错复现）。
+            if (epoch > 0 && epoch < _publishedEpoch)
             {
-                // A newer reload has already started or succeeded; discard stale snapshot.
+                // A newer reload has already been published; discard this stale snapshot.
                 snapshot.DisposeOwner(); // this one was never published either — release now
                 return;
             }
+            if (epoch > 0) _publishedEpoch = epoch;
             // 旧快照仅被换下；其 mmap 的释放由 GC 可达性驱动（查询栈 root 住
             // Snapshot 时绝不 unmap——见 _retiring 移除说明）。Reload 风暴下
             // 不可达快照由 GC 稳定回收，无句柄无界累积。

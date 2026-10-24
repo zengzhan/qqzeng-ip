@@ -18,18 +18,35 @@ public final class GeoInfo {
     private final String[] values;
 
     /**
-     * 原名（canonical snake_case）→ 索引的精确映射。
+     * 字段名索引（原名精确表 + 归一化表）。
      * <p>
-     * 语义 getter 传的都是规范名（country_code / as_name / geo_id ...），
-     * 走这层可完全避开 {@link #normalizeKey} 的 StringBuilder 分配。
-     * <b>必须由快照共享</b>：热路径每个 GeoInfo 都新建 HashMap 会让
-     * 64K 槽解码缓存额外背上数十 MB 堆，直接抵消缓存的意义。
+     * 原名（canonical snake_case）→ 索引的精确映射让语义 getter 完全避开
+     * {@link #normalizeKey} 的 StringBuilder 分配。<b>热路径必须由快照共享</b>：
+     * 每个 GeoInfo 都新建 HashMap 会让 64K 槽解码缓存额外背上数十 MB 堆。
+     * <p>
+     * 投影 / 合并结果（{@code findFields}、ChainedReader）的字段序由调用方决定，
+     * 无法共享快照表——这里改为<b>首次 get() 时惰性构建</b>，且字段数
+     * ≤ {@link #SMALL_INDEX_MAX} 时不建 HashMap，只建一份归一化名数组、get() 线性比对
+     * （首个匹配胜出，与 putIfAbsent 语义一致）。原实现每次 findFields 构造两张 HashMap，
+     * 实测 560 B/op，是该路径的主要开销。
+     * <p>
+     * 并发语义与 {@link #pipeCache} 同型：非 volatile 单引用惰性写，最坏重复构建一次；
+     * {@link Index} 全字段 final，经数据竞争发布也保证读到完整构建的表（JLS §17.5）。
      */
-    private final Map<String, Integer> exactMap;
-    // 归一化字段索引映射 (key: lowercase without underscores -> index)
-    private final Map<String, Integer> normalizedMap;
-    // toJson 数值类型标记（与 fieldNames 等长；内部快路径传入，公共构造时现算）
+    private Index index;
+
+    /**
+     * 不可变索引；final 字段保证竞态发布下的可见性。
+     * 大表形态：exact/normalized 非 null；小表形态：二者为 null，normNames 为各字段归一化名。
+     */
+    private record Index(Map<String, Integer> exact, Map<String, Integer> normalized, String[] normNames) {
+    }
+
+    /** 不建 HashMap、改线性比对的字段数上限（投影查询通常只取少数字段）。 */
+    private static final int SMALL_INDEX_MAX = 8;
+    // toJson 数值类型标记（与 fieldNames 等长；内部快路径传入，其余现算——代价仅一个 boolean[]）
     private final boolean[] numericFlags;
+
     // to_pipe 惰性记忆化（对齐 C#/Node/Python/Go/Rust 的 _pipe 缓存语义）。
     // 非 volatile 的单引用惰性写与 String.hashCode 同型：最坏情形是并发下
     // 重复计算一次，任何线程读到的都是完整 String，绝不读到半成品。
@@ -47,13 +64,8 @@ public final class GeoInfo {
     public GeoInfo(String[] fieldNames, String[] values) {
         this.fieldNames = fieldNames != null ? fieldNames.clone() : new String[0];
         this.values = values != null ? values.clone() : new String[0];
-        this.exactMap = buildExactMap(this.fieldNames);
-        this.normalizedMap = buildNormalizedMap(this.fieldNames);
-        boolean[] flags = new boolean[this.fieldNames.length];
-        for (int i = 0; i < this.fieldNames.length; i++) {
-            flags[i] = isNumericFieldName(this.fieldNames[i]);
-        }
-        this.numericFlags = flags;
+        this.numericFlags = buildNumericFlags(this.fieldNames);
+        // 索引惰性构建（见 index 字段注释）
     }
 
     /**
@@ -63,10 +75,33 @@ public final class GeoInfo {
             boolean[] numericFlags, Map<String, Integer> sharedExactMap) {
         this.fieldNames = fieldNames != null ? fieldNames : new String[0];
         this.values = values != null ? values : new String[0];
-        this.exactMap = sharedExactMap != null ? sharedExactMap : buildExactMap(this.fieldNames);
-        this.normalizedMap = sharedNormalizedMap != null ? sharedNormalizedMap : buildNormalizedMap(this.fieldNames);
+        // 快照级共享表齐备时直接挂上（热路径零构建）；否则留空，首次 get() 时惰性构建。
         this.numericFlags = numericFlags != null && numericFlags.length == this.fieldNames.length
                 ? numericFlags : buildNumericFlags(this.fieldNames);
+        if (sharedExactMap != null && sharedNormalizedMap != null) {
+            this.index = new Index(sharedExactMap, sharedNormalizedMap, null);
+        }
+    }
+
+    /** 取（必要时构建）字段索引。快路径保持极小以便 JIT 内联，构建逻辑放在 {@link #buildIndex()}。 */
+    private Index index() {
+        Index idx = index;
+        return idx != null ? idx : buildIndex();
+    }
+
+    private Index buildIndex() {
+        Index idx;
+        if (fieldNames.length <= SMALL_INDEX_MAX) {
+            String[] norm = new String[fieldNames.length];
+            for (int i = 0; i < norm.length; i++) {
+                norm[i] = fieldNames[i] != null ? normalizeKey(fieldNames[i]) : null;
+            }
+            idx = new Index(null, null, norm);
+        } else {
+            idx = new Index(buildExactMap(fieldNames), buildNormalizedMap(fieldNames), null);
+        }
+        index = idx;
+        return idx;
     }
 
     private static boolean[] buildNumericFlags(String[] names) {
@@ -172,11 +207,33 @@ public final class GeoInfo {
         }
         // 规范名（country_code / as_name / geo_id ...）是语义 getter 的绝对多数路径：
         // 精确命中 → 零分配；别名（countryCode / COUNTRY-CODE）才付归一化代价。
-        Integer idx = exactMap.get(name);
+        Index ix = index();
+        if (ix.exact() == null) {
+            return getSmall(ix.normNames(), name);
+        }
+        Integer idx = ix.exact().get(name);
         if (idx == null) {
-            idx = normalizedMap.get(normalizeKey(name));
+            idx = ix.normalized().get(normalizeKey(name));
         }
         if (idx != null && idx < values.length && values[idx] != null) {
+            return values[idx];
+        }
+        return "";
+    }
+
+    /** 小表形态的 get：先精确、再归一化，均取首个匹配（与大表 putIfAbsent 语义一致）。 */
+    private String getSmall(String[] normNames, String name) {
+        int idx = -1;
+        for (int i = 0; i < fieldNames.length; i++) {
+            if (name.equals(fieldNames[i])) { idx = i; break; }
+        }
+        if (idx < 0) {
+            String key = normalizeKey(name);
+            for (int i = 0; i < normNames.length; i++) {
+                if (key.equals(normNames[i])) { idx = i; break; }
+            }
+        }
+        if (idx >= 0 && idx < values.length && values[idx] != null) {
             return values[idx];
         }
         return "";

@@ -46,25 +46,25 @@
 
 ### 2.1 Maven / Gradle 坐标
 
-已发布至 **Maven Central**，构建工具会自动拉取 `qzdb-1.0.6.jar` 及其 `-sources.jar` / `-javadoc.jar`，**无需克隆本仓库源码**。
+已发布至 **Maven Central**，构建工具会自动拉取 `qzdb-1.0.9.jar` 及其 `-sources.jar` / `-javadoc.jar`，**无需克隆本仓库源码**。
 
 ```xml
 <!-- Maven -->
 <dependency>
     <groupId>com.qqzeng</groupId>
     <artifactId>qzdb</artifactId>
-    <version>1.0.6</version>
+    <version>1.0.9</version>
 </dependency>
 ```
 
 ```groovy
 // Gradle (Groovy DSL)
-implementation 'com.qqzeng:qzdb:1.0.6'
+implementation 'com.qqzeng:qzdb:1.0.9'
 ```
 
 ```kotlin
 // Gradle (Kotlin DSL)
-implementation("com.qqzeng:qzdb:1.0.6")
+implementation("com.qqzeng:qzdb:1.0.9")
 ```
 
 > 若需本地构建：在 `ip-qzdb-sdk/java/` 执行 `mvn install` 安装到本地仓库；或直接把 `src/main/java/com/qqzeng/qzdb/` 目录加入你的源码树编译。
@@ -197,7 +197,7 @@ try (InputStream in = getClass().getResourceAsStream("/ip_china.qzdb")) {
 | 字节查询 | `Optional<GeoInfo> findBytes(byte[] ip16)` | `Optional<GeoInfo>` | 按 4 字节（IPv4）或 16 字节（IPv6）原始字节查 |
 | 整数查询 | `Optional<GeoInfo> findUint(int ipInt)` | `Optional<GeoInfo>` | 按 IPv4 的 `int` 整型查（见下方说明） |
 | 字段子集 | `Optional<GeoInfo> findFields(String ipStr, String[] fields)` | `Optional<GeoInfo>` | 只解析指定字段，减少不必要的字符串分配 |
-| 管道字符串 | `String findStr(String ipStr)` | `String` | 直接返回 `toPipeString()` 结果；未命中返回 `""`；IP 非法抛异常 |
+| 管道字符串 | `String findStr(String ipStr)` | `String` | 直接返回 `toPipeString()` 结果；未命中与 IP 非法均返回 `""`（不抛异常，与 API_CONTRACT §二 一致） |
 | 行号查询 | `int lookupRowId(String ipStr)` | `int` | 仅返回内部行号（不含字段，最轻）；非法 / 未命中返回 `0` |
 | 行号（整数） | `int lookupRowIdUint(int ipInt)` | `int` | `findUint` 的轻量版，只返回行号 |
 | 行号（字节） | `int lookupRowIdBytes(byte[] ipBytes)` | `int` | `findBytes` 的轻量版，只返回行号；非 4/16 字节返回 `0` |

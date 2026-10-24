@@ -18,6 +18,7 @@ type Builder struct {
 	groupIndex int
 	verifyCrc  bool
 	noCopy     bool // 零拷贝模式：调用方保证 buffer 生命周期内只读不释放
+	owned      bool // buffer 是 NewBuilderBytes 内部拷贝的私有副本，Build 时无需再拷贝
 	warmup     bool // 主动预热跳表与节点冷页
 }
 
@@ -30,7 +31,7 @@ func NewBuilder(path string) *Builder {
 func NewBuilderBytes(b []byte) *Builder {
 	cp := make([]byte, len(b))
 	copy(cp, b)
-	return &Builder{buffer: cp, verifyCrc: true}
+	return &Builder{buffer: cp, verifyCrc: true, owned: true}
 }
 
 // NewBuilderBytesNoCopy 以内存字节构建（零拷贝变体）。
@@ -81,9 +82,16 @@ func (b *Builder) Build() (*QzdbReader, error) {
 		}
 		s, err = buildSnapshotFromBytes(data, b.groupIndex, b.verifyCrc)
 	case b.buffer != nil:
-		if b.noCopy {
+		switch {
+		case b.noCopy:
 			s, err = buildSnapshot(b.buffer, nil, b.groupIndex, b.verifyCrc)
-		} else {
+		case b.owned:
+			// NewBuilderBytes 已持有私有副本，再拷贝一次只会让装载期内存翻倍。
+			if len(b.buffer) < 192 {
+				return nil, newErr(ErrCodeBadHeader, "buffer too small for QZDB header")
+			}
+			s, err = buildSnapshot(b.buffer, nil, b.groupIndex, b.verifyCrc)
+		default:
 			s, err = buildSnapshotFromBytes(b.buffer, b.groupIndex, b.verifyCrc)
 		}
 	default:

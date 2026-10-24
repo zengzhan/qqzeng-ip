@@ -1471,27 +1471,20 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     {
         if ($this->closed) return null;
         if ($ipStr === null || $ipStr === '') return null;
-        $ip = trim($ipStr, self::TRIM_CHARS);
-        if ($ip === '') return null;
-        if (strpos($ip, ':') !== false || preg_match('/^\d+\.\d+\.\d+\.\d+$/', $ip)) {
-            // 与 find() 相同的解析分流:fastParseIp 会在解析期把 IPv4-mapped
-            // (::ffff:a.b.c.d)降级为 v4(§8 规则 4)。此前这里走 parseIpv6Raw,
-            // 其"不降级返回 16 字节"的前提已被解析期降级破坏——mapped 地址
-            // 在这里永远拿不到 v6 字节,lookupCidr 的 mapped 查询恒为 null。
-            $parsed = self::fastParseIp($ip);
-            if ($parsed === null) return null;
-            list($v4, $v6bin) = $parsed;
-            if ($v4 !== null) {
-                $n = $this->lookupV4PrefixLen($v4);
-                return $n < 0 ? null : $this->formatV4Cidr($v4, $n);
-            }
-            $n = $this->lookupV6PrefixLen($v6bin);
-            return $n < 0 ? null : $this->formatV6Cidr($v6bin, $n);
+        // 与 find()/lookupRowId() 完全相同的严格解析（不 trim）：此前这里先
+        // trim() 再解析，导致 " 1.2.3.4" / "1.2.3.4\n" 在 find 返回 null 的同时
+        // lookupCidr 却返回网段，同一 SDK 内对同一输入口径不一致（契约 §二.1：
+        // 非法 IP 两者都返回空）。fastParseIp 会在解析期把 IPv4-mapped
+        // (::ffff:a.b.c.d)降级为 v4(§8 规则 4)。
+        $parsed = self::fastParseIp($ipStr);
+        if ($parsed === null) return null;
+        list($v4, $v6bin) = $parsed;
+        if ($v4 !== null) {
+            $n = $this->lookupV4PrefixLen($v4);
+            return $n < 0 ? null : $this->formatV4Cidr($v4, $n);
         }
-        $v4 = self::fastParseIpv4($ip);
-        if ($v4 === null) return null;
-        $n = $this->lookupV4PrefixLen($v4);
-        return $n < 0 ? null : $this->formatV4Cidr($v4, $n);
+        $n = $this->lookupV6PrefixLen($v6bin);
+        return $n < 0 ? null : $this->formatV6Cidr($v6bin, $n);
     }
 
     public function lookupCidrUint(int $ipInt)
@@ -2238,6 +2231,37 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $suffix = ($ipInt & 0xFFFF) << 16;
         $steps = 0;
 
+        // 缓冲模式快路径：内联子指针读取（24 位 / 32 位节点），省掉每步
+        // getV4Child → readUint24/safeReadU32 两层方法调用。越界安全：offV4Nodes > 0
+        // 时 parseHeader 的 $chk 已保证 [offV4Nodes, offV4Nodes + v4NodeCount*节点宽)
+        // 落在数据内，而 $idx < v4NodeCount 守卫与 getV4Child 完全相同，故读取恒在界内。
+        // 每步语义（0 → miss、哨兵位 → 叶子低位行号、步数上限）与下方原路径逐位一致；
+        // 24 位哨兵 0x800000 命中时原路径返回 (val & 0x7FFFFF) | SENTINEL 再 & MASK_31，
+        // 即 val & 0x7FFFFF。流式模式 / offV4Nodes == 0 仍走原路径。
+        if ($this->data !== null && $this->offV4Nodes > 0) {
+            $d = $this->data;
+            $base = $this->offV4Nodes;
+            $nodeCount = $this->v4NodeCount;
+            $node24 = $this->v4Node24;
+            while (true) {
+                if ($idx >= $nodeCount) return 0;
+                if ($node24) {
+                    $o = $base + $idx * 6 + ((($suffix >> 31) & 1) * 3);
+                    $child = ord($d[$o]) | (ord($d[$o + 1]) << 8) | (ord($d[$o + 2]) << 16);
+                    if ($child & 0x800000) return $child & self::SENTINEL_MASK_24;
+                } else {
+                    $o = $base + ($idx << 3) + ((($suffix >> 31) & 1) << 2);
+                    $child = ord($d[$o]) | (ord($d[$o + 1]) << 8) | (ord($d[$o + 2]) << 16) | (ord($d[$o + 3]) << 24);
+                    if ($child & self::SENTINEL) return $child & self::SENTINEL_MASK_31;
+                }
+                if ($child === 0) return 0;
+                $idx = $child;
+                $suffix <<= 1;
+                $steps++;
+                if ($steps >= self::MAX_TRIE_WALK_STEPS_V4) return 0;
+            }
+        }
+
         while (true) {
             $bit = ($suffix >> 31) & 1;
             $child = $this->getV4Child($idx, $bit);
@@ -2291,6 +2315,36 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $maxDepth = 128;
 
         $steps = 0;
+
+        // 缓冲模式快路径（同 trieWalkV4，24 位 / 32 位节点）：内联子指针读取与取位，
+        // 省掉每步 getV6Child → readUint24/safeReadU32 两层方法调用及浮点除法取字节
+        // 下标。越界安全依据同上（offV6Nodes > 0 已过 $chk，$idx < v6NodeCount 守卫）；
+        // 步数上限、0/哨兵判定与下方原路径逐位一致。
+        if ($this->data !== null && $this->offV6Nodes > 0) {
+            $d = $this->data;
+            $base = $this->offV6Nodes;
+            $nodeCount = $this->v6NodeCount;
+            $node24 = $this->v6Node24;
+            while ($depth < $maxDepth) {
+                if (++$steps >= self::MAX_TRIE_WALK_STEPS_V6) return 0;
+                if ($idx >= $nodeCount) return 0;
+                $bit = (ord($ipBin[$depth >> 3]) >> (7 - ($depth & 7))) & 1;
+                if ($node24) {
+                    $o = $base + $idx * 6 + $bit * 3;
+                    $child = ord($d[$o]) | (ord($d[$o + 1]) << 8) | (ord($d[$o + 2]) << 16);
+                    if ($child & 0x800000) return $child & self::SENTINEL_MASK_24;
+                } else {
+                    $o = $base + ($idx << 3) + ($bit << 2);
+                    $child = ord($d[$o]) | (ord($d[$o + 1]) << 8) | (ord($d[$o + 2]) << 16) | (ord($d[$o + 3]) << 24);
+                    if ($child & self::SENTINEL) return $child & self::SENTINEL_MASK_31;
+                }
+                if ($child === 0) return 0;
+                $idx = $child;
+                $depth += 1;
+            }
+            return 0;
+        }
+
         while ($depth < $maxDepth) {
             if (++$steps >= self::MAX_TRIE_WALK_STEPS_V6) return 0;
             $byteIdx = (int)($depth / 8);
