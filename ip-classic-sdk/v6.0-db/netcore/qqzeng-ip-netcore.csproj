@@ -1,15 +1,25 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-    <!-- 开启所有的 Release 优化 -->
+    <!-- 多目标: netstandard2.0 (库引用兼容 .NET Framework 4.6.1+/旧 .NET Core) + net10.0 (可执行验证/示例) -->
+    <TargetFrameworks>netstandard2.0;net10.0</TargetFrameworks>
+    <LangVersion>7.3</LangVersion>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
     <Optimize>true</Optimize>
-    <TieredPGO>true</TieredPGO>
-    <!-- 允许使用最新的 C# 语言特性 -->
-    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
   </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)'=='net10.0'">
+    <OutputType>Exe</OutputType>
+    <StartupObject>qqzengIp.Program</StartupObject>
+    <DefineConstants Condition="Exists('Verify.cs')">$(DefineConstants);HAS_VERIFY</DefineConstants>
+  </PropertyGroup>
+
+  <!-- netstandard2.0 目标只编译库本身 -->
+  <ItemGroup Condition="'$(TargetFramework)'=='netstandard2.0'">
+    <Compile Remove="Program.cs" />
+    <Compile Remove="Verify.cs" />
+  </ItemGroup>
 
 </Project>

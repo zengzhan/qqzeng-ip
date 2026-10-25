@@ -4,6 +4,18 @@
 
 本文档详细介绍qqzeng-ip 6.0在8种编程语言中的API使用方法。所有语言版本都遵循相同的接口设计，确保跨语言的一致性。
 
+每门语言均提供三类构造方式（按各语言惯用命名）：
+
+| 能力 | 说明 |
+|------|------|
+| 单例 | 自动探测数据库路径，进程内共享一个实例 |
+| 指定路径 | 多实例 / 多数据集场景 |
+| 字节流 | 从内存构造（网络下载、加密分发等场景） |
+
+**数据库路径自动探测顺序**（单例与无参构造）: 当前目录 → `data/` → `../data/`、`../../data/` 等上级目录 → 仓库 `dada/全球旗舰版-*/`（全局库文件名 `qqzeng-ip-6.0-global.db`）。
+
+**查询入口**（所有语言一致）: 字符串查询 `find(ip)` + 整数查询（省去 IP 解析，高并发推荐）。未命中或非法 IP 一律返回空串 `""`（fail-closed）。
+
 ## C 语言 API
 
 ### 初始化
@@ -28,6 +40,18 @@ if (!ctx) {
     return -1;
 }
 ```
+
+#### `ipdb_init_default()`
+```c
+ipdb_search_t* ipdb_init_default(void);
+```
+按上述探测顺序自动定位数据库，失败返回 `NULL`。
+
+#### `ipdb_init_bytes()`
+```c
+ipdb_search_t* ipdb_init_bytes(const unsigned char *data, size_t len);
+```
+从内存字节流构造（复制并解析，调用方缓冲随即可释放）。
 
 ### 查询
 
@@ -94,7 +118,7 @@ ipdb_free(ctx);
 pub fn instance() -> &'static IpDbSearch
 ```
 
-**返回值**: 返回全局单例引用
+**返回值**: 返回全局单例引用（自动探测路径，加载失败 panic）
 
 **示例**:
 ```rust
@@ -102,6 +126,13 @@ use qqzeng_ip::IpDbSearch;
 
 let searcher = IpDbSearch::instance();
 ```
+
+#### `IpDbSearch::from_path()` / `from_bytes()`
+```rust
+pub fn from_path<P: AsRef<Path>>(path: P) -> Result<Self, std::io::Error>
+pub fn from_bytes(data: Vec<u8>) -> Result<Self, std::io::Error>
+```
+多实例 / 字节流构造；非法文件返回 `Err`（fail-closed）。另有 `new()` 等价于自动探测的 `from_path`。
 
 ### 查询
 
@@ -138,6 +169,12 @@ let location = searcher.find_uint(0x0808, 0x0808);
 println!("Location: {}", location);
 ```
 
+#### `find_uint32()`
+```rust
+pub fn find_uint32(&self, ip_int: u32) -> &str
+```
+完整 uint32 整数查询（`find_uint(prefix, suffix)` 的兼容包装）。
+
 ## Go API
 
 ### 初始化
@@ -157,6 +194,13 @@ searcher, err := ipdb.Instance()
 if err != nil {
     log.Fatal(err)
 }
+```
+
+#### `ipdb.New()` / `NewFromPath()` / `NewFromBytes()`
+```go
+func New() (*IpDbSearch, error)                       // 自动探测
+func NewFromPath(path string) (*IpDbSearch, error)    // 指定路径
+func NewFromBytes(data []byte) (*IpDbSearch, error)   // 字节流
 ```
 
 ### 查询
@@ -194,6 +238,12 @@ location := searcher.FindUint(0x0808, 0x0808)
 fmt.Printf("Location: %s\n", location)
 ```
 
+#### `FindUint32()`
+```go
+func (searcher *IpDbSearch) FindUint32(ip uint32) string
+```
+完整 uint32 整数查询（推荐，单次调用完成整棵查找）。
+
 ## Java API
 
 ### 初始化
@@ -203,13 +253,19 @@ fmt.Printf("Location: %s\n", location)
 public static IpDbSearch getInstance()
 ```
 
-**返回值**: 返回全局单例实例
+**返回值**: 返回全局单例实例（JDK 8+ 兼容）
 
 **示例**:
 ```java
 import com.qqzeng.ip.IpDbSearch;
 
 IpDbSearch searcher = IpDbSearch.getInstance();
+```
+
+#### `new IpDbSearch(String)` / `IpDbSearch.fromBytes(byte[])`
+```java
+public IpDbSearch(String dbPath)   // 指定路径
+public static IpDbSearch fromBytes(byte[] data)   // 字节流
 ```
 
 ### 查询
@@ -230,7 +286,15 @@ String location = searcher.find("8.8.8.8");
 System.out.println("Location: " + location);
 ```
 
+#### `findUint()`
+```java
+public String findUint(int ipInt)
+```
+整数查询（`ipInt` 按 uint32 语义解释），省去字符串解析。
+
 ## Node.js API
+
+包名 `qqzeng-ip-db`，同时发布 CommonJS / ESM 双入口与 TypeScript 定义 (`lib/IpDbSearch.d.ts`)。
 
 ### 初始化
 
@@ -243,9 +307,21 @@ static getInstance(): IpDbSearch
 
 **示例**:
 ```javascript
-const IpDbSearch = require('./lib/IpDbSearch');
+// CJS
+const { IpDbSearch } = require('qqzeng-ip-db');
+const searcher = IpDbSearch.getInstance();
+
+// ESM (默认导出即类本身)
+import IpDbSearch from 'qqzeng-ip-db';
 const searcher = IpDbSearch.getInstance();
 ```
+
+#### `new IpDbSearch(dbPath)` / `IpDbSearch.fromBytes()`
+```javascript
+new IpDbSearch(dbPath?: string): IpDbSearch       // 指定路径 (缺省自动探测)
+static fromBytes(buf: Buffer | Uint8Array): IpDbSearch
+```
+多实例构造；非法文件抛异常（fail-closed）。
 
 ### 查询
 
@@ -299,6 +375,13 @@ using qqzengIp;
 var searcher = IpDbSearch.Instance;
 ```
 
+#### `IpDbSearch.FromPath()` / `FromBytes()`
+```csharp
+public static IpDbSearch FromPath(string path)
+public static IpDbSearch FromBytes(byte[] data)
+```
+多实例构造；目标框架 netstandard2.0 与 net10.0 双发行。
+
 ### 查询
 
 #### `Find()`
@@ -335,6 +418,8 @@ Console.WriteLine($"Location: {location}");
 
 ## PHP API
 
+命名空间 `Qqzeng\Ip`，`declare(strict_types=1)`，PHP 7.2+。
+
 ### 初始化
 
 #### `IpDbSearch::getInstance()`
@@ -350,6 +435,16 @@ use Qqzeng\Ip\IpDbSearch;
 
 $searcher = IpDbSearch::getInstance();
 ```
+
+#### `IpDbSearch::fromPath()` / `IpDbSearch::fromBytes()`
+```php
+public static function fromPath(string $dbPath): IpDbSearch
+public static function fromBytes(string $bytes): IpDbSearch
+```
+多实例构造；非法文件抛 `RuntimeException`。
+
+> 历史类名 `IpDbSearchOptimized` 保留为**弃用别名**（继承转发，行为与
+> `IpDbSearch` 完全一致），仅用于向后兼容。
 
 ### 查询
 
@@ -369,21 +464,38 @@ $location = $searcher->find("8.8.8.8");
 echo "Location: " . $location . "\n";
 ```
 
+#### `findUint()`
+```php
+public function findUint(int $ipInt): string
+```
+整数查询，省去字符串解析。
+
 ## Python API
+
+包 `qqzeng_ip.ipdb`，Python 3.8+，零依赖。
 
 ### 初始化
 
 #### `__init__()`
 ```python
-def __init__(self)
+def __init__(self, db_path: str | None = None)
 ```
+无参 = 单例 + 自动探测；传路径则加载指定文件（同路径重复构造复用单例，兼容旧版语义）。
 
 **示例**:
 ```python
 from qqzeng_ip.ipdb import IpDbSearch
 
 searcher = IpDbSearch()
+searcher = IpDbSearch("/path/to/qqzeng-ip-6.0-global.db")
 ```
+
+#### `IpDbSearch.from_bytes()`
+```python
+@classmethod
+def from_bytes(cls, data: bytes) -> IpDbSearch
+```
+从内存字节流构造独立实例（不经过单例）。
 
 ### 查询
 
@@ -402,6 +514,12 @@ def find(self, ip: str) -> str
 location = searcher.find("8.8.8.8")
 print(f"Location: {location}")
 ```
+
+#### `find_uint()`
+```python
+def find_uint(self, ip_int: int) -> str
+```
+整数查询（0..4294967295），省去字符串解析；另有模块级 `fast_parse_ip(ip)` 严格解析（非法返回 -1）。
 
 ## 返回数据格式
 
@@ -469,8 +587,13 @@ if (result.isEmpty()) {
 
 1. **优先使用整数查询接口**：
    - C: `ipdb_find_uint()`
-   - Go: `FindUint()`
-   - Rust: `find_uint()`
+   - Go: `FindUint32()` / `FindUint()`
+   - Rust: `find_uint32()` / `find_uint()`
+   - Java: `findUint()`
+   - C#: `Find(uint)`
+   - Node.js: `findUint()`
+   - Python: `find_uint()`
+   - PHP: `findUint()`
 
 2. **避免重复初始化**：使用单例模式
 
@@ -579,6 +702,6 @@ printf("IP: %s, Result: %s\n", ip, result);
 
 ---
 
-**文档版本**: 6.0  
+**文档版本**: 6.0.1 (2026-10-25, 补充 from_path/from_bytes、整数查询与路径探测)
 **最后更新**: 2026-01-06  
 **维护者**: qqzeng-ip团队

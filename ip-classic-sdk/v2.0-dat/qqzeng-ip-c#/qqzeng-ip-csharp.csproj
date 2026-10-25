@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>netstandard2.0;net10.0</TargetFrameworks>
+    <LangVersion>7.3</LangVersion>
+    <RootNamespace>qqzeng_ip_dat</RootNamespace>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <Optimize>true</Optimize>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TargetFramework)'=='net10.0' AND Exists('Verify.cs')">
+    <OutputType>Exe</OutputType>
+    <AssemblyName>verify</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)'=='netstandard2.0'">
+    <Compile Remove="Verify.cs" />
+  </ItemGroup>
+</Project>

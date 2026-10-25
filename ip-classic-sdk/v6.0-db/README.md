@@ -1,335 +1,192 @@
-# qqzeng-ip v6.0 多语言解析 SDK
-
-🗂️ IP 引擎 v6.0——多语言 IP 归属地解析方案
+# qqzeng-ip v6.0 (.db) 多语言解析 SDK
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Build Status](https://github.com/zengzhan/qqzeng-ip/actions/workflows/ci.yml/badge.svg)](https://github.com/zengzhan/qqzeng-ip/actions/workflows/ci.yml)
-[![Version](https://img.shields.io/badge/Version-6.0.0-orange.svg)]()
+[![Version](https://img.shields.io/badge/Version-6.0.1-orange.svg)]()
+[![Format](https://img.shields.io/badge/Format-.db%20(6.0)-brightgreen.svg)]()
 
-本项目旨在打造一套**工业级、高性能、跨平台**的 IP 地址库解析 SDK。涵盖 C, Rust, Go, Java, Node.js, C#, Python, PHP 八大主流语言，均按"千万美金级"高标准实现。
+**qqzeng-ip v6.0** 是一套专为高并发生产环境设计的工业级 IPv4 归属地解析引擎。底层采用 **65,536 一级前缀索引（16-bit）+ 紧凑 24-bit 二叉检索树（Trie）** 架构，将任意 IPv4 地址查询收敛在最多 16 次常数级内存位跳之内。
 
-## 🚀 核心特性
+本仓库提供 **C、Rust、Go、Java、C# (.NET)、Node.js、PHP、Python** 八大主流语言的零依赖标准实现，统一遵循 **Fail-Closed 安全校验** 与 **无锁并发只读** 准则。
 
-- **🏆 顶级性能**：55M+ QPS，毫秒级响应
-- **🔒 线程安全**：无锁设计，支持高并发
-- **🌍 跨平台**：支持 x86/ARM，大小端字节序自动处理
-- **📦 零依赖**：纯算法实现，无外部依赖
-- **🎯 统一API**：8种语言保持一致的接口设计
-- **✅ 100%准确**：通过200+测试用例验证
+## 核心特性
 
-## 📊 性能评测 (最新测试)
+* **常数级极速检索**：一级索引直接消解前 16 位前缀，剩余 16 位通过预解析的平坦内存数组按位寻址，最高吞吐达 **68.1M QPS**。
+* **Fail-Closed 防御性安全**：加载期对文件尺寸、头部元数据、65,536 条一级索引、全部内部节点跳转边界及字符串区 UTF-8 编码进行全量核验；查询期内置 16 跳上限，彻底杜绝越界读取与环路死循环。
+* **无锁线程安全**：初始化完成后所有内部索引与字符串表均为只读不可变状态，支持多线程 / 多协程无锁高并发访问。
+* **灵活加载与 100% 向下兼容**：完整保留 `getInstance()` / `Instance()` 单例模式，同时全面支持**按指定路径构造多实例**（`from_path`）与**从内存字节流直接加载**（`from_bytes`）。
+* **零外部依赖**：纯各语言标准库实现，单文件或单目录即可嵌入任何现有工程。
+* **黄金数据集 100% 验证**：通过全球旗舰版 2,112,893 条 CIDR（共 **6,338,679 次首/中/末边界 IP 查询**）全量逐字节对账测试，0 误差。
 
-**测试环境**: macOS (Apple Silicon)  
-**测试场景**: **3,000,000 次随机 IP** (UInt32) 连续查询  
-**测试日期**: 2026-01-06  
-**环境版本**: 使用各语言2025年最新版本
+## 性能基准评测
 
-| 排名 | 语言 | 版本 | QPS (查询/秒) | 耗时 (300w次) | 性能评价 | 状态 |
-|:---|:---|:---|:---|:---|:---|:---|
-| 1 | **Rust** | 1.90.0 | **55,065,026** | 54.48ms | 🛡️ **极速安全** | ✅ **完美** |
-| 2 | **Go** | 1.24.3 | **43,150,826** | 69.52ms | ⚡ **高速** | ✅ **卓越** |
-| 3 | **C#** | .NET 10.0 | **42,285,861** | 70.00ms | 🚀 **惊艳** | ✅ **优秀** |
-| 3 | **Node.js**| 25.2.1 | **40,962,924** | 73.24ms | 🔥 **惊艳** | ✅ **优秀** |
-| 5 | **C** | Clang 17.0 | **39,012,744** | 76.90ms | 👑 **王者** | ✅ **优秀** |
-| 6 | **Java** | 21.0.9 | **28,042,469** | 142.00ms | ☕ **稳健** | ✅ **良好** |
-| 7 | **PHP** | 8.5.1 | **1,013,356** | 3.95s | 🐘 **实用** | ✅ **可用** |
-| 8 | **Python** | 3.14.0 | **235,800** | 16.96s | 🐢 **标准** | ✅ **标准** |
+* **测试环境**：macOS Apple Silicon (ARM64)
+* **测试数据集**：`qqzeng-ip-6.0-global.db`（全球旗舰版，2,112,893 条 CIDR 网段）
+* **测试方法**：基于相同 LCG 随机序列执行 **3,000,000 次**连续 `uint32` 查询，每次查询强制提取结果字符串并将其长度累加至 `checksum`（彻底排除编译器死代码消除干扰）。
 
-> **注**: 前5种语言性能均超过40M QPS，达到业界顶尖水平。
+| 语言 | 运行时 / 编译器版本 | 加载及全量校验耗时 | 查询吞吐量 (QPS) | 常驻内存 (RSS) | 并发重放验证 |
+| :--- | :--- | ---: | ---: | ---: | :---: |
+| **Go** | Go 1.27 | 14.9 ms | **68,100,000** | 60.6 MB | ✅ 8 协程通过 |
+| **C#** | .NET 10.0 (`netstandard2.0` 兼容) | 35.6 ms | **60,000,000** | 126.5 MB | ✅ 8 线程通过 |
+| **Rust** | Rust 1.98 (`--release`) | 14.2 ms | **54,000,000** | 27.4 MB | ✅ 8 线程通过 |
+| **Java** | OpenJDK 21 (JDK 8 字节码兼容) | 58.2 ms | **53,900,000** | 271.3 MB | ✅ 8 线程通过 |
+| **C** | Clang 21 (`-O2 -std=c11`) | 9.3 ms | **38,200,000** | 55.2 MB | ✅ 8 线程通过 |
+| **Node.js** | Node.js 26.5 (V8) | 31.3 ms | **21,800,000** | 129.5 MB | ✅ 单线程通过 |
+| **PHP** | PHP 8.5 (`strict_types=1`) | 243.3 ms | **6,450,000** | 109.1 MB | ✅ 单进程通过 |
+| **Python** | CPython 3.14 | 137.9 ms | **2,270,000** | 129.5 MB | ✅ 单进程通过 |
 
-## 🛠️ 快速开始
+> **注**：加载耗时包含对全部 65,536 条一级索引与数百万节点指针的完整性安全校验；Java 端若在容器环境附加 `-XX:+UseSerialGC` 参数，常驻内存可由 271 MB 降至约 120 MB。
+
+## 快速开始
 
 ### 环境要求
 
-| 语言 | 最低版本 | 推荐版本 |
-|------|----------|----------|
-| C | GCC 4.9+ / Clang 3.5+ | GCC 13+ / Clang 17+ |
-| Rust | 1.70+ | 1.90+ |
-| Go | 1.19+ | 1.24+ |
-| Java | JDK 8+ | JDK 21+ |
-| Node.js | 16+ | 25+ |
-| .NET | .NET 6+ | .NET 10+ |
-| Python | 3.8+ | 3.14+ |
-| PHP | 7.4+ | 8.5+ |
+| 语言 | 最低兼容版本 | 推荐生产版本 | 构建 / 依赖说明 |
+| :--- | :--- | :--- | :--- |
+| **C** | C99 / C11 | Clang 17+ / GCC 13+ | 标准 C 库，提供 `Makefile` 与 `CMakeLists.txt` |
+| **Rust** | Rust 1.70+ | Rust 1.85+ | 零第三方 crate 依赖 |
+| **Go** | Go 1.19+ | Go 1.22+ | Go Modules，仅依赖标准库 |
+| **Java** | JDK 8+ | JDK 17 / 21 LTS | 编译目标 `--release 8`，零外部 jar 依赖 |
+| **C# (.NET)** | `.NET Standard 2.0` / .NET 6+ | .NET 8 / 10 | 同时支持旧版 .NET Framework 4.6.1+ 与现代 .NET |
+| **Node.js** | Node.js 16+ | Node.js 20 / 22+ | 同时支持 CommonJS、`import` (ESM) 与 TypeScript `.d.ts` |
+| **PHP** | PHP 7.2+ | PHP 8.2+ | PSR-4 规范，基于 `SplFixedArray` 与紧凑偏移索引 |
+| **Python** | Python 3.8+ | Python 3.11+ | 纯标准库 `array('I')` 预解析，无需编译 C 扩展 |
 
-### 安装方式
+### 多语言调用示例
 
-#### C 语言
-```bash
-cd c
-gcc -O3 -std=c99 -Wall -Wextra -o test main.c src/qqzeng_ip_search.c
-./test
-```
+默认单例会自动按顺序探测当前工作目录、`data/`、`../data/` 等常见路径下的 `qqzeng-ip-6.0-global.db`；生产环境推荐通过路径或字节流显式初始化。
 
-#### Rust
-```bash
-cd rust
-cargo run --release
-```
-
-#### Go
-```bash
-cd go
-go run main.go
-```
-
-#### Java
-```bash
-cd java
-javac -cp src src/main/java/com/qqzeng/ip/IpDbSearch.java src/main/java/Main.java
-java -cp src/main/java Main
-```
-
-#### Node.js
-```bash
-cd nodejs
-npm install
-node test.js
-```
-
-#### .NET Core
-```bash
-cd netcore
-dotnet run
-```
-
-#### Python
-```bash
-cd python
-pip install -r requirements.txt
-python3 test.py
-```
-
-#### PHP
-```bash
-cd php
-composer install
-php test.php
-```
-
-## 📖 API 文档
-
-### 统一接口设计
-
-所有语言版本都提供以下统一接口：
-
-#### 初始化
+#### 1. C
 ```c
-// C
-ipdb_search_t* ctx = ipdb_init("path/to/database.db");
+#include "src/qqzeng_ip_search.h"
+
+// 方式一：显式指定路径初始化（推荐）或 ipdb_init_default() 自动探测
+ipdb_search_t *ctx = ipdb_init("/path/to/qqzeng-ip-6.0-global.db");
+// 方式二：从内存字节流初始化
+// ipdb_search_t *ctx = ipdb_init_bytes(buffer, buffer_len);
+
+const char *loc1 = ipdb_find(ctx, "8.8.8.8");        // 字符串查询
+const char *loc2 = ipdb_find_uint(ctx, 0x08080808u); // 32位无符号整数查询（极速路径）
+
+ipdb_free(ctx);
 ```
 
+#### 2. Rust
+```rust
+use rust::IpDbSearch;
+
+// 单例模式（自动探测路径）
+let db = IpDbSearch::instance();
+
+// 多实例模式：显式指定路径或从 Vec<u8> 字节流加载
+let db = IpDbSearch::from_path("/path/to/qqzeng-ip-6.0-global.db")?;
+let loc = db.find("8.8.8.8");
+let loc_fast = db.find_uint32(0x08080808);
+```
+
+#### 3. Go
 ```go
-// Go
-searcher, err := ipdb.Instance()
+import "qqzeng-ip-go/ipdb"
+
+// 单例模式
+db, err := ipdb.Instance()
+// 或指定路径 / 字节流：db, err := ipdb.NewFromPath("/path/to/qqzeng-ip-6.0-global.db")
+
+loc := db.Find("8.8.8.8")
+locFast := db.FindUint32(0x08080808) // 亦支持兼容旧版的 db.FindUint(0x0808, 0x0808)
 ```
 
+#### 4. Java (JDK 8+)
 ```java
-// Java
-IpDbSearch searcher = IpDbSearch.getInstance();
+import com.qqzeng.ip.IpDbSearch;
+
+// 单例模式（惰性加载，线程安全）
+IpDbSearch db = IpDbSearch.getInstance();
+// 多实例模式：new IpDbSearch("/path/to/qqzeng-ip-6.0-global.db") 或 IpDbSearch.fromBytes(bytes)
+
+String loc = db.find("8.8.8.8");
+String locFast = db.findUint(0x08080808);
 ```
 
-#### 查询接口
-```c
-// 字符串IP查询
-const char* result = ipdb_find(ctx, "8.8.8.8");
+#### 5. C# (.NET)
+```csharp
+using qqzengIp;
 
-// 高性能整数查询
-const char* result = ipdb_find_uint(ctx, 0x08080808);
+// 单例模式
+var db = IpDbSearch.Instance;
+// 多实例模式：IpDbSearch.FromPath("/path/to/qqzeng-ip-6.0-global.db") 或 IpDbSearch.FromBytes(bytes)
+
+string loc = db.Find("8.8.8.8");
+string locFast = db.Find(0x08080808u);
 ```
 
-```go
-// Go
-result := searcher.Find("8.8.8.8")
-result := searcher.FindUint(0x0808, 0x0808)
-```
-
-```java
-// Java
-String result = searcher.find("8.8.8.8");
-```
-
-#### 返回格式
-查询结果为制表符分隔的地理位置信息：
-```
-亚洲|中国|广东省|深圳市||中国电信|440300|China|CN|114.0579|22.5431
-```
-
-字段说明：
-- 大洲 | 国家 | 省份 | 城市 | 区县 | ISP | 行政区码 | 国家英文名 | ISO代码 | 经度 | 纬度
-
-## 🏗️ 项目结构
-
-```
-/
-├── data/
-│   ├── qqzeng-ip-6.0-global.db  # 核心数据库文件 (18.8MB)
-│   └── test.txt                 # 一致性验证数据集 (200条)
-├── docs/                         # 文档目录
-│   ├── API.md                    # API详细文档
-│   ├── DATABASE_FORMAT.md        # 数据库格式规范
-│   └── INTEGRATION.md            # 集成示例
-├── c/          # C 实现 (Pure C99)
-├── rust/       # Rust 实现 (Safe Rust)
-├── go/         # Go 实现 (Go Modules)
-├── netcore/    # C# 实现 (.NET 10.0, Safe)
-├── java/       # Java 实现 (JDK 8+)
-├── nodejs/     # Node.js 实现 (CommonJS + TypeScript .d.ts)
-├── python/     # Python 实现 (Py3)
-├── php/        # PHP 实现 (PSR-4)
-├── LICENSE     # MIT 许可证
-├── CHANGELOG.md # 版本更新日志
-└── README.md   # 项目说明
-```
-
-## 🔧 核心设计
-
-### 极致性能 (Performance First)
-- **预解析 (Pre-parsing)**: 启动时一次性加载并解析为内存结构
-- **零拷贝 (Zero-Copy)**: 直接操作原始二进制buffer
-- **位运算加速**: IP转换使用手动位移优化
-
-### 绝对安全 (Safety & Robustness)
-- **跨平台一致性**: 手动处理字节序，确保x86/ARM兼容
-- **边界防御**: 多重边界检查，防止缓冲区溢出
-- **错误处理**: 优雅的错误处理和恢复机制
-
-### 线程安全 (Thread Safety)
-- **无锁设计**: 解析器实例为不可变状态
-- **高并发**: 支持多线程/协程并发读取
-
-### 接口统一 (Unified API)
-- **加载**: `Instance()` / `New()` / `init()`
-- **查询**: `Find("8.8.8.8")` → 返回地区字符串
-- **底层**: `FindUint(uint32)` → 高性能场景推荐
-
-## ✅ 验证与测试
-
-### 自动化测试
-所有语言版本都包含自动化测试脚本：
-
-```bash
-# 运行测试（各语言目录下）
-./test          # C
-cargo test      # Rust
-go test         # Go
-java Main       # Java
-node test.js    # Node.js
-dotnet test     # .NET
-python test.py  # Python
-php test.php    # PHP
-```
-
-### 测试覆盖
-- **功能测试**: 200条IP段验证，包含起始IP、结束IP、中间IP
-- **性能测试**: 300万次随机IP查询压测
-- **边界测试**: 异常输入处理验证
-- **并发测试**: 多线程安全性验证
-
-### 测试结果
-所有语言实现均 **100% 通过** 测试：
-- ✅ 功能正确性: 200/200
-- ✅ 性能达标: 全部达到预期QPS
-- ✅ 内存安全: 无泄漏，无溢出
-- ✅ 线程安全: 并发读取无问题
-
-## 🌍 集成示例
-
-### Web框架集成
-
-#### Express.js (Node.js)
+#### 6. Node.js (CommonJS / ESM / TypeScript)
 ```javascript
-const IpDbSearch = require('./lib/IpDbSearch');
-const searcher = IpDbSearch.getInstance();
+const IpDbSearch = require('./lib/IpDbSearch'); // ESM: import IpDbSearch from './lib/IpDbSearch.mjs'
 
-app.get('/api/location/:ip', (req, res) => {
-    const location = searcher.find(req.params.ip);
-    res.json({ ip: req.params.ip, location });
-});
+// 单例模式
+const db = IpDbSearch.getInstance();
+// 多实例模式：new IpDbSearch('/path/to/qqzeng-ip-6.0-global.db') 或 IpDbSearch.fromBytes(buffer)
+
+const loc = db.find('8.8.8.8');
+const locFast = db.findUint(0x08080808);
 ```
 
-#### Spring Boot (Java)
-```java
-@RestController
-public class LocationController {
-    private final IpDbSearch searcher = IpDbSearch.getInstance();
-    
-    @GetMapping("/api/location/{ip}")
-    public Map<String, String> getLocation(@PathVariable String ip) {
-        String location = searcher.find(ip);
-        return Map.of("ip", ip, "location", location);
-    }
-}
+#### 7. Python
+```python
+from qqzeng_ip.ipdb import IpDbSearch
+
+# 默认单例或按路径构造独立实例
+db = IpDbSearch('/path/to/qqzeng-ip-6.0-global.db')
+# 字节流加载：db = IpDbSearch.from_bytes(raw_bytes)
+
+loc = db.find('8.8.8.8')
+loc_fast = db.find_uint(0x08080808)
 ```
 
-#### Gin (Go)
-```go
-func main() {
-    searcher, _ := ipdb.Instance()
-    r := gin.Default()
-    
-    r.GET("/api/location/:ip", func(c *gin.Context) {
-        location := searcher.Find(c.Param("ip"))
-        c.JSON(200, gin.H{"ip": c.Param("ip"), "location": location})
-    })
-    
-    r.Run(":8080")
-}
+#### 8. PHP
+```php
+use Qqzeng\Ip\IpDbSearch;
+
+// 单例模式：IpDbSearch::getInstance()
+// 指定路径或字节流：
+$db = IpDbSearch::fromPath('/path/to/qqzeng-ip-6.0-global.db');
+
+$loc = $db->find('8.8.8.8');
+$locFast = $db->findUint(0x08080808);
 ```
 
-## 📈 性能优化建议
+## 返回字段格式
 
-### 高并发场景
-- 使用单例模式，避免重复初始化
-- 优先使用 `FindUint()` 接口，减少字符串解析开销
-- 考虑内存映射(mmap)处理超大数据库
+所有语言的查询接口在命中时均返回以 `|` 分隔的 11 段地理位置与网络信息字符串；当输入为非法 IP 字符串（如 `"256.1.1.1"`、`"1..2.3"`、`"0008.8.8.8"`）时，所有语言统一返回空字符串 `""`，绝不抛出未捕获异常。
 
-### 生产环境部署
-- 预热：启动后进行几次查询预热JIT/缓存
-- 监控：监控QPS和响应时间
-- 扩容：根据QPS需求水平扩展实例
+```text
+大洲|国家|省份|城市|区县|ISP|行政区码|国家英文名|ISO代码|经度|纬度
+```
 
-## 🤝 贡献指南
+**返回示例**：
+```text
+亚洲|中国|广东省|深圳市|南山区|中国电信|440305|China|CN|113.93029|22.53291
+```
 
-### 开发环境设置
-1. 克隆仓库
-2. 选择语言目录
-3. 运行测试确保环境正常
-4. 进行开发
+## 目录结构与文档导航
 
-### 代码规范
-- 遵循各语言官方编码规范
-- 保持API接口一致性
-- 添加适当的注释和文档
-- 确保测试通过
+```text
+v6.0-db/
+├── c/                  # C11 实现 (Makefile + CMakeLists.txt)
+├── rust/               # Safe Rust 实现 (零拷贝字符串切片)
+├── go/                 # Go Modules 实现 (package ipdb)
+├── netcore/            # C# 实现 (netstandard2.0 + net10.0 双目标)
+├── java/               # Java 实现 (JDK 8 兼容字节码, package com.qqzeng.ip)
+├── nodejs/             # Node.js 实现 (CommonJS + ESM + TypeScript .d.ts)
+├── python/             # Python 实现 (array('I') C 层步长切片预解析)
+├── php/                # PHP 实现 (PSR-4, SplFixedArray + 紧凑偏移索引)
+├── docs/
+│   ├── API.md                  # 8 语言完整 API 参考手册
+│   └── INTEGRATION.md          # Spring Boot / Gin / Express / Laravel 等生产集成指南
+├── LICENSE             # MIT 开源许可证
+└── README.md
+```
 
-### 提交流程
-1. Fork 项目
-2. 创建特性分支
-3. 提交更改
-4. 推送到分支
-5. 创建 Pull Request
+## 许可证
 
-## 📄 许可证
-
-本项目采用 [MIT 许可证](LICENSE)。
-
-## 🆘 支持与反馈
-
-- **问题报告**: [GitHub Issues](https://github.com/zengzhan/qqzeng-ip/issues)
-- **功能请求**: [GitHub Discussions](https://github.com/zengzhan/qqzeng-ip/discussions)
-
-
-## 🏆 致谢
-
-感谢所有为这个项目做出贡献的开发者和用户。
-
----
-
-**qqzeng-ip 6.0** - 企业级IP地理位置解析SDK  
-*高性能 • 高可靠 • 跨平台*
-
-
-<!-- commit description update -->
-
-<!-- commit description sync 1784710613 -->
+本项目采用 [MIT License](LICENSE) 开源。

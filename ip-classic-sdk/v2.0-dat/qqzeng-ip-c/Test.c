@@ -1,21 +1,30 @@
+/*
+ * qqzeng-ip 2.0 (.dat) C ç‰ˆä½¿ç”¨ç¤ºä¾‹
+ */
 #include "IpSearch2Fast.h"
-#include <locale.h>
-#include <time.h>
-int main(int argc, char** argv)
-{
-	IpSearch2Fast* ipSearch = getInstance();
-	if (!ipSearch)
-	{
-		printf("the IPSearch instance is null!");
-		return -1;
-	}
-	
-	char* ip = "58.213.198.68";
-	char* local = geoip_query(ipSearch, ip);
-	setlocale(LC_ALL, "zh_CN.UTF-8"); // ÉèÖÃÓïÑÔÇøÓòÎªÖĞÎÄ
-	printf("%s\n", local);
-	//ÑÇÖŞ|ÖĞ¹ú|½­ËÕ|ÄÏ¾©|ÇØ»´|µçĞÅ|320104|China|CN|118.79815|32.01112
 
-	system("pause");
-	return 0;
+#include <stdio.h>
+
+int main(void)
+{
+    /* æ–¹å¼ä¸€: é»˜è®¤è·¯å¾„å•ä¾‹(è‡ªåŠ¨æ¢æµ‹) */
+    IpSearch2Fast* finder = getInstance();
+    /* æ–¹å¼äºŒ: æŒ‡å®šè·¯å¾„,å¯åŒæ—¶åŠ è½½å›½å†…ç‰ˆä¸å…¨çƒç‰ˆ:
+       IpSearch2Fast* china  = geoip_init("qqzeng-ip-china-utf8.dat");
+       IpSearch2Fast* global = geoip_init("qqzeng-ip-global-utf8.dat"); */
+    if (!finder)
+    {
+        printf("the IPSearch instance is null! (æŠŠ .dat æ”¾åˆ°å·¥ä½œç›®å½•æˆ–ç”¨ geoip_init(path))\n");
+        return -1;
+    }
+
+    const char* ip = "58.213.198.68";
+    const char* local = geoip_query(finder, ip);
+    printf("%s\n%s\n", ip, local);
+
+    /* æ•´æ•°æŸ¥è¯¢(é«˜æ€§èƒ½åœºæ™¯): */
+    printf("%s\n", geoip_query_uint(finder, 0x08080808u));
+
+    geoip_free(finder);
+    return 0;
 }

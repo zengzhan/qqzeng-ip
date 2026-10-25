@@ -1,13 +1,27 @@
 {
-  "name": "nodejs",
+  "name": "qqzeng-ip-db",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
-  "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+  "description": "qqzeng-ip 6.0 (.db) classic offline IP geolocation SDK (zero dependencies)",
+  "main": "lib/IpDbSearch.js",
+  "types": "lib/IpDbSearch.d.ts",
+  "exports": {
+    ".": {
+      "require": "./lib/IpDbSearch.js",
+      "import": "./lib/IpDbSearch.mjs",
+      "types": "./lib/IpDbSearch.d.ts"
+    }
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
-  "type": "commonjs"
+  "files": [
+    "lib"
+  ],
+  "scripts": {
+    "test": "node test.js"
+  },
+  "keywords": [
+    "ip",
+    "geolocation",
+    "qqzeng",
+    "offline"
+  ],
+  "license": "ISC"
 }

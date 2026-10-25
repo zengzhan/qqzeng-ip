@@ -1,90 +1,36 @@
-mod lib;
-use lib::IpDbSearch;
-use std::fs::File;
-use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+//! qqzeng-ip 6.0 (.db) Rust 版冒烟示例
+//! 用法: cargo run --release --bin rust [db_path] [ip ...]
+
+use rust::IpDbSearch;
 use std::time::Instant;
 
 fn main() {
-    println!("正在初始化 qqzeng-ip 数据库...");
-    let _ = IpDbSearch::instance();
-    println!("数据库加载完成");
-
-    // 验证逻辑
-    if let Some(path) = find_test_file() {
-        // Rust tests run in parallel, and since we don't have the DB in CI, we might panic here.
-        // However, main.rs is usually for manual testing. cargo test --release runs lib tests.
-        // If this runs, we want it to be graceful.
-        if std::panic::catch_unwind(|| {
-             let _ = IpDbSearch::instance();
-        }).is_err() {
-             println!("⚠️ 数据库加载失败，跳过测试 (CI环境下正常)");
-             return;
+    let args: Vec<String> = std::env::args().collect();
+    let db = match args.get(1).map(|p| IpDbSearch::from_path(p)).unwrap_or_else(IpDbSearch::new) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("数据库加载失败: {e} (用法: rust [db_path] [ip ...])");
+            return;
         }
-        
-        verify_file(path);
+    };
+    println!("数据库加载完成: nodes={}, strings={}", db.node_count(), db.string_count());
+
+    for ip in ["1.10.11.12", "8.8.8.8", "58.213.198.68", "255.255.255.255", "1..2.3"] {
+        println!("{ip} -> {}", db.find(ip));
+    }
+    for ip in &args[2..] {
+        println!("{ip} -> {}", db.find(ip));
     }
 
-    // --- 随机压测 ---
-    let total_count = 3_000_000;
-    println!("\n生成 {} 个随机 IP (UInt32)...", total_count);
-    let random_ips = generate_random_ips(total_count);
-    println!("生成完成，开始压测 (find_uint)...");
-
-    let searcher = IpDbSearch::instance();
-    let bench_start = Instant::now();
-    
-    for &ip in &random_ips {
-        // Rust 接口：prefix u16, suffix u16
-        let prefix = (ip >> 16) as u16;
-        let suffix = (ip & 0xFFFF) as u16;
-        searcher.find_uint(prefix, suffix);
+    // 快速压测
+    let n = 1_000_000u64;
+    let mut seed: u64 = 123_456_789;
+    let mut checksum = 0u64;
+    let t0 = Instant::now();
+    for _ in 0..n {
+        seed = seed.wrapping_mul(48_271) % 2_147_483_647;
+        checksum += db.find_uint32(seed as u32).len() as u64;
     }
-    
-    let bench_duration = bench_start.elapsed();
-    
-    println!("{} 次随机查询耗时: {:.2?}", total_count, bench_duration);
-    let qps = total_count as f64 / bench_duration.as_secs_f64();
-    println!("QPS: {:.2}", qps);
-}
-
-fn generate_random_ips(count: usize) -> Vec<u32> {
-    let mut ips = Vec::with_capacity(count);
-    let mut seed: u32 = 123;
-    for _ in 0..count {
-        seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-        ips.push(seed);
-    }
-    ips
-}
-
-fn verify_file(path: PathBuf) {
-    println!("正在读取测试文件: {:?}", path);
-    let file = File::open(path).unwrap();
-    let reader = BufReader::new(file);
-    let searcher = IpDbSearch::instance();
-    let mut passed = 0;
-    let mut total = 0;
-    
-    for line in reader.lines() {
-        let l = line.unwrap();
-        let parts: Vec<&str> = l.split('\t').collect();
-        if parts.len() < 3 { continue; }
-        if searcher.find(parts[0]) == parts[2] && searcher.find(parts[1]) == parts[2] {
-            passed += 1;
-        }
-        total += 1;
-    }
-    println!("验证完成: {}/{} 通过", passed, total);
-}
-
-fn find_test_file() -> Option<PathBuf> {
-    let attempts = [
-        PathBuf::from("../data/test.txt"),
-        PathBuf::from("../../data/test.txt"),
-    ];
-    for p in &attempts {
-        if p.exists() { return Some(p.clone()); }
-    }
-    None
+    let ms = t0.elapsed().as_secs_f64() * 1000.0;
+    println!("bench: {n} queries, {:.0} qps (checksum {checksum})", n as f64 / (ms / 1000.0));
 }

@@ -1,0 +1,13 @@
+{
+  "name": "qqzeng-ip-dat",
+  "version": "2.0.0",
+  "description": "qqzeng-ip 2.0 (.dat) high performance IP geolocation reader for Node.js",
+  "main": "IpSearch.js",
+  "types": "IpSearch.d.ts",
+  "files": ["IpSearch.js", "IpSearch.d.ts"],
+  "scripts": {
+    "test": "node verify.js"
+  },
+  "keywords": ["ip", "geolocation", "qqzeng", "dat"],
+  "license": "MIT"
+}

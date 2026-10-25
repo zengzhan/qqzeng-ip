@@ -1,46 +1,57 @@
 <?php
-//phpinfo();
 
-ini_set('memory_limit','1024M');
+/**
+ * qqzeng-ip 2.0 (.dat) -> Redis ZSET 批量导入工具。
+ *
+ * 用法:
+ *   php ip-import.php <qqzeng-ip.dat> [redis_uri]
+ *   php ip-import.php qqzeng-ip-global-utf8.dat   # 默认 127.0.0.1:6379
+ *
+ * 数据结构: ZSET key=qqzengip, score=区间结束IP(uint32), member=地区字符串。
+ * 查询: zRangeByScore('qqzengip', $ip, '+inf', ['limit' => [0, 1]]) 取第一条。
+ *
+ * 相比历史版本的改进:
+ *   1. 直接读取 .dat 二进制(旧版依赖外部明文 txt),与 SDK 同源同口径。
+ *   2. 修复 32/64 位 ip2long 负数陷阱(直接使用 uint32 记录值)。
+ *   3. 修正 pipeline 未生效问题(每 1 万条 exec 一次分批提交)。
+ */
 
+require __DIR__ . '/../qqzeng-ip-php/IpSearch.php';
+
+if ($argc < 2) {
+    fwrite(STDERR, "usage: php ip-import.php <qqzeng-ip.dat> [redis_uri]\n");
+    exit(2);
+}
+if (!class_exists('Redis')) {
+    fwrite(STDERR, "phpredis extension not loaded (php -m | grep redis); nothing to do\n");
+    exit(77); /* graceful skip: no redis client in this environment */
+}
+$datPath = $argv[1];
+$redisUri = $argv[2] ?? '127.0.0.1:6379';
+$key = 'qqzengip';
+
+list($host, $port) = array_pad(explode(':', $redisUri, 2), 2, 6379);
 $redis = new Redis();
-$redis->connect('127.0.0.1', 6379);
+$redis->connect($host, (int)$port);
 
-//批量导入 更快
+$searcher = new IpSearch($datPath);
+echo 'records: ', $searcher->recordCount(), "\n";
+
 $redis->multi(Redis::PIPELINE);
-//清空ip库
-$redis->delete('qqzengip');
-//批量导入
-$arr = file('全球旗舰版-201808-368729.txt');
-$data = array();
-if($arr) {
-    $i=0;
-    foreach($arr as $line) {   
-        $line=str_replace(array("\n","\r"),"",$line);
-        list($start,$end,$startnum,$endnum,$continent,$country,$province, $city, $district,$isp,$areacode,$en,$cc,$lng,$lat) = explode("|", $line);
-        // $redis->zAdd('qqzengip',16781311, '亚洲|中国|广东|深圳|南山|电信|440100|China|CN|113.280637|23.125178'); 自由定义字段  
-        $redis->zAdd('qqzengip',intval($endnum),$line); 
-       
-        $i++;
-        if( $i%10000==0){
-            echo  $i.'<br>';
-        }
-        
+$redis->del([$key]);
+
+$i = 0;
+foreach ($searcher->records() as $start => [$end, $region]) {
+    $redis->zAdd($key, (int)$end, $region); /* score = 区间结束 IP (uint32) */
+    if (++$i % 10000 === 0) {
+        $redis->exec();
+        $redis->multi(Redis::PIPELINE);
+        echo $i, "\n";
     }
 }
 $redis->exec();
-//统计数量
-echo '数量：'.$redis->zCount('qqzengip', "-inf", "+inf").'<br>';
-//版本
-$result=$redis->zRangeByScore('qqzengip', 4294967295, 4294967295, array('limit' => array(0, 1)));
-echo '版本：'.$result[0];
+
+echo 'count: ', $redis->zCount($key, '-inf', '+inf'), "\n";
+$last = $redis->zRangeByScore($key, 4294967295, 4294967295, ['limit' => [0, 1]]);
+echo 'last: ', $last[0] ?? '(none)', "\n";
 $redis->close();
-
-// 注意：
-// 32 bits ip2long(): -2147483648 ~ 214748364764
-// 64 bits ip2long(): 0 ~ 42949672945 
-// intval在32bits/64 bits最大值是不同的
-// if (($lngIP=ip2long($strIP)) < 0){ $lngIP += 4294967296 ;}  //  ADD 2^32 
-// 官网推荐 echo sprintf("%u", ip2long('192.168.1.2'));
-
-?>
