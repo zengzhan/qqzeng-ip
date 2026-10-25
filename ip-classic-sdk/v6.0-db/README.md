@@ -190,3 +190,5 @@ v6.0-db/
 ## 许可证
 
 本项目采用 [MIT License](LICENSE) 开源。
+
+<!-- commit: v6.0-db: 经典 6.0 (.db) 多语言解析 SDK（C/Rust/Go/Java/C#/Node.js/PHP/Python） sync=1792914953 -->
