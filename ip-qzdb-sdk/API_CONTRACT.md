@@ -61,6 +61,14 @@ Go/Rust/C# 经 batch 二进制 `--cidr` 模式)+ `ip-qzdb-sdk/cross_lang_verify.
 
 ### 4. 零拷贝共享查询（语言扩展层，非强制）
 - **Rust**：`find_shared() -> Option<Arc<GeoInfo>>`（缓存命中零堆分配）、`find_ref() -> Option<GeoInfoRef>`（借用视图；`_snap` Arc 保活快照，reader reload 不影响已返回引用。字段值自 v2.5 起为 `'static`：池串是装载期 leaked 副本、数字/浮点是内联栈值，`to_geo_info()` 退化为纯拷贝）与 `ToIp` 惯用入参族（`Ipv4Addr`/`Ipv6Addr`/`IpAddr`/`u32`/`u128`/`str`）。
+- **C**：`qzdb_find_values_fast` / `qzdb_find_values_uint_fast` / `qzdb_find_values_v6_fast`（类型化极速直取）。
+  - **索引预解析**：`qzdb_resolve_field_indices` 负责将字段名称预解析为整数索引数组。严格遵循 **Fail-Closed** 原则：遇到任何未知字段名或非法参数直接返回 `QZDB_ERR_INVALID_PARAM`。
+  - **生命周期与热更新契约 (Lifetime & Concurrency Contract)**：
+    - 返回的 `qzdb_value_t` 结构中：文本字段借用当前 Reader 只读字符串池指针（无堆分配、无拷贝）；原生数值字段直接返回类型化值（ASN 为 `uint32_t`，经纬度为 `double`）。
+    - **借用指针使用范围**：`qzdb_value_t` 里的字符串指针**仅限在当前这次查询/函数调用上下文内使用**。若业务方需要长期保存或跨异步任务传递，必须自行拷贝（如 `strdup`）；借用指针不得跨越 7 次以上的 registry 轮换。
+    - **禁止原地并发 Reload**：快速接口直接借用只读内存池指针，因此**同一个 reader 实例严禁在查询进行时并发调用 `qzdb_reload`、`qzdb_reload_buffer` 或 `qzdb_free`**（原地更新会析构并释放只读池，导致在途指针悬空）。
+    - **Registry 容器生命周期说明**：`qzdb_registry_t` 内部采用固定 8 槽位的环形隔离队列（quarantine ring）。发生同名重新注册（替换实例）时，旧 reader 放入隔离队列，在后续又发生 8 次轮换时会被直接销毁释放，**不会等待在途持有者释放完毕**。因此在快速连续轮换场景下最多容忍 7 次后续轮换，若在此期间持续持有旧指针将导致 use-after-free。
+    - **热更新安全警告**：调用方若自行实现原子指针交换轮换，**严禁在交换后立即调用 `qzdb_free`**（这必将引发 use-after-free），必须确保所有在途并发查询全部安全退出后再释放旧实例。
 - **强制约束**：扩展 API 的 `to_pipe()` / `to_json()` 输出必须与 owned `find()` 结果**逐字节一致**（由 `tests/zero_copy_ref.rs` parity 断言背书）。
 - **ChainedReader::find_ref**：仅 Fallback 模式可用；Merge/MergeOverride 模式因跨库合并需所有权拼接，不支持零拷贝视图（计划 v1.0.7 起改为显式 panic，避免与"未命中"混淆）。
 

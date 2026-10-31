@@ -217,6 +217,14 @@ if command -v gcc &> /dev/null || command -v clang &> /dev/null; then
     else
         run_test "C-IpStrict" "./ip_strict_test" "c" "IP_STRICT_OK"
     fi
+    # 快速零拷贝投影 API 契约与 fail-closed 防御测试
+    if ! (cd c && $CC -O2 -o test_fast_api test_fast_api.c qzdb_reader.c -lm); then
+        echo "✗ C-FastApi (compile failed)" > "$RESULTS_DIR/C-FastApi.result.status"
+        TEST_NAMES+=("C-FastApi")
+        TEST_PIDS+=(0)
+    else
+        run_test "C-FastApi" "./test_fast_api" "c" "ALL FAST API REGRESSION TESTS PASSED!"
+    fi
 fi
 
 # Java (v2.4 API: com.qqzeng.qzdb.QzdbReader + QzdbReaderTest)

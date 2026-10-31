@@ -162,6 +162,7 @@ typedef struct {
      * the __atomic_* builtins. */
     qzdb_cache_entry_t** geo_cache;
     uint32_t             geo_cache_cap;
+    uint32_t             generation;     /* 实例代际计数：初始化为 1，每次 reload 自增，free 置 0 */
 } qzdb_reader_t;
 
 typedef struct {
@@ -264,6 +265,57 @@ int  qzdb_find_fields_buf(qzdb_reader_t* ctx, const char* ip_str,
 int  qzdb_find_fields_uint_buf(qzdb_reader_t* ctx, uint32_t ip_int,
                                const char** field_names,
                                char** values, char (*bufs)[QZDB_VALUE_BUF_SIZE], int buf_size);
+
+/* Field value types in fast projection */
+typedef enum {
+    QZDB_TYPE_STRING = 0,   /* 字符串池借用指针 (val.str: const char*, len: size_t) */
+    QZDB_TYPE_UINT   = 1,   /* 原生无符号整型 (如 ASN, val.u32: uint32_t) */
+    QZDB_TYPE_FLOAT  = 2,   /* 原生浮点 (如 经纬度, val.f64: double) */
+} qzdb_val_type_t;
+
+typedef struct {
+    qzdb_val_type_t type;
+    uint8_t         has_value;  /* 1 = 命中并有效; 0 = 空值/未收录 */
+    union {
+        struct {
+            const char* ptr;
+            size_t      len;
+        } str;
+        uint32_t u32;
+        double   f64;
+    } val;
+} qzdb_value_t;
+
+/* ---- Zero-copy fast projection queries (v2.4+ / high-throughput) ----
+ * 预解析字段索引 + 池内只读指针/原生数值零拷贝直取。
+ *
+ * 契约说明与生命周期约束 (LIFETIME CONTRACT):
+ * 1. 字段索引预解析：在初始化阶段将字段名数组解析为整型索引 indices，遇到未知字段名时
+ *    返回 QZDB_ERR_INVALID_PARAM 严格 fail-closed，杜绝未知字段静默穿透；
+ * 2. 强类型安全直取：
+ *    - 字符串类型字段（country, province, isp 等）：返回常驻池指针 val.str.ptr 与字节长度 val.str.len，零堆分配、零内存拷贝；
+ *    - 原生整型字段（asn 等）：type 为 QZDB_TYPE_UINT，直接返回 val.u32 原生数值，无需经历整数转字符串再 atoi 的二次损耗；
+ *    - 原生浮点字段（longitude, latitude 等）：type 为 QZDB_TYPE_FLOAT，直接返回 val.f64 原生数值；
+ * 3. 并发安全与生命周期：快速接口只读借用内存池指针，因此【严禁在多线程并发执行查询的同时执行
+ *    qzdb_reload / qzdb_reload_buffer 或 qzdb_free】；若需在线热更新且无法停止查询，请使用
+ *    qzdb_registry_t 容器（隔离队列安全延迟回收），或在应用层通过原子指针持有不同 Reader 实例；
+ * 4. 返回值：> 0 表示成功匹配字段数；0 表示 IP 未在库中命中；< 0 表示参数错误或索引越界。
+ */
+int  qzdb_resolve_field_indices(qzdb_reader_t* ctx, const char** field_names, int count, int* out_indices);
+int  qzdb_find_fields_fast(qzdb_reader_t* ctx, const char* ip_str,
+                           const int* indices, int count, const char** out_ptrs);
+int  qzdb_find_fields_uint_fast(qzdb_reader_t* ctx, uint32_t ip_int,
+                                const int* indices, int count, const char** out_ptrs);
+int  qzdb_find_fields_v6_fast(qzdb_reader_t* ctx, const uint8_t* ip_bin,
+                              const int* indices, int count, const char** out_ptrs);
+
+int  qzdb_find_values_fast(qzdb_reader_t* ctx, const char* ip_str,
+                           const int* indices, int count, qzdb_value_t* out_values);
+int  qzdb_find_values_uint_fast(qzdb_reader_t* ctx, uint32_t ip_int,
+                                const int* indices, int count, qzdb_value_t* out_values);
+int  qzdb_find_values_v6_fast(qzdb_reader_t* ctx, const uint8_t* ip_bin,
+                              const int* indices, int count, qzdb_value_t* out_values);
+uint32_t qzdb_get_generation(const qzdb_reader_t* ctx);
 
 /* ---- Low-level lookups ---- */
 uint32_t qzdb_lookup_row_id(qzdb_reader_t* ctx, const char* ip_str);

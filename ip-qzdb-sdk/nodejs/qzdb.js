@@ -2127,10 +2127,20 @@ function fastParseIp(ip) {
   const n = s.length;
   if (n === 0 || n > 45) return null;
   const cached = _parseMemo.get(s);
-  if (cached !== undefined) return cached;
+  if (cached !== undefined) {
+    if (cached.v6 !== null) {
+      return Object.freeze({ v4: null, v6: Buffer.from(cached.v6) });
+    }
+    return cached;
+  }
   const rec = _fastParseIpUncached(s, n);
-  if (_parseMemo.size < _PARSE_MEMO_CAP) _parseMemo.set(s, Object.freeze(rec));
-  else _parseMemo.clear();
+  if (rec !== null) {
+    if (_parseMemo.size < _PARSE_MEMO_CAP) _parseMemo.set(s, Object.freeze(rec));
+    else _parseMemo.clear();
+    if (rec.v6 !== null) {
+      return Object.freeze({ v4: null, v6: Buffer.from(rec.v6) });
+    }
+  }
   return rec;
 }
 

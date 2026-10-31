@@ -30,6 +30,11 @@
  * （直到 macOS 26 SDK 的 _locale.h 才引入 _locale_posix2008.h），需显式引入 xlocale.h。 */
 #include <xlocale.h>
 #endif
+#if defined(__aarch64__) || defined(_M_ARM64)
+#if defined(__ARM_FEATURE_CRC32)
+#include <arm_acle.h>
+#endif
+#endif
 
 /* ========================================================================
  * Error messages
@@ -52,8 +57,9 @@ const char* qzdb_strerror(int error_code) {
 }
 
 /* ========================================================================
- * CRC32
+ * CRC32 (Hardware-accelerated with software fallback)
  * ======================================================================== */
+#if !((defined(__aarch64__) || defined(_M_ARM64)) && defined(__ARM_FEATURE_CRC32))
 static uint32_t crc32_table[256];
 static pthread_once_t crc32_once = PTHREAD_ONCE_INIT;
 
@@ -65,6 +71,7 @@ static void crc32_init_once(void) {
         crc32_table[i] = c;
     }
 }
+#endif
 
 /* 分支预测提示：仅标注热循环中的罕见退出路径（GCC/Clang 扩展，其它编译器退化为普通 if） */
 #if defined(__GNUC__) || defined(__clang__)
@@ -76,12 +83,24 @@ static void crc32_init_once(void) {
 #endif
 
 static uint32_t crc32_update(uint32_t crc, const uint8_t* buf, size_t len) {
+#if (defined(__aarch64__) || defined(_M_ARM64)) && defined(__ARM_FEATURE_CRC32)
+    while (len >= 8 && ((uintptr_t)buf & 7) == 0) {
+        crc = __crc32d(crc, *(const uint64_t*)buf);
+        buf += 8; len -= 8;
+    }
+    while (len > 0) {
+        crc = __crc32b(crc, *buf);
+        buf++; len--;
+    }
+    return crc;
+#else
     /* pthread_once makes the lazy lookup table initialization race-free while
      * keeping the hot path read-only after the first call. */
     (void)pthread_once(&crc32_once, crc32_init_once);
     for (size_t i = 0; i < len; i++)
         crc = crc32_table[(crc ^ buf[i]) & 0xFF] ^ (crc >> 8);
     return crc;
+#endif
 }
 
 static uint32_t crc32_compute_file(const uint8_t* d, size_t size) {
@@ -371,23 +390,59 @@ const char* qzdb_usage_type_description(const char* raw) {
 }
 
 /* ========================================================================
- * Float formatting — canonical cross-language (spec §10.5)
+ * Fast integer & float formatting — canonical cross-language (spec §10.5)
  * 整数值无小数点；非整数固定 6 位小数；NaN/Inf 为 ""。
+ * 完全消除全局 locale 锁与 uselocale 线程上下文开销。
  * ======================================================================== */
-static void format_float_value_locale(locale_t loc, double dv, char* buf, size_t buf_size) {
-    locale_t previous = (locale_t)0;
-    if (loc) previous = uselocale(loc);
-    if (isnan(dv) || isinf(dv)) {
-        buf[0] = '\0';
-    } else if (dv == floor(dv)) {
-        if (dv >= -9223372036854775808.0 && dv < 9223372036854775808.0)
-            snprintf(buf, buf_size, "%ld", (long)dv);
-        else
-            snprintf(buf, buf_size, "%.0f", dv);
-    } else {
-        snprintf(buf, buf_size, "%.6f", dv);
+static inline int format_u64_fast(uint64_t val, char* buf, size_t buf_size) {
+    char tmp[24];
+    int len = 0;
+    if (val == 0) tmp[len++] = '0';
+    else {
+        while (val > 0) {
+            tmp[len++] = (char)('0' + (val % 10));
+            val /= 10;
+        }
     }
-    if (loc) uselocale(previous);
+    if ((size_t)len >= buf_size) return -1;
+    for (int i = 0; i < len; i++) buf[i] = tmp[len - 1 - i];
+    buf[len] = '\0';
+    return len;
+}
+
+static inline int format_i64_fast(int64_t val, char* buf, size_t buf_size) {
+    if (val < 0) {
+        if (buf_size < 2) return -1;
+        buf[0] = '-';
+        uint64_t u = (uint64_t)(-(val + 1)) + 1;
+        int n = format_u64_fast(u, buf + 1, buf_size - 1);
+        if (n < 0) return -1;
+        return n + 1;
+    }
+    return format_u64_fast((uint64_t)val, buf, buf_size);
+}
+
+static void format_float_value_locale(locale_t loc, double dv, char* buf, size_t buf_size) {
+    if (isnan(dv) || isinf(dv)) {
+        if (buf_size > 0) buf[0] = '\0';
+        return;
+    }
+    if (dv == floor(dv)) {
+        if (dv >= -9223372036854775808.0 && dv < 9223372036854775808.0) {
+            format_i64_fast((int64_t)dv, buf, buf_size);
+            return;
+        }
+    }
+    /* 非整值或超大整值：使用 snprintf_l 配合指定 C locale，避免全局 uselocale 锁 */
+    if (loc) {
+        if (dv == floor(dv)) snprintf_l(buf, buf_size, loc, "%.0f", dv);
+        else snprintf_l(buf, buf_size, loc, "%.6f", dv);
+    } else {
+        locale_t c_loc = newlocale(LC_NUMERIC_MASK, "C", (locale_t)0);
+        if (dv == floor(dv)) snprintf_l(buf, buf_size, c_loc, "%.0f", dv);
+        else snprintf_l(buf, buf_size, c_loc, "%.6f", dv);
+        freelocale(c_loc);
+    }
 }
 
 static QZDB_UNUSED void format_float_value(double dv, char* buf, size_t buf_size) {
@@ -914,7 +969,7 @@ static int decode_geo_field_buf(qzdb_reader_t* ctx, uint32_t entry_id, int group
             uint32_t value;
             int rc = safe_read_uint_width(ctx->data, ctx->data_size, field_offset, width, &value);
             if (rc != QZDB_OK) return rc;
-            int n = snprintf(buf, (size_t)buf_size, "%lu", (unsigned long)value);
+            int n = format_u64_fast((uint64_t)value, buf, (size_t)buf_size);
             if (n < 0 || (size_t)n >= (size_t)buf_size) return QZDB_ERR_BOUNDS;
         }
         *out_value = buf;
@@ -997,7 +1052,7 @@ static int get_geo_info(qzdb_reader_t* ctx, uint32_t entry_id, int group_index, 
                     free_geo_info(result);
                     return QZDB_ERR_BOUNDS;
                 }
-                int n = snprintf(buf, sizeof(buf), "%lu", (unsigned long)value);
+                int n = format_u64_fast((uint64_t)value, buf, sizeof(buf));
                 if (n < 0 || (size_t)n >= sizeof(buf)) {
                     free_geo_info(result);
                     return QZDB_ERR_BOUNDS;
@@ -2411,6 +2466,7 @@ static int init_from_buffer(qzdb_reader_t* ctx, int is_heap, int verify_crc) {
     int pool_rc = ensure_pools_loaded(ctx);
     if (pool_rc != QZDB_OK) { ret = pool_rc; goto fail; }
     geo_cache_init(ctx);
+    ctx->generation = 1;
 
     switch (ctx->pool_count) { case 6: ctx->version_code = 1; break; case 7: ctx->version_code = 2; break; case 25: ctx->version_code = 3; break; default: ctx->version_code = 3; break; }
 
@@ -2610,6 +2666,7 @@ int qzdb_reload_buffer(qzdb_reader_t* ctx, const uint8_t* buf, size_t len) {
     if (!ctx || !buf || len == 0 || ctx->group_index < 0 ||
         ctx->group_index >= ctx->actual_groups) return QZDB_ERR_INVALID_PARAM;
     int group_index = ctx->group_index;
+    uint32_t next_gen = ctx->generation + 1;
     qzdb_reader_t new_ctx;
     memset(&new_ctx, 0, sizeof(new_ctx));
     int rc = qzdb_init_buffer(&new_ctx, buf, len, 1);
@@ -2625,6 +2682,7 @@ int qzdb_reload_buffer(qzdb_reader_t* ctx, const uint8_t* buf, size_t len) {
     qzdb_warmup(&new_ctx);
     qzdb_free(ctx);
     memcpy(ctx, &new_ctx, sizeof(*ctx));
+    ctx->generation = next_gen;
     return QZDB_OK;
 }
 
@@ -2633,6 +2691,7 @@ int qzdb_reload(qzdb_reader_t* ctx, const char* db_path) {
     if (!ctx || !db_path || ctx->group_index < 0 ||
         ctx->group_index >= ctx->actual_groups) return QZDB_ERR_INVALID_PARAM;
     int group_index = ctx->group_index;
+    uint32_t next_gen = ctx->generation + 1;
     qzdb_reader_t new_ctx;
     memset(&new_ctx, 0, sizeof(new_ctx));
     int result = qzdb_init(&new_ctx, db_path);
@@ -2648,6 +2707,7 @@ int qzdb_reload(qzdb_reader_t* ctx, const char* db_path) {
     qzdb_warmup(&new_ctx);
     qzdb_free(ctx);
     memcpy(ctx, &new_ctx, sizeof(*ctx));
+    ctx->generation = next_gen;
     return QZDB_OK;
 }
 
@@ -2978,6 +3038,249 @@ int qzdb_find_fields(qzdb_reader_t* ctx, const char* ip_str,
     int rc = resolve_entry_id_for_row(ctx, row_id, ctx->group_index, &entry_id);
     if (rc != QZDB_OK) return rc;
     return find_fields_heap_for_entry(ctx, entry_id, ctx->group_index, fields, result);
+}
+
+/* === Fast zero-copy projection implementations === */
+int qzdb_resolve_field_indices(qzdb_reader_t* ctx, const char** field_names, int count, int* out_indices) {
+    if (!ctx || !field_names || !out_indices || count < 0 || count > QZDB_MAX_FIELDS)
+        return QZDB_ERR_INVALID_PARAM;
+    for (int i = 0; i < count; i++) {
+        if (!field_names[i]) return QZDB_ERR_INVALID_PARAM;
+        int idx = field_index_normalized(ctx, field_names[i]);
+        if (idx < 0) return QZDB_ERR_INVALID_PARAM;  /* 严格 fail-closed，杜绝未知字段名 */
+        out_indices[i] = idx;
+    }
+    return QZDB_OK;
+}
+
+static inline int resolve_row_id_fields_fast_impl(qzdb_reader_t* ctx, uint32_t row_id, int group,
+                                                  const int* indices, int count, const char** out_ptrs) {
+    for (int i = 0; i < count; i++) out_ptrs[i] = "";
+    if (row_id == 0) return 0;
+    if (row_id >= (uint32_t)ctx->row_count) return QZDB_ERR_BOUNDS;
+
+    const uint8_t* rptr = ctx->data + ctx->off_ip_row + (size_t)row_id * (size_t)ctx->ip_row_size;
+    uint32_t geo_id = (uint32_t)rptr[0] | ((uint32_t)rptr[1] << 8) | ((uint32_t)rptr[2] << 16);
+    uint16_t mask = ctx->group_dim_masks ? ctx->group_dim_masks[group] : 0;
+    uint32_t entry_id = geo_id;
+    if (mask & 0x02) {
+        if (ctx->row_asn_width > 0)
+            entry_id = (uint32_t)rptr[3] | ((uint32_t)rptr[4] << 8) | ((uint32_t)rptr[5] << 16);
+    } else if (mask & 0x04) {
+        if (ctx->row_usage_width > 0) {
+            size_t off = 3 + (size_t)ctx->row_asn_width;
+            entry_id = (uint32_t)rptr[off] | ((uint32_t)rptr[off+1] << 8) | ((uint32_t)rptr[off+2] << 16);
+        }
+    }
+    if (entry_id == 0) return 0;
+    if (entry_id >= (uint32_t)ctx->group_entry_counts[group]) return QZDB_ERR_BOUNDS;
+
+    int stride = ctx->group_strides[group];
+    const uint8_t* entry_base = ctx->data + ctx->off_geo_entries + ctx->group_entry_offsets[group] + (size_t)entry_id * (size_t)stride;
+    int group_fc = ctx->group_field_counts[group];
+    const int* f_offsets = ctx->group_field_offsets[group];
+    const int* f_widths = ctx->group_field_widths[group];
+    const int* f_native = ctx->group_field_native[group];
+    char*** pools = ctx->group_pools[group];
+    const int* pool_cnts = ctx->group_pool_counts[group];
+
+    for (int i = 0; i < count; i++) {
+        int idx = indices[i];
+        if (idx < 0 || idx >= group_fc) return QZDB_ERR_INVALID_PARAM; /* 非法索引 fail-closed */
+        if (f_native && f_native[idx]) {
+            out_ptrs[i] = "";
+            continue;
+        }
+        int w = f_widths[idx];
+        int off = f_offsets[idx];
+        const uint8_t* val_ptr = entry_base + off;
+        uint32_t pool_idx = 0;
+        if (w == 1) pool_idx = val_ptr[0];
+        else if (w == 2) pool_idx = (uint32_t)val_ptr[0] | ((uint32_t)val_ptr[1] << 8);
+        else if (w == 3) pool_idx = (uint32_t)val_ptr[0] | ((uint32_t)val_ptr[1] << 8) | ((uint32_t)val_ptr[2] << 16);
+        else if (w == 4) pool_idx = (uint32_t)val_ptr[0] | ((uint32_t)val_ptr[1] << 8) | ((uint32_t)val_ptr[2] << 16) | ((uint32_t)val_ptr[3] << 24);
+
+        if (pools && pools[idx] && pool_idx < (uint32_t)pool_cnts[idx]) {
+            const char* s = pools[idx][pool_idx];
+            out_ptrs[i] = s ? s : "";
+        } else {
+            out_ptrs[i] = "";
+        }
+    }
+    return count;
+}
+
+static inline int resolve_row_id_values_fast_impl(qzdb_reader_t* ctx, uint32_t row_id, int group,
+                                                  const int* indices, int count, qzdb_value_t* out_values) {
+    for (int i = 0; i < count; i++) {
+        out_values[i].type = QZDB_TYPE_STRING;
+        out_values[i].has_value = 0;
+        out_values[i].val.str.ptr = "";
+        out_values[i].val.str.len = 0;
+    }
+    if (row_id == 0) return 0;
+    if (row_id >= (uint32_t)ctx->row_count) return QZDB_ERR_BOUNDS;
+
+    const uint8_t* rptr = ctx->data + ctx->off_ip_row + (size_t)row_id * (size_t)ctx->ip_row_size;
+    uint32_t geo_id = (uint32_t)rptr[0] | ((uint32_t)rptr[1] << 8) | ((uint32_t)rptr[2] << 16);
+    uint16_t mask = ctx->group_dim_masks ? ctx->group_dim_masks[group] : 0;
+    uint32_t entry_id = geo_id;
+    if (mask & 0x02) {
+        if (ctx->row_asn_width > 0)
+            entry_id = (uint32_t)rptr[3] | ((uint32_t)rptr[4] << 8) | ((uint32_t)rptr[5] << 16);
+    } else if (mask & 0x04) {
+        if (ctx->row_usage_width > 0) {
+            size_t off = 3 + (size_t)ctx->row_asn_width;
+            entry_id = (uint32_t)rptr[off] | ((uint32_t)rptr[off+1] << 8) | ((uint32_t)rptr[off+2] << 16);
+        }
+    }
+    if (entry_id == 0) return 0;
+    if (entry_id >= (uint32_t)ctx->group_entry_counts[group]) return QZDB_ERR_BOUNDS;
+
+    int stride = ctx->group_strides[group];
+    const uint8_t* entry_base = ctx->data + ctx->off_geo_entries + ctx->group_entry_offsets[group] + (size_t)entry_id * (size_t)stride;
+    int group_fc = ctx->group_field_counts[group];
+    const int* f_offsets = ctx->group_field_offsets[group];
+    const int* f_widths = ctx->group_field_widths[group];
+    const int* f_native = ctx->group_field_native[group];
+    const int* f_native_type = ctx->group_field_native_type[group];
+    char*** pools = ctx->group_pools[group];
+    const int* pool_cnts = ctx->group_pool_counts[group];
+
+    for (int i = 0; i < count; i++) {
+        int idx = indices[i];
+        if (idx < 0 || idx >= group_fc) return QZDB_ERR_INVALID_PARAM;
+        int w = f_widths[idx];
+        int off = f_offsets[idx];
+        const uint8_t* val_ptr = entry_base + off;
+
+        if (f_native && f_native[idx]) {
+            int ntype = f_native_type ? f_native_type[idx] : 0;
+            if (ntype == 1) {
+                /* 原生浮点 (float32 / float64) */
+                out_values[i].type = QZDB_TYPE_FLOAT;
+                if (w == 4) {
+                    uint32_t bits = (uint32_t)val_ptr[0] | ((uint32_t)val_ptr[1] << 8) | ((uint32_t)val_ptr[2] << 16) | ((uint32_t)val_ptr[3] << 24);
+                    union { uint32_t u; float f; } uv;
+                    uv.u = bits;
+                    out_values[i].val.f64 = (double)uv.f;
+                    out_values[i].has_value = 1;
+                } else if (w == 8) {
+                    uint64_t bits = 0;
+                    for (int k = 0; k < 8; k++) bits |= ((uint64_t)val_ptr[k] << (k * 8));
+                    union { uint64_t u; double d; } uv;
+                    uv.u = bits;
+                    out_values[i].val.f64 = uv.d;
+                    out_values[i].has_value = 1;
+                }
+            } else {
+                /* 原生整型 (如 ASN uint32) */
+                out_values[i].type = QZDB_TYPE_UINT;
+                uint32_t uval = 0;
+                if (w == 1) uval = val_ptr[0];
+                else if (w == 2) uval = (uint32_t)val_ptr[0] | ((uint32_t)val_ptr[1] << 8);
+                else if (w == 3) uval = (uint32_t)val_ptr[0] | ((uint32_t)val_ptr[1] << 8) | ((uint32_t)val_ptr[2] << 16);
+                else if (w == 4) uval = (uint32_t)val_ptr[0] | ((uint32_t)val_ptr[1] << 8) | ((uint32_t)val_ptr[2] << 16) | ((uint32_t)val_ptr[3] << 24);
+                out_values[i].val.u32 = uval;
+                out_values[i].has_value = 1;
+            }
+        } else {
+            /* 字符串池引用 */
+            out_values[i].type = QZDB_TYPE_STRING;
+            uint32_t pool_idx = 0;
+            if (w == 1) pool_idx = val_ptr[0];
+            else if (w == 2) pool_idx = (uint32_t)val_ptr[0] | ((uint32_t)val_ptr[1] << 8);
+            else if (w == 3) pool_idx = (uint32_t)val_ptr[0] | ((uint32_t)val_ptr[1] << 8) | ((uint32_t)val_ptr[2] << 16);
+            else if (w == 4) pool_idx = (uint32_t)val_ptr[0] | ((uint32_t)val_ptr[1] << 8) | ((uint32_t)val_ptr[2] << 16) | ((uint32_t)val_ptr[3] << 24);
+
+            if (pools && pools[idx] && pool_idx < (uint32_t)pool_cnts[idx]) {
+                const char* s = pools[idx][pool_idx];
+                if (s && s[0] != '\0') {
+                    out_values[i].val.str.ptr = s;
+                    out_values[i].val.str.len = strlen(s);
+                    out_values[i].has_value = 1;
+                } else {
+                    out_values[i].val.str.ptr = "";
+                    out_values[i].val.str.len = 0;
+                    out_values[i].has_value = 0;
+                }
+            } else {
+                out_values[i].val.str.ptr = "";
+                out_values[i].val.str.len = 0;
+                out_values[i].has_value = 0;
+            }
+        }
+    }
+    return count;
+}
+
+int qzdb_find_values_uint_fast(qzdb_reader_t* ctx, uint32_t ip_int,
+                                const int* indices, int count, qzdb_value_t* out_values) {
+    if (!ctx || !indices || !out_values || count < 0 || count > QZDB_MAX_FIELDS)
+        return QZDB_ERR_INVALID_PARAM;
+    if (!ctx->has_v4) return QZDB_ERR_NOT_FOUND;
+    uint32_t row_id = trie_walk_v4(ctx, ip_int);
+    return resolve_row_id_values_fast_impl(ctx, row_id, ctx->group_index, indices, count, out_values);
+}
+
+int qzdb_find_values_v6_fast(qzdb_reader_t* ctx, const uint8_t* ip_bin,
+                              const int* indices, int count, qzdb_value_t* out_values) {
+    if (!ctx || !ip_bin || !indices || !out_values || count < 0 || count > QZDB_MAX_FIELDS)
+        return QZDB_ERR_INVALID_PARAM;
+    if (!ctx->has_v6) return QZDB_ERR_NOT_FOUND;
+    uint32_t row_id = trie_walk_v6(ctx, ip_bin);
+    return resolve_row_id_values_fast_impl(ctx, row_id, ctx->group_index, indices, count, out_values);
+}
+
+int qzdb_find_values_fast(qzdb_reader_t* ctx, const char* ip_str,
+                           const int* indices, int count, qzdb_value_t* out_values) {
+    if (!ctx || !ip_str || !indices || !out_values || count < 0 || count > QZDB_MAX_FIELDS)
+        return QZDB_ERR_INVALID_PARAM;
+    parse_result_t res;
+    if (!fast_parse_ip(ip_str, &res)) return QZDB_ERR_INVALID_PARAM;
+    if (res.is_v4) return qzdb_find_values_uint_fast(ctx, res.v4, indices, count, out_values);
+    return qzdb_find_values_v6_fast(ctx, res.v6, indices, count, out_values);
+}
+
+int qzdb_find_fields_uint_fast(qzdb_reader_t* ctx, uint32_t ip_int,
+                                const int* indices, int count, const char** out_ptrs) {
+    if (!ctx || !indices || !out_ptrs || count < 0 || count > QZDB_MAX_FIELDS)
+        return QZDB_ERR_INVALID_PARAM;
+    if (!ctx->has_v4) {
+        for (int i = 0; i < count; i++) out_ptrs[i] = "";
+        return QZDB_ERR_NOT_FOUND;
+    }
+    uint32_t row_id = trie_walk_v4(ctx, ip_int);
+    return resolve_row_id_fields_fast_impl(ctx, row_id, ctx->group_index, indices, count, out_ptrs);
+}
+
+int qzdb_find_fields_v6_fast(qzdb_reader_t* ctx, const uint8_t* ip_bin,
+                              const int* indices, int count, const char** out_ptrs) {
+    if (!ctx || !ip_bin || !indices || !out_ptrs || count < 0 || count > QZDB_MAX_FIELDS)
+        return QZDB_ERR_INVALID_PARAM;
+    if (!ctx->has_v6) {
+        for (int i = 0; i < count; i++) out_ptrs[i] = "";
+        return QZDB_ERR_NOT_FOUND;
+    }
+    uint32_t row_id = trie_walk_v6(ctx, ip_bin);
+    return resolve_row_id_fields_fast_impl(ctx, row_id, ctx->group_index, indices, count, out_ptrs);
+}
+
+int qzdb_find_fields_fast(qzdb_reader_t* ctx, const char* ip_str,
+                           const int* indices, int count, const char** out_ptrs) {
+    if (!ctx || !ip_str || !indices || !out_ptrs || count < 0 || count > QZDB_MAX_FIELDS)
+        return QZDB_ERR_INVALID_PARAM;
+    parse_result_t res;
+    if (!fast_parse_ip(ip_str, &res)) {
+        for (int i = 0; i < count; i++) out_ptrs[i] = "";
+        return QZDB_ERR_INVALID_PARAM;
+    }
+    if (res.is_v4) return qzdb_find_fields_uint_fast(ctx, res.v4, indices, count, out_ptrs);
+    return qzdb_find_fields_v6_fast(ctx, res.v6, indices, count, out_ptrs);
+}
+
+uint32_t qzdb_get_generation(const qzdb_reader_t* ctx) {
+    return ctx ? ctx->generation : 0;
 }
 
 /* ========================================================================
