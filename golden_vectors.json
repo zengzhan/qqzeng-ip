@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "QZDB Expected Golden Vectors",
+  "description": "SDK 跨语言对拍期望向量测试集（Expected Output，待引擎实测）",
+  "version": "1.0.0",
+  "as_of": "2026-11-03",
+  "vectors": [
+    {
+      "desc": "公共 DNS 节点 (江苏南京电信出口)",
+      "ip": "114.114.114.114",
+      "expected": {
+        "country_code": "CN",
+        "country": "中国",
+        "province": "江苏省",
+        "city": "南京市",
+        "isp": "中国电信",
+        "usage_type": "DNS"
+      }
+    },
+    {
+      "desc": "公共 DNS / 任播 Anycast 网段",
+      "ip": "8.8.8.8",
+      "expected": {
+        "country_code": "US",
+        "country": "美国",
+        "isp": "Google",
+        "usage_type": "DNS"
+      }
+    },
+    {
+      "desc": "IPv6 国内骨干接入网段",
+      "ip": "240e:e1:8000::1",
+      "expected": {
+        "country_code": "CN",
+        "country": "中国",
+        "province": "广东省",
+        "isp": "中国电信"
+      }
+    },
+    {
+      "desc": "省级骨干专线 (无法下探地级市，City 必须产出空字符串)",
+      "ip": "202.96.0.1",
+      "expected": {
+        "country_code": "CN",
+        "country": "中国",
+        "province": "广东省",
+        "city": "",
+        "district": ""
+      }
+    },
+    {
+      "desc": "私有保留地址 (RFC 1918)",
+      "ip": "192.168.1.1",
+      "expected": {
+        "country": "局域网",
+        "province": "",
+        "city": "",
+        "isp": ""
+      }
+    },
+    {
+      "desc": "环回地址 (Loopback)",
+      "ip": "127.0.0.1",
+      "expected": {
+        "country": "局域网",
+        "province": "",
+        "city": "",
+        "isp": ""
+      }
+    },
+    {
+      "desc": "IPv6 环回地址",
+      "ip": "::1",
+      "expected": {
+        "country": "局域网",
+        "province": "",
+        "city": "",
+        "isp": ""
+      }
+    }
+  ]
+}
