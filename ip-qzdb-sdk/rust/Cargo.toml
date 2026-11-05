@@ -21,7 +21,12 @@ categories = ["network-programming", "database", "parser-implementations"]
 #   tests/*     — 依赖未随包发布的 .qzdb 数据文件，下游 `cargo test` 必然失败。
 #   bench_qps.rs— 内部基准（开发仓内部基准，不随包发布、不在发布仓声明）。
 exclude = [
-    "src/bin/*",
+    "src/bin/batch_rust*",
+    "src/bin/demo.rs",
+    "src/bin/dump_rust.rs",
+    "src/bin/metaprobe.rs",
+    "src/bin/owned_vs_shared.rs",
+    "src/bin/regress_rust.rs",
     "src/main.rs",
     "tests/*",
     "crates/*",

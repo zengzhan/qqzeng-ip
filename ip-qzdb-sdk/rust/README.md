@@ -502,47 +502,48 @@ cargo update -p qzdb
 
 ### 15.1 零分配位掩码判定
 
-无需通过字符串比较或正则匹配，直接通过 `info.flags()` 进行微秒级/纳秒级位运算嗅探：
+通过单次查表、无字符串解码开销，直接在 `QzdbReader` 上传 IP 快速判定，或获取 `IpAttrFlags` 进行位运算：
 
 ```rust
 use qzdb::{QzdbReader, IpAttrFlags};
 
 let reader = QzdbReader::from_file("ip_ult.qzdb")?;
-if let Some(info) = reader.find("1.1.1.1") {
-    let flags: IpAttrFlags = info.flags();
+let ip = "1.1.1.1";
 
-    // 快捷布尔判定（纳秒级）
-    if info.is_domestic() {
-        println!("中国大陆本土 IP");
-    }
-    if info.is_datacenter() {
-        println!("机房 / 云厂商流量");
-    }
-    if info.is_mobile() {
-        println!("蜂窝移动网络流量");
-    }
-    if info.is_crawler() {
-        println!("搜索引擎 / 爬虫网络");
-    }
+// 1. Reader 快捷布尔判定（单次查表、零堆分配）
+if reader.is_domestic(ip) {
+    println!("中国大陆境内 IP");
+}
+if reader.is_datacenter(ip) {
+    println!("机房 / 云厂商 / CDN 节点");
+}
+if reader.is_mobile(ip) {
+    println!("蜂窝移动网络流量");
+}
+if reader.is_crawler(ip) {
+    println!("AI 或通用搜索引擎网络爬虫");
+}
 
-    // 原始 32 位位掩码位运算
-    let raw_bits: u32 = flags.bits();
-    if flags.contains(IpAttrFlags::DOMESTIC | IpAttrFlags::BROADBAND) {
-        println!("国内家宽用户");
-    }
+// 2. 提取 32 位完整特征位掩码进行组合位运算
+let flags: IpAttrFlags = reader.flags(ip);
+if flags.is_hit() {
+    println!("库内命中记录");
+}
+if flags.contains(IpAttrFlags::DOMESTIC_CN | IpAttrFlags::BROADBAND) {
+    println!("中国大陆家宽网段");
 }
 ```
 
 ### 15.2 Agent 原生 MCP Tool 支持
 
-本库提供符合 MCP 规范的标准 JSON Schema 声明与独立 stdio JSON-RPC 通信工具：
+本库提供符合 MCP 规范的标准 JSON Schema 声明与独立 stdio JSON-RPC 通信工具（二进制位置参数为 `<db_path> [--manifest]`）：
 
 ```bash
-# 启动 MCP 协议服务端（供 Claude Desktop / Cursor / Antigravity 挂载）
-cargo run --release --bin qzdb_mcp -- --db-path /path/to/qqzeng_ip_ult.qzdb
+# 1. 启动 MCP 协议服务端（供 Claude Desktop / Cursor / Antigravity 挂载）
+cargo run --release --bin qzdb_mcp -- /path/to/qqzeng_ip_ult.qzdb
 
-# 输出标准 MCP Manifest 元数据
-cargo run --release --bin qzdb_mcp -- --manifest
+# 2. 导出标准 MCP Manifest 离线工具元数据（JSON 格式）
+cargo run --release --bin qzdb_mcp -- /path/to/qqzeng_ip_ult.qzdb --manifest
 ```
 
 ---
@@ -551,21 +552,29 @@ cargo run --release --bin qzdb_mcp -- --manifest
 
 `rust/` 目录（本库源码）：
 
-| 文件 | 职责 |
-|------|------|
+| 文件 / 目录 | 职责 |
+|-------------|------|
 | `src/lib.rs` | 核心读取器：加载、Trie 遍历、查询、热更新、CRC、生命周期、`GeoInfo`、`Builder`、`Registry`、`ChainedReader`、`UsageType` |
-| `src/main.rs` | 命令行单 IP 查询示例（`cargo run -- <db_path> <ip>`） |
+| `src/bitmask.rs` | 零分配 IP 特征位掩码引擎：`IpAttrFlags`、O(1) 预计算表与快捷布尔谓词 |
+| `src/agent_schema.rs` | 面向 AI Agent 的 MCP Tool 契约与标准 JSON Schema 导出器 |
+| `src/bin/qzdb_mcp.rs` | 官方原生 MCP (Model Context Protocol) stdio JSON-RPC 2.0 服务端（单二进制无外部重型依赖，发布仓放行） |
 | `src/bin/demo.rs` | 综合用法示例 |
 | `src/bin/batch_rust.rs` | 标准输入批量查询示例 |
+| `src/bin/batch_rust_stream.rs` | 高并发流式输入批量对账工具 |
 | `src/bin/dump_rust.rs` | 元信息 / 结构导出示例 |
+| `src/bin/metaprobe.rs` | 元数据探测与字段规范对账工具 |
+| `src/bin/owned_vs_shared.rs` | 引用与深拷贝微观性能对比探针 |
 | `src/bin/regress_rust.rs` | 回归测试 / 比对工具 |
-| `bench_qps.rs` | QPS 基准测试 |
-| `tests/golden.rs` | Tier2 黄金校验（强制 0 失败，读取 `tools/golden_vectors.json`） |
+| `src/main.rs` | 命令行单 IP 冒烟 CLI（`cargo run -- <db_path> <ip>`） |
+| `crates/` | **下一代衍生多端扩展生态**（包含 `qzdb-wasm`、`qzdb-python`、`qzdb-node`，通过 `tools/build_nextgen_plugins.sh` 独立编译打包，暂不混入核心基础 crate） |
+| `bench_qps.rs` | 内部 QPS 基准测试 |
+| `tests/golden.rs` | Tier2 黄金校验（强制 0 失败，读取 `golden_vectors.json`） |
+| `tests/bitmask_oracle.rs` | 位掩码与全量地理字段真值严格对账 Oracle |
 | `tests/tier1.rs` | Tier1 单元测试（覆盖契约 §10 九大类） |
-| `tests/csv_oracle.rs` | **独立 CSV 地面真值校验**：以源数据 `test_data_202608/{std,ult}/china/*_range.csv` 为裁判，对 std/ult_china 各约 6000 区间内 + 5000 全局随机样本比对 `country/province/city/isp`，强制 0 失配 |
-| `tests/cidr_oracle.rs` | CIDR 反查独立 Oracle（不依赖内部 Trie，交叉验证网络地址/前缀长度） |
-| `tests/concurrency.rs` / `tests/edge_cases.rs` / `tests/ipv4_scan.rs` / `tests/ipv6_boundary.rs` | 并发安全 / 边界 / 扫描 测试 |
-| `Cargo.toml` | 包定义与依赖（`arc-swap`, `memmap2`, `serde_json`） |
+| `tests/csv_oracle.rs` | 独立 CSV 地面真值校验（强制 0 失配） |
+| `tests/cidr_oracle.rs` | CIDR 反查独立 Oracle |
+| `tests/concurrency.rs` / `tests/failclosed.rs` / `tests/zero_copy_ref.rs` | 并发无锁安全 / 防御性 Fail-Closed / 零拷贝视图集成测试 |
+| `Cargo.toml` | 包定义与依赖（运行时依赖：`arc-swap`, `crc32fast`, `memmap2`；开发测试期依赖：`serde_json`, `rayon`） |
 
 > **运行测试**：`cargo test`（覆盖 Tier1 + golden + 独立 CSV 真值 + CIDR Oracle + 并发/边界）。其中 `csv_oracle` 需仓库根 `test_data_202608/` 源 CSV 与 `../data/` 真实库，强制 0 失配。
 
@@ -577,4 +586,4 @@ cargo run --release --bin qzdb_mcp -- --manifest
 
 [MIT](https://opensource.org/licenses/MIT)
 
-<!-- commit: rust: Rust SDK（mmap 只读映射，内存安全） sync=1793853863 -->
+<!-- commit: rust: Rust 极速解析引擎 (mmap + 最小 unsafe surface, 整型随机最不利 4300 万+ QPS, 口径见 docs/PERFORMANCE.md) -->
