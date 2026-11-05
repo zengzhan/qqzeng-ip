@@ -13,10 +13,8 @@ documentation = "https://docs.rs/qzdb"
 keywords = ["ip", "geolocation", "ip-lookup", "qzdb", "offline"]
 categories = ["network-programming", "database", "parser-implementations"]
 
-# crates.io 只发布 lib；以下均为仓库内部工具，不随包发布：
-#   src/bin/*   — 跨语言对拍 / 元数据探针 / 回归工具。其中 metaprobe 依赖 dev-only 的
-#                 serde_json，若随包发布，下游 `cargo install qzdb` 会因缺 dev-dependency
-#                 直接编译失败（cargo publish 的 verify 不覆盖这条路径）。
+# crates.io 只发布 lib；除官方原生 MCP 工具 qzdb_mcp 外，内部回归探针不随包发布：
+#   src/bin/batch_rust* / dump_rust / metaprobe / owned_vs_shared / regress_rust
 #   src/main.rs — 手工冒烟 CLI，不是面向用户的产品二进制。
 #   tests/*     — 依赖未随包发布的 .qzdb 数据文件，下游 `cargo test` 必然失败。
 #   bench_qps.rs— 内部基准（开发仓内部基准，不随包发布、不在发布仓声明）。

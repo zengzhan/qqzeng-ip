@@ -525,11 +525,12 @@ if reader.is_crawler(ip) {
 }
 
 // 2. 提取 32 位完整特征位掩码进行组合位运算
-let flags: IpAttrFlags = reader.flags(ip);
+let flags: IpAttrFlags = reader.inspect_flags(ip);
 if flags.is_hit() {
     println!("库内命中记录");
 }
-if flags.contains(IpAttrFlags::DOMESTIC_CN | IpAttrFlags::BROADBAND) {
+let raw = flags.bits();
+if (raw & (IpAttrFlags::DOMESTIC_CN | IpAttrFlags::BROADBAND)) == (IpAttrFlags::DOMESTIC_CN | IpAttrFlags::BROADBAND) {
     println!("中国大陆家宽网段");
 }
 ```
@@ -566,7 +567,7 @@ cargo run --release --bin qzdb_mcp -- /path/to/qqzeng_ip_ult.qzdb --manifest
 | `src/bin/owned_vs_shared.rs` | 引用与深拷贝微观性能对比探针 |
 | `src/bin/regress_rust.rs` | 回归测试 / 比对工具 |
 | `src/main.rs` | 命令行单 IP 冒烟 CLI（`cargo run -- <db_path> <ip>`） |
-| `crates/` | **下一代衍生多端扩展生态**（包含 `qzdb-wasm`、`qzdb-python`、`qzdb-node`，通过 `tools/build_nextgen_plugins.sh` 独立编译打包，暂不混入核心基础 crate） |
+| `crates/` | **下一代衍生多端扩展生态**（包含 `qzdb-wasm`、`qzdb-python`、`qzdb-node`，通过 `ip-qzdb-sdk/tools/build_nextgen_plugins.sh` 独立编译打包，暂不混入核心基础 crate） |
 | `bench_qps.rs` | 内部 QPS 基准测试 |
 | `tests/golden.rs` | Tier2 黄金校验（强制 0 失败，读取 `golden_vectors.json`） |
 | `tests/bitmask_oracle.rs` | 位掩码与全量地理字段真值严格对账 Oracle |
@@ -574,6 +575,8 @@ cargo run --release --bin qzdb_mcp -- /path/to/qqzeng_ip_ult.qzdb --manifest
 | `tests/csv_oracle.rs` | 独立 CSV 地面真值校验（强制 0 失配） |
 | `tests/cidr_oracle.rs` | CIDR 反查独立 Oracle |
 | `tests/concurrency.rs` / `tests/failclosed.rs` / `tests/zero_copy_ref.rs` | 并发无锁安全 / 防御性 Fail-Closed / 零拷贝视图集成测试 |
+| `tests/contains.rs` / `tests/jump_sentinel.rs` | 包含判定与跳转哨兵回归测试 |
+| `tests/ipv4_scan.rs` / `tests/ipv6_boundary.rs` / `tests/edge_cases.rs` | IPv4 全表扫描采样、IPv6 边界与极端输入测试 |
 | `Cargo.toml` | 包定义与依赖（运行时依赖：`arc-swap`, `crc32fast`, `memmap2`；开发测试期依赖：`serde_json`, `rayon`） |
 
 > **运行测试**：`cargo test`（覆盖 Tier1 + golden + 独立 CSV 真值 + CIDR Oracle + 并发/边界）。其中 `csv_oracle` 需仓库根 `test_data_202608/` 源 CSV 与 `../data/` 真实库，强制 0 失配。
@@ -586,4 +589,4 @@ cargo run --release --bin qzdb_mcp -- /path/to/qqzeng_ip_ult.qzdb --manifest
 
 [MIT](https://opensource.org/licenses/MIT)
 
-<!-- commit: rust: Rust SDK（mmap 只读映射，内存安全） sync=1793855547 -->
+<!-- commit: rust: Rust 极速解析引擎 (mmap + 最小 unsafe surface, 整型随机最不利 4300 万+ QPS, 口径见 docs/PERFORMANCE.md) -->

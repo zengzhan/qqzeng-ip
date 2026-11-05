@@ -26,7 +26,7 @@ use crate::{KnownUsage, ParsedIp, QzdbReader, Snapshot, SnapshotInner, ToIp, Usa
 /// - `Bit 11` (`SATELLITE`)：卫星互联网接入（`UsageType == Satellite`）。
 /// - `Bit 12` (`DNS_ANYCAST`)：公共 DNS 基础设施（`UsageType == DNS`）。
 /// - `Bit 13` (`EDU_GOV_FIN`)：高校科研/政务/金融专网（`UsageType` 为 `Education` | `Government` | `Finance`）。
-/// - `Bits 16..=20`：编码 21 类官方 [`KnownUsage`] 的枚举序号（`1..=21`，`0` 表示未知或无此字段）。
+/// - `Bits 16..=20`：编码已知的 [`KnownUsage`] 枚举序号（`1..=21`，保留历史枚举超集，`0` 表示未知或无此字段）。
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct IpAttrFlags(u32);
