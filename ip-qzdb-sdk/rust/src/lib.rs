@@ -27,7 +27,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use arc_swap::ArcSwap;
+#[cfg(not(target_arch = "wasm32"))]
 use memmap2::{Mmap, MmapOptions};
+
+pub mod agent_schema;
+pub mod bitmask;
+pub use bitmask::IpAttrFlags;
 
 // ---------------------------------------------------------------------------
 // 常量
@@ -50,7 +55,10 @@ const SENTINEL_MASK_31: u32 = 0x7FFFFFFF;
 /// 下期望 miss ≈ (0.25)⁴ ≈ 0.4%（实测热流 miss% 0.006%@600M ops），热池
 /// 命中即等于 sequential 级速度；重建路径（值语义去共享化后）本身也无
 /// 共享状态写入。
+#[cfg(not(target_arch = "wasm32"))]
 const LOCAL_GEO_LINES: usize = 1 << 14;
+#[cfg(target_arch = "wasm32")]
+const LOCAL_GEO_LINES: usize = 1 << 10;
 const LOCAL_GEO_WAYS: usize = 4;
 const LOCAL_GEO_SLOTS: usize = LOCAL_GEO_LINES * LOCAL_GEO_WAYS;
 
@@ -64,6 +72,7 @@ fn next_geo_gen() -> u64 {
 
 enum DataStorage {
     Owned(Arc<Vec<u8>>),
+    #[cfg(not(target_arch = "wasm32"))]
     Mapped(Arc<Mmap>),
 }
 
@@ -72,11 +81,25 @@ impl DataStorage {
     fn as_slice(&self) -> &[u8] {
         match self {
             DataStorage::Owned(data) => data.as_slice(),
+            #[cfg(not(target_arch = "wasm32"))]
             DataStorage::Mapped(data) => data.as_ref(),
+        }
+    }
+
+    fn from_file(path: impl AsRef<Path>) -> Result<DataStorage, QzdbError> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Ok(DataStorage::Mapped(map_file(path)?))
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let bytes = std::fs::read(path)?;
+            Ok(DataStorage::Owned(Arc::new(bytes)))
         }
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn map_file(path: impl AsRef<Path>) -> Result<Arc<Mmap>, QzdbError> {
     let file = File::open(path)?;
     // SAFETY: the mapping is read-only, the File is kept alive by the OS mapping,
@@ -1712,6 +1735,7 @@ pub struct SnapshotInner {
     edition_source: &'static str,
     field_names_source: &'static str,
     canonical_crc: OnceLock<u32>,
+    entry_flags: OnceLock<Box<[u32]>>,
 
     // 快照代次：线程本地解码缓存的键前段（进程内单调递增，见 next_geo_gen）。
     generation: u64,
@@ -2396,6 +2420,7 @@ impl SnapshotInner {
             edition_source,
             field_names_source,
             canonical_crc,
+            entry_flags: OnceLock::new(),
             generation: next_geo_gen(),
         })
     }
@@ -3826,8 +3851,8 @@ impl std::fmt::Debug for QzdbReader {
 impl QzdbReader {
     /// 从文件路径加载（默认 CRC 校验开启）。
     pub fn from_file(path: impl AsRef<Path>) -> Result<QzdbReader, QzdbError> {
-        // 文件路径使用只读 mmap；内存字节入口仍保持拷贝语义。
-        let inner = SnapshotInner::from_bytes(DataStorage::Mapped(map_file(path)?), 0, true)?;
+        // 文件路径使用只读 mmap（WASM 下自动退化为 Owned）；内存字节入口仍保持拷贝语义。
+        let inner = SnapshotInner::from_bytes(DataStorage::from_file(path)?, 0, true)?;
         Ok(QzdbReader {
             snap: ArcSwap::from_pointee(inner),
         })
@@ -3840,6 +3865,19 @@ impl QzdbReader {
         verify_crc: bool,
     ) -> Result<QzdbReader, QzdbError> {
         let data = DataStorage::Owned(Arc::new(bytes.to_vec()));
+        let inner = SnapshotInner::from_bytes(data, group_index, verify_crc)?;
+        Ok(QzdbReader {
+            snap: ArcSwap::from_pointee(inner),
+        })
+    }
+
+    /// 零二次拷贝构造：直接接管调用方已分配的 `Vec<u8>` 所有权（用于 WASM 线性内存接管与 FFI）。
+    pub fn from_owned_vec(
+        bytes: Vec<u8>,
+        group_index: usize,
+        verify_crc: bool,
+    ) -> Result<QzdbReader, QzdbError> {
+        let data = DataStorage::Owned(Arc::new(bytes));
         let inner = SnapshotInner::from_bytes(data, group_index, verify_crc)?;
         Ok(QzdbReader {
             snap: ArcSwap::from_pointee(inner),
@@ -4496,7 +4534,7 @@ impl QzdbReader {
     pub fn reload(&self, path: impl AsRef<Path>) -> Result<(), QzdbError> {
         let group_index = self.inner().group_index;
         let new_inner =
-            SnapshotInner::from_bytes(DataStorage::Mapped(map_file(path)?), group_index, true)?;
+            SnapshotInner::from_bytes(DataStorage::from_file(path)?, group_index, true)?;
         new_inner.warmup();
         self.snap.store(Arc::new(new_inner));
         Ok(())
@@ -4506,6 +4544,19 @@ impl QzdbReader {
         let group_index = self.inner().group_index;
         let new_inner = SnapshotInner::from_bytes(
             DataStorage::Owned(Arc::new(bytes.to_vec())),
+            group_index,
+            true,
+        )?;
+        new_inner.warmup();
+        self.snap.store(Arc::new(new_inner));
+        Ok(())
+    }
+
+    /// 零二次拷贝原子热更新：直接接管调用方传入的 `Vec<u8>` 缓冲区。
+    pub fn reload_owned_vec(&self, bytes: Vec<u8>) -> Result<(), QzdbError> {
+        let group_index = self.inner().group_index;
+        let new_inner = SnapshotInner::from_bytes(
+            DataStorage::Owned(Arc::new(bytes)),
             group_index,
             true,
         )?;
@@ -4577,6 +4628,7 @@ fn empty_snapshot() -> SnapshotInner {
         edition_source: EDITION_SOURCE_UNKNOWN,
         field_names_source: FIELD_NAMES_SOURCE_SYNTHETIC,
         canonical_crc: OnceLock::new(),
+        entry_flags: OnceLock::new(),
         generation: next_geo_gen(),
     }
 }
@@ -4620,6 +4672,16 @@ impl Builder {
         }
     }
 
+    /// 零二次拷贝构造器：直接接管调用方已分配的 `Vec<u8>` 所有权。
+    pub fn from_owned_vec(bytes: Vec<u8>) -> Self {
+        Builder {
+            path: None,
+            bytes: Some(bytes),
+            group_index: 0,
+            verify_crc: true,
+        }
+    }
+
     pub fn group_index(mut self, g: usize) -> Self {
         self.group_index = g;
         self
@@ -4632,7 +4694,7 @@ impl Builder {
 
     pub fn build(self) -> Result<QzdbReader, QzdbError> {
         let data = match (self.path, self.bytes) {
-            (Some(p), _) => DataStorage::Mapped(map_file(&p)?),
+            (Some(p), _) => DataStorage::from_file(&p)?,
             (None, Some(b)) => DataStorage::Owned(Arc::new(b)),
             (None, None) => {
                 return Err(err(ErrorCode::InvalidParam, "no path or bytes provided"));

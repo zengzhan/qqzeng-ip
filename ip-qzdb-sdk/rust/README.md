@@ -26,7 +26,8 @@
 12. [错误处理](#12-错误处理)
 13. [性能说明](#13-性能说明)
 14. [维护与升级](#14-维护与升级)
-15. [项目结构](#15-项目结构)
+15. [位掩码判定与 Agent MCP 协议](#15-位掩码判定与-agent-mcp-协议)
+16. [项目结构](#16-项目结构)
 
 ---
 
@@ -495,7 +496,58 @@ cargo update -p qzdb
 
 ---
 
-## 15. 项目结构
+## 15. 位掩码判定与 Agent MCP 协议
+
+从 `v2.0.2` 起，Rust SDK 内置了基于 32 位位掩码的高性能布尔判定特性（`IpAttrFlags`）与面向大模型智能体的 MCP (Model Context Protocol) 协议支持。
+
+### 15.1 零分配位掩码判定
+
+无需通过字符串比较或正则匹配，直接通过 `info.flags()` 进行微秒级/纳秒级位运算嗅探：
+
+```rust
+use qzdb::{QzdbReader, IpAttrFlags};
+
+let reader = QzdbReader::from_file("ip_ult.qzdb")?;
+if let Some(info) = reader.find("1.1.1.1") {
+    let flags: IpAttrFlags = info.flags();
+
+    // 快捷布尔判定（纳秒级）
+    if info.is_domestic() {
+        println!("中国大陆本土 IP");
+    }
+    if info.is_datacenter() {
+        println!("机房 / 云厂商流量");
+    }
+    if info.is_mobile() {
+        println!("蜂窝移动网络流量");
+    }
+    if info.is_crawler() {
+        println!("搜索引擎 / 爬虫网络");
+    }
+
+    // 原始 32 位位掩码位运算
+    let raw_bits: u32 = flags.bits();
+    if flags.contains(IpAttrFlags::DOMESTIC | IpAttrFlags::BROADBAND) {
+        println!("国内家宽用户");
+    }
+}
+```
+
+### 15.2 Agent 原生 MCP Tool 支持
+
+本库提供符合 MCP 规范的标准 JSON Schema 声明与独立 stdio JSON-RPC 通信工具：
+
+```bash
+# 启动 MCP 协议服务端（供 Claude Desktop / Cursor / Antigravity 挂载）
+cargo run --release --bin qzdb_mcp -- --db-path /path/to/qqzeng_ip_ult.qzdb
+
+# 输出标准 MCP Manifest 元数据
+cargo run --release --bin qzdb_mcp -- --manifest
+```
+
+---
+
+## 16. 项目结构
 
 `rust/` 目录（本库源码）：
 
@@ -525,4 +577,4 @@ cargo update -p qzdb
 
 [MIT](https://opensource.org/licenses/MIT)
 
-<!-- commit: rust: Rust SDK（mmap 只读映射，内存安全） sync=1793414415 -->
+<!-- commit: rust: Rust 极速解析引擎 (mmap + 最小 unsafe surface, 整型随机最不利 4300 万+ QPS, 口径见 docs/PERFORMANCE.md) -->

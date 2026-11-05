@@ -117,3 +117,43 @@ Go/Rust/C# 经 batch 二进制 `--cidr` 模式)+ `ip-qzdb-sdk/cross_lang_verify.
 | 5 | **dimensionMask 双位置位**（畸形文件） | 按 `0x02(asn) → 0x04(usage) → 0x01(geo)` 优先级链选维（Java 语义）；Go 已对齐计划中，合法文件不受影响 | 2026-09-02 审查登记 |
 | 6 | **快照生命周期（Go）** | refCount 引用计数已由 `runtime.SetFinalizer` + GC 可达性托管：读者持引用即免 munmap，查询路径仅一次 atomic Load | 2026-09 实现（`-race` 全绿背书） |
 | 7 | **性能基线** | CI `perf-gate` job 以绝对下限（floors）拦截数量级回退；细粒度回归由本地 `tools/perf_gate.py --baseline --tol 0.25` 承担 | BENCH_CONTRACT §门禁 |
+
+---
+
+## 六、 下一代扩展层契约：零分配位掩码与 AI Agent MCP 工具声明（v2.6 增量扩展）
+
+在保持存量 8 语言核心 API 100% 兼容的基础上，Rust 核心引擎及派生扩展包（`@qqzeng/qzdb-wasm`、`qqzeng-ip-rust`、`@qqzeng/qzdb-native`）新增以下标准扩展契约：
+
+### 1. 零分配特征位掩码 (`IpAttrFlags` / `inspect_flags`)
+`inspect_flags(ip) -> uint32` 通过快照级惰性预计算表（`entry_id -> u32`）提供零堆分配、零字符串解码的 O(1) 场景与地域判定，其 32 位无符号整型位布局冻结如下：
+
+| 位区间 (Bit) | 常量标识 | 掩码值 | 严格判定语义（与 `GeoInfo` 100% 自洽） |
+| :--- | :--- | :--- | :--- |
+| `Bit 0` | `HIT` | `1 << 0` | 库内命中有效记录（`row_id > 0` 且 `entry_id > 0`） |
+| `Bit 1` | `DOMESTIC_CN` | `1 << 1` | 中国大陆境内（`country_code == "CN"` 且省份非香港/澳门/台湾） |
+| `Bit 2` | `GREATER_CN` | `1 << 2` | 大中华区（`country_code` 为 `CN`/`HK`/`MO`/`TW` 或 `country == "中国"`） |
+| `Bit 3` | `PRIVATE_RESERVED` | `1 << 3` | 私有保留或环回地址（`country == "局域网"` 或 `UsageType == Reserved`） |
+| `Bit 4` | `DATACENTER` | `1 << 4` | 数据中心 / 云服务 / CDN（`UsageType` 为 `DataCenter` \| `Cloud` \| `CDN`） |
+| `Bit 5` | `AI_CRAWLER` | `1 << 5` | AI 训练与搜索爬虫（`UsageType == AICrawler`） |
+| `Bit 6` | `SPIDER` | `1 << 6` | 通用搜索引擎爬虫（`UsageType == Spider`） |
+| `Bit 7` | `MOBILE` | `1 << 7` | 蜂窝移动网络（`UsageType == Mobile`） |
+| `Bit 8` | `BROADBAND` | `1 << 8` | 家庭或企业宽带接入（`UsageType == Broadband`） |
+| `Bit 9` | `VPN_PROXY` | `1 << 9` | VPN 或代理出口（`UsageType == VPN`） |
+| `Bit 10` | `BACKBONE_IXP` | `1 << 10` | 骨干网或交换中心（`UsageType` 为 `Backbone` \| `IXP`） |
+| `Bit 11` | `SATELLITE` | `1 << 11` | 卫星互联网接入（`UsageType == Satellite`） |
+| `Bit 12` | `DNS_ANYCAST` | `1 << 12` | 公共 DNS 基础设施（`UsageType == DNS`） |
+| `Bit 13` | `EDU_GOV_FIN` | `1 << 13` | 高校教育 / 政务 / 金融网络（`UsageType` 为 `Education` \| `Government` \| `Finance`） |
+| `Bits 16..20` | `USAGE_CODE` | `(bits >> 16) & 0x1F` | 编码 21 类官方 `KnownUsage` 的枚举序号（`1..=21`，`0` 表示未知或无此字段） |
+
+便捷布尔方法契约：
+- `is_datacenter(ip)` ≡ `(inspect_flags(ip) & DATACENTER) != 0`
+- `is_domestic(ip)` ≡ `(inspect_flags(ip) & DOMESTIC_CN) != 0`
+- `is_crawler(ip)` ≡ `(inspect_flags(ip) & (AI_CRAWLER | SPIDER)) != 0`
+- `is_ai_crawler(ip)` ≡ `(inspect_flags(ip) & AI_CRAWLER) != 0`
+- `is_mobile(ip)` ≡ `(inspect_flags(ip) & MOBILE) != 0`
+- `is_vpn(ip)` ≡ `(inspect_flags(ip) & VPN_PROXY) != 0`
+
+### 2. AI Agent / MCP 工具清单导出 (`export_mcp_tool_manifest`)
+`export_mcp_tool_manifest() -> string` 输出符合 JSON Schema Draft 2020-12 与 Model Context Protocol (`2025-06-18`) 的工具描述 JSON，内含：
+- `database_meta`：实时反映当前快照的 `edition`、`version`、`data_month`、`build_time`、`crc32_hash` 与 `available_fields`。
+- `tools`：声明 `qzdb_inspect_ip_fast`（零分配位掩码批量嗅探）与 `qzdb_lookup_geo_fields`（支持 `fields` 按需字段投影以最小化 LLM Token 消耗）。

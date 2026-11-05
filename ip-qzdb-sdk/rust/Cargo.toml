@@ -23,14 +23,21 @@ categories = ["network-programming", "database", "parser-implementations"]
 exclude = [
     "src/bin/*",
     "src/main.rs",
-        "tests/*",
+    "tests/*",
+    "crates/*",
     "rustfmt.toml",
     ".DS_Store",
 ]
 
+[features]
+default = []
+wasm-lite = []
+
 [dependencies]
 arc-swap = "1"
 crc32fast = "1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 memmap2 = "0.9"
 
 [dev-dependencies]
