@@ -61,7 +61,7 @@
 
 ## 二·五、与原版产品及同类格式对比(外部参照)
 
-同机(Apple M4 Max)权威第三方/原版数据,来源:发布仓 `docs/BENCHMARK_COMPARISON.md`
+同机(Apple M4 Max)权威第三方/原版数据,来源:发布仓 `docs/benchmark-comparison.md`
 (原版作者 BenchmarkDotNet v0.15 实测,单次查询纳秒级 + 随机亿级批量):
 
 | 产品 / 格式 | 随机亿级吞吐 | 单次查询 |
