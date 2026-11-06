@@ -142,7 +142,7 @@ jobs:
           javac --release 17 -encoding UTF-8 -d build $(find src -name '*.java')
 
       - name: Set up .NET 10
-        uses: actions/setup-dotnet@3951f0dfe7a07e2313ec93c75700083e2005cbab # v4.3.0
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
         with:
           dotnet-version: "10.0.x"
 
