@@ -198,4 +198,4 @@ QZDB 引擎采用专门定制的 **双阶段 PATRICIA Trie + RowSchema 偏移直
 - **[`docs/BENCHMARK_COMPARISON.md`](../docs/BENCHMARK_COMPARISON.md)**：QZDB vs `.db` / `.dat` / `.xdb` / `.mmdb` 性能评测白皮书
 - **[`docs/PERFORMANCE.md`](../docs/PERFORMANCE.md)**：8 语言三口径基准数据与复现指南
 
-<!-- commit: ip-qzdb-sdk: QZDB 多语言 SDK（Rust/C/Go/Java/C#/Node.js/PHP/Python） sync=1793951035 -->
+<!-- commit: ip-qzdb-sdk: QZDB 多语言 SDK（Rust/C/Go/Java/C#/Node.js/PHP/Python） -->
