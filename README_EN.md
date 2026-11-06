@@ -356,7 +356,7 @@ Objective comparison between QZDB and standard industry binary IP formats in loo
 | **[`database-sql/`](./database-sql)** | 🗄️ **Database SQL DDL** — MySQL / PostgreSQL / SQL Server schemas and bulk loaders |
 | **[`ip-history-sdk/`](./ip-history-sdk)** | 🗂️ **Historical Archive & Tools** — v3.0~v5.0 archives, Big DAT, and Windows offline desktop tool |
 | **[`demo/`](./demo)** | 📋 **Evaluation Samples** — IP and mobile prefix CSV / TXT / QZDB sample files |
-| **[`docs/`](./docs)** | 📄 **Architecture & Guides** — Performance benchmark comparisons and 2026 edition selection guides |
+| **[`docs/`](./docs)** | 📄 **Architecture & Guides** — Product specifications, official performance benchmarks, and binary format comparisons |
 
 ### IP Database Product Editions & Field Specifications
 

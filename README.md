@@ -358,7 +358,7 @@ flowchart LR
 | **[`database-sql/`](./database-sql)** | 🗄️ **数据库建表与入库脚本**——MySQL / PostgreSQL / SQL Server DDL 与高速导入脚本 |
 | **[`ip-history-sdk/`](./ip-history-sdk)** | 🗂️ **IP 历史版本与工具归档**——v3.0~v5.0 历史源码、Big DAT 与桌面离线查询工具 |
 | **[`demo/`](./demo)** | 📋 **演示样本**——IP 归属地与号段 CSV / TXT / QZDB 数据样例 |
-| **[`docs/`](./docs)** | 📄 **项目文档与选型指南**——基准性能横评与 2026 最新版本对照指南 |
+| **[`docs/`](./docs)** | 📄 **项目文档与选型指南**——版本规格与字段详解、官方性能白皮书及多格式横评 |
 
 ### 数据交付格式与产品规格 (Data Delivery Formats & Specifications)
 
