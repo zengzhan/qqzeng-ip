@@ -1,56 +1,48 @@
 # 更新日志
 
-本文件记录 QZDB 多语言 SDK 的用户可见变更。格式参照 Keep a Changelog；语义化版本。
+本文件记录 QZDB 多语言 SDK 的用户可见变更。格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)，实行语义化版本控制。
 
-## [Unreleased]
+## 各语言 SDK 独立版本矩阵
 
-## [2026-10-24] - v1.2.2 (Go 1.0.8 / .NET 1.0.10 / Java 1.0.10 / Python 1.0.8 / Node 1.0.8 / PHP 1.2.2 / Rust 2.0.2)
+| 语言 SDK | 当前版本 | 仓库子路径 | 官方包坐标与引入方式 |
+| :--- | :---: | :--- | :--- |
+| **Java** | `1.0.10` | `ip-qzdb-sdk/java` | `com.qqzeng:qzdb:1.0.10` |
+| **.NET** | `1.0.10` | `ip-qzdb-sdk/netcore` | `QQZeng.Qzdb` (`1.0.10`) |
+| **Rust** | `2.0.2` | `ip-qzdb-sdk/rust` | `qzdb = "2.0.2"` *(⚠️ 含破坏性变更，详见下方说明与迁移建议)* |
+| **Python** | `1.0.8` | `ip-qzdb-sdk/python` | `pip install qzdb==1.0.8` |
+| **Node.js** | `1.0.8` | `ip-qzdb-sdk/nodejs` | `npm install @qqzengip/qzdb@1.0.8` |
+| **PHP** | `1.2.2` | `ip-qzdb-sdk/php` | `composer require qqzeng/qzdb:1.2.2` |
+| **Go** | `v1.0.8` | `ip-qzdb-sdk/go` | `go get github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go@v1.0.8` |
+| **C / C++** | 单文件源码 | `ip-qzdb-sdk/c` | 源码拷贝 `qzdb_reader.c` 与 `qzdb_reader.h` |
 
-### Bug Fixes & Optimizations
-- **Go**: 修复无锁缓存并发写入时的键值错配竞态（改用单指针发布）；修复 Registry 按 name 定位槽位；补齐 `parseHexGroup` 辅助函数；IPv6 采用单趟零分配解析（延迟 -84%）。
-- **.NET**: 为 `MmapManager` 补充终结器与 `GC.KeepAlive`，彻底修复每次 `Reload()` 永久泄露 mmap 映射与文件句柄的缺陷；修复 reload 序号比较机制。
-- **C**: 修复 `qzdb_free()` 误释放外部借用缓冲导致 SIGSEGV 的重大缺陷；修复 macOS 15 及更早系统下缺少 `<xlocale.h>` 头文件的问题；修复段头边界越界读。
-- **Java**: `swapIn()` 引入 CAS 循环，杜绝 `close()` 与 `reload()` 并发时已释放实例复活；堆内快照取消不必要的退役宽限期；优化 `GeoInfo` 小表投影构建与内存开销。
-- **Python**: 修复 IPv6 解析非 ASCII 字符（如 `::中`）抛 `IndexError` 导致整批崩溃的问题；优化整数字符串组装与 24 位子节点解包。
-- **Node.js**: 修复 `ChainedReader` 批量与流式查询把非法 IP 误当作未命中的契约不符问题；保持记忆表冻结记录。
-- **PHP**: 统一 `lookupCidr` 走严格校验；缓冲模式 Trie 树遍历内联子节点读取，避开深层方法调用，遍历提速 25%~38%。
-- **Rust**: 修复 3 处 clippy 冗余引用与切片警告。
+> ⚠️ **关于 Rust SDK 2.0.2 语义化版本声明与 Yank 策略**：
+> `qzdb` Rust 2.0.2 版本进行了高并发值语义去共享化重构，涉及 `GeoData.values` 类型（由 `Box<[Arc<str>]>` 改为 `Box<[FieldVal<'static>]>`）、`ErrorCode` 增加 `#[non_exhaustive]` 以及 `FieldVal::Inline` 封装私有化。因 crates.io 规则限制已发布版本无法撤回修改，处理策略如下：
+> 1. **下游适配**：旧代码若直接解构 `Arc<str>`，请迁移为使用 `field.as_str()` 或标准 `PartialEq`；`ErrorCode` 匹配分支请补充 `_ => ...` 通配符；
+> 2. **主版本演进**：官方将发布 `v3.0.0` 正式对齐语义化版本规范，并对 2.0.2 视社区依赖情况执行 `cargo yank`；架构演进以零拷贝无锁高并发为唯一目标。
 
+---
 
-### Breaking changes
+## [2026-10-24] - v1.2.2 (全语言发布)
 
-- **Rust SDK：值表示去共享化，`GeoData.values` 从 `Box<[Arc<str>]>` 改为
-  `Box<[FieldVal<'static>]>`**（`ip-qzdb-sdk/rust/src/lib.rs`）。查询结果在命中与构造全程
-  零共享原子 RMW，16 线程热流 QPS 与 Go 基线追平（hot.v4 216.8M vs Go 212M，
-  hot.mixed 242.4M vs Go 227M），random.v4 单线程建行成本 225ns → 159ns。连带变更：
+### Breaking Changes
+- **Rust SDK**: 查询结果表示由 `Box<[Arc<str>]>` 重构为 `Box<[FieldVal<'static>]>`，去除原子引用计数争用（16 线程并发达 233M+ QPS）；`ErrorCode` 增加 `#[non_exhaustive]` 防止未来扩充破坏穷举；`FieldVal::Inline` 内部封装隐藏（装载期常量池零堆分配）。
+- **Node.js SDK**: `loadBuffer(Buffer)` 采用零拷贝共享视图，Reader 存续期间调用方不得就地篡改原 Buffer 内容；`Uint8Array` / `ArrayBuffer` 等其他输入仍执行安全复制。
 
-  - `GeoInfo::field_names_arc()` 移除：字段名表与 norm_map / 数值索引随快照装载固定为
-    进程级生命期（`&'static`），`field_names()` 直接返回 `&'static [String]`。同 reader
-    实例的跨查询共享由指针相等保证（`std::ptr::eq`，替代 `Arc::ptr_eq`）。
-  - `GeoInfo::values()` 返回 `&[FieldVal<'static>]`：池字段是装载期 `Box::leak` 的
-    `&'static str` 借用（指针复制），数字/浮点/pipe 是 32B 栈缓冲内联值。下游若对旧
-    `Arc<str>` 元素做匹配，需迁移到 `FieldVal::as_str()`（`PartialEq` 按字符串语义比较，
-    大多数下游仅需改为 `.as_str()` / 直接 `[u8]` 解引用）。
-  - 实例逃逸语义放宽：`GeoInfo` / `GeoInfoRef::to_geo_info()` 的值与元信息不再锚定
-    reader 的存活（'static 值不受快照替换影响），借用约束仅由 `find_ref(&self)` 的
-    `'_` 生命周期体现。此前「必须持有 reader 才能读值」的隐性约束不再需要。
-  - **进程级内存生命期**：池字符串与元信息块在每次 `load` 时 leak（KB×代数级常量，
-    reload 不回收，仅进程退出时归还）。这是用常量内存换零 RMW 的有意取舍——重度
-    热更新（每秒 reload）场景不适合依赖它释放内存。
-  - 线程本地解码缓存从直映射升级为 **4 路组相联**（16384 行 × 4 路 + splitmix 乘法散列）：
-    基准热池 miss% 从结构性对撞驱逐降到 0.006%（600M ops 实测），并对错开 seed 的
-    混发流同样有效。
+### Added
+- **C SDK**: 新增原生跨平台定点格式化算法，彻底摆脱系统 locale 依赖，无锁并发格式化吞吐提升。
+- **Go SDK**: 新增单趟零分配 IPv6 解析器，大幅降低 IPv6 高并发分配压力。
 
-- **Rust SDK：`ErrorCode` 枚举增加 `#[non_exhaustive]`**（`ip-qzdb-sdk/rust/src/lib.rs`）。
-  防止未来新增错误码时破坏下游的穷举 `match`，下游必须提供通配分支 `_ => ...`。
+### Changed
+- **PHP SDK**: 缓冲模式 Trie 树遍历内联子节点解析，避开深层方法调用栈开销，遍历提速 25%~38%。
+- **.NET SDK**: 优化 `TryParseIp` 实现路径，恢复高内联预算与指令缓存亲和，吞吐显著回升。
 
-- **Rust SDK：`FieldVal::Inline` 改为 `Inline(InlineBuf)`**（`ip-qzdb-sdk/rust/src/lib.rs`）。
-  `InlineBuf` 的字段与构造器保持私有，外部不能再直接构造任意载荷；下游若匹配旧的
-  `Inline(buf, len)` 形状，需要迁移到新的 `InlineBuf` API。
-
-- **Node.js SDK：`loadBuffer(Buffer)` 改为零拷贝别名**（`ip-qzdb-sdk/nodejs/qzdb.js`）。
-  `Buffer` 输入不再复制；Reader 存续期间调用方不得修改原始 `Buffer`，否则查询结果会随之变化。
-  `Uint8Array` / `ArrayBuffer` 等其他输入仍按原语义复制。
+### Fixed
+- **C SDK**: 修复 Linux/glibc 环境下调用专有符号 `snprintf_l` 导致未决引用的链接缺陷；修复 `qzdb_free()` 误释放外部借用缓冲缺陷。
+- **.NET SDK**: `MmapManager` 补充终结器与 `GC.KeepAlive`，彻底解决 `Reload()` 偶发泄露 mmap 映射与文件句柄的缺陷。
+- **Java SDK**: `swapIn()` 引入 CAS 循环，杜绝 `close()` 与 `reload()` 并发时的快照复活隐患；装载失败路径补齐安全释放。
+- **Go SDK**: 修复无锁缓存并发写入时的指针错配竞态；修复 Registry 多库槽位定位。
+- **Python SDK**: 修复 IPv6 解析非 ASCII 字符时的 `IndexError`；优化 24-bit 节点解包逻辑。
+- **Node.js SDK**: 修复 `ChainedReader` 批量查询将非法 IP 误判为未命中的契约不符缺陷。
 
 ### Fixed
 

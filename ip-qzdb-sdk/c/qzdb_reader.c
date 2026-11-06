@@ -423,8 +423,10 @@ static inline int format_i64_fast(int64_t val, char* buf, size_t buf_size) {
 }
 
 static void format_float_value_locale(locale_t loc, double dv, char* buf, size_t buf_size) {
+    (void)loc;
+    if (buf_size == 0) return;
     if (isnan(dv) || isinf(dv)) {
-        if (buf_size > 0) buf[0] = '\0';
+        buf[0] = '\0';
         return;
     }
     if (dv == floor(dv)) {
@@ -433,15 +435,34 @@ static void format_float_value_locale(locale_t loc, double dv, char* buf, size_t
             return;
         }
     }
-    /* 非整值或超大整值：使用 snprintf_l 配合指定 C locale，避免全局 uselocale 锁 */
-    if (loc) {
-        if (dv == floor(dv)) snprintf_l(buf, buf_size, loc, "%.0f", dv);
-        else snprintf_l(buf, buf_size, loc, "%.6f", dv);
+    /* 跨平台定点格式化：整数与 6 位小数拼接，不依赖 snprintf_l 与 locale 锁 */
+    int neg = signbit(dv) ? 1 : 0;
+    double abs_dv = neg ? -dv : dv;
+    if (abs_dv < 1e12) {
+        double scaled = abs_dv * 1e6;
+        uint64_t total = (uint64_t)round(scaled);
+        uint64_t int_part = total / 1000000ULL;
+        uint32_t frac_part = (uint32_t)(total % 1000000ULL);
+        size_t pos = 0;
+        if (neg) {
+            if (pos + 1 < buf_size) buf[pos++] = '-';
+        }
+        int n = format_u64_fast(int_part, buf + pos, buf_size - pos);
+        if (n < 0) { buf[0] = '\0'; return; }
+        pos += (size_t)n;
+        if (pos + 8 < buf_size) {
+            buf[pos++] = '.';
+            for (int i = 5; i >= 0; i--) {
+                buf[pos + i] = (char)('0' + (frac_part % 10));
+                frac_part /= 10;
+            }
+            pos += 6;
+            buf[pos] = '\0';
+        } else {
+            buf[0] = '\0';
+        }
     } else {
-        locale_t c_loc = newlocale(LC_NUMERIC_MASK, "C", (locale_t)0);
-        if (dv == floor(dv)) snprintf_l(buf, buf_size, c_loc, "%.0f", dv);
-        else snprintf_l(buf, buf_size, c_loc, "%.6f", dv);
-        freelocale(c_loc);
+        snprintf(buf, buf_size, "%.6f", dv);
     }
 }
 

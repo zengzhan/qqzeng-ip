@@ -495,12 +495,10 @@ node tier2_csv_verify.js full std china   # 单库全量
 node tier3_concurrent.js        # 并发安全验证
 ```
 
-跨语言完整 API 规范见仓库根 [`API_CONTRACT.md`](../../API_CONTRACT.md)（v2.4，单一事实来源）。
+跨语言完整 API 规范见 SDK 根 [`API_CONTRACT.md`](../API_CONTRACT.md)（v2.4，单一事实来源）。
 
 ---
 
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: nodejs: Node.js SDK（BigInt 偏移解析） sync=1793943026 -->

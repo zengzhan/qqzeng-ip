@@ -6,7 +6,7 @@
 - **特性**：无锁快照（lock-free snapshot）+ per-snapshot 有界 `GeoInfo` 解码缓存，并发查询互不阻塞
 - **依赖**：仅依赖系统 `libc` / `libpthread`（POSIX 线程用于缓存写入互斥）
 - **许可**：MIT
-- **跨语言规范**：以仓库根 [`API_CONTRACT.md`](../../API_CONTRACT.md) 为唯一事实来源（SSOT）
+- **跨语言规范**：以 SDK 根 [`API_CONTRACT.md`](../API_CONTRACT.md) 为唯一事实来源（SSOT）
 
 ---
 
@@ -74,10 +74,10 @@ int main(void) {
 
     /* 单次查询：未命中或 IP 非法时返回 QZDB_ERR_NOT_FOUND，不崩溃 */
     qzdb_geo_info_t info;
-    if (qzdb_find(&ctx, "114.114.114.114", &info) == QZDB_OK) {
+    if (qzdb_find(&ctx, "118.115.99.0", &info) == QZDB_OK) {
         char pipe[1024];
         qzdb_geo_info_to_pipe(&ctx, &info, pipe, sizeof(pipe));
-        printf("pipe = %s\n", pipe);                 /* 国家|省份|城市|ISP|... */
+        printf("pipe = %s\n", pipe);                 /* 亚洲|Asia|CN|CHN|中国|China|... */
         printf("country = %s\n",
                qzdb_geo_info_get(&ctx, &info, "country"));
         qzdb_free_geo_info(&info);                   /* 释放堆内字符串 */
@@ -85,7 +85,7 @@ int main(void) {
 
     /* 直接拿到管道字符串；未命中返回 ""（适合落库/日志） */
     char out[1024];
-    qzdb_find_str(&ctx, "240e:390:1:1::1", out, sizeof(out));
+    qzdb_find_str(&ctx, "2600:5800:2a8e::", out, sizeof(out));
     printf("str  = %s\n", out);
 
     /* 仅取内部行号（最轻量，不涉及字段解析） */
@@ -717,12 +717,10 @@ typedef enum { QZDB_OK=0, QZDB_ERR_NOT_FOUND=-1, QZDB_ERR_CORRUPTED=-2,
 | `main.c` / `batch_query.c` / `batch_cli.c` | 示例与批量查询 CLI |
 | `bench_qps.c` | 吞吐基准 |
 
-跨语言完整 API 规范见仓库根 [`API_CONTRACT.md`](../../API_CONTRACT.md)。
+跨语言完整 API 规范见 SDK 根 [`API_CONTRACT.md`](../API_CONTRACT.md)。
 
 ---
 
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: c: C SDK（零拷贝 mmap 读取，单文件集成） sync=1793943026 -->

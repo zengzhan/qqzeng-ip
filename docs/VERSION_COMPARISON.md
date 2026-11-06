@@ -2,7 +2,7 @@
 
 > **文档定位**：本文档面向技术负责人、系统架构师及开发集成人员，提供 **qqzeng-ip** 新一代双栈旗舰版 **`.qzdb`（五大版本）** 与经典版 **`.db`（6.0）/ `.dat`（2.0）** 在 **文件大小、数据行数、25 维字段区别、压缩比、检索延迟与适用场景** 等维度的全景对照，助您一分钟锁定最优版本。
 >
-> 🔗 **关联文档**：[返回首页 (`README.md`)](../README.md) · [多格式性能评测白皮书 (`BENCHMARK_COMPARISON.md`)](./BENCHMARK_COMPARISON.md) · [8语言统一性能口径 (`PERFORMANCE.md`)](./PERFORMANCE.md) · [商业授权与层级 (`PRODUCT_TIERS.md`)](./PRODUCT_TIERS.md)
+> 🔗 **关联文档**：[返回首页 (`README.md`)](../README.md) · [多格式性能评测白皮书 (`BENCHMARK_COMPARISON.md`)](./BENCHMARK_COMPARISON.md) · [8语言统一性能口径 (`PERFORMANCE.md`)](./PERFORMANCE.md) · [官方商业服务中心](https://www.qqzeng.com/service/)
 
 ## 一、一分钟快速选型对照表
 

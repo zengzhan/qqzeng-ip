@@ -38,7 +38,7 @@ if [ ${#DB_FILES[@]} -eq 0 ] || [ ! -f "${DB_FILES[0]}" ]; then
     DEMO_DB="$SCRIPT_DIR/../demo/qqzeng-ip-ult.qzdb"
     if [ -f "$DEMO_DB" ]; then
         echo "No ip-qzdb-sdk/data fixtures found; running the public demo oracle instead."
-        # 发布仓不含 tools/：此时退回内置的 demo CSV 对拍（Python SDK，管道串 + CIDR）。
+        # 公开仓运行内置的 demo CSV 对拍（Python SDK，管道串 + CIDR）。
         if [ -f "$SCRIPT_DIR/tools/demo_sample_check.py" ]; then
             DEMO_CHECK=("$PYTHON_BIN" "$SCRIPT_DIR/tools/demo_sample_check.py")
         else
@@ -233,16 +233,10 @@ fi
 #   1) 显式且有效的 JAVA_HOME —— CI / 容器 / 需要钉住 JDK 版本时用这个；
 #   2) 否则按常见安装路径探测，LTS(21) 优先于最新版。
 #
-# 三点不要"顺手简化"，每一条都有具体的坏掉方式：
-#   ① 本函数在本文件里**故意逐字重复**，不要抽成 `source tools/java_env.sh`。
-#      sync_to_github.py:266 把 run_all_tests.sh 原样拷进发布仓库，但不同步
-#      ip-qzdb-sdk/tools/ 下的辅助脚本 —— 抽出去会让发布仓那份直接 source 失败。
-#      tools/build_all.sh:56 里有第二份副本，改一处必须同时改另一处。
-#   ② 原来写的是 `JAVA_HOME=$(find_java_home)`（无条件覆盖），把调用方显式设置的
-#      JAVA_HOME 静默丢掉 —— 于是 `JAVA_HOME=<jdk28> ./run_all_tests.sh` 跑的其实是
-#      探测到的 JDK 27，而日志里根本看不出来。显式设置必须优先。
-#   ③ 路径必须加引号。原来的 `for f in $h/bin/javac` 没加引号，任何**含空格的
-#      JDK 路径**（macOS 上很常见）会被 word split 成几个不存在的片段，探测恒失败。
+# 注意事项：
+#   ① 本函数保持自包含，不依赖外部环境脚本，确保在精简环境下独立运行；
+#   ② 优先使用显式设置的 JAVA_HOME，未设置时再按系统路径探测；
+#   ③ 路径变量严格带引号，防止含空格路径探测失败。
 find_java_home() {
     if [ -n "${JAVA_HOME:-}" ]; then
         if [ -x "${JAVA_HOME}/bin/javac" ]; then

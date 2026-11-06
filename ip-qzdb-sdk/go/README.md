@@ -7,7 +7,7 @@
 - **特性**：无锁快照（`atomic.Pointer[Snapshot]`）+ per-snapshot 有界 `GeoInfo` 解码缓存，并发查询互不阻塞
 - **依赖**：Go 标准库（`go >= 1.21`）+ `golang.org/x/sys`（跨平台只读 `mmap`：Unix 使用 `x/sys/unix`，Windows 使用 `x/sys/windows` 的 `CreateFileMapping`）
 - **许可**：MIT
-- **跨语言规范**：以仓库根 [`API_CONTRACT.md`](../../API_CONTRACT.md) 为唯一事实来源（SSOT）
+- **跨语言规范**：以 SDK 根 [`API_CONTRACT.md`](../API_CONTRACT.md) 为唯一事实来源（SSOT）
 
 ---
 
@@ -436,4 +436,4 @@ go/
 └── cmd/               # demo / batch / bench / dump / regress 等示例
 ```
 
-<!-- commit: go: Go SDK（跨平台 mmap，无锁并发查询） sync=1793943026 -->
+<!-- commit: go: Go SDK（跨平台 mmap，无锁并发查询） sync=1792769155 -->

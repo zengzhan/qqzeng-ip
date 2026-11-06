@@ -49,12 +49,14 @@ from qzdb import QzdbReader
 
 with QzdbReader("../demo/qqzeng-ip-ult.qzdb") as reader:
     # 1. 查询返回竖线分隔字符串
-    print(reader.find_str("114.114.114.114"))
+    print(reader.find_str("118.115.99.0"))
+    # 输出: 亚洲|Asia|CN|CHN|中国|China|四川|Sichuan|成都|Chengdu|双流|Shuangliu|510116|103.923730|30.574440|Asia/Shanghai|zh-CN|CNY|86|🇨🇳|中国电信|4134|CHINANET BACKBONE|chinatelecom.com.cn|Broadband
 
     # 2. 查询返回结构化 GeoInfo 对象（同时支持 IPv4 与 IPv6）
-    loc = reader.find("114.114.114.114")
+    loc = reader.find("118.115.99.0")
     if loc is not None:
         print(loc.country, loc.province, loc.city, loc.isp, loc.get("usage_type"))
+        # 输出: 中国 四川 成都 中国电信 Broadband
 ```
 
 ### Go
@@ -68,8 +70,9 @@ if err != nil {
 defer reader.Close()
 
 // 查询结构化 GeoInfo
-if info := reader.Find("114.114.114.114"); info != nil {
+if info, err := reader.Find("118.115.99.0"); err == nil && info != nil {
     fmt.Println(info.Get("country"), info.Get("city"), info.Get("isp"))
+    // 输出: 中国 成都 中国电信
 }
 ```
 
@@ -80,21 +83,23 @@ import com.qqzeng.qzdb.QzdbReader;
 import java.io.File;
 
 try (QzdbReader reader = new QzdbReader.Builder(new File("../demo/qqzeng-ip-ult.qzdb")).build()) {
-    GeoInfo loc = reader.find("114.114.114.114").orElse(null);
+    GeoInfo loc = reader.find("118.115.99.0").orElse(null);
     if (loc != null) {
         System.out.println(loc.getCountry() + " " + loc.getProvince() + " " + loc.getCity());
+        // 输出: 中国 四川 成都
     }
-    System.out.println(reader.findStr("114.114.114.114"));
+    System.out.println(reader.findStr("118.115.99.0"));
 }
 ```
 
 ### Rust
 ```rust
-use qzdb::from_file;
+use qzdb::QzdbReader;
 
-let reader = from_file("../demo/qqzeng-ip-ult.qzdb").expect("open qzdb failed");
-if let Some(loc) = reader.find("114.114.114.114") {
+let reader = QzdbReader::from_file("../demo/qqzeng-ip-ult.qzdb").expect("open qzdb failed");
+if let Some(loc) = reader.find("118.115.99.0") {
     println!("Country: {}, City: {}, ISP: {}", loc.country(), loc.city(), loc.isp());
+    // 输出: Country: 中国, City: 成都, ISP: 中国电信
 }
 ```
 
@@ -103,9 +108,10 @@ if let Some(loc) = reader.find("114.114.114.114") {
 using QQZeng.Qzdb;
 
 using var reader = QzdbReader.Open("../demo/qqzeng-ip-ult.qzdb");
-GeoInfo? loc = reader.Find("114.114.114.114");
+GeoInfo? loc = reader.Find("118.115.99.0");
 if (loc != null) {
-    Console.WriteLine($"{loc.Get("province")} {loc.Get("city")} ({loc.Get("isp")})");
+    Console.WriteLine($"{loc.Province} {loc.City} ({loc.Isp})");
+    // 输出: 四川 成都 (中国电信)
 }
 ```
 
@@ -121,8 +127,9 @@ int main(void) {
         return 1;
     }
     char buf[QZDB_VALUE_BUF_SIZE];
-    if (qzdb_find_str(&reader, "114.114.114.114", buf, sizeof(buf)) == QZDB_OK) {
+    if (qzdb_find_str(&reader, "118.115.99.0", buf, sizeof(buf)) == QZDB_OK) {
         printf("Result: %s\n", buf);
+        // 输出: Result: 亚洲|Asia|CN|CHN|中国|China|四川|Sichuan|成都|Chengdu|双流|Shuangliu|510116|103.923730|30.574440|Asia/Shanghai|zh-CN|CNY|86|🇨🇳|中国电信|4134|CHINANET BACKBONE|chinatelecom.com.cn|Broadband
     }
     qzdb_close(&reader);
     return 0;
@@ -131,13 +138,14 @@ int main(void) {
 
 ### Node.js
 ```javascript
-const QzdbReader = require('@qqzengip/qzdb');
+const { Builder } = require('@qqzengip/qzdb');
 
-const reader = new QzdbReader.Builder('../demo/qqzeng-ip-ult.qzdb').build();
+const reader = new Builder('../demo/qqzeng-ip-ult.qzdb').build();
 try {
-    const loc = reader.find('114.114.114.114');
+    const loc = reader.find('118.115.99.0');
     if (loc) {
         console.log(loc.get('country'), loc.get('city'), loc.get('isp'));
+        // 输出: 中国 成都 中国电信
     }
 } finally {
     reader.close();
@@ -150,9 +158,10 @@ try {
 use Qqzeng\Ip\QzdbBuilder;
 
 $reader = QzdbBuilder::path('../demo/qqzeng-ip-ult.qzdb')->build();
-$loc = $reader->find('114.114.114.114');
+$loc = $reader->find('118.115.99.0');
 if ($loc !== null) {
-    echo $loc->get('country') . ' ' . $loc->get('city') . ' ' . $loc->get('isp');
+    echo $loc->get('country') . ' ' . $loc->get('city') . ' ' . $loc->get('isp') . PHP_EOL;
+    // 输出: 中国 成都 中国电信
 }
 $reader->close();
 ```
@@ -183,10 +192,8 @@ QZDB 引擎采用专门定制的 **双阶段 PATRICIA Trie + RowSchema 偏移直
 
 ## 六、核心规范与参考文档
 
-- **[`FORMAT.md`](./FORMAT.md) / [`docs/QZDB_FORMAT.md`](../docs/QZDB_FORMAT.md)**：QZDB 二进制存储格式规范
-- **[`API_CONTRACT.md`](./API_CONTRACT.md) / [`docs/QZDB_SDK_API.md`](../docs/QZDB_SDK_API.md)**：8 语言统一 SDK API v2.4 设计规范
+- **[`FORMAT.md`](./FORMAT.md)**：QZDB 二进制存储格式规范
+- **[`API_CONTRACT.md`](./API_CONTRACT.md)**：8 语言统一 SDK API v2.4 设计规范
 - **[`docs/VERSION_COMPARISON.md`](../docs/VERSION_COMPARISON.md)**：五大版本规格、文件大小与 25 维字段全景对照
 - **[`docs/BENCHMARK_COMPARISON.md`](../docs/BENCHMARK_COMPARISON.md)**：QZDB vs `.db` / `.dat` / `.xdb` / `.mmdb` 性能评测白皮书
 - **[`docs/PERFORMANCE.md`](../docs/PERFORMANCE.md)**：8 语言三口径基准数据与复现指南
-
-<!-- commit: ip-qzdb-sdk: QZDB 多语言 SDK（Rust/C/Go/Java/C#/Node.js/PHP/Python） sync=1793943026 -->

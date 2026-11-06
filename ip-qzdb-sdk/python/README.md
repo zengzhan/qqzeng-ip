@@ -2,7 +2,7 @@
 
 官方 QZDB（离线 IP 地理定位数据库）Python SDK。纯离线、零依赖、零分配查询路径，支持 IPv4/IPv6 单条/批量/流式查询、CIDR 反查、多库链式合并与无锁热更新。
 
-> 规范版本 **v2.4**。所有语言行为以 [`../API_CONTRACT.md`](./API_CONTRACT.md) 为唯一事实来源；跨语言正确性由 `../tools/golden_vectors.json` 裁判（已用 C# 独立校验 4102/4102 通过）。
+> 规范版本 **v2.4**。所有语言行为以 [`../API_CONTRACT.md`](../API_CONTRACT.md) 为唯一事实来源；跨语言一致性由 CI 门禁结合公开 demo 样本库逐字段校验（全量 4102 向量集仅在内部开发仓回归中执行）。
 
 ---
 
@@ -346,6 +346,4 @@ python3 test_csv_oracle.py  # Tier0 独立真值校验（对源 CSV 抽样，证
 1. 从官方渠道获取新版 `.qzdb`（`.qzdb` 为付费数据，不入库）。
 2. 放入 `../data/` 或指定路径，`QzdbReader(path)` 重新加载即可；线上热更新用 `reader.reload(path)`（原子替换，不影响在途查询）。
 3. 字段新增/布局变化由文件头 `GROUP_SCHEMA` / `ROW_SCHEMA` 自描述，SDK 自动适配，无需改代码。
-4. 多语言行为以 `../API_CONTRACT.md` 为准；新增 IP 样本后重建 `tools/golden_vectors.json` 并跑全语言 Tier2 校验。
-
-<!-- commit: python: Python SDK（mmap 轻量读取） sync=1793943026 -->
+4. 多语言行为以 `../API_CONTRACT.md` 为准；跨语言冒烟在 CI 中执行 demo 样本对拍。

@@ -10,7 +10,7 @@
 - **操作系统**：macOS Sequoia 15.5 (Darwin 24.5.0)
 - **测试工具链**：
   - 跨格式同源对比：`.NET 10.0 (RyuJIT AdvSIMD)` + `BenchmarkDotNet v0.15.0`（微基准单次纳秒测试 + 随机千万/亿级吞吐实测）
-  - QZDB 8 语言基准：遵循 [`BENCH_CONTRACT.md`](./BENCH_CONTRACT.md) v1.0（`splitmix64` 固定随机种子、FNV-1a 指纹对账校验、单线程 Best-of-3 与 16 线程并发压测）
+  - QZDB 8 语言基准：遵循统一基准契约规范（`splitmix64` 固定随机种子、FNV-1a 指纹对账校验、单线程 Best-of-3 与 16 线程并发压测，详见 [`PERFORMANCE.md`](./PERFORMANCE.md)）
 
 ## 二、核心结论：六大格式全景横评总表
 

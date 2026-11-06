@@ -6,7 +6,11 @@
 *.db
 *.qzdb
 *.csv
+*.vec
+*.bin
 data/
+dada/
+**/dada/
 !demo/*.qzdb
 !demo/*.csv
 
@@ -50,20 +54,22 @@ build/
 *.jar
 ip-qzdb-sdk/java/build/
 
-# Local private documentation & internal release notes
-docs/BENCH_CONTRACT.md
-docs/CORRECTION_WORKFLOW.md
-docs/DEVELOPER_GUIDE_OUTLINE.md
-docs/DOC_STYLE.md
-docs/FRAUD_SOLUTION_OUTLINE.md
-docs/GITHUB_FOLDER_DESCRIPTIONS.md
-docs/PACKAGE_AUDIT.md
-docs/PRODUCT_TIERS.md
-docs/QUALITY_METRICS.md
-docs/QUERY_CONTRACT.md
-docs/QZDB_SYNC_GUIDE.md
-docs/RELEASE_CHECKLIST.md
-docs/T1_COVERAGE_PROOF.md
+# Local private documentation, notes & credentials
+*.token
+*.key
+*.secret
+*.asc
+*.pem
+*.pfx
+*.local.*
+ci_settings.xml
+settings.xml
+docs/*PUBLISH*.md
+docs/*CREDENTIALS*.md
+docs/archive/
+docs/audit/
+docs/design-notes/
+docs/internal/
 release-manifest.template.json
 PUBLISHING.md
 

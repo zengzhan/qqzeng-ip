@@ -157,3 +157,30 @@ Go/Rust/C# 经 batch 二进制 `--cidr` 模式)+ `ip-qzdb-sdk/cross_lang_verify.
 `export_mcp_tool_manifest() -> string` 输出符合 JSON Schema Draft 2020-12 与 Model Context Protocol (`2025-06-18`) 的工具描述 JSON，内含：
 - `database_meta`：实时反映当前快照的 `edition`、`version`、`data_month`、`build_time`、`crc32_hash` 与 `available_fields`。
 - `tools`：声明 `qzdb_inspect_ip_fast`（零分配位掩码批量嗅探）与 `qzdb_lookup_geo_fields`（支持 `fields` 按需字段投影以最小化 LLM Token 消耗）。
+
+### 3. 应用场景类型权威枚举 (`usage_type`)
+QZDB 官方定义 21 类网络应用场景枚举。在含有 `usage_type` 字段的版本（`MAX` 15 维、`ULT` 25 维、`ASN` 8 维）中，取值为以下原始英文字符串；若命中未收录场景则安全兜底为 `Unknown`，不崩溃。
+
+| 序号 | 原始值 (`RawValue`) | 中文名称 | 场景含义与典型特征 | 是否出现在公开 Demo 库 |
+| :---: | :--- | :--- | :--- | :---: |
+| 1 | `AICrawler` | AI 爬虫 | AI 训练 / AI 搜索爬虫（GPTBot、ClaudeBot 等） | 否 |
+| 2 | `Backbone` | 骨干网 | 运营商骨干传输网 / 国际出口路由 | 是 |
+| 3 | `Broadband` | 宽带 | 家庭/企业宽带接入（xDSL、FTTH、Cable、拨号等） | 是 |
+| 4 | `Business` | 企业 | 企业专线 / 企业内部组网 | 是 |
+| 5 | `CDN` | CDN | 内容分发网络缓存与加速节点 | 是 |
+| 6 | `Cloud` | 云服务 | 公有云 / 托管云主机（AWS、阿里云、Azure、腾讯云等） | 是 |
+| 7 | `DNS` | DNS | DNS 基础设施 / Anycast 公共 DNS 节点 | 否 |
+| 8 | `DataCenter` | 数据中心 | IDC 机房托管 / 服务器租用 | 是 |
+| 9 | `Education` | 教育网 | 高校 / 科研网（如 CERNET、Internet2 等） | 是 |
+| 10 | `Finance` | 金融 | 银行 / 证券 / 保险等专有金融机构内网 | 是 |
+| 11 | `Government` | 政府 | 政务内外网 / 公共管理机构网络 | 是 |
+| 12 | `ISP` | 互联网提供商 | 未细分场景的通用网络运营商基础设施 | 否 |
+| 13 | `IXP` | 交换中心 | 互联网交换中心（Internet Exchange Point） | 否 |
+| 14 | `IoT` | 物联网 | 物联网设备 / 智能硬件蜂窝接入 | 否 |
+| 15 | `Mobile` | 移动网络 | 蜂窝移动网络（2G/3G/4G/5G 基站流量） | 是 |
+| 16 | `Reserved` | 保留地址 | RFC 1918 / RFC 6890 保留或未分配私网网段 | 否 |
+| 17 | `Satellite` | 卫星互联网 | 低轨星座 / 卫星互联网接入（Starlink、OneWeb 等） | 否 |
+| 18 | `Spider` | 爬虫 | 通用商业搜索引擎网络爬虫（Googlebot、Baiduspider 等） | 否 |
+| 19 | `Streaming` | 流媒体 | 音视频 / 游戏直播等流媒体专用加速节点 | 否 |
+| 20 | `Unknown` | 未知 | 无法明确判定用途的场景兜底 | 是 |
+| 21 | `VPN` | VPN/代理 | 数据中心代理 / VPN / 匿名隐私网络出口 | 是 |
