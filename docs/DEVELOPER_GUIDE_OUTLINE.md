@@ -11,7 +11,7 @@ docs/
 ├── quickstart.md            # 1. 30 秒极速接入指南（全语言最小可运行 Demo）
 ├── data-schema.md           # 2. 字段字典与数据模型（引用 QUERY_CONTRACT.md）
 ├── errors.md                # 3. 错误状态码与空值消费准则（空字符串处理）
-├── update-and-rollback.md   # 4. 离线更新、安全校验与平滑热重载（引用 RELEASE_CHECKLIST.md）
+├── update-and-rollback.md   # 4. 离线更新、安全校验与平滑热重载方案
 └── changelog.md             # 5. 月度发版记录与更新摘要
 ```
 
