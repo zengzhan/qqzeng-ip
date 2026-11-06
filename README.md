@@ -25,7 +25,7 @@
 
 </div>
 
-> **QZDB (qqzeng IP Database)** 是一款专为企业级高并发、云原生架构打造的下一代 IP 地理位置与号段归属地二进制搜索引擎。凭借**双阶段 Patricia Trie 树算法**、**`mmap` 零拷贝**以及**无锁并发设计**，单机支持 500 万+ QPS（C/Rust 原生可达 1000 万+ QPS，延迟低至纳秒级，多线程缓存扩展下吞吐可达数千万至亿级，实测横评见 [docs/benchmark-comparison.md](./docs/benchmark-comparison.md)）。
+> **QZDB (qqzeng IP Database)** 是一款专为企业级高并发、云原生架构打造的下一代 IP 地理位置与号段归属地二进制搜索引擎。凭借**双阶段 Patricia Trie 树算法**、**`mmap` 零拷贝**以及**无锁并发设计**，单机支持 500 万+ QPS（C/Rust 原生可达 1000 万+ QPS，延迟低至纳秒级，多线程缓存扩展下吞吐可达数千万至亿级，口径与复现见 [docs/PERFORMANCE.md](./docs/PERFORMANCE.md)）。
 
 ---
 
@@ -74,7 +74,7 @@
 ## 📊 多语言 SDK 性能横向评测榜单 (SDK Benchmark)
 
 分为两大工程阵营：**原生/编译系统语言阵营**（C、Go、Rust、Java、C#）注重高并发极致吞吐；**动态脚本生态阵营**（Node.js、PHP、Python）注重开箱即用与轻量集成。  
-测试数据均取自统一受控基准（Apple M4 Max 单线程，`ip-qzdb-sdk/bench_reports/*.json` 真实快照），数字由 CI 性能门禁守护。完整定义见下方折叠区与 [docs/benchmark-comparison.md](./docs/benchmark-comparison.md)。
+测试数据均取自统一受控基准（Apple M4 Max 单线程，`ip-qzdb-sdk/bench_reports/*.json` 真实快照），数字由 CI 性能门禁守护。完整定义见下方折叠区与 [docs/PERFORMANCE.md](./docs/PERFORMANCE.md)。
 
 | 语言与阵营（点击直达源码） | 单线程整型随机¹<br>**口径 A · 真实契约基准** | 16 线程并发²<br>**口径 B · 多核极限** | 字符串查询³<br>**口径 C · 含 IP 解析** | 架构优化特点 |
 | :--- | :---: | :---: | :---: | :--- |
@@ -96,7 +96,7 @@
 - **口径 C｜字符串 find_str**：字符串输入（含 IP 解析与格式校验）、demo 样本库 —— 与 CI 门禁同口径，跨语言可比；
 - **⁴ 契约基准与直测探针说明**：统一契约包含伪随机流推进与防作弊指纹校验；Node.js 与 PHP 在契约下分别为 8.22M 与 0.72M，在消除流推进开销的极简裸循环探针下可达 99.4M 与 5.67M；
 - **环境与库规模效应**：Apple M4 Max（14 核）单线程 best-of-3；x86 平台通常低 2~4 倍；122MB 全球库因超出 CPU L3 缓存容量，口径 A 约为省级库的 1/3（物理客观规律）；
-- 完整定义与复现命令见 [docs/benchmark-comparison.md](./docs/benchmark-comparison.md)。除 C/C++ 源码直编外，其余 7 语言均可由包管理器一条命令安装（见下方 Quick Start）。仅供技术选型参考，非 SLA。
+- 完整定义与复现命令见 [docs/PERFORMANCE.md](./docs/PERFORMANCE.md)。除 C/C++ 源码直编外，其余 7 语言均可由包管理器一条命令安装（见下方 Quick Start）。仅供技术选型参考，非 SLA。
 
 </details>
 
@@ -325,7 +325,7 @@ flowchart LR
 
 ## ⚖️ 主流二进制 IP 数据格式对比 (Format Comparison)
 
-为了帮助架构师进行客观技术选型，以下列出了 QZDB 与业界主流二进制 IP 格式在检索路径、记录形态与存储开销上的真实物理对比（详细基准报告见 [`docs/benchmark-comparison.md`](./docs/benchmark-comparison.md) 与 [`docs/VERSION_COMPARISON_202611.md`](./docs/VERSION_COMPARISON_202611.md)）：
+为了帮助架构师进行客观技术选型，以下列出了 QZDB 与业界主流二进制 IP 格式在检索路径、记录形态与存储开销上的真实物理对比（详细基准报告见 [`docs/BENCHMARK_COMPARISON.md`](./docs/BENCHMARK_COMPARISON.md) 与 [`docs/VERSION_COMPARISON.md`](./docs/VERSION_COMPARISON.md)）：
 
 | 格式 | 检索路径（步数构成） | 记录形态 | 体积驱动因素 | 客观短板 |
 | :--- | :--- | :--- | :--- | :--- |

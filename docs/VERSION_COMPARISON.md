@@ -188,7 +188,7 @@ QZDB 专为现代微服务与云原生架构设计，单文件整合 **IPv4 + IP
 
 > 📖 **完整性能文档直达**：
 > - 想要了解各语言压测口径、复现命令与完整指标，请参阅：[`PERFORMANCE.md`](./PERFORMANCE.md)
-> - 想要对比 QZDB 与 MaxMind GeoIP2、ip2region xdb、经典 .dat 的架构横评，请参阅：[`benchmark-comparison.md`](./benchmark-comparison.md)
+> - 想要对比 QZDB 与 MaxMind GeoIP2、ip2region xdb、经典 .dat 的架构横评，请参阅：[`BENCHMARK_COMPARISON.md`](./BENCHMARK_COMPARISON.md)
 
 ---
 
