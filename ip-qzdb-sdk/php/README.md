@@ -1061,4 +1061,4 @@ php bench_all.php
 
 [MIT](https://opensource.org/licenses/MIT)
 
-<!-- commit: php: PHP SDK（纯 PHP 实现，缓冲与流式双模式） sync=1793951035 -->
+<!-- commit: php: PHP SDK（纯 PHP 实现，缓冲与流式双模式） -->
