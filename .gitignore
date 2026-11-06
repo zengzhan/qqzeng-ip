@@ -51,11 +51,20 @@ build/
 ip-qzdb-sdk/java/build/
 
 # Local private documentation & internal release notes
-docs/GITHUB_FOLDER_DESCRIPTIONS.md
-docs/QZDB_SYNC_GUIDE.md
+docs/BENCH_CONTRACT.md
+docs/CORRECTION_WORKFLOW.md
+docs/DEVELOPER_GUIDE_OUTLINE.md
 docs/DOC_STYLE.md
-docs/RELEASE_CHECKLIST.md
+docs/FRAUD_SOLUTION_OUTLINE.md
+docs/GITHUB_FOLDER_DESCRIPTIONS.md
 docs/PACKAGE_AUDIT.md
+docs/PERFORMANCE.md
+docs/PRODUCT_TIERS.md
+docs/QUALITY_METRICS.md
+docs/QUERY_CONTRACT.md
+docs/QZDB_SYNC_GUIDE.md
+docs/RELEASE_CHECKLIST.md
+docs/T1_COVERAGE_PROOF.md
 release-manifest.template.json
 PUBLISHING.md
 

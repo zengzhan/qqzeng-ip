@@ -25,7 +25,7 @@
 
 </div>
 
-> **QZDB (qqzeng IP Database)** is a next-generation IP geolocation and mobile phone prefix binary search engine engineered for enterprise-grade high concurrency and cloud-native architectures. Powered by a **two-phase Patricia Trie lookup algorithm**, **`mmap` zero-copy**, and **lock-free concurrent design**, a single machine achieves 5M+ QPS (native C/Rust reaches 10M+ QPS with sub-80ns latency, scaling to tens or hundreds of millions QPS under multi-threaded caching; see docs/PERFORMANCE.md for methodology and reproduction).
+> **QZDB (qqzeng IP Database)** is a next-generation IP geolocation and mobile phone prefix binary search engine engineered for enterprise-grade high concurrency and cloud-native architectures. Powered by a **two-phase Patricia Trie lookup algorithm**, **`mmap` zero-copy**, and **lock-free concurrent design**, a single machine achieves 5M+ QPS (native C/Rust reaches 10M+ QPS with sub-80ns latency, scaling to tens or hundreds of millions QPS under multi-threaded caching; see [docs/benchmark-comparison.md](./docs/benchmark-comparison.md) for benchmark comparison).
 
 ---
 
@@ -74,7 +74,7 @@
 ## 📊 SDK Benchmark Ranking
 
 Divided into two engineering tiers: **Native / Compiled High-Performance Tier** (C, Go, Rust, Java, C#) designed for extreme throughput and low latency; **Dynamic Scripting Ecosystem** (Node.js, PHP, Python) optimized for zero-compilation simplicity and lightweight integration.  
-All metrics derived from a unified, controlled environment (Apple M4 Max, single-thread, live snapshots in `ip-qzdb-sdk/bench_reports/*.json`) continuously guarded by CI test gates. See details below and in [docs/PERFORMANCE.md](./docs/PERFORMANCE.md).
+All metrics derived from a unified, controlled environment (Apple M4 Max, single-thread, live snapshots in `ip-qzdb-sdk/bench_reports/*.json`) continuously guarded by CI test gates. See details below and in [docs/benchmark-comparison.md](./docs/benchmark-comparison.md).
 
 | Language & Tier (Click for source) | Single-Thread Integer¹<br>**Metric A · Standard Contract** | 16-Thread Concurrency²<br>**Metric B · Multi-Core Limit** | String Lookup³<br>**Metric C · With IP Parse** | Features & Architecture |
 | :--- | :---: | :---: | :---: | :--- |
@@ -96,7 +96,7 @@ All metrics derived from a unified, controlled environment (Apple M4 Max, single
 - **Metric C | String `find_str`**: String IP input (including IP parsing and format validation), demo database — identical to CI test suite for cross-language comparison;
 - **⁴ Contract Benchmark vs Direct Probe**: The standard contract executes PRNG progression and FNV fingerprint cross-validation; Node.js and PHP measure 8.22M and 0.72M under full contract, and reach 99.4M and 5.67M under minimal direct loop probes;
 - **Environment & Scale Effect**: Apple M4 Max (14 cores), single-thread best-of-3; x86 environments typically measure 2~4x lower; 122MB global database Metric A is approximately 1/3 of provincial database due to CPU L3 cache boundary (physical hardware reality);
-- Full definitions and reproduction commands in [docs/PERFORMANCE.md](./docs/PERFORMANCE.md). Aside from C/C++ source compilation, the other 7 languages install in one command via package managers (see Quick Start below).
+- Full definitions and reproduction commands in [docs/benchmark-comparison.md](./docs/benchmark-comparison.md). Aside from C/C++ source compilation, the other 7 languages install in one command via package managers (see Quick Start below).
 
 </details>
 
@@ -323,7 +323,7 @@ flowchart LR
 
 ## ⚖️ Binary Format Comparison
 
-Objective comparison between QZDB and standard industry binary IP formats in lookup path, record representation, and storage drivers (detailed benchmark reports in [`docs/benchmark-comparison.md`](./docs/benchmark-comparison.md) and [`docs/PERFORMANCE.md`](./docs/PERFORMANCE.md)):
+Objective comparison between QZDB and standard industry binary IP formats in lookup path, record representation, and storage drivers (detailed benchmark reports in [`docs/benchmark-comparison.md`](./docs/benchmark-comparison.md) and [`docs/VERSION_COMPARISON_202611.md`](./docs/VERSION_COMPARISON_202611.md)):
 
 | Format | Lookup Path (Step Composition) | Record Representation | Size Driver | Objective Limitation |
 | :--- | :--- | :--- | :--- | :--- |
@@ -356,7 +356,7 @@ Objective comparison between QZDB and standard industry binary IP formats in loo
 | **[`database-sql/`](./database-sql)** | 🗄️ **Database SQL DDL** — MySQL / PostgreSQL / SQL Server schemas and bulk loaders |
 | **[`ip-history-sdk/`](./ip-history-sdk)** | 🗂️ **Historical Archive & Tools** — v3.0~v5.0 archives, Big DAT, and Windows offline desktop tool |
 | **[`demo/`](./demo)** | 📋 **Evaluation Samples** — IP and mobile prefix CSV / TXT / QZDB sample files |
-| **[`docs/`](./docs)** | 📄 **Architecture & Guides** — Performance benchmarks, specifications, and style guides |
+| **[`docs/`](./docs)** | 📄 **Architecture & Guides** — Performance benchmark comparisons and 2026 edition selection guides |
 
 ### IP Database Product Editions & Field Specifications
 
