@@ -23,10 +23,12 @@
 9. [链式多库查询 `ChainedReader`](#9-链式多库查询-chainedreader)
 10. [命名注册表 `QzdbRegistry`](#10-命名注册表-qzdbregistry)
 11. [热更新与生命周期](#11-热更新与生命周期)
-12. [错误处理](#12-错误处理)
-13. [性能说明](#13-性能说明)
-14. [维护与升级](#14-维护与升级)
-15. [项目结构](#15-项目结构)
+12. [主流框架集成指南（Laravel / Hyperf / Webman / Symfony / ThinkPHP）](#12-主流框架集成指南laravel--hyperf--webman--symfony--thinkphp)
+13. [错误处理](#13-错误处理)
+14. [性能说明](#14-性能说明)
+15. [维护与升级](#15-维护与升级)
+16. [项目结构](#16-项目结构)
+17. [常见问题解答（FAQ）](#17-常见问题解答faq)
 
 ---
 
@@ -116,7 +118,7 @@ $rowId = $reader->lookupRowId('8.8.8.8');
 > **注意：查询语义约定（与 Java 不同，与 C# 一致）**
 >
 > - `find*` 系列方法在 **IP 未命中** 或 **IP 格式非法** 时均返回 `null` / `0`，**不抛异常**（Fail-Soft 查询）。
-> - 只有**数据库文件损坏、格式不支持、CRC 校验失败等加载期错误**，`build()` / `load()` / `reload()` 才会抛出 `QzdbException`（见[第 12 节](#12-错误处理)）。
+> - 只有**数据库文件损坏、格式不支持、CRC 校验失败等加载期错误**，`build()` / `load()` / `reload()` 才会抛出 `QzdbException`（见[第 13 节](#13-错误处理)）。
 >
 > 因此：对来自外部的不可信 IP 文本，可直接用 `find()` 而无需 try/catch；若需区分"未命中"与"格式非法"，请用 `findBatch` / `findStream` 的 `BatchResult`（仅格式非法才会进入 `hasError()`，见[第 8 节](#8-批量与流式查询)）。
 
@@ -208,16 +210,21 @@ LRU 分页缓存（`STREAM_PAGE_SIZE` = 64KB × `STREAM_PAGE_CACHE_PAGES` = 64 �
 **4MB**），同一页内的 Trie 步进、池偏移读取都命中缓存，不产生系统调用。只有跨页访问
 才会触发一次 64KB `fread`。
 
-实测（Apple M4 Max / PHP 8.5.10 / 本地 SSD，`find()` 随机 IPv4，50k 次）：
+实测（Apple arm64 / **PHP 8.5.12** / 本地 SSD，10,000 随机 IPv4，`findStr`，
+每点 3 次取中位数、优化前后同机交替 3 轮；当前 `data/` 库）：
 
-| 库 | 大小 | 缓冲模式 | 流式/低内存模式 | 流式常驻内存 |
-|----|------|----------|------------------|--------------|
-| `std_china` | 8.2 MB | 2.28M QPS | 0.65M QPS | ~8 MB |
-| `max_global` | 111.7 MB | 0.37M QPS | 0.026M QPS | ~10 MB |
+| 库 | 当前大小 | 流式优化前 | 流式优化后 | 降幅 |
+|----|----------|------------|------------|------|
+| `std_china` | 2.89 MB | 1.465 μs/次 | 1.149 μs/次 | -21.6% |
+| `ult_china` | 6.28 MB | 5.786 μs/次 | 3.738 μs/次 | -35.4% |
+| `ult_global` | 65.88 MB | 58.387 μs/次 | 44.025 μs/次 | -24.6% |
 
-即：流式模式比缓冲模式慢 5.6 倍（小库）到 14 倍（大库），代价是常驻内存从 1.0× 文件
-大小降到约 1/11（大库）～ 1/1（小库，4MB 页缓存本身成为下限）。**两者解析结果逐字节
-一致**（20k 输入 × 4 个库对拍，0 差异）。
+流式峰值内存优化前后均为 **8.0 MB**，没有拿内存换速度。缓冲模式见 `bench_all.php`
+（`findUint` 口径）：`std_china` V4 约 4.63M QPS、`ult_china` 约 3.59M QPS。
+两种模式解析结果**逐字节一致**（20,120 输入 × 4 个库对拍，0 差异）。
+
+> 旧文档里的 `8.2 MB` / `111.7 MB` 两个库与 2.28M / 0.026M QPS 是 2026-08
+> 历史测试文件的数字，与当前 `data/` 不是同一批数据，不要混用。
 
 **生产环境建议**：
 1. FPM worker 较多或 `memory_limit` 较小时，使用 `MEMORY_LOW`，不要仅依赖自动阈值；
@@ -238,35 +245,36 @@ PHP-FPM 的每个 worker 都是独立进程。一个 worker 加载一次数据�
        + 20%～30% 安全余量
 ```
 
-以约 116 MB 的 `ult_global` 为例，`balanced` 模式单 worker 可能需要约
-125～150 MB；50 个 worker 不能按 116 MB 只预留一份，而应按 worker 数量累加。
-实际数值与 PHP 版本、数据版本、查询分布和业务代码有关，必须在目标机器实测。
+以当前 `data/qqzeng_ip_ult_global.qzdb`（**65.88 MB**）为例，`balanced` 模式
+单 worker 峰值实测约 **72～82 MB**；50 个 worker 不能按 66 MB 只预留一份，
+而应按 worker 数量累加。实际数值与 PHP 版本、数据版本、查询分布和业务代码
+有关，必须在目标机器实测。
 
 **推荐选择：**
 
 | 场景 | 推荐 | 取舍 |
 |------|------|------|
-| PHP 7.4 / 8.x 存量服务器、`memory_limit` 较小 | `MEMORY_LOW` | 内存最低，查询延迟约为缓冲模式的 1/5～1/15 |
+| PHP 7.4 / 8.x 存量服务器、`memory_limit` 较小 | `MEMORY_LOW` | 内存最低（约 8 MB）；查询延迟约为缓冲模式的 2～34 倍，随库规模增大而拉开，见第 4.5 节实测 |
 | FPM worker 少、数据库较小、追求响应速度 | `MEMORY_BALANCED` | 速度优先，单 worker 占用较高 |
 | 50+ worker 或大库高并发 | Go 常驻服务 + PHP 调用 | 共享一份数据库，部署复杂度增加 |
 
-FPM 中不要在每次请求里重复加载数据库。应在常驻生命周期中初始化一次，
-并复用同一个 reader；传统短生命周期 PHP 请求则建议使用 `MEMORY_LOW` 或改用
-Go 服务。部署后请确认 worker 重启不会造成瞬时超额，并设置合理的
-`pm.max_children`、`pm.max_requests` 和宿主机内存告警。
+**FPM 下没法跨请求复用 reader**：每个请求结束时 PHP 会销毁全部变量（包括
+`static` 和单例），下一个请求必然重新加载一次库。能做的只是压低单次加载成本：
+`MEMORY_LOW`，并把整库 CRC 校验放到部署期做一次。要彻底消除重复加载，只能换
+常驻运行时（第 4.7 节）或把库放到进程外服务。部署后请确认 worker 重启不会
+造成瞬时超额，并设置合理的 `pm.max_children`、`pm.max_requests` 和宿主机
+内存告警。
 
 **FPM 示例：**
 
 ```php
-// bootstrap.php：每个常驻 worker 初始化一次，不要放在请求处理函数内。
+// bootstrap.php —— 每个请求都会重新执行这一段、重新加载一次库。
+// FPM 的 static 不跨请求存活，写成 static 单例也起不到复用作用。
 require_once __DIR__ . '/QzdbReader.php';
 
-static $reader = null;
-if ($reader === null) {
-    $reader = Qqzeng\Ip\QzdbBuilder::path('/data/qqzeng_ip_ult_global.qzdb')
-        ->memoryMode(Qqzeng\Ip\QzdbReader::MEMORY_LOW)
-        ->build();
-}
+$reader = Qqzeng\Ip\QzdbBuilder::path('/data/qqzeng_ip_ult_global.qzdb')
+    ->memoryMode(Qqzeng\Ip\QzdbReader::MEMORY_LOW)
+    ->build();
 ```
 
 如果使用 Swoole、RoadRunner、FrankenPHP 等常驻 PHP，必须显式调用 `close()`，
@@ -290,6 +298,91 @@ $reader = QzdbBuilder::bytes(file_get_contents($path))->build();
 3. 逐步增加 FPM worker，确认总 RSS 没有超过宿主机可用内存的 70%～80%；
 4. 验证数据库更新失败时旧 reader 仍可查询，更新成功后新数据才生效；
 5. 验证异常输入、损坏数据库、文件权限错误都能明确失败，不得静默返回错误地理信息。
+
+---
+
+### 4.7 常驻运行（FrankenPHP / RoadRunner / Swoole）
+
+2026 年 PHP 圈的主流做法已经从“每请求重启”转向“启动一次、常驻内存”
+的 worker 模式：框架只引导一次，之后每个请求只走查询。PHP 8.5 是当前
+正式版（8.5.12，2026 年 10 月 21 日），PHP 8.6 计划 2026 年 11 月 19 日
+发布正式版；本 SDK 要求 PHP 7.4+、64 位，推荐 8.2+。
+
+| 运行时 | 部署形态 | 要不要 PHP 扩展 | 2026 年定位 |
+|---|---|---|---|
+| **FrankenPHP** | 单二进制，内置 Caddy，自带 HTTPS / HTTP3 | 不需要 | PHP Foundation 官方支持（2025 年 5 月宣布），新项目默认推荐，运维面最小 |
+| **RoadRunner** | Go 二进制 + PHP worker 进程 | 不需要 | 最成熟、进程隔离最好，迁移老应用首选 |
+| **Swoole / Open Swoole** | PECL 扩展，协程 | 需要编译扩展 | 适合大量并发上游调用，运维最重；协程、并发任务、内置表是它独有的 |
+
+数字口径（不要混着用）：FrankenPHP 官方说在 API Platform 应用上比 FPM
+快约 3.5 倍；独立开发者 Vulke 的实测是 worker 模式约 15,000 req/s、
+FPM 约 4,000 req/s（约 3.75 倍）。这两组数来自不同场景，都量的是框架
+引导成本，不是查库本身。
+
+### 为什么对 QZDB 特别划算
+
+`QzdbReader` 本来就是按常驻模型写的：不可变快照、`reload()` 重建后原子
+替换、GeoInfo 缓存 65536 槽直接映射（装满靠碰撞覆盖单槽淘汰，永不整表
+清空，防长驻进程周期性毛刺）、无单例（复用请走 `QzdbRegistry`）。
+FPM 下这些设计每请求重建一次，等于白费；worker 模式下启动时加载一次，
+之后每个请求只做一次查询。
+
+实测（FrankenPHP 1.13.1 自带 PHP 8.5.12，6.6 MB 的 ult_china 库）：
+加载带 CRC 约 47 ms、不带约 5 ms，单次查询约 4.7 μs。省的是启动加载
+加 CRC 这部分，不是查询本身（查询本来就是微秒级）；大库的加载耗时
+须在目标机上实测，不要拿这组小库数字直接外推。
+
+示例见 `examples/frankenphp-worker.php`（FrankenPHP 原生 worker 写法，
+函数签名按 FrankenPHP 官方 worker 文档核对）：
+
+```bash
+FRANKENPHP_CONFIG="worker ./ip-qzdb-sdk/php/examples/frankenphp-worker.php 8" \
+  QZDB_PATH=/data/qqzeng_ip_ult_global.qzdb \
+  MAX_REQUESTS=500 \
+  frankenphp php-server
+```
+
+主流框架（Laravel Octane / Hyperf / Webman / Symfony / ThinkPHP）的接入模板见
+[第 12 节](#12-主流框架集成指南laravel--hyperf--webman--symfony--thinkphp)，
+FPM 与常驻的配置对照表在 12.1。
+
+### 先算清的四件事
+
+1. **内存不是省了，是变固定了**。FrankenPHP 默认每 CPU 2 个 worker。
+   总量按第 4.6 节的公式估算：worker 数 × 单 worker 峰值。当前
+   `ult_global` 为 **65.88 MB**，`balanced` 单 worker 峰值实测约
+   **72～82 MB**（8 核默认 16 个 worker 约 1.2～1.3 GB）。单 worker 峰值
+   必须在目标机上实测，不要只按文件大小留内存。FPM 是“每请求临时占一份
+   × 并发数”，worker 是“每 worker 常驻一份”，总量可能更大，但 CPU 上
+   的重复加载没了。
+2. **状态会串请求**。`$_GET`、`$_POST`、`$_SERVER` 每个请求自动重置，
+   但 `$_ENV` 不重置，static 变量、全局变量、类静态属性也会跨请求保留。
+   请求相关的值不要往这些地方放；SDK 自身的缓存是有界的、快照不可变，
+   风险低，业务代码才是重灾区。
+3. **必须设 `MAX_REQUESTS` 兜底回收**（示例默认 500）。重启全部 worker
+   用 Caddy 管理接口：`curl -X POST http://localhost:2019/frankenphp/workers/restart`。
+   常驻进程退出前必须显式调用 `$reader->close()`。
+4. **启动失败会直接让 worker 退出**。库文件不存在或损坏时，启动期就抛
+   异常，FrankenPHP 会按退避策略重启 worker。这是故意的：不要带病服务，
+   部署时先确认库文件路径和权限。
+
+### FPM 还是兼容路径，不是被删掉
+
+低流量、WordPress 这类场景 FPM 仍然够用，做法不变：用 `MEMORY_LOW`
+（第 4.6 节）压低「每请求一次」的加载成本。FPM 无法跨请求复用 reader，
+要彻底消除重复加载只能换常驻运行时或进程外服务。50+ worker 或大库高并发，
+优先用 Go 常驻服务 + PHP 通过 Unix Socket/HTTP 调用（第 4.5 节），
+8 个进程共享同一份库内存。
+
+### 不建议的两条路
+
+- **APCu**：是 FPM 进程池级共享内存，但取回时仍要拷回当前请求的 PHP 堆，
+  省了磁盘 IO，没省内存峰值；默认共享内存还得调。适合小索引表，不适合整库。
+- **OPcache preload**：主要缓存字节码和类定义，拿它塞几十 MB 数据属于
+  hack，不建议。
+- **FFI + mmap**：SDK 里 `tryMmapLoad()` 目前直接返回 `false`（留的桩，
+  代码注释写的是 macOS 下 FFI 调系统函数兼容性不稳定），接通它要把
+  `readBytes()` 改成 FFI 切片，工程量不小，优先级最低。
 
 ---
 
@@ -431,7 +524,7 @@ foreach ($results as $r) {
 
 // 流式：惰性 yield 产出，适合超大数据集 / 管道消费（内存恒定）
 foreach ($reader->findStream($hugeIpList) as $r) {
-    if ($r->isSuccess()) process($r->result);
+    if ($r->isSuccess()) process($r->info);
 }
 ```
 
@@ -531,7 +624,272 @@ $reader->reloadBuffer($newBytes);
 
 ---
 
-## 12. 错误处理
+## 12. 主流框架集成指南（Laravel / Hyperf / Webman / Symfony / ThinkPHP）
+
+2026 年的 PHP 生产部署，主流做法已经从「每请求重启」转向「启动一次、常驻内存」
+（见第 4.7 节）。本节给出五套框架 + FrankenPHP 原生 worker 的接入模板，全部放在
+[`examples/`](examples/) 目录，可通过 `php -l` 直接检查语法：
+
+| 示例文件 | 框架 / 运行时 | 交付内容 |
+|---|---|---|
+| [`laravel-octane-provider.php`](examples/laravel-octane-provider.php) | Laravel 11/12 + Octane | 服务提供者、风控中间件、`qzdb:reload` 命令 |
+| [`hyperf-service.php`](examples/hyperf-service.php) | Hyperf 3.x（Swoole 协程） | 容器工厂、启动监听器、整实例切换热更新 |
+| [`webman-bootstrap.php`](examples/webman-bootstrap.php) | Webman（Workerman） | `onWorkerStart` 引导、风控中间件、全局封装 |
+| [`symfony-subscriber.php`](examples/symfony-subscriber.php) | Symfony 7 | `services.yaml` 工厂配置、REQUEST 事件订阅者 |
+| [`thinkphp8-service.php`](examples/thinkphp8-service.php) | ThinkPHP 8.0 | 系统服务类、`provider.php` 绑定、中间件、`ip_geo()` |
+| [`frankenphp-worker.php`](examples/frankenphp-worker.php) | FrankenPHP worker | 裸 worker 循环 + `close()` 收尾 |
+
+### 12.1 FPM 与常驻内存框架的选型与配置对照表
+
+同一份业务代码要同时伺候两种部署，差异全部收在「怎么构建 reader」这一步：
+
+| 配置项 | 常驻内存框架 | 传统 PHP-FPM |
+|---|---|---|
+| 代表运行时 | Octane、Hyperf、Webman、FrankenPHP、RoadRunner | nginx + php-fpm、Apache、WordPress |
+| 内存模式 | `MEMORY_BALANCED` | 大库用 `MEMORY_LOW` |
+| CRC 策略 | 启动期 `verifyCrc(true)` 一次，摊薄为零 | `verifyCrc(false)`，部署脚本离线校验一次 |
+| 预热 | 启动期 `warmup()`，首请求不吃冷页 | 不做（每请求预热等于白付成本） |
+| 常驻量级 | 每 worker 一份，见 12.2 表 | 每请求一份，`MEMORY_LOW` 页窗口约 4 MB |
+| 释放 | 退出时显式 `close()` | 请求结束自动析构，无需手工 |
+| 热更新 | 原子 `reload()` 或换实例 + 重启 worker | 直接 `rename()` 换文件，下个请求生效 |
+
+**怎么选**：worker 数固定、库常驻、CPU 上不重复加载 → 常驻；流量低、内存紧张、
+或者项目本来就是一堆 FPM 进程 → FPM + `MEMORY_LOW`。50+ worker 或大库高并发，
+按第 4.5 节走 Go 常驻服务 + PHP 远程调用，比在 PHP 里堆 worker 更省。
+
+### 12.2 常驻内存量级实测
+
+同一份 SDK，两种模式的常驻内存差一个数量级。下表是**相对加载前基线的增量**
+（`memory_get_usage(true)` 差值，不含 PHP 自身约 4 MB 堆基线），每种组合都在
+独立进程里测量：
+
+`MEMORY_BALANCED`（整库常驻）：
+
+| 库 | 文件大小 | 仅加载 + 预热 | 再 50k 次 `findFields`(6 列) | 再 100k 次 `find`(全字段) |
+|---|---|---|---|---|
+| `std_china` | 3.0 MB | 2.9 MB | 2.9 MB | 2.9 MB |
+| `max_global` | 62.6 MB | 61.7 MB | 61.7 MB | 87.7 MB |
+| `ult_global` | 69.1 MB | 67.9 MB | 67.9 MB | 101.9 MB |
+
+`MEMORY_LOW`（流式页缓存，与库大小无关）：
+
+| 库 | 文件大小 | 仅加载 + 预热 | 再 50k 次 `findFields`(6 列) | 再 100k 次 `find`(全字段) |
+|---|---|---|---|---|
+| `std_china` | 3.0 MB | 0.0 MB | 0.0 MB | 0.0 MB |
+| `max_global` | 62.6 MB | 2.0 MB | 4.0 MB | 4.0 MB |
+| `ult_global` | 69.1 MB | 2.0 MB | 4.0 MB | 4.0 MB |
+
+<details>
+<summary>点开查看测量口径与复现要点</summary>
+
+- 环境：Apple Silicon、PHP 8.5.12（NTS）、本地 SSD、`memory_limit=512M`、
+  `verifyCrc(true)` + `warmup()`，随机 IPv4 固定种子 50,000 次
+  `findFields($ip, ['country_code','province','city','isp','asn','usage_type'])`
+  后再 100,000 次全字段 `find($ip)`。
+- **必须一个进程只测一种组合**：`memory_get_usage(true)` 统计的是进程实际分配的块，
+  `close()` 后这些块不还给操作系统；在同一进程里连着测多个库，后一份会复用前一份
+  的空闲块，增量读数会失真（这是最容易把 `MEMORY_LOW` 测成 6~10 MB 的原因）。
+- 读数是增量，不是 RSS。估算单 worker 常驻请再叠加 PHP 自身约 4 MB 堆基线，
+  真实 RSS 还会包含扩展与 opcode 缓存。
+- balanced 下 `findFields` 列不改变常驻（61.7 → 61.7），全字段 `find` 却涨到 87.7 MB：
+  按需取列走投影解码、不回填 per-snapshot 的 GeoInfo 缓存（`GEO_CACHE_LIMIT = 1 << 16` 槽），
+  全字段 `find` 会把命中的记录常驻下来。**少取列不只省 CPU，也直接省常驻内存**。
+- `MEMORY_LOW` 的常驻上界是页缓存本身（64 KB × 64 页 = 4 MB），与库大小无关；
+  小库热点集中时增量可以低于 1 MB 的分配粒度，所以会读到 0.0。
+- 换机器、换 PHP 版本、换字段集合都会改变数字，上线前必须在目标机实测；
+  吞吐类基准请用 `bench_all.php` / `bench_contract.php`（第 14.1 节）。
+- 总内存按第 4.6 节公式累加：常驻 = worker 数 × 单 worker 常驻；
+  `reload()` 期间峰值约为「旧库 + 新库」两份（第 11 节）。
+
+</details>
+
+### 12.3 五条贯穿全部示例的约定
+
+1. **双运行时自适应**：一个 `isResident()` 判定决定内存模式，业务代码不感知部署形态。
+   常驻信号：`PHP_SAPI` 不是 `fpm-fcgi`/`cgi`，且识别到 Octane / Swoole / Workerman /
+   RoadRunner / FrankenPHP。判不准时用环境变量 `QZDB_RESIDENT=0/1` 显式覆盖。
+2. **只解码需要的列**：`findFields($ip, ['country_code', 'usage_type'])`；
+   需要全字段再 `find($ip)`。
+3. **强类型取值**：`getCountryCode()` / `getProvince()` / `getCity()` / `getIsp()` /
+   `getAsn()`（`?int`）/ `getUsageType()`（`UsageType` 对象）。
+   **禁止** `explode('|', $info->toPipe())` 这类手工切割——字段顺序变化就会静默错位。
+4. **启动期失败要 loud**：库缺失 / 损坏时 `build()` 抛 `QzdbException`（第 4.4 节），
+   让 worker 退出或让 FPM 走全局异常处理，不要吞掉异常带病服务。
+5. **退出显式 `close()`、热更新先 `rename()`**：常驻进程不会替你收尾（第 4.6 / 11.1 节）；
+   覆写正在被打开的 `.qzdb` 会让 mmap 语言直接崩（契约 §四.2）。
+
+### 12.4 Laravel 11 / 12（Octane）
+
+关键点：Octane 每个请求 `clone` 基础容器，**必须在 worker 启动期就把单例解析出来**，
+否则每个请求的 sandbox 各自加载一份。完整实现见
+[`examples/laravel-octane-provider.php`](examples/laravel-octane-provider.php)。
+
+```php
+// app/Providers/QzdbServiceProvider.php（节选）
+use Qqzeng\Ip\QzdbBuilder;
+use Qqzeng\Ip\QzdbReader;
+
+$this->app->singleton(QzdbReader::class, function ($app) {
+    $resident = isset($_SERVER['LARAVEL_OCTANE']) || getenv('LARAVEL_OCTANE') !== false;
+    $path = (string) $app['config']->get('qzdb.path');
+    $reader = QzdbBuilder::path($path)
+        ->memoryMode($resident ? QzdbReader::MEMORY_BALANCED : QzdbReader::MEMORY_LOW)
+        ->verifyCrc($resident ? true : (bool) $app['config']->get('qzdb.fpm_verify_crc'))
+        ->build();
+    if ($resident) {
+        $reader->warmup();
+    }
+    return $reader;
+});
+// boot() 里主动 make()，并监听 WorkerStopping 调 close()
+```
+
+### 12.5 Hyperf 3.x（Swoole 协程）
+
+关键点：协程环境下**不要对共享实例做原地 `reload()`**，改成「建新实例 → 换引用 →
+旧实例过宽限期再 `close()`」；`dependencies.php` 用工厂产出只读单例。完整实现见
+[`examples/hyperf-service.php`](examples/hyperf-service.php)。
+
+```php
+// app/Qzdb/QzdbReaderFactory.php（节选，implements Hyperf\Contract\FactoryInterface）
+use Qqzeng\Ip\QzdbBuilder;
+use QzdbSnapshotHolder; // 进程内快照持有者
+
+public function create(...$dependencies): QzdbReader
+{
+    $resident = extension_loaded('swoole') || extension_loaded('swow');
+    $reader = QzdbBuilder::path($this->path)
+        ->memoryMode($resident ? \Qqzeng\Ip\QzdbReader::MEMORY_BALANCED : \Qqzeng\Ip\QzdbReader::MEMORY_LOW)
+        ->verifyCrc($resident)          // FPM 形态：CRC 放部署脚本
+        ->build();
+    if ($resident) {
+        $reader->warmup();              // 启动期预热，首请求不吃冷页
+    }
+    QzdbSnapshotHolder::set($reader);   // 之后所有协程只读这一份
+    return $reader;
+}
+```
+
+### 12.6 Webman（Workerman 常驻）
+
+关键点：`config/bootstrap.php` 里注册引导类，在 `onWorkerStart` 加载 + 预热；
+全局中间件用 `usage_type` 做风控判定。完整实现见
+[`examples/webman-bootstrap.php`](examples/webman-bootstrap.php)。
+
+```php
+// app/Bootstrap/QzdbBootstrap.php（节选，implements Webman\Bootstrap）
+use Qqzeng\Ip\QzdbBuilder;
+use Qqzeng\Ip\QzdbReader;
+
+public function onWorkerStart($worker = null): void
+{
+    $path = (string) config('qzdb.path');
+    $this->reader = QzdbBuilder::path($path)
+        ->memoryMode(QzdbReader::MEMORY_BALANCED) // Workerman worker 常驻，一份库服务所有请求
+        ->verifyCrc(true)                          // FPM 复用时改 MEMORY_LOW + false
+        ->build();
+    $this->reader->warmup();
+}
+// 中间件里：$info = $reader->findFields($ip, ['country_code', 'usage_type']);
+// $usage = $info->getUsageType(); // DataCenter / Cloud / VPN / AICrawler 直接比对 rawValue()
+```
+
+### 12.7 Symfony 7（FrankenPHP / RoadRunner / FPM）
+
+关键点：`services.yaml` 用工厂方法产出 reader，`kernel.request` 订阅者把结果挂到
+`$request->attributes`。部署形态差异用参数 `qzdb.resident` 表达。完整实现（含整段
+`services.yaml`）见 [`examples/symfony-subscriber.php`](examples/symfony-subscriber.php)。
+
+```yaml
+# config/services.yaml（节选）
+services:
+  Qqzeng\Ip\QzdbReader:
+    factory: ['@App\Qzdb\QzdbManager', 'createReader']   # balanced+CRC+warmup 或 low+免CRC
+  App\EventListener\GeoInfoSubscriber:
+    tags: [{ name: kernel.event_subscriber }]
+```
+
+```php
+// src/EventListener/GeoInfoSubscriber.php（节选，implements EventSubscriberInterface）
+public function onKernelRequest(RequestEvent $event): void
+{
+    $request = $event->getRequest();
+    $info = $this->reader->findFields((string) $request->getClientIp(),
+        ['country_code', 'province', 'city', 'isp', 'asn', 'usage_type']);
+    $request->attributes->set('geo_info', $info); // 未命中也写 null
+}
+```
+
+- **FrankenPHP / RoadRunner**：容器随 worker 进程只引导一次，`shared` 服务就是进程级
+  单例 → `qzdb.resident: true`；退出前调 `QzdbManager::shutdown()`；换库后重启 worker
+  （`POST /frankenphp/workers/restart`）或让订阅者按节流检查 mtime 调 `reload()`。
+- **PHP-FPM**：每个请求重建容器 → `qzdb.resident: false`，用 `MEMORY_LOW`、请求期
+  `verifyCrc(false)`，整库 CRC 交给 `bin/console` 里的一次性校验命令（示例给了
+  `QzdbVerifyCommand`）。
+
+### 12.8 ThinkPHP 8.0（FPM 与 think-swoole）
+
+关键点：系统服务类 `boot()` 里初始化（think-swoole 常驻时启动期就加载），
+`app/provider.php` 把 `QzdbReader::class` 绑到同一个 static，辅助函数 `ip_geo()`
+全局可用。完整实现见 [`examples/thinkphp8-service.php`](examples/thinkphp8-service.php)。
+
+```php
+// app/service/QzdbService.php（节选，extends think\Service）
+use Qqzeng\Ip\QzdbBuilder;
+use Qqzeng\Ip\QzdbReader;
+
+public function boot(): void
+{
+    if (self::isResident()) {          // think-swoole：需显式 QZDB_RESIDENT=1
+        self::reader();                // 启动期加载 + warmup，跨请求复用
+    }
+}
+
+public static function reader(): QzdbReader
+{
+    if (self::$reader instanceof QzdbReader) {
+        return self::$reader;
+    }
+    $resident = self::isResident();
+    return self::$reader = QzdbBuilder::path((string) config('qzdb.path'))
+        ->memoryMode($resident ? QzdbReader::MEMORY_BALANCED : QzdbReader::MEMORY_LOW)
+        ->verifyCrc($resident)         // FPM：CRC 放部署脚本，请求期不重复读整库
+        ->build();
+}
+```
+
+`app/provider.php`：
+
+```php
+return [
+    \Qqzeng\Ip\QzdbReader::class => function ($app) {
+        return \app\service\QzdbService::reader();   // TP 绑定不保证单例，static 兜住
+    },
+];
+```
+
+Swoole 扩展在 CLI 下与 `php think xxx` 一次性命令无法区分，所以 think-swoole 部署
+**要显式给 `QZDB_RESIDENT=1`**，别指望自动判定。
+
+### 12.9 `findFields()` 与 `findStr()`：两条性能路径怎么选
+
+| 入口 | 返回 | 适合场景 |
+|---|---|---|
+| `findFields($ip, [...])` | `?GeoInfo`（只解码请求列） | 需要结构化字段、类型化 ASN / usage、按列做风控判定 |
+| `findStr($ip)` | `\|` 分隔字符串，未命中 `""` | 只落库 / 打日志 / 透传给下游，不解析成对象 |
+
+- `findFields` 的收益随「需要的列 / 全部列」比例缩小，`find()` 全字段解析在
+  `max_global` 上是 15 列；只取 6 列时分配量明显下降（12.2 折叠区里那 30 MB 的
+  常驻差就是它）。
+- `findStr()` 跳过 `GeoInfo` 构造，是批量导出 / 日志增强最省的路径；但它是
+  按物理 Schema 顺序拼装的字符串，**不要**在应用层 `explode('|')` 还原字段——
+  列顺序属于文件格式契约，跨版本会变。真要字段就用 `findFields`。
+- 批量入口配套：`findBatchFields($ips, $fields)` / `findStream($ips)`（第 8 节），
+  `BatchResult` 的三态能区分「未命中」和「输入非法」。
+
+---
+
+## 13. 错误处理
 
 所有加载 / 解析期错误以 **`QzdbException`（`\Exception` 子类）** 抛出，携带整数错误码（见 [4.4](#44-加载异常处理) 表）：
 
@@ -547,9 +905,9 @@ try {
 
 ---
 
-## 13. 性能说明
+## 14. 性能说明
 
-### 13.1 内存模式与基准边界
+### 14.1 内存模式与基准边界
 
 `MEMORY_BALANCED` 和 `MEMORY_LOW` 返回结果完全一致，区别只在驻留内存和访问路径：
 
@@ -577,21 +935,22 @@ balanced 模式的 QPS 估算 low 模式容量。
 - **零分配 IP 解析**：IPv4 直接整数运算；IPv6 严格解析（拒绝前导 0 / zone id / 双 `::`）。
 - **SENTINEL 高位哨兵位（`0x80000000` / `0x800000`）在解析前剥离**，保证 trie 遍历正确还原叶子行号 / 前缀深度。
 
-### 参考性能（同架构理论量级，实际随 PHP 版本 / CPU / 数据规模 / 查询分布而变）
+### 参考性能（历史量级数据，勿与第 4.5 节当前实测混用）
 
 | 场景 | 量级 | 说明 |
 |------|------|------|
-| 整型查询 · 50 万随机散布 IP（缓存最不利） | 5.67M QPS | 省级 8.6MB 库，单线程，口径 A（docs/PERFORMANCE.md）；字符串口径 find_str 429K QPS（解析占大头，见口径说明） |
-| 多请求并发 | 安全无锁 | 并发查询零竞争退化 |
-| 热点 IP 重复查询 | 吞吐进一步放大、分配趋零 | 同 IP 重复查询，GC 压力显著下降 |
+| 整型查询 · 50 万随机散布 IP（缓存最不利） | 5.67M QPS | 2026-08 的省级 8.6 MB 库，单线程，口径 A（docs/PERFORMANCE.md）；字符串口径 find_str 429K QPS |
+| 多请求并发 | 安全无锁 | 并发查询零竞争退化（定性） |
+| 热点 IP 重复查询 | 吞吐进一步放大 | 同 IP 重复查询，GC 压力下降（定性，未单独实测） |
 
-> 上述数字用于说明量级，非 SLA；以你自身环境的基准测试为准（仓库内 `bench_all.php`）。
+> 上表是历史量级说明，**不是当前 `data/` 库的实测**，也非 SLA。当前实测数字见
+> 第 4.5 节；请以自身环境的 `bench_all.php` / `bench_contract.php` 结果为准。
 
 ---
 
-## 14. 维护与升级
+## 15. 维护与升级
 
-### 14.1 更新数据（最频繁的操作）
+### 15.1 更新数据（最频繁的操作）
 
 不需要重新编译或重启进程：
 
@@ -599,7 +958,7 @@ balanced 模式的 QPS 估算 low 模式容量。
 2. 调用 `$reader->reload($newPath)` 或 `$reader->reloadBuffer($newBytes)` 原子热更新。
 3. 用 `$reader->getDataMonth()` / `$reader->getBuildTime()` / `$reader->getVersion()` 确认已加载的数据版本。
 
-### 14.2 升级 SDK
+### 15.2 升级 SDK
 
 本 SDK 单文件发布，升级即替换 `QzdbReader.php`。版本遵循 **SemVer**：
 
@@ -609,7 +968,7 @@ balanced 模式的 QPS 估算 low 模式容量。
 | 向后兼容的功能新增 | 次版本 `y` | 直接升级 |
 | Bug 修复 / 性能优化 | 补丁 `z` | 直接升级（建议始终跟进） |
 
-### 14.3 校验数据完整性
+### 15.3 校验数据完整性
 
 ```php
 // 重新计算全文件 CRC32 并与 Header 存储值比对（只读操作）
@@ -618,7 +977,7 @@ $ok = $reader->verifyCrc();
 $hash = $reader->getFileHash();
 ```
 
-### 14.4 兼容性注意
+### 15.4 兼容性注意
 
 - 命名空间固定为 `Qqzeng\Ip`，升级不会造成命名空间漂移。
 - 最低 PHP 7.4；建议 8.2+。核心 SDK 不依赖 PHP 8 专属语法或扩展；PHP 7.4
@@ -626,7 +985,7 @@ $hash = $reader->getFileHash();
 
 ---
 
-## 15. 项目结构
+## 16. 项目结构
 
 `php/` 目录（本 SDK 源码，全部集中于单文件）：
 
@@ -636,19 +995,65 @@ $hash = $reader->getFileHash();
 | `test.php` | 调用示例（演示 Builder 加载、查询、语义 Getter、CIDR、元信息；`php test.php` 可跑通） |
 | `bench_all.php` | 双栈吞吐基准（IPv4 走 `findUint`，IPv6 走 `findV6Bin`） |
 | `batch_cli.php` | 命令行批量查询工具示例 |
-| `tier1_test.php` | 单元测试（无 DB，105 断言，覆盖解析 / 归一化 / 浮点 / Fail-Closed / 缓存等） |
-| `tier2_golden.php` | 黄金校验（读取 `golden_vectors.json`，对真实库断言 `find(ip)->toPipe() === expected`，0 失败；向量由被测代码自身生成，只证跨语言一致） |
-| `csv_oracle_test.php` | **独立真值校验**（以源数据 `test_data_202608/<edition>/china/*_range.csv` 为裁判，全局 + 区间内抽样共 22000 样本比对 country/province/city/isp，0 失配；证明对*真值*答得对） |
+| `examples/` | 框架集成示例（见第 12 节）：`laravel-octane-provider.php`（Octane 服务提供者 + 中间件 + reload 命令）、`hyperf-service.php`（容器工厂 + 协程安全热更新）、`webman-bootstrap.php`（`onWorkerStart` 引导 + 风控中间件）、`symfony-subscriber.php`（`services.yaml` 工厂 + REQUEST 订阅者）、`thinkphp8-service.php`（系统服务类 + `provider.php` + `ip_geo()`）、`frankenphp-worker.php`（原生 worker 模式；另见第 4.7 节） |
+| `tier1_test.php` | 单元测试（不依赖真实库也能跑；本地有 `data/` 时 **125 断言**，纯 clone 无数据时 **117 断言** —— 8 条缓存淘汰策略断言会 SKIP。覆盖解析 / 归一化 / 浮点 / Fail-Closed / 缓存等） |
+| `tier2_golden.php` | 黄金校验（读取 `../tools/golden_vectors.json`，对 `../data/` 真实库断言 `find(ip)->toPipe() === expected`；向量由 **Python 参考实现**生成，只证跨语言一致。逐库加载 + 释放，默认 128M 内存可跑完） |
+| `tier2_hostile.php` | 敌对语料 / Fail-Closed 回归（29 组变异，损坏文件必须结构化报错） |
+| `csv_oracle_test.php` | **独立真值校验**：以与 `data/*.qzdb` 同代的 range CSV 为裁判，22,000 样本比对 country/province/city/isp；源目录由 `QZDB_ORACLE_SRC_DIR` 指定，任一目标被跳过即硬失败 |
+| `bench_contract.php` | 参考基准（仅需 Core，不再依赖 GMP）：先做 u64 原语对拍与 12 路查询流指纹 parity 自检，再测冷/热 QPS、P50/P95/P99 与 16 进程并发 |
+| `../tools/prepare_oracle_data.py` | 从发布素材 zip 解压同代 CSV，并用 SHA-256 校验 zip 内 `.qzdb` 与 `data/*.qzdb` 一致（防止拿错月份） |
 
-运行测试：
+运行测试（在 `php/` 目录下）：
 
 ```bash
-php tier1_test.php                         # 无数据库依赖的单元测试
-php tier2_golden.php                       # 需仓库根 test_data_202608/ 真实库，做黄金向量校验
-php csv_oracle_test.php                    # 独立真值校验（需源 CSV + 真实库）
+php tier1_test.php
+
+# 裁判必须与 data/*.qzdb 同代，否则 ISP/城市更新会造成假失配
+python3 ../tools/prepare_oracle_data.py \
+    --source /path/to/qqzeng-data/202611/ip --out /tmp/qzdb_oracle_202611
+QZDB_ORACLE_SRC_DIR=/tmp/qzdb_oracle_202611 php csv_oracle_test.php
+
+php tier2_golden.php          # 默认 128M 即可，12,306 向量 0 失败
+php tier2_hostile.php
+BENCH_OPS=20000 BENCH_EDITIONS=std_china php bench_contract.php  # 快速验证 parity 12/12
+php bench_contract.php        # 完整参考基准（默认 OPS=2,000,000，耗时较长）
+php bench_all.php
 ```
 
-跨语言完整 API 规范见仓库根：`ip-qzdb-sdk/API_CONTRACT.md`（v2.4，单一事实来源）。
+> 不设 `QZDB_ORACLE_SRC_DIR` 会回落到历史基准 `test_data_202608`，与当前
+> `data/` 不同代，会得到约 507 条假失配。
+
+跨语言完整 API 规范见 `ip-qzdb-sdk/API_CONTRACT.md`（**v2.5**，单一事实来源）。
+
+---
+
+## 17. 常见问题解答（FAQ）
+
+### Q1: PHP SDK 基于什么框架？依赖哪些扩展？
+- **零框架、零第三方依赖**：纯原生 PHP 单文件设计（所有核心功能全部包含在 `QzdbReader.php`），无 Composer 强依赖。
+- **环境要求**：兼容 **PHP 7.4+ 及 PHP 8.x**（仅限 64 位），仅依赖 PHP 内置标准模块 `Core`、`filter`、`hash`。
+- **运行环境兼容**：完美支持传统 **PHP-FPM**、CLI 脚本以及 **常驻内存运行时**（Swoole、Workerman、RoadRunner、FrankenPHP）。
+
+### Q2: 性能表现如何？高并发下怎么用？
+- **常驻内存模式（`MEMORY_BUFFER`）**：
+  - 单次查询延迟：**0.21 ~ 0.28 微秒**（`0.0002ms` 级别）。
+  - 单核吞吐量：**350 万 ~ 460 万 QPS**。
+  - 适合 Swoole / Workerman / CLI / FrankenPHP 等长生命周期常驻服务。
+- **流式/低内存模式（`MEMORY_LOW`）**：
+  - 单次查询延迟：`std_china` 约 **1.15 μs**（约 87 万 QPS），`ult_china` 约 **3.74 μs**，`ult_global` 约 **44.0 μs**。
+  - 常驻内存极低：仅约 **4 MB ~ 8 MB**（内置 64KB × 64 页 LRU 页缓存）。
+  - 适合 PHP-FPM 多 Worker 进程或容器内存受限场景。
+
+### Q3: 本版本相比上一版有哪些重大改进？
+1. **流式查询性能大幅提升**（零额外内存代价）：
+   - `std_china` 流式耗时 1.465 μs → **1.149 μs（提速 21.6%）**；
+   - `ult_china` 流式耗时 5.786 μs → **3.738 μs（提速 35.4%）**；
+   - `ult_global` 流式耗时 58.387 μs → **44.025 μs（提速 24.6%）**；
+   - Trie 步进（rowId 查询）耗时优化 **13% ~ 21%**。
+2. **基准门禁与同代数据校准**：
+   - 彻底解决 Oracle 507 假失配问题，同代 CSV 裁判 **22,000 样本 0 失配**；
+   - 修复 SplitMix64 在 PHP 算术右移时的符号扩展 Bug，`bench_contract` parity **12/12 全部通过**；
+   - 优化 `tier2_golden` 测试生命周期，默认 128M 内存即可跑完 12,306 条向量（峰值仅 79.7 MB）。
 
 ---
 

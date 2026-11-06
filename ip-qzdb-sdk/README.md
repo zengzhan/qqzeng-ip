@@ -14,14 +14,14 @@
 
 | 语言与文档 | 官方包坐标与一行安装命令 | 单核整型随机 (口径 A) | 单核热点 / 16核并发 (口径 B) | 字符串直查 `find_str` (口径 C) |
 | :--- | :--- | ---: | ---: | ---: |
-| 👑 **[C / C++](./c/README.md)** | 单文件源码集成（`qzdb_reader.c` + `.h`） | **96.5 M/s** | 101.8 M/s / **506 M/s** | **12.6 M/s** |
-| ⚡ **[Go](./go/README.md)** | `go get github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go@v1.0.6` | **97.3 M/s** | 105.5 M/s / **719 M/s** | **12.1 M/s** |
-| 🛡️ **[Rust](./rust/README.md)** | `cargo add qzdb` (crates.io `2.0.0`) | **82.6 M/s** | 88.0 M/s / **233 M/s** | **11.5 M/s** |
-| ☕ **[Java](./java/README.md)** | Maven / Gradle: `com.qqzeng:qzdb:1.0.8` | **48.1 M/s** | 105.4 M/s / **136 M/s** | **11.9 M/s** |
-| 🚀 **[C# (.NET)](./netcore/README.md)** | `dotnet add package QQZeng.Qzdb` (`1.0.8`) | **46.9 M/s** | 132.1 M/s / **550 M/s** | **20.9 M/s** |
-| 🟢 **[Node.js](./nodejs/README.md)** | `npm install @qqzengip/qzdb` (`1.0.6`) | **8.22 M/s** | 7.64 M/s *(裸循环 99.4M)* | **10.3 M/s** |
-| 🐘 **[PHP](./php/README.md)** | `composer require qqzeng/qzdb` (`1.2.0`) | **5.67 M/s** | 0.73 M/s *(FPM/Swoole)* | **470 K/s** |
-| 🐍 **[Python](./python/README.md)** | `pip install qzdb` (`1.0.6`) | **1.30 M/s** | 1.28 M/s *(多进程扩展)* | **273 K/s** |
+| 👑 **[C / C++](./c/README.md)** | 单文件源码集成（`qzdb_reader.c` + `.h`） | **96.5 M/s** | 101.8 M/s / **500 M/s** | **12.6 M/s** |
+| ⚡ **[Go](./go/README.md)** | `go get github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go@v1.0.8` | **97.3 M/s** | 105.5 M/s / **826 M/s** | **12.1 M/s** |
+| 🛡️ **[Rust](./rust/README.md)** | `cargo add qzdb` (crates.io `2.0.2`) | **82.6 M/s** | 88.0 M/s / **233 M/s** | **11.5 M/s** |
+| ☕ **[Java](./java/README.md)** | Maven / Gradle: `com.qqzeng:qzdb:1.0.10` | **48.1 M/s** | 105.4 M/s / **120 M/s** | **11.9 M/s** |
+| 🚀 **[C# (.NET)](./netcore/README.md)** | `dotnet add package QQZeng.Qzdb` (`1.0.10`) | **46.9 M/s** | 132.1 M/s / **550 M/s** | **20.9 M/s** |
+| 🟢 **[Node.js](./nodejs/README.md)** | `npm install @qqzengip/qzdb` (`1.0.8`) | **8.22 M/s** | 7.64 M/s *(裸循环 99.4M)* | **10.3 M/s** |
+| 🐘 **[PHP](./php/README.md)** | `composer require qqzeng/qzdb` (`1.2.2`) | **5.67 M/s** | 1.88 M/s *(FPM/Swoole)* | **470 K/s** |
+| 🐍 **[Python](./python/README.md)** | `pip install qzdb` (`1.0.8`) | **1.30 M/s** | 1.28 M/s *(多进程扩展)* | **273 K/s** |
 
 > 📌 **测试基准说明**：基于 Apple M4 Max（14 核，macOS）实测。口径定义、全球库规模效应及复现方式详见 **[`docs/PERFORMANCE.md`](../docs/PERFORMANCE.md)**。
 

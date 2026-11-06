@@ -670,7 +670,6 @@ class QzdbReader
     const MAX_TRIE_WALK_STEPS_V4 = 32 + 8;   // IPv4 walk cap = max(32+8,40) = 40
 const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     const MAX_POOL_COUNT = 1 << 26;
-    const MAX_POOL_OFFSET_ENTRIES = 1 << 18; // 单池偏移表上限 262144 项（1MB，约 4MB PHP 数组），超限降级为 null。
     // 有界 GeoInfo 缓存容量。直接映射（direct-mapped）：碰撞覆盖单槽，**永不整表清空**。
     // 与 Go(geoCache.slots) / Node.js(_geoCache.keys|vals) / C#(槽位数组) 语义一致。
     const GEO_CACHE_LIMIT = 1 << 16;
@@ -1262,15 +1261,23 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         if ($fieldNames === null || (is_array($fieldNames) && count($fieldNames) === 0)) {
             return $this->findParsed($v4, $v6);
         }
-        $info = $this->findParsed($v4, $v6);
-        if ($info === null) return null;
-        $projNames = [];
-        $projValues = [];
-        foreach ($fieldNames as $f) {
-            $projNames[] = $f;
-            $projValues[] = $info->get($f);
+        $entryId = $this->entryIdParsed($v4, $v6);
+        if ($entryId === 0) return null;
+        return $this->resolveFields($entryId, $this->groupIndex, $fieldNames);
+    }
+
+    /** Trie 遍历 + 单维度行读取，返回当前组的 entryId；未命中 / 不支持的族返回 0。 */
+    private function entryIdParsed($v4, $v6): int
+    {
+        if ($v4 !== null) {
+            if (!$this->hasV4) return 0;
+            $rowId = $this->trieWalkV4($v4);
+        } else {
+            if (!$this->hasV6) return 0;
+            $rowId = $this->trieWalkV6($v6);
         }
-        return new GeoInfo($projValues, $projNames);
+        if ($rowId === 0) return 0;
+        return $this->readRowDimension($rowId & self::SENTINEL_MASK_31, $this->groupIndex);
     }
 
     public function find($ipStr)
@@ -1327,8 +1334,14 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     /** 管道符字符串：未命中 / 非法返回 ""（契约 §3）。 */
     public function findStr($ipStr): string
     {
-        $info = $this->find($ipStr);
-        return $info === null ? '' : $info->toPipe();
+        if ($this->closed) return '';
+        if ($ipStr === null || $ipStr === '') return '';
+        $result = self::fastParseIp($ipStr);
+        if ($result === null) return '';
+        list($v4, $v6) = $result;
+        $entryId = $this->entryIdParsed($v4, $v6);
+        if ($entryId === 0) return '';
+        return $this->resolvePipe($entryId, $this->groupIndex);
     }
 
     public function findFields($ipStr, $fieldNames = null)
@@ -2096,34 +2109,15 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
                     continue;
                 }
                 $poolCursor = $dataBase + $totalLen;
-                if ($this->usesLowResidentMemory()) {
-                    // Keep the offset table in the database and read only the
-                    // two offsets needed by the current lookup. A PHP array
-                    // would amplify each 32-bit offset to tens of bytes.
-                    $groupDescs[] = [
-                        'ot' => $offsetTableBase,
-                        'db' => $dataBase,
-                        'count' => $count,
-                        'total' => $totalLen,
-                    ];
-                } else {
-                    if (($count + 1) > self::MAX_POOL_OFFSET_ENTRIES) {
-                        $groupDescs[] = null;
-                        continue;
-                    }
-                    $offs = unpack('V*', $this->readBytes($offsetTableBase, ($count + 1) * 4));
-                    if ($offs === false) {
-                        $groupDescs[] = null;
-                        continue;
-                    }
-                    $groupDescs[] = [
-                        'ot' => $offsetTableBase,
-                        'db' => $dataBase,
-                        'count' => $count,
-                        'total' => $totalLen,
-                        'offs' => $offs,
-                    ];
-                }
+                // 偏移表留在数据库字节里按需读 8 字节（start/end），不展开成 PHP 数组：
+                // 一个 32 位偏移进 PHP 数组要放大到几十字节，max_global 的 25 万项
+                // 曾占 ~30MB 峰值；缓冲模式下 ord() 直读比数组下标并不慢。
+                $groupDescs[] = [
+                    'ot' => $offsetTableBase,
+                    'db' => $dataBase,
+                    'count' => $count,
+                    'total' => $totalLen,
+                ];
             }
             $this->groupPoolDescs[$g] = $groupDescs;
         }
@@ -2145,19 +2139,32 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             $this->poolCacheOrder[$cacheKey] = true;
             return $this->poolCache[$cacheKey];
         }
-        if (isset($desc['offs'])) {
-            // unpack('V*') 返回 1-based 数组
-            $start = $desc['offs'][$idx + 1];
-            $end = $desc['offs'][$idx + 2];
+        $ot = $desc['ot'] + $idx * 4;
+        $d = $this->data;
+        if ($d !== null && $ot >= 0 && $ot + 8 <= $this->dataLen) {
+            $start = ord($d[$ot]) | (ord($d[$ot + 1]) << 8) | (ord($d[$ot + 2]) << 16) | (ord($d[$ot + 3]) << 24);
+            $end = ord($d[$ot + 4]) | (ord($d[$ot + 5]) << 8) | (ord($d[$ot + 6]) << 16) | (ord($d[$ot + 7]) << 24);
         } else {
-            $start = $this->safeReadU32($desc['ot'] + $idx * 4);
-            $end = $this->safeReadU32($desc['ot'] + ($idx + 1) * 4);
+            // 相邻两个偏移一次读 8 字节：流式模式下每次 readBytes 都要查分页缓存
+            // 并维护 LRU 顺序，合并后每个池字段少一次。短读必须回退到逐项读取，
+            // 让 safeReadU32 保留原有的越界抛错语义（Fail-Closed 不可弱化）。
+            $pair = $this->readBytes($ot, 8);
+            if (strlen($pair) === 8) {
+                $u = unpack('V2', $pair);
+                $start = $u[1];
+                $end = $u[2];
+            } else {
+                $start = $this->safeReadU32($ot);
+                $end = $this->safeReadU32($ot + 4);
+            }
         }
         // 偏移表是累积结构，末项为总长度；越界/逆序项一律降级为空串（§Fail-Closed）
         if ($end < $start || $end > $desc['total']) return '';
         $length = $end - $start;
         if ($length <= 0) return '';
-        $val = $this->readBytes($desc['db'] + $start, $length);
+        $val = ($d !== null && $desc['db'] + $end <= $this->dataLen)
+            ? substr($d, $desc['db'] + $start, $length)
+            : $this->readBytes($desc['db'] + $start, $length);
         // 写入 LRU 缓存（超过容量时淘汰最久未使用）
         if ($cacheEnabled && count($this->poolCache) >= self::POOL_CACHE_LIMIT) {
             // array_key_first() was added in PHP 7.3; keep the SDK usable on
@@ -2404,21 +2411,60 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     private function resolveRowId($rowId, $groupIndex)
     {
         $rowId &= self::SENTINEL_MASK_31; // 防御性剥离（idempotent）
-        list($geoId, $asnId, $usageTypeId) = $this->readIPRow($rowId);
-        $mask = $groupIndex < count($this->groupDimMasks) ? $this->groupDimMasks[$groupIndex] : 0;
-
-        if ($mask & 0x02) {
-            $entryId = $asnId;
-        } elseif ($mask & 0x04) {
-            $entryId = $usageTypeId;
-        } else {
-            $entryId = $geoId;
-        }
-
+        $entryId = $this->readRowDimension($rowId, $groupIndex);
         if ($entryId === 0) {
             return null;
         }
         return $this->resolveGeo($entryId, $groupIndex);
+    }
+
+    /**
+     * 只读当前组 dimensionMask 对应的那一个维度 ID（readIPRow 读全部三个，
+     * 热路径上另外两个是白读）。语义与 readIPRow()[k] 逐位一致：越界行返回 0，
+     * 该维度宽度为 0 时返回 0。
+     */
+    private function readRowDimension($rowId, $groupIndex)
+    {
+        if ($rowId <= 0 || $rowId >= $this->rowCount) {
+            return 0;
+        }
+        $off = $this->offIPRow + $rowId * $this->ipRowSize;
+        $mask = $groupIndex < count($this->groupDimMasks) ? $this->groupDimMasks[$groupIndex] : 0;
+
+        if ($this->offRowSchema > 0) {
+            if ($mask & 0x02) {
+                $w = $this->rowAsnWidth;
+                if ($w <= 0) return 0;
+                $off += $this->rowGeoWidth;
+            } elseif ($mask & 0x04) {
+                $w = $this->rowUsageWidth;
+                if ($w <= 0) return 0;
+                $off += $this->rowGeoWidth + $this->rowAsnWidth;
+            } else {
+                // readIPRow 对 geo 维无条件走 safeReadUintWidth：宽度 ≤1 时读 1 字节
+                $w = $this->rowGeoWidth;
+            }
+            if ($w < 1) $w = 1;
+        } else {
+            $w = 3;
+            if ($mask & 0x02) {
+                $off += 3;
+            } elseif ($mask & 0x04) {
+                if ($this->ipRowSize < 9) return 0;
+                $off += 6;
+            }
+        }
+
+        $d = $this->data;
+        if ($d !== null && $off >= 0 && $off + $w <= $this->dataLen) {
+            if ($w === 3) {
+                return ord($d[$off]) | (ord($d[$off + 1]) << 8) | (ord($d[$off + 2]) << 16);
+            }
+            if ($w === 1) return ord($d[$off]);
+            if ($w === 2) return ord($d[$off]) | (ord($d[$off + 1]) << 8);
+            return ord($d[$off]) | (ord($d[$off + 1]) << 8) | (ord($d[$off + 2]) << 16) | (ord($d[$off + 3]) << 24);
+        }
+        return $this->safeReadUintWidth($off, $w);
     }
 
     /** 解析 entryId 为 GeoInfo，带 per-snapshot 有界无锁缓存。 */
@@ -2440,6 +2486,82 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             }
         }
 
+        $values = $this->decodeEntryValues($entryId, $groupIndex, null);
+        if ($values === null) return null;
+        $info = new GeoInfo($values, $this->fieldNames, $this->normalizedFieldMap);
+
+        // 写入有界缓存：直接映射，碰撞就覆盖这一个槽。
+        // 表容量由 slot 下标本身封顶，无需容量计数器，更不需要整表清空。
+        if ($cacheEnabled) {
+            $this->geoCache[$slot] = [$groupIndex, $entryId, $info];
+        }
+
+        return $info;
+    }
+
+    /**
+     * 只解码被请求的列。缓存命中时从完整 GeoInfo 投影；未命中（MEMORY_LOW /
+     * 流式 / 大库随机访问）只触碰目标列的条目字节与池，不构造完整记录。
+     * 返回与 resolveGeo 同构的投影 GeoInfo；未命中记录返回 null。
+     */
+    private function resolveFields($entryId, $groupIndex, $fieldNames)
+    {
+        if ($groupIndex < 0 || $groupIndex >= count($this->groupFieldCounts)) return null;
+        if ($entryId < 0 || $entryId >= $this->groupEntryCounts[$groupIndex]) return null;
+
+        $projNames = [];
+        $cols = [];
+        foreach ($fieldNames as $f) {
+            $projNames[] = $f;
+            // 与 GeoInfo::get() 同一套归一化：'' 恒缺失，其它按 normalizedFieldMap 查列
+            $cols[] = $f === '' ? -1 : ($this->normalizedFieldMap[GeoInfo::normalizeKey($f)] ?? -1);
+        }
+
+        if ($this->geoCacheEnabled && !$this->usesLowResidentMemory()) {
+            $slot = (($entryId ^ ($entryId >> 16)) + ($groupIndex << 13)) & self::GEO_CACHE_MASK;
+            $hit = $this->geoCache[$slot] ?? null;
+            if ($hit !== null && $hit[0] === $groupIndex && $hit[1] === $entryId) {
+                $projValues = [];
+                foreach ($cols as $c) {
+                    $projValues[] = $c < 0 ? '' : $hit[2][$c];
+                }
+                return new GeoInfo($projValues, $projNames);
+            }
+        }
+
+        $values = $this->decodeEntryValues($entryId, $groupIndex, $cols);
+        if ($values === null) return null;
+        return new GeoInfo($values, $projNames);
+    }
+
+    /**
+     * 管道串快路径：缓存命中复用 GeoInfo::toPipe() 的 memoize；缓存关闭时直接
+     * implode 解码值，省掉随手丢弃的 GeoInfo 分配。缓存开启而未命中时仍走
+     * resolveGeo，让后续 find()/findStr() 共享同一份缓存条目。
+     */
+    private function resolvePipe($entryId, $groupIndex): string
+    {
+        if ($this->geoCacheEnabled && !$this->usesLowResidentMemory()) {
+            $info = $this->resolveGeo($entryId, $groupIndex);
+            return $info === null ? '' : $info->toPipe();
+        }
+        if ($groupIndex < 0 || $groupIndex >= count($this->groupFieldCounts)) return '';
+        if ($entryId < 0 || $entryId >= $this->groupEntryCounts[$groupIndex]) return '';
+        $values = $this->decodeEntryValues($entryId, $groupIndex, null);
+        return $values === null ? '' : implode('|', $values);
+    }
+
+    /**
+     * 解码一条 geo 条目的字段值。$cols 为 null 时解码全部列（结果下标 = 列下标）；
+     * 否则按给定列下标顺序解码，-1 表示缺失列（值 ""）。调用方已完成 entryId /
+     * groupIndex 的边界校验。字段数为 0 的组返回 null。
+     *
+     * 缓冲模式在循环内直接对 $this->data 做 ord() 位拼，省掉 safeReadUintWidth →
+     * safeReadU16/U24 的两层调用；越出缓冲的字段回退原 safeRead* 路径，保持与
+     * 旧实现完全一致的越界语义（畸形 schema 下读到相邻条目也必须一致）。
+     */
+    private function decodeEntryValues($entryId, $groupIndex, $cols)
+    {
         $this->ensurePoolsLoaded();
 
         $fieldCount = $this->groupFieldCounts[$groupIndex];
@@ -2449,19 +2571,95 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $stride = $this->groupStrides[$groupIndex];
         $entryOffset = $groupEntryStart + $entryId * $stride;
 
+        $d = $this->data;
+        $dataLen = $this->dataLen;
+
+        // 流式模式：整条目一次读出，字段直接从局部缓冲解码，把「每字段一次
+        // readBytes」收敛成「每条目一次」。短读时保持 $entryBuf 为 null 并回退
+        // 原逐字段路径，由原有 safeRead* 决定越界行为（Fail-Closed 语义不变）。
+        $entryBuf = null;
+        if ($d === null && $this->stream !== null && $stride > 0) {
+            $buf = $this->readBytes($entryOffset, $stride);
+            if (strlen($buf) === $stride) {
+                $entryBuf = $buf;
+            }
+        }
+
         $widths = $this->groupFieldWidths[$groupIndex];
         $baseOffsets = $this->groupFieldOffsets[$groupIndex];
         $natives = $this->groupFieldNative[$groupIndex];
         $natTypes = $this->groupFieldNativeType[$groupIndex];
+        $nativeCount = $natives ? count($natives) : 0;
+        $natTypeCount = $natTypes ? count($natTypes) : 0;
 
+        $n = $cols === null ? $fieldCount : count($cols);
         $values = [];
-        for ($i = 0; $i < $fieldCount; $i++) {
+        for ($k = 0; $k < $n; $k++) {
+            if ($cols === null) {
+                $i = $k;
+            } else {
+                $i = $cols[$k];
+                if ($i < 0 || $i >= $fieldCount) {
+                    $values[] = '';
+                    continue;
+                }
+            }
             $w = $widths[$i];
-            $fo = $entryOffset + $baseOffsets[$i];
-            $isNative = $natives && $i < count($natives) && $natives[$i];
+            $pos = $baseOffsets[$i];
+            $fo = $entryOffset + $pos;
+            $isNative = $i < $nativeCount && $natives[$i];
+            $t = ($isNative && $i < $natTypeCount) ? $natTypes[$i] : 0;
+
+            if ($entryBuf !== null) {
+                // 流式快路径。字段若越出 stride，回退到原逐字段读取：畸形 schema 下
+                // 原实现会读到相邻条目的字节，这里必须保持完全一致，不能擅自报错。
+                $need = ($isNative && $t === 1)
+                    ? ($w === 4 ? 4 : 8)
+                    : min(max($w, 1), 4);
+                if ($pos >= 0 && $pos + $need <= $stride) {
+                    if ($isNative) {
+                        if ($t === 1) {
+                            $valNum = $w === 4
+                                ? unpack('g', $entryBuf, $pos)[1]
+                                : unpack('e', $entryBuf, $pos)[1];
+                            $values[] = GeoInfo::formatFloatValue($valNum);
+                        } else {
+                            $values[] = (string)self::readUintWidthFrom($entryBuf, $pos, $w);
+                        }
+                    } else {
+                        $idx = self::readUintWidthFrom($entryBuf, $pos, $w);
+                        $values[] = $this->poolString($groupIndex, $i, $idx);
+                    }
+                    continue;
+                }
+            } elseif ($d !== null && $fo >= 0) {
+                // 缓冲快路径：按 safeReadUintWidth 的宽度映射直接拼字节。
+                if ($isNative && $t === 1) {
+                    $need = $w === 4 ? 4 : 8;
+                    if ($fo + $need <= $dataLen) {
+                        $valNum = $w === 4 ? unpack('g', $d, $fo)[1] : unpack('e', $d, $fo)[1];
+                        $values[] = GeoInfo::formatFloatValue($valNum);
+                        continue;
+                    }
+                } else {
+                    $need = $w <= 1 ? 1 : ($w === 2 ? 2 : ($w === 3 ? 3 : 4));
+                    if ($fo + $need <= $dataLen) {
+                        if ($need === 2) {
+                            $u = ord($d[$fo]) | (ord($d[$fo + 1]) << 8);
+                        } elseif ($need === 3) {
+                            $u = ord($d[$fo]) | (ord($d[$fo + 1]) << 8) | (ord($d[$fo + 2]) << 16);
+                        } elseif ($need === 1) {
+                            $u = ord($d[$fo]);
+                        } else {
+                            $u = ord($d[$fo]) | (ord($d[$fo + 1]) << 8) | (ord($d[$fo + 2]) << 16) | (ord($d[$fo + 3]) << 24);
+                        }
+                        $values[] = $isNative ? (string)$u : $this->poolString($groupIndex, $i, $u);
+                        continue;
+                    }
+                }
+            }
 
             if ($isNative) {
-                $t = $natTypes && $i < count($natTypes) ? $natTypes[$i] : 0;
                 if ($t === 1) {
                     // float
                     if ($w === 4) {
@@ -2482,15 +2680,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             $values[] = $val;
         }
 
-        $info = new GeoInfo($values, $this->fieldNames, $this->normalizedFieldMap);
-
-        // 写入有界缓存：直接映射，碰撞就覆盖这一个槽。
-        // 表容量由 slot 下标本身封顶，无需容量计数器，更不需要整表清空。
-        if ($cacheEnabled) {
-            $this->geoCache[$slot] = [$groupIndex, $entryId, $info];
-        }
-
-        return $info;
+        return $values;
     }
 
     // ------------------------------------------------------------------
@@ -2754,7 +2944,12 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             $d = $this->data;
             return ord($d[$off]) | (ord($d[$off + 1]) << 8) | (ord($d[$off + 2]) << 16);
         }
-        return $this->readByte($off) | ($this->readByte($off + 1) << 8) | ($this->readByte($off + 2) << 16);
+        // 流式模式：一次读 3 字节。原实现退化成 3 次 readByte，每次都查一次
+        // 分页缓存并刷新 LRU 顺序；Trie 每步一个 24 位节点，这是流式遍历的
+        // 主要放大源。短读返回 0，与 readByte 的越界语义一致。
+        $b = $this->readBytes($off, 3);
+        if (strlen($b) < 3) return 0;
+        return ord($b[0]) | (ord($b[1]) << 8) | (ord($b[2]) << 16);
     }
 
     private function readByte($off)
@@ -2925,6 +3120,20 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         } else {
             return $this->safeReadU32($off);
         }
+    }
+
+    /**
+     * 从已一次性读出的条目缓冲解码变宽小端整数，语义与 safeReadUintWidth 一致。
+     * 调用方必须保证 pos + 实际读取宽度落在缓冲内；越界时由调用方回退原路径。
+     */
+    private static function readUintWidthFrom(string $b, int $pos, int $width): int
+    {
+        if ($width <= 1) return ord($b[$pos]);
+        if ($width === 2) return unpack('v', $b, $pos)[1];
+        if ($width === 3) {
+            return ord($b[$pos]) | (ord($b[$pos + 1]) << 8) | (ord($b[$pos + 2]) << 16);
+        }
+        return unpack('V', $b, $pos)[1];
     }
 
     // ------------------------------------------------------------------

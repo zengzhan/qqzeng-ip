@@ -440,7 +440,9 @@ static void format_float_value_locale(locale_t loc, double dv, char* buf, size_t
     double abs_dv = neg ? -dv : dv;
     if (abs_dv < 1e12) {
         double scaled = abs_dv * 1e6;
-        uint64_t total = (uint64_t)round(scaled);
+        /* round-half-even（契约 §10.5）：round() 是半数远离零，tie 偶底会错进一位；
+         * nearbyint 按当前舍入模式（默认 nearest-even）舍入，不抛 FE_INEXACT。 */
+        uint64_t total = (uint64_t)nearbyint(scaled);
         uint64_t int_part = total / 1000000ULL;
         uint32_t frac_part = (uint32_t)(total % 1000000ULL);
 
@@ -470,8 +472,11 @@ static void format_float_value_locale(locale_t loc, double dv, char* buf, size_t
         buf[pos] = '\0';
     } else {
         /* 防御性兜底：QZDB 经纬度坐标范围为 [-180.0, 180.0]，业务值恒小于 1e12；
-         * 若外部极端传入 >= 1e12 浮点数，使用 snprintf 作为兜底保障 */
-        snprintf(buf, buf_size, "%.6f", dv);
+         * 若外部极端传入 >= 1e12 浮点数，使用 snprintf 作为兜底保障。
+         * 整数值（>= 2^63 走不了 int64 快路）用 %.0f 输出整值，否则 %.6f
+         * 会多出 ".000000"（FORMAT §10.5：整数值无小数点）。 */
+        const char *fmt = (dv == floor(dv)) ? "%.0f" : "%.6f";
+        snprintf(buf, buf_size, fmt, dv);
     }
 }
 
