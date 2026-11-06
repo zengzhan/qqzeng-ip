@@ -202,3 +202,5 @@ v2.0-dat/
 ## 许可证
 
 本项目采用 [MIT License](../v6.0-db/LICENSE) 开源。
+
+<!-- commit: v2.0-dat: 经典 2.0 (.dat) 多语言解析 SDK（C/C++/Go/Java/C#/Node.js/PHP/Python/Ruby） sync=1793936056 -->
