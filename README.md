@@ -1,453 +1,352 @@
-# 👑 qqzeng-ip / QZDB 极速 IP 地理位置解析引擎
+# qqzeng-ip — 高性能 IP 地理位置与网络画像数据库引擎
 
-<div align="center">
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Format: QZDB v2.4](https://img.shields.io/badge/Format-.qzdb%20%7C%20.db%20%7C%20.dat-orange.svg)](docs/QZDB_FORMAT.md)
+[![Dual-Stack: IPv4 & IPv6](https://img.shields.io/badge/Dual--Stack-IPv4%20%26%20IPv6-success.svg)](docs/VERSION_COMPARISON.md)
+[![Maven Central](https://img.shields.io/badge/Maven%20Central-com.qqzeng%3Aqzdb%201.0.8-C71A36.svg)](https://central.sonatype.com/artifact/com.qqzeng/qzdb)
+[![crates.io](https://img.shields.io/badge/crates.io-qzdb%202.0.0-DEA584.svg)](https://crates.io/crates/qzdb)
+[![NuGet](https://img.shields.io/badge/NuGet-QQZeng.Qzdb%201.0.8-004880.svg)](https://www.nuget.org/packages/QQZeng.Qzdb)
+[![PyPI](https://img.shields.io/badge/PyPI-qzdb%201.0.6-3775A9.svg)](https://pypi.org/project/qzdb/)
+[![npm](https://img.shields.io/badge/npm-%40qqzengip%2Fqzdb%201.0.6-CB3837.svg)](https://www.npmjs.com/package/@qqzengip/qzdb)
+[![Packagist](https://img.shields.io/badge/Packagist-qqzeng%2Fqzdb%201.2.0-F28D1A.svg)](https://packagist.org/packages/qqzeng/qzdb)
 
-[English](./README_EN.md) | **简体中文**
+> 单文件整合全球 **1,250 万+ IPv4/IPv6 双栈网段** · 亚微秒级 `mmap` 零拷贝检索 · **8 大主流语言**统一 API 与四层黄金向量对账验证。
+>
+> 🔗 **快捷导航**：[在线查询体验 (25维画像)](https://www.qqzeng.com/ip/) · [版本选型与字段对照](docs/VERSION_COMPARISON.md) · [多格式性能评测](docs/BENCHMARK_COMPARISON.md) · [8语言性能白皮书](docs/PERFORMANCE.md) · [SDK API 规范](docs/QZDB_SDK_API.md) · [商业授权与选购](https://www.qqzeng.com/service/)
 
-</div>
+## 目录
 
-<div align="center">
+1. [核心架构亮点](#一核心架构亮点)
+2. [一分钟版本选型指南](#二一分钟版本选型指南)
+3. [QZDB 版本规格、文件大小与字段区别](#三qzdb-版本规格文件大小与字段区别)
+4. [性能测试与多格式横向对比](#四性能测试与多格式横向对比)
+5. [30 秒快速安装与集成](#五30-秒快速安装与集成)
+6. [多语言代码示例](#六多语言代码示例)
+7. [仓库目录结构导航](#七仓库目录结构导航)
+8. [验证体系与商业授权](#八验证体系与商业授权)
 
-[![Verification](https://img.shields.io/badge/Verification-100%25%20Passed-brightgreen.svg)](https://github.com/zengzhan/qqzeng-ip)
-[![Latency](https://img.shields.io/badge/Latency-%3C0.08%C2%B5s-purple.svg)](https://github.com/zengzhan/qqzeng-ip)
-[![Languages](https://img.shields.io/badge/Languages-Rust%20%7C%20C%20%7C%20Go%20%7C%20Java%20%7C%20C%23%20%7C%20Node%20%7C%20PHP%20%7C%20Python-blue.svg)](https://github.com/zengzhan/qqzeng-ip)
-[![License](https://img.shields.io/badge/License-MIT-orange.svg)](./LICENSE)
+## 一、核心架构亮点
 
-**官方包已发布至各大平台，开箱即用 👇**
+**qqzeng-ip** 提供以新一代二进制格式 **`.qzdb`** 为核心的 IP 地理位置、运营商、自治域（ASN）与网络应用场景（IDC 机房 / 家宽 / 移动基站 / 云厂商）解析引擎，同时完整维护存量系统广泛使用的经典 **6.0（`.db`）**、**2.0（`.dat`）** 与 **手机号段归属地** SDK。
 
-[![Maven Central](https://img.shields.io/maven-central/v/com.qqzeng/qzdb?logo=apache-maven&label=Maven%20Central&color=C71A36)](https://central.sonatype.com/artifact/com.qqzeng/qzdb)
-[![NuGet](https://img.shields.io/nuget/v/QQZeng.Qzdb?logo=nuget&label=NuGet&color=004880)](https://www.nuget.org/packages/QQZeng.Qzdb)
-[![PyPI](https://img.shields.io/pypi/v/qzdb?logo=pypi&label=PyPI&color=3776AB)](https://pypi.org/project/qzdb/)
-[![npm](https://img.shields.io/npm/v/@qqzengip/qzdb?logo=npm&label=npm&color=CB3837)](https://www.npmjs.com/package/@qqzengip/qzdb)
-[![crates.io](https://img.shields.io/crates/v/qzdb?logo=rust&label=crates.io&color=DEA584)](https://crates.io/crates/qzdb)
-[![Packagist](https://img.shields.io/packagist/v/qqzeng/qzdb?logo=composer&label=Packagist&color=F28D1A)](https://packagist.org/packages/qqzeng/qzdb)
-[![Go Module](https://img.shields.io/badge/Go%20Module-v1.0.6-00ADD8?logo=go)](https://pkg.go.dev/github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go)
-
-</div>
-
-> **QZDB (qqzeng IP Database)** 是一款专为企业级高并发、云原生架构打造的下一代 IP 地理位置与号段归属地二进制搜索引擎。凭借**双阶段 Patricia Trie 树算法**、**`mmap` 零拷贝**以及**无锁并发设计**，单机支持 500 万+ QPS（C/Rust 原生可达 1000 万+ QPS，延迟低至纳秒级，多线程缓存扩展下吞吐可达数千万至亿级，口径与复现见 [docs/PERFORMANCE.md](./docs/PERFORMANCE.md)）。
-
----
-
-> [!IMPORTANT]
-> **🚀 为什么选择 QZDB 旗舰解析引擎？**
-> - ⚡ **极致性能**：Rust / C / Go 基于只读内存映射（mmap）实现零堆分配查询，单次解析延迟低至 **< 0.08 µs (80 纳秒)**。
-> - 🛡️ **全量无抽样验证**：对全部 `959,162` 个 CIDR 区间的边界及中心 IP 进行了 **`2,877,486` 次无抽样全量核对**，通过率 **100.00%**。
-> - 📦 **高密存储**：Trie 树前缀压路机算法，千万级全球 IP/CIDR 细化网段体积压缩率高达 **95%+**（仅十余兆）。
-> - 🌐 **全语言原生 SDK**：官方提供 Rust, C/C++, Go, Java, C#, Node.js, PHP, Python 八种主流语言支持。
-
----
-
-## 📑 目录 (Table of Contents)
-
-| 章节 | 你会看到什么 |
-| :--- | :--- |
-| [⚡ 30 秒快速集成](#-30-秒快速集成-quick-start) | 8 语言一键安装命令 + Hello World 示例（**新用户从这里开始**） |
-| [🧭 核心产品线一键直达](#-核心产品线一键直达-product-navigation) | IP / 号段 / 数据库 / 历史版本五大产品入口 |
-| [📊 多语言 SDK 性能榜单](#-多语言-sdk-性能横向评测榜单-sdk-benchmark) | 8 语言吞吐与延迟实测对比 |
-| [📐 算法架构与查询流程](#-qzdb-算法架构与查询流程-algorithm-architecture) | 双阶段 Patricia Trie + Jump Table 原理 |
-| [⚖️ 主流二进制格式对比](#️-主流二进制-ip-数据格式对比-format-comparison) | 与 `.mmdb` / `.xdb` / `.ipdb` 的客观选型对比 |
-| [📂 目录结构与数据规格](#-核心产品与目录结构-project-structure) | 仓库结构、文件体积、五个版本字段定义 |
-| [🗺️ 数据字段规范](#️-数据多维层级与字段规范-data-dimensions--schema) | 大洲/国家/省市/经纬度/时区/运营商字段标准 |
-| [🎯 典型应用场景](#-典型应用场景与用途-application-scenarios) | DNS 智能解析、CDN 调度、风控等落地场景 |
-| [📱 手机号段归属库](#-手机号段归属地数据库-phone-location-database) | 50 万+ 号段 DAT 与 Redis 方案 |
-
----
-
-## 🧭 核心产品线一键直达 (Product Navigation)
-
-| 产品线 | 说明与核心亮点 | 包含内容 / 支持语言 | 快速入口 |
-| :--- | :--- | :--- | :---: |
-| 🚀 **IP 旗舰 QZDB 解析 SDK** | **下一代旗舰**：双阶段 Trie 树 + `mmap` 零分配，纳秒级检索，支持 IPv4/IPv6 全字段与风控 | 🦀 Rust · 🐹 Go · ☕ Java · ⚡ C/C++ <br> 🔷 C# · 🟩 Node · 🐍 Python · 🐘 PHP | 👉 [**`ip-qzdb-sdk/`**](./ip-qzdb-sdk) |
-| 📦 **IP 经典版解析 SDK** | **经典在用**：6.0 经典 `.db` 与 2.0 早期 `.dat` 格式多语言解析 SDK 与源码 | v6.0 (.db) SDK · v2.0 (.dat) SDK | 👉 [**`ip-classic-sdk/`**](./ip-classic-sdk) |
-| 📱 **手机号段归属地 SDK** | **50万+ 全号段**：压缩率 95.7%+ 的二进制 DAT 解析及 Redis 高并发缓存方案 | v2.0 ~ v6.0 DAT SDK · Redis 导入 | 👉 [**`phone-location-sdk/`**](./phone-location-sdk) |
-| 🗄️ **关系型数据库脚本** | **海量入库 DDL**：针对 IP 网段与号段优化的建表、前缀索引与批量高速入库脚本 | 🐬 MySQL · 🐘 PostgreSQL · 🪟 SQL Server | 👉 [**`database-sql/`**](./database-sql) |
-| 🗂️ **IP 历史版本与工具** | **演进留档**：IP 3.0~5.0 早期版本解析、Big DAT 与 Windows 离线查询工具 | v3.0~v5.0 源码 · 桌面查询工具 | 👉 [**`ip-history-sdk/`**](./ip-history-sdk) |
-| 📋 **脱敏测试样本数据** | **演示样例**：IP 归属地与号段 CSV / TXT / QZDB 样例数据 | 全国/全球 IP 样例 · 号段样例 | 👉 [**`demo/`**](./demo) |
-
-> 💰 **获取完整数据**：仓库内为脱敏演示样本。五大版本（标准 ¥299 起 / 专业 ¥499 / ASN ¥399 / 旗舰 ¥699 / 至尊 ¥999），中国版/全球版可选；买断永久可用，包年更新每月 1 日自动推送（比单次更新省 40%+）。
-> - 🛒 产品与价格：https://www.qqzeng.com/service/
-> - 🔍 先在线验数据：https://www.qqzeng.com/ip/
-
----
-
-## 📊 多语言 SDK 性能横向评测榜单 (SDK Benchmark)
-
-分为两大工程阵营：**原生/编译系统语言阵营**（C、Go、Rust、Java、C#）注重高并发极致吞吐；**动态脚本生态阵营**（Node.js、PHP、Python）注重开箱即用与轻量集成。  
-测试数据均取自统一受控基准（Apple M4 Max 单线程，`ip-qzdb-sdk/bench_reports/*.json` 真实快照），数字由 CI 性能门禁守护。完整定义见下方折叠区与 [docs/PERFORMANCE.md](./docs/PERFORMANCE.md)。
-
-| 语言与阵营（点击直达源码） | 单线程整型随机¹<br>**口径 A · 真实契约基准** | 16 线程并发²<br>**口径 B · 多核极限** | 字符串查询³<br>**口径 C · 含 IP 解析** | 架构优化特点 |
-| :--- | :---: | :---: | :---: | :--- |
-| 👑 [C / C++](./ip-qzdb-sdk/c) | **96.5 M/s** | **5.06 亿/s** | 12.6 M/s | 极致轻量 · 零依赖 · 零拷贝 mmap |
-| ⚡ [Go](./ip-qzdb-sdk/go) | **97.3 M/s** | **7.19 亿/s** | 12.1 M/s | 高并发 Goroutine · 单文件部署 |
-| 🛡️ [Rust](./ip-qzdb-sdk/rust) *(10月重构)* | **82.6 M/s** | **2.33 亿/s** | 11.5 M/s | 值语义去共享化 · 4路组相联缓存 |
-| ☕ [Java](./ip-qzdb-sdk/java) | **48.1 M/s** *(v4: 101M)* | **1.36 亿/s** | **11.9 M/s** | 堆外内存视图 · 全字段解析领先 |
-| 🚀 [C#](./ip-qzdb-sdk/netcore) | **46.9 M/s** | **5.50 亿/s** | **20.9 M/s** | 原生内存映射 · 字符串全链路领先 |
-| ───────── | ───────── | ───────── | ───────── | *动态脚本与应用生态阵营* |
-| 🔥 [Node.js](./ip-qzdb-sdk/nodejs) | **8.22 M/s** *(探针: 99M)⁴* | 进程级多核 | 10.3 M/s | BigInt 偏移解析 · JS 生态极速档 |
-| 🐘 [PHP](./ip-qzdb-sdk/php) | **5.67 M/s** *(探针)⁴* | FPM 进程池 | 470 K/s | 纯 PHP 零扩展依赖 · 双模式缓冲 |
-| 🐍 [Python](./ip-qzdb-sdk/python) | **1.30 M/s** | 多进程池扩展 | 273 K/s | 零三方依赖 · 数据分析与快速接入 |
-
-<details>
-<summary>📐 口径定义、环境声明与复现方式（点开查看）</summary>
-
-- **口径 A｜单线程整型随机（缓存最不利）**：整型输入、50 万离散散布 IP、省级 8.6MB 库、单线程 —— 容量规划的保守承诺值，编译语言单次寻址平均 10~25 ns；
-- **口径 B｜16 线程并发**：在只读 mmap 与不可变快照下，16 个工作线程并发压测的多核总吞吐；
-- **口径 C｜字符串 find_str**：字符串输入（含 IP 解析与格式校验）、demo 样本库 —— 与 CI 门禁同口径，跨语言可比；
-- **⁴ 契约基准与直测探针说明**：统一契约包含伪随机流推进与防作弊指纹校验；Node.js 与 PHP 在契约下分别为 8.22M 与 0.72M，在消除流推进开销的极简裸循环探针下可达 99.4M 与 5.67M；
-- **环境与库规模效应**：Apple M4 Max（14 核）单线程 best-of-3；x86 平台通常低 2~4 倍；122MB 全球库因超出 CPU L3 缓存容量，口径 A 约为省级库的 1/3（物理客观规律）；
-- 完整定义与复现命令见 [docs/PERFORMANCE.md](./docs/PERFORMANCE.md)。除 C/C++ 源码直编外，其余 7 语言均可由包管理器一条命令安装（见下方 Quick Start）。仅供技术选型参考，非 SLA。
-
-</details>
-
----
-
-## ⚡ 30 秒快速集成 (Quick Start)
-
-**无需克隆源码**——QZDB SDK 已发布至各语言官方包仓库，一条命令即可接入。
-
-### 📦 官方包一键安装
-
-| 语言 | 包仓库 | 安装命令 |
+| 核心特性 | 技术架构与实测指标 | 工程价值 |
 | :--- | :--- | :--- |
-| 🐍 **Python** | PyPI | `pip install qzdb` |
-| 🦀 **Rust** | crates.io | `cargo add qzdb` |
-| 🐹 **Go** | Go Module | `go get github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go` |
-| 🔷 **C#** | NuGet | `dotnet add package QQZeng.Qzdb` |
-| 🟢 **Node.js** | npm | `npm i @qqzengip/qzdb` |
-| 🐘 **PHP** | Packagist | `composer require qqzeng/qzdb` |
-| ☕ **Java** | Maven Central | 见下方依赖片段 |
-| ⚡ **C / C++** | 源码集成 | 下载 [`qzdb_reader.c`](./ip-qzdb-sdk/c/qzdb_reader.c) + [`qzdb_reader.h`](./ip-qzdb-sdk/c/qzdb_reader.h) 一起编译 |
+| **双阶段极速检索** | `16-bit Jump Table` + `PATRICIA Trie` 最长前缀匹配，IPv4 平均 ≤16 次位比对 | 编译型语言单核整型随机达 **46.9M ~ 97.3M QPS**，16 核达 **7.19 亿 QPS** |
+| **42:1 极限压缩** | 拓扑后序离线去重（Hash-Consing）+ 字典池化，2.94 GB 双栈 CSV 压至 **69.1 MB** | 国内双栈版仅 **2.6 ~ 6.3 MB**，随容器镜像秒级分发 |
+| **零拷贝共享内存** | 原生支持操作系统 `mmap` 只读内存映射，多进程共享同一物理内存页 | 查询全程 **0 堆内存分配、无锁并发**，告别数仓/Redis 3GB~6GB 内存占用 |
+| **自描述动态 Schema** | 文件头内嵌字段元数据字典，原生返回强类型 `GeoInfo` 对象与按名取值 | 彻底告别传统竖线字符串手工 `split('|')` 引起的列偏移隐患 |
+| **工业级安全门禁** | 加载期执行头部、CRC32、偏移边界与 UTF-8 校验（Fail-Closed） | 截断或损坏文件安全拒绝；8 语言通过 L1~L4 黄金向量逐字节对账 |
 
-<details>
-<summary>☕ Java 的 Maven / Gradle 依赖片段</summary>
+## 二、一分钟版本选型指南
 
-Maven：
+根据您的业务场景、网络协议要求与系统架构，按以下对照表直接锁定对应引擎与版本：
 
-```xml
-<dependency>
-    <groupId>com.qqzeng</groupId>
-    <artifactId>qzdb</artifactId>
-    <version>1.0.7</version>
-</dependency>
+| 业务场景与系统形态 | 推荐引擎格式 | 推荐版本规格 | 二进制体积 (全球 / 国内) | 对应 SDK 目录 |
+| :--- | :--- | :--- | :--- | :--- |
+| **Web 高并发防刷 / 访问控制 / 省市分流** | 新一代 `.qzdb` (双栈) | **标准版 (`STD` · 6维)** | **39.6 MB** / **2.9 MB** | [`ip-qzdb-sdk/`](ip-qzdb-sdk) |
+| **BGP 路由调优 / 跨网调度 / CDN 分配** | 新一代 `.qzdb` (双栈) | **自治域版 (`ASN` · 8维)** | **26.6 MB** / **2.6 MB** | [`ip-qzdb-sdk/`](ip-qzdb-sdk) |
+| **电商本地化 / 广告精准投放 / 区县下沉** | 新一代 `.qzdb` (双栈) | **专业版 (`PRO` · 11维)** | **49.1 MB** / **5.0 MB** | [`ip-qzdb-sdk/`](ip-qzdb-sdk) |
+| **业务风控 / 反欺诈 / 机房与家宽识别** | 新一代 `.qzdb` (双栈) | **旗舰版 (`MAX` · 15维)** | **62.6 MB** / **5.9 MB** | [`ip-qzdb-sdk/`](ip-qzdb-sdk) |
+| **跨国出海业务 / 中英双语 / 全维画像** | 新一代 `.qzdb` (双栈) | **至尊版 (`ULT` · 25维)** | **69.1 MB** / **6.3 MB** | [`ip-qzdb-sdk/`](ip-qzdb-sdk) |
+| **存量老系统平滑升级（全球纯 IPv4）** | 经典 6.0 `.db` (纯v4) | **全球旗舰版 (11维)** | **33.2 MB** *(解除16MB限制)* | [`ip-classic-sdk/v6.0-db/`](ip-classic-sdk/v6.0-db) |
+| **存量老系统长期维护（国内纯 IPv4）** | 经典 2.0 `.dat` (纯v4) | **国内精华版 (11维)** | **6.4 MB** *(字符池1.6MB)* | [`ip-classic-sdk/v2.0-dat/`](ip-classic-sdk/v2.0-dat) |
+| **自建关系型数仓 / SQL 离线关联分析** | 明文 `.csv` (CIDR/Range) | **全系列版本可选** | 29.8 MB ~ 2.94 GB | [`database-sql/`](database-sql) |
+
+## 三、QZDB 版本规格、文件大小与字段区别
+
+`.qzdb` 单文件同时涵盖 **IPv4 与 IPv6** 全量网段。五大版本的字段体系遵循严格的**递增包含关系**：
+
+```text
+标准版 STD (6维)  ⊂  专业版 PRO (11维)  ⊂  旗舰版 MAX (15维)  ⊂  至尊版 ULT (25维)
+└─ 自治域版 ASN (8维)：独立网络专项版 = 基础国家级地理 (4维) + 网络与风控 (4维)
 ```
 
-Gradle：
+### 1. 全球双栈版（IPv4 + IPv6 全量）文件大小对比
 
-```groovy
-implementation 'com.qqzeng:qzdb:1.0.7'
+| 版本规格 | 字段维度 | 明文 CSV 行数 | 明文 CSV 大小 | **QZDB 二进制大小** | 体积压缩比 |
+| :--- | :---: | ---: | ---: | ---: | :---: |
+| **标准版 (`STD`)** | 6 维 | 1,183 万行 | 728.2 MB | **39.6 MB** | `18 : 1` |
+| **自治域版 (`ASN`)** | 8 维 | 638 万行 | 579.5 MB | **26.6 MB** | `22 : 1` |
+| **专业版 (`PRO`)** | 11 维 | 1,217 万行 | 1,469.0 MB | **49.1 MB** | `30 : 1` |
+| **旗舰版 (`MAX`)** | 15 维 | 1,250 万行 | 2,091.1 MB | **62.6 MB** | `33 : 1` |
+| **至尊版 (`ULT`)** | **25 维** | **1,250 万行** | **2,939.0 MB** | **69.1 MB** | **`42 : 1`** |
+
+### 2. 国内精华双栈版（中国本土业务专用）文件大小对比
+
+| 版本规格 | 字段维度 | 明文 CSV 行数 | 明文 CSV 大小 | **QZDB 二进制大小** | 典型单次延迟 |
+| :--- | :---: | ---: | ---: | ---: | ---: |
+| **标准版 (`STD`)** | 6 维 | 51.0 万行 | 29.8 MB | **2.9 MB** | `~50 ns` |
+| **自治域版 (`ASN`)** | 8 维 | 38.5 万行 | 38.7 MB | **2.6 MB** | `~50 ns` |
+| **专业版 (`PRO`)** | 11 维 | 85.3 万行 | 99.7 MB | **5.0 MB** | `~80 ns` |
+| **旗舰版 (`MAX`)** | 15 维 | 87.6 万行 | 150.4 MB | **5.9 MB** | `~100 ns` |
+| **至尊版 (`ULT`)** | **25 维** | **87.6 万行** | **201.2 MB** | **6.3 MB** | `~120 ns` |
+
+### 3. 五大版本字段区别一览表
+
+| 版本层级 | 字段数 | 包含字段标识 (`Key`) 与中文说明 |
+| :--- | :---: | :--- |
+| **标准版 (`STD`)** | **6 维** | `continent` (大洲)、`country_code` (国家二字码)、`country` (国家)、`province` (省份)、`city` (城市)、`isp` (运营商) |
+| **专业版 (`PRO`)** | **11 维** | 在 **`STD` (6维)** 基础上新增 5 维精细地理：`district` (区县)、`geo_id` (6位行政区划码)、`longitude` (经度)、`latitude` (纬度)、`timezone` (IANA 时区) |
+| **旗舰版 (`MAX`)** | **15 维** | 在 **`PRO` (11维)** 基础上新增 4 维网络与风控：`asn` (自治域号)、`as_name` (自治域组织)、`as_domain` (官方主域名)、`usage_type` (应用场景：家宽/移动/机房/云/专线/教育/CDN/爬虫) |
+| **至尊版 (`ULT`)** | **25 维** | 在 **`MAX` (15维)** 基础上新增 10 维出海国际化：`continent_en`、`country_alpha3` (三字码)、`country_en`、`province_en`、`city_en`、`district_en`、`languages` (语言码)、`currency_code` (货币码)、`phone_prefix` (电话区号)、`emoji_flag` (国旗 Emoji) |
+| **自治域版 (`ASN`)** | **8 维** | 独立网络路由版：`continent`、`country_code`、`country`、`isp` + `asn`、`as_name`、`as_domain`、`usage_type` |
+
+<details>
+<summary>📋 <b>点击展开：25 维全要素字段取值示例（深圳南山电信节点）与版本覆盖矩阵</b></summary>
+
+| 序号 | 字段标识 (`Key`) | 中文名称 | 标准取值示例 | `STD` (6) | `PRO` (11) | `MAX` (15) | `ULT` (25) | `ASN` (8) |
+| :---: | :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: |
+| 1 | `continent` | 大洲中文 | `亚洲` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 2 | `country_code` | 国家二字码 | `CN` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 3 | `country` | 国家中文名 | `中国` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 4 | `province` | 省份 / 州 | `广东省` | ✅ | ✅ | ✅ | ✅ | — |
+| 5 | `city` | 地级市 | `深圳市` | ✅ | ✅ | ✅ | ✅ | — |
+| 6 | `isp` | 运营商 | `中国电信` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 7 | `district` | 区县行政区 | `南山区` | — | ✅ | ✅ | ✅ | — |
+| 8 | `geo_id` | 行政区划代码 | `440305` | — | ✅ | ✅ | ✅ | — |
+| 9 | `longitude` | 经度 (WGS84) | `113.93041` | — | ✅ | ✅ | ✅ | — |
+| 10 | `latitude` | 纬度 (WGS84) | `22.53303` | — | ✅ | ✅ | ✅ | — |
+| 11 | `timezone` | IANA 时区 | `Asia/Shanghai` | — | ✅ | ✅ | ✅ | — |
+| 12 | `asn` | 自治域编号 | `4134` | — | — | ✅ | ✅ | ✅ |
+| 13 | `as_name` | 自治域组织 | `CHINANET-BACKBONE` | — | — | ✅ | ✅ | ✅ |
+| 14 | `as_domain` | 官方主域名 | `chinatelecom.cn` | — | — | ✅ | ✅ | ✅ |
+| 15 | `usage_type` | 应用场景 | `Broadband` | — | — | ✅ | ✅ | ✅ |
+| 16 | `continent_en` | 大洲英文 | `Asia` | — | — | — | ✅ | — |
+| 17 | `country_alpha3` | 国家三字码 | `CHN` | — | — | — | ✅ | — |
+| 18 | `country_en` | 国家英文名 | `China` | — | — | — | ✅ | — |
+| 19 | `province_en` | 省份英文 | `Guangdong` | — | — | — | ✅ | — |
+| 20 | `city_en` | 城市英文 | `Shenzhen` | — | — | — | ✅ | — |
+| 21 | `district_en` | 区县英文 | `Nanshan` | — | — | — | ✅ | — |
+| 22 | `languages` | 官方语言码 | `zh-CN` | — | — | — | ✅ | — |
+| 23 | `currency_code` | 货币代码 | `CNY` | — | — | — | ✅ | — |
+| 24 | `phone_prefix` | 国际电话区号 | `86` | — | — | — | ✅ | — |
+| 25 | `emoji_flag` | 国旗 Emoji | `🇨🇳` | — | — | — | ✅ | — |
+
+- **`usage_type` 8 大风控场景枚举**：`Broadband` (家庭宽带)、`Mobile` (移动基站)、`DataCenter` (IDC 机房)、`Cloud` (公有云主机)、`Enterprise` (政企专线)、`Education` (教育科研网)、`Anycast` (骨干 CDN/DNS)、`Crawler` (商业搜索引擎爬虫)。
+- **经典版 `.dat` 16MB 容量边界提示**：经典 2.0 格式（`.dat`）采用 24-bit（16MB）字符池寻址。国内精华版字符池仅 1.6MB（总文件 6.4MB），可永久安全使用 `.dat`；全球版唯一字符池已突破 16.9MB，纯 IPv4 全球版存量用户请使用 6.0 格式（`.db`，33.2MB）或升级至新一代 `.qzdb`。详见 [docs/VERSION_COMPARISON.md](docs/VERSION_COMPARISON.md)。
+
+</details>
+
+## 四、性能测试与多格式横向对比
+
+> **基准环境与口径声明**：实测硬件为 **Apple M4 Max（14 核，macOS）**，遵循 [docs/PERFORMANCE.md](docs/PERFORMANCE.md) 与 [docs/BENCH_CONTRACT.md](docs/BENCH_CONTRACT.md) 统一契约（`splitmix64` 固定种子、FNV-1a 指纹对账）。
+> - **口径 A（整型随机·保守承诺值）**：50 万随机散布 IP 整型查询（省级 8.6MB 库；在 122MB 全球库上受 CPU L3 缓存物理规律影响，吞吐约为小库的 1/3）。
+> - **口径 B（热点 / 16 核并发）**：重复查询命中缓存或 16 线程无锁并发吞吐。
+> - **口径 C（字符串直查 `find_str`）**：含 IP 字符串解析 + 走树 + UTF-8 结果拼装全链路（CI 门禁口径）。
+
+### 1. 同源数据下六大二进制格式横向评测
+
+将同源 IP 数据集分别编译为 `.qzdb`、经典 `.db` (6.0 / 3.0)、经典 `.dat` (2.0)、`ip2region (.xdb)` 与 `MaxMind (.mmdb)` 同机对比：
+
+| 格式与引擎 | 最快单次查询 | 单核随机吞吐 (QPS) | 协议与字段能力 | 核心检索机制与瓶颈分析 |
+| :--- | ---: | ---: | :--- | :--- |
+| 🚀 **[QZDB (`.qzdb`)](ip-qzdb-sdk)** | **~10 – 21 ns** | **46.9M ~ 97.3 M/s** | IPv4 + IPv6 双栈 (6~25维对象) | `16-bit Jump Table` + 扁平 `PATRICIA Trie` + `RowSchema` 偏移直取，零反序列化 |
+| ⚡ **[qqzeng 6.0 (`.db`)](ip-classic-sdk/v6.0-db)** | **10.6 ns** | **30.0 M/s** (3,000万/s) | 纯 IPv4 (11维竖线字符串) | 65,536 前缀表 + 24-bit 二叉树（≤16 跳），纯偏移寻址，经典版最快 |
+| 🟢 **[qqzeng 3.0 (`.db`)](ip-classic-sdk)** | **17.5 ns** | **15.5 M/s** (1,555万/s) | 纯 IPv4 (11维竖线字符串) | 前缀索引 + 紧凑区间检索 |
+| 🟢 **[qqzeng 2.0 (`.dat`)](ip-classic-sdk/v2.0-dat)** | **29.9 ns** | **9.5 M/s** (950万/s) | 纯 IPv4 (11维竖线字符串) | 256 首字节桶 + 有序区间二分查找（国内版 6.4MB 稳定首选） |
+| 📦 **ip2region (`.xdb` Content)** | **45.4 ~ 70.2 ns** | **6.28 ~ 6.99 M/s** (690万/s) | 纯 IPv4/独立v6 (5维字符串) | 二级向量索引 + 局部二分；`VectorIndex` 模式为 91万/s，`File` 模式为 68万/s |
+| 🌐 **MaxMind (`.mmdb` Memory)** | **668.1 ns** | **1.38 M/s** (138万/s) | IPv4 + IPv6 (嵌套 Map) | 逐位二叉 Trie 遍历（无首阶段大表跳级）+ 叶子 TLV 动态反序列化；`mmap` 模式为 71万/s |
+
+```text
+单核随机查询吞吐对比 (Apple M4 Max，单位：万次/秒)：
+QZDB (.qzdb, Go/C)        ████████████████████████████████████████████████ 9,730 万/s (~10 ns)
+QZDB (.qzdb, Java/C#)     ████████████████████████ 4,810 万/s (~21 ns)
+qqzeng-ip 6.0 (.db)       ███████████████ 3,000 万/s (10.6 ns)
+qqzeng-ip 3.0 (.db)       ████████ 1,555 万/s (17.5 ns)
+qqzeng-ip 2.0 (.dat)      █████ 950 万/s (29.9 ns)
+ip2region (.xdb Content)  ███▌ 690 万/s (45~70 ns)
+MaxMind (.mmdb Memory)    ▊ 138 万/s (668 ns)
+MaxMind (.mmdb mmap)      ▍ 71 万/s (1,410 ns)
+```
+
+> 📖 完整 `BenchmarkDotNet` 多轮实测报表（单次纳秒、百万次毫秒、亿级吞吐）见 **[docs/BENCHMARK_COMPARISON.md](docs/BENCHMARK_COMPARISON.md)**。
+
+### 2. QZDB 8 大主流语言 SDK 性能榜单
+
+| 语言 SDK | 口径 A：单核整型随机 | 口径 B：单核热点 / 16核并发 | 口径 C：字符串 `find_str` | 架构特性说明 |
+| :--- | ---: | ---: | ---: | :--- |
+| 👑 **[C / C++](ip-qzdb-sdk/c/README.md)** | **96.5 M/s** | 101.8 M/s / **506 M/s** | **12.6 M/s** | 纯 C99 零拷贝 `mmap`，栈上实例化，单文件 `.c/.h` 直接内嵌 |
+| ⚡ **[Go](ip-qzdb-sdk/go/README.md)** | **97.3 M/s** | 105.5 M/s / **719 M/s** | **12.1 M/s** | 跨平台 `mmap` 只读视图，原生 Goroutine 无锁高并发 |
+| 🛡️ **[Rust](ip-qzdb-sdk/rust/README.md)** | **82.6 M/s** | 88.0 M/s / **233 M/s** | **11.5 M/s** | 值语义去共享化 + 4 路组相联缓存 + `Arc<str>` 零分配池化 |
+| ☕ **[Java](ip-qzdb-sdk/java/README.md)** | **48.1 M/s** | 105.4 M/s / **136 M/s** | **11.9 M/s** | `MappedByteBuffer` 堆外内存视图 + 零分配 IPv6 解析，0 GC 停顿 |
+| 🚀 **[C# (.NET)](ip-qzdb-sdk/netcore/README.md)** | **46.9 M/s** | 132.1 M/s / **550 M/s** | **20.9 M/s** | 原生指针内存映射，字符串全链路解析吞吐居首 |
+| 🟢 **[Node.js](ip-qzdb-sdk/nodejs/README.md)** | **8.22 M/s** | 7.64 M/s *(裸循环 99.4M)* | **10.3 M/s** | V8 `BigInt` 极速偏移计算，纯 JS 零 C++ 扩展依赖 |
+| 🐘 **[PHP](ip-qzdb-sdk/php/README.md)** | **5.67 M/s** | 0.73 M/s *(FPM/Swoole)* | **470 K/s** | 纯 PHP 零扩展，支持全内存 Buffer 与有界多页 LRU 流式双模式 |
+| 🐍 **[Python](ip-qzdb-sdk/python/README.md)** | **1.30 M/s** | 1.28 M/s *(多进程扩展)* | **273 K/s** | 纯标准库 `mmap` 零三方依赖；另有 PyO3 扩展 `qqzeng-ip-rust` 可选 |
+
+<details>
+<summary>🔬 <b>点击展开：本机一键复现基准命令</b></summary>
+
+```bash
+# 口径 C：8 语言全量 CI 门禁基准（含 FNV-1a 指纹对账）
+cd ip-qzdb-sdk && python3 tools/perf_gate.py
+
+# 口径 A / B：各语言统一契约基准（支持 random / hot / seq 分布与多线程并发）
+cd ip-qzdb-sdk && BENCH_OPS=2000000 ./c/bench_contract
 ```
 
 </details>
 
-### 🚀 Hello World（8 语言）
+## 五、30 秒快速安装与集成
 
-八种语言的 API 设计保持一致：**一次加载、长期持有实例、无锁并发查询**。
+全部主流语言均已发布官方稳定包，支持**包管理器一行命令引入**或**单文件/单目录零依赖源码拷贝**：
 
-<details open>
-<summary>🐍 Python</summary>
+| 语言 | 官方包坐标 (最新版本) | 包管理器安装命令 | 源码直接拷贝入口 |
+| :--- | :--- | :--- | :--- |
+| ☕ **[Java](ip-qzdb-sdk/java/README.md)** | `com.qqzeng:qzdb:1.0.8` | Gradle: `implementation 'com.qqzeng:qzdb:1.0.8'` | 拷贝 [`com/qqzeng/qzdb/`](ip-qzdb-sdk/java/src/main/java/com/qqzeng/qzdb) 包 |
+| 🚀 **[C# (.NET)](ip-qzdb-sdk/netcore/README.md)** | `QQZeng.Qzdb` (`1.0.8`) | `dotnet add package QQZeng.Qzdb` | 拷贝 [`ip-qzdb-sdk/netcore/*.cs`](ip-qzdb-sdk/netcore) |
+| ⚡ **[Go](ip-qzdb-sdk/go/README.md)** | `v1.0.6` (Go Module) | `go get github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go@v1.0.6` | 拷贝 [`ip-qzdb-sdk/go/qzdb/`](ip-qzdb-sdk/go/qzdb) 目录 |
+| 🛡️ **[Rust](ip-qzdb-sdk/rust/README.md)** | `qzdb` (`2.0.0`) | `cargo add qzdb` | 引入 [`ip-qzdb-sdk/rust/`](ip-qzdb-sdk/rust) crate |
+| 🐍 **[Python](ip-qzdb-sdk/python/README.md)** | `qzdb` (`1.0.6`) | `pip install qzdb` | 拷贝单文件 [`qzdb.py`](ip-qzdb-sdk/python/qzdb.py) |
+| 🟢 **[Node.js](ip-qzdb-sdk/nodejs/README.md)** | `@qqzengip/qzdb` (`1.0.6`) | `npm install @qqzengip/qzdb` | 拷贝单文件 [`qzdb.js`](ip-qzdb-sdk/nodejs/qzdb.js) |
+| 🐘 **[PHP](ip-qzdb-sdk/php/README.md)** | `qqzeng/qzdb` (`1.2.0`) | `composer require qqzeng/qzdb` | 拷贝单文件 [`QzdbReader.php`](ip-qzdb-sdk/php/QzdbReader.php) |
+| 👑 **[C / C++](ip-qzdb-sdk/c/README.md)** | 原生 C99 库 | 随宿主项目直接编译 | 拷贝 [`qzdb_reader.c`](ip-qzdb-sdk/c/qzdb_reader.c) + [`qzdb_reader.h`](ip-qzdb-sdk/c/qzdb_reader.h) |
 
+## 六、多语言代码示例
+
+> 💡 **生产环境提示**：请在服务启动时创建一次 `QzdbReader` 实例并全局长期复用（内部全只读，天然支持多线程无锁并发查询）。仓库 [`demo/qqzeng-ip-ult.qzdb`](demo/README.md) 提供了 25 维双栈演示样本库，可直接运行以下示例。
+
+### Python
 ```python
 from qzdb import QzdbReader
 
-searcher = QzdbReader("qqzeng_ip_ult_china.qzdb")
+with QzdbReader("demo/qqzeng-ip-ult.qzdb") as reader:
+    # 1. 查询返回竖线分隔字符串
+    print(reader.find_str("114.114.114.114"))
 
-# 返回竖线分隔字符串
-print(searcher.find_str("114.114.114.114"))
-# 亚洲|CN|中国|江苏|南京|中国电信
-
-# 返回结构化 GeoInfo
-loc = searcher.find("114.114.114.114")
-if loc:
-    print(loc.country, loc.province, loc.city, loc.isp)
+    # 2. 查询返回强类型 GeoInfo 对象（同时支持 IPv4 与 IPv6）
+    loc = reader.find("2400:3200::1")
+    if loc is not None:
+        print(loc.country_code, loc.province, loc.city, loc.isp, loc.get("usage_type"))
 ```
 
-</details>
-
-<details>
-<summary>🦀 Rust</summary>
-
-```rust
-use qzdb::QzdbReader;
-
-// from_file 走只读 mmap，返回 Result —— 请在启动期用 ? / match 处理
-let searcher = QzdbReader::from_file("qqzeng_ip_ult_china.qzdb")?;
-
-if let Some(loc) = searcher.find("114.114.114.114") {
-    // 类型化字段访问（O(1)，零分配）
-    println!("Country: {}, City: {}", loc.country(), loc.city());
-    // 动态字段访问
-    println!("ISP: {}", loc.get("isp"));
-}
-```
-
-</details>
-
-<details>
-<summary>🐹 Go</summary>
-
+### Go
 ```go
+package main
+
 import (
     "fmt"
     "log"
-
     "github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go/qzdb"
 )
 
-// 创建并持有 QzdbReader 实例（mmap 零拷贝，全局复用）
-searcher, err := qzdb.Open("qqzeng_ip_ult_china.qzdb", 0, true)
-if err != nil {
-    log.Fatal(err)
-}
-defer searcher.Close()
-
-// 返回竖线分隔字符串
-fmt.Println(searcher.FindStr("114.114.114.114"))
-
-// 返回结构化 GeoInfo
-info, err := searcher.Find("114.114.114.114")
-if err == nil && info != nil {
-    fmt.Println(info.GetCountry(), info.GetProvince(), info.GetCity())
-}
-```
-
-</details>
-
-<details>
-<summary>☕ Java</summary>
-
-```java
-import com.qqzeng.qzdb.QzdbReader;
-import com.qqzeng.qzdb.GeoInfo;
-
-// Builder 模式，支持 groupIndex / verifyCrc
-try (QzdbReader reader = new QzdbReader.Builder(new File("qqzeng_ip_ult_china.qzdb")).build()) {
-    GeoInfo loc = reader.find("114.114.114.114").orElse(null);
-    if (loc != null) {
-        System.out.println(loc.getCountry() + " " + loc.getProvince() + " " + loc.getCity());
+func main() {
+    reader, err := qzdb.Open("demo/qqzeng-ip-ult.qzdb", 0, true)
+    if err != nil {
+        log.Fatal(err)
     }
-    System.out.println(reader.findStr("114.114.114.114"));
+    defer reader.Close()
+
+    if info := reader.Find("114.114.114.114"); info != nil {
+        fmt.Println(info.Get("country"), info.Get("province"), info.Get("city"), info.Get("isp"))
+    }
 }
 ```
 
-</details>
+### Java
+```java
+import com.qqzeng.qzdb.GeoInfo;
+import com.qqzeng.qzdb.QzdbReader;
+import java.io.File;
+
+try (QzdbReader reader = new QzdbReader.Builder(new File("demo/qqzeng-ip-ult.qzdb")).build()) {
+    reader.find("114.114.114.114").ifPresent(loc -> {
+        System.out.printf("%s %s %s (%s)%n",
+            loc.getCountry(), loc.getProvince(), loc.getCity(), loc.get("usage_type"));
+    });
+}
+```
+
+### Rust
+```rust
+use qzdb::from_file;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let reader = from_file("demo/qqzeng-ip-ult.qzdb")?;
+    if let Some(loc) = reader.find("114.114.114.114") {
+        println!("{} {} {} [ASN: {}]", loc.country(), loc.city(), loc.isp(), loc.get("asn"));
+    }
+    Ok(())
+}
+```
 
 <details>
-<summary>🔷 C# (.NET)</summary>
+<summary>📌 <b>点击展开：C# (.NET) / C / Node.js / PHP 完整调用示例</b></summary>
 
+#### C# (.NET)
 ```csharp
 using QQZeng.Qzdb;
 
-using var reader = QzdbReader.Open("qqzeng_ip_ult_china.qzdb");
-GeoInfo loc = reader.Find("114.114.114.114");
-if (loc != null) {
-    // 类型化取值
-    Console.WriteLine("Province: " + loc.GetProvince());
-    // 动态字段访问
-    Console.WriteLine("ISP: " + loc.Get("isp"));
+using var reader = QzdbReader.Open("demo/qqzeng-ip-ult.qzdb");
+GeoInfo? loc = reader.Find("114.114.114.114");
+if (loc != null)
+{
+    Console.WriteLine($"{loc.Get("country")} {loc.Get("province")} {loc.Get("city")} - {loc.Get("isp")}");
 }
 ```
 
-</details>
+#### C / C++
+```c
+#include <stdio.h>
+#include "qzdb_reader.h"
 
-<details>
-<summary>🟢 Node.js</summary>
+int main(void) {
+    qzdb_reader_t reader;
+    if (qzdb_init(&reader, "demo/qqzeng-ip-ult.qzdb") != QZDB_OK) {
+        return 1;
+    }
+    char buf[QZDB_VALUE_BUF_SIZE];
+    if (qzdb_find_str(&reader, "114.114.114.114", buf, sizeof(buf)) == QZDB_OK) {
+        printf("%s\n", buf);
+    }
+    qzdb_close(&reader);
+    return 0;
+}
+```
 
+#### Node.js
 ```javascript
 const QzdbReader = require('@qqzengip/qzdb');
 
-const reader = new QzdbReader.Builder("qqzeng_ip_ult_china.qzdb").build();
-const loc = reader.find("114.114.114.114");
-console.log(loc.get("country"), loc.get("city"));
+const reader = new QzdbReader.Builder('demo/qqzeng-ip-ult.qzdb').build();
+try {
+    const loc = reader.find('114.114.114.114');
+    if (loc) {
+        console.log(loc.get('country'), loc.get('city'), loc.get('isp'));
+    }
+} finally {
+    reader.close();
+}
 ```
 
-</details>
-
-<details>
-<summary>🐘 PHP</summary>
-
+#### PHP
 ```php
+<?php
 require_once __DIR__ . '/vendor/autoload.php';
-use Qqzeng\Ip\QzdbReader;
+use Qqzeng\Ip\QzdbBuilder;
 
-$reader = new QzdbReader("qqzeng_ip_ult_china.qzdb");
-$loc = $reader->find("114.114.114.114");
-echo $loc->get('country') . ' ' . $loc->get('city');
+$reader = QzdbBuilder::path('demo/qqzeng-ip-ult.qzdb')->build();
+$loc = $reader->find('114.114.114.114');
+if ($loc !== null) {
+    echo $loc->get('country') . ' ' . $loc->get('city') . ' ' . $loc->get('isp') . PHP_EOL;
+}
+$reader->close();
 ```
 
 </details>
 
-<details>
-<summary>⚡ C / C++</summary>
+## 七、仓库目录结构导航
 
-```c
-#include "qzdb_reader.h"
-
-qzdb_reader_t searcher;
-qzdb_init(&searcher, "qqzeng_ip_ult_china.qzdb");   // 栈上持有实例
-char buf[256];
-qzdb_find_str(&searcher, "114.114.114.114", buf, sizeof(buf));
-printf("Result: %s\n", buf);
-```
-
-</details>
-
-> 更完整的 API 文档、错误处理与多语言用例，请参见 **[QZDB 多语言 SDK 指南](./ip-qzdb-sdk/README_zh.md)**。
-
----
-
-## 📐 QZDB 算法架构与查询流程 (Algorithm Architecture)
-
-QZDB 引擎核心采用专门定制的 **双阶段 Patricia Trie 树型检索算法**：
-
-```mermaid
-flowchart LR
-    A["输入目标 IP (如 114.114.114.114)"] --> B["阶段1: Jump Table 前缀跳级 (16-bit 静态表定位)"]
-    B --> C["阶段2: Patricia Trie LPM 匹配 (只读内存按位遍历)"]
-    C --> D["阶段3: String Pool 物理偏移 (O1 无锁读取)"]
-    D --> E["输出结果 (中国|江苏|南京|中国电信)"]
-```
-
-1. **第一阶段 (Jump Table 快速跳级)**：
-   * **IPv4**：默认预读 `16-bit` 的静态前缀跳转表（$2^{16} = 65,536$ 个槽位）。根据 IP 的前两字节，直接 $\mathcal{O}(1)$ 跳转定位到 Trie 树的具体子树节点，消除前 16 层的递归遍历。
-   * **IPv6**：根据数据量大小动态估算最佳跳转位数 `v6_jump_bits`（通常为 `16~20 bit`），同样实现首阶段的快速降维。
-2. **第二阶段 (Trie 节点匹配 & 字符串池偏移读取)**：
-   * 在定位到的子树节点中，以最长前缀匹配 (LPM) 算法沿单侧节点向右/向左遍历。所有中间路由指针和叶子节点数据在文件中扁平化连续存放，极具 CPU 缓存友好性。
-   * 查询命中后，SDK 会直接根据其物理偏移量（Offset）在预载入的只读字符串池（String Pool）中以 $\mathcal{O}(1)$ 解析最终文本，全程免去临界区上锁（Lock-free）。
-
-| 维度指标 | 步数与物理特征 | 技术细节与架构机制 |
+| 目录路径 | 模块定位与包含内容 | 核心文档 |
 | :--- | :--- | :--- |
-| **检索步数构成** | 16 位跳表一次直达 + Patricia 分叉节点行走 | 首阶段 $2^{16}$ 静态跳转表消除前 16 层递归，剩余位在压缩前缀树中仅沿实际分叉行走；最坏步数 $\le 16$ 步（v4）/ $\le 120$ 步（v6），步数与库内记录总数完全脱钩。 |
-| **空间复杂度** | 极小量级（节点拓扑压缩） | 经由前缀压路机算法压缩，每个 Trie 节点仅占用 6~8 字节，千万级全球 IP 树存储开销低于 20MB。 |
-| **内存开销 (Memory)** | $\mathcal{O}(0)$ 零堆分配 | 原生编译型语言（Rust/C/Go）直接借助操作系统 `mmap` 进行零拷贝寻址与直读，无堆对象分配与 GC 停顿。 |
+| 👑 **[`ip-qzdb-sdk/`](ip-qzdb-sdk)** | **新一代 QZDB 极速双栈解析引擎 SDK**（C / C# / Go / Java / Node.js / PHP / Python / Rust 8 语言源码） | [SDK 总览](ip-qzdb-sdk/README.md) · [API 契约](ip-qzdb-sdk/API_CONTRACT.md) |
+| 📦 **[`ip-classic-sdk/`](ip-classic-sdk)** | **经典版纯 IPv4 解析引擎 SDK**（含 `v6.0-db` 16 跳二叉树版与 `v2.0-dat` 经典二分版，共 17 套实现） | [经典版总览](ip-classic-sdk/README.md) |
+| 📱 **[`phone-location-sdk/`](phone-location-sdk)** | **50 万+ 中国手机号段归属地解析 SDK**（涵盖 2.0 ~ 6.0 各版本多语言源码及 Redis 方案） | [号段库文档](phone-location-sdk/README.md) |
+| 🗄️ **[`database-sql/`](database-sql)** | **关系型数据库建表与秒级批量入库脚本**（MySQL `LOAD DATA`、PostgreSQL `COPY`、SQL Server `BULK`） | [SQL 导入指南](database-sql/README.md) |
+| 📋 **[`demo/`](demo)** | **官方演示样本数据**（含 `qqzeng-ip-ult.qzdb` 25 维双栈二进制样本与对应 CSV 对照表） | [样本说明](demo/README.md) |
+| 📚 **[`docs/`](docs)** | **架构规范与性能评测白皮书**（格式规范、API 规范、版本选型指南、多格式 Benchmark 横评） | [版本对比](docs/VERSION_COMPARISON.md) · [性能横评](docs/BENCHMARK_COMPARISON.md) |
 
----
+## 八、验证体系与商业授权
 
-## ⚖️ 主流二进制 IP 数据格式对比 (Format Comparison)
-
-为了帮助架构师进行客观技术选型，以下列出了 QZDB 与业界主流二进制 IP 格式在检索路径、记录形态与存储开销上的真实物理对比（详细基准报告见 [`docs/BENCHMARK_COMPARISON.md`](./docs/BENCHMARK_COMPARISON.md) 与 [`docs/VERSION_COMPARISON.md`](./docs/VERSION_COMPARISON.md)）：
-
-| 格式 | 检索路径（步数构成） | 记录形态 | 体积驱动因素 | 客观短板 |
-| :--- | :--- | :--- | :--- | :--- |
-| **QZDB (qqzeng)** | 16 位跳表一次直达 + Patricia 分叉节点行走；**步数与数据规模无关** | 字段级字典池 + 行间接层，记录存整数 ID，按偏移直读、无解码 | 索引与数据规模、字段池去重率 | 格式较新，生态以自家 8 语言官方 SDK 与持续一致性验证为中心 |
-| **.mmdb (MaxMind)** | 逐位走搜索树，≤32 跳（v4）/ ≤128 跳（v6） | 类型化 Map，可嵌套；值可指针去重，**键名随记录重复编码** | 节点数 × 记录位宽 + 记录编码（含键名） | 命中后需解码整条记录，解码与物化成本随字段数增长 |
-| **.db (ip2region 旧版)** | 全库分段二分，约 $\log_2(\text{总段数})$ 步随机访存 | 单条拼接字符串 | 段数 × 索引条目 + 字符串总量 | 仅支持 IPv4；无字段结构划分（现行格式已升级为 xdb） |
-| **.xdb (现行版)** | 向量索引 $\mathcal{O}(1)$ 直达桶 + 桶内二分 $\mathcal{O}(\log M)$ | 单条分隔符拼接字符串，整串级去重 | 512KB 固定向量索引 + 段数 × 14B（v4）+ 字符串总量 | 无字段级类型与字典，字段扩展需靠加长拼接字符串 |
-| **.ipdb (IPIP)** | 逐位走二叉树，≤32 跳（v4）/ ≤128 跳（v6），节点 8B 定长 | 制表符拼接字符串，按元数据字段表定位 | 节点数 × 8B + 字符串总量 | 无字段级字典（相同字符串跨记录重复存）；格式规范与生成工具链未公开 |
-
-<details>
-<summary>🔍 各格式核心机制深度说明（点开查看）</summary>
-
-- **`QZDB`（双阶段压缩前缀树）**：首阶段 16-bit 静态跳转表一次直达子树，次阶段在 Patricia 树中仅沿实际分叉节点检索，最坏步数 $\le 16$ 步（v4），检索路径与全库规模完全脱钩；采用字段级独立字典池，网段记录存储整数 ID，SDK 按需直接通过 RowSchema 物理偏移直读目标字段，无需解码反序列化，亦无需 split 拆分字符串。
-- **`.mmdb`（MaxMind 通用类型化嵌套树）**：二进制二叉树，逐位遍历（IPv4 ≤32 跳，IPv6 ≤128 跳）。虽然值支持指针去重，但键名随 Map 重复编码；命中后需递归反序列化整条记录，在高级语言中堆对象分配与物化开销随字段数量线性增长。
-- **`.db`（ip2region 旧版，分段二分）**：构建期已将网段压平为互不重叠的起止范围，全库二分需约 $\log_2(\text{总段数})$ 步随机访存，对 CPU 缓存不友好；仅支持 IPv4，无字段类型划分。
-- **`.xdb`（ip2region 现行版，分区向量索引）**：前两字节经 512KB 向量索引表 $\mathcal{O}(1)$ 直达对应桶，在桶内对 14B 定长段执行 $\mathcal{O}(\log M)$ 二分查找；载荷为纯字符串拼接，生成器支持整串级去重，但缺乏字段级类型与字典池，字段扩展需依赖拼接长字符串并在读取时做 split 拆分。
-- **`.ipdb`（IPIP 专有前缀树）**：定长 8 字节节点的二叉树逐位遍历；记录区以制表符拼接字符串存储，缺乏字段级独立字典池（相同文本跨记录重复存储）；官方 SDK 覆盖丰富，但格式规范与生成工具链未开源。
-
-</details>
-
----
-
-## 📂 核心产品与目录结构 (Project Structure)
-
-| 目录/文件 | 说明 (Description) |
-| :--- | :--- |
-| **[`ip-qzdb-sdk/`](./ip-qzdb-sdk)** | ⚡ **QZDB 极速解析引擎**——Rust / C / Go / Java / C# / Node.js / PHP / Python 八语言 SDK 全覆盖 |
-| **[`ip-classic-sdk/`](./ip-classic-sdk)** | 📦 **IP 数据库经典版 SDK**——v6.0 (.db) 与 v2.0 (.dat) 经典在用解析源码 |
-| **[`phone-location-sdk/`](./phone-location-sdk)** | 📱 **手机号段归属地 SDK**——v2.0 至 v6.0 全版本多语言 DAT 解析 SDK 与 Redis 方案 |
-| **[`database-sql/`](./database-sql)** | 🗄️ **数据库建表与入库脚本**——MySQL / PostgreSQL / SQL Server DDL 与高速导入脚本 |
-| **[`ip-history-sdk/`](./ip-history-sdk)** | 🗂️ **IP 历史版本与工具归档**——v3.0~v5.0 历史源码、Big DAT 与桌面离线查询工具 |
-| **[`demo/`](./demo)** | 📋 **演示样本**——IP 归属地与号段 CSV / TXT / QZDB 数据样例 |
-| **[`docs/`](./docs)** | 📄 **项目文档与选型指南**——版本规格与字段详解、官方性能白皮书及多格式横评 |
-
-### 数据交付格式与产品规格 (Data Delivery Formats & Specifications)
-
-| 格式分类 | 主要内容 | 文件大小 (以国内/全球版为例) | 查询性能 | 适用场景 |
-| :--- | :--- | :--- | :--- | :--- |
-| **QZDB 二进制 (.qzdb)** | 包含 24-bit Trie 树索引、动态元数据与多语种压缩字符串池。 | **9.5 MB** (国内版) / **160 MB** (全球版) | 内存映射读取，微秒级响应 | 高并发 Web 服务、防火墙网关、DNS 调度。支持 `mmap` 零拷贝加载。 |
-| **CSV 文本 (.csv / .txt)** | 标准 CIDR 掩码文本，每行按大洲/国家/省/市/区/经纬度扁平展开。 | **11 MB** (国内版) / **204 MB** (全球版) | 取决于底层数据库性能 | 离线数仓 ETL、报表分析。支持一键批量导入 MySQL, PostgreSQL, SQL Server。 |
-
-### IP 数据库产品划分与字段规格 (Database Editions & Fields)
-
-依据项目官方权威规范（5 版本 × 2 区域 × 3 协议），本系列提供五个核心产品版本，各版本维度池及 CSV/QZDB 列字段定义如下：
-
-| 版本 | 维度池数 | 核心定位 | 字段构成列表 (按规范排序顺序) |
-| :--- | :---: | :--- | :--- |
-| **`std` 标准版** | **6** | 基础地理 + 运营商 | `continent`, `country_code`, `country`, `province`, `city`, `isp` |
-| **`pro` 专业版** | **11** | 细粒度地理定位 | `std` 字段 + `district`, `geo_id`, `longitude`, `latitude`, `timezone` |
-| **`asn` ASN 路由版** | **8** | 网络专项（无细粒度地理）| `continent`, `country_code`, `country`, `isp`, `asn`, `as_name`, `as_domain`, `usage_type` |
-| **`max` 旗舰版** | **15** | 地理 + 路由 + 风控应用 | `pro` 字段 + `asn`, `as_name`, `as_domain`, `usage_type` |
-| **`ult` 至尊版** | **25** | 全维度 (地理/英文/风控等) | `max` 字段 + 10 个英文扩展项（`continent_en`, `country_alpha3`, `country_en`, `province_en`, `city_en`, `district_en`, `languages`, `currency_code`, `phone_prefix`, `emoji_flag`） |
-
-> **字段设计说明**：
-> * **规范物理排序**：各版本在导出为 CSV 或构建 QZDB 时均遵循统一的「规范顺序」内插平铺（如英文扩展项 `_en` 紧随对应中文项，ASN 与应用场景位放置于末尾）。
-> * **应用场景分类 `usage_type`**：使用英文字符串存储网络应用场景分类值（如 `Broadband`、`DataCenter`、`VPN`、`Cloud`、`Spider`、`Reserved` 等），SDK 直接读取字符串无需位运算解码。
-> * **老客户无缝迁移说明**：旧版旗舰版（Ultimate 历史在售版为 11 维，仅地理无 ASN）的数据结构与当前的全新的 **`pro` 专业版 (11 维)** 完全一致，历史购入旗舰版的用户可直接无缝对应迁移至新版的 **`pro` 专业版** ；全新版本的 **`max` 旗舰版** 则升级为 15 维（融入了网络 ASN 自治域与应用场景分类）。
-
----
-
-## 🗺️ 数据多维层级与字段规范 (Data Dimensions & Schema)
-
-QZDB 最新版支持动态字段拓扑（Schema），各版本通过标准的 CSV 扁平网段与 QZDB 二进制树提供一致的物理交付。典型多维字段定义如下：
-
-| 字段类别 | 标准命名 | 数据格式示例 | 技术规范与参考标准 |
-| :--- | :--- | :--- | :--- |
-| **空间地理层** | `大洲` / `国家` / `省份` / `城市` / `区县` | `亚洲` / `中国` / `广东` / `深圳` / `南山` | 符合国家民政部 GB/T 2260 行政区划划分；国外细化至州/邦/郡/市级 |
-| **英文与出境层**| `国家英文` / `国家二位代码` | `China` / `CN` | 符合国际标准化组织 ISO 3166-1 Alpha-2 规范 |
-| **网络服务层** | `运营商` | `电信` / `联通` / `移动` / `阿里云` / `AWS` | 支持全球主流 ISP 节点与各大主流云服务商 IDC 网段标记 |
-| **位置投影层** | `经纬度` | `113.930478,22.53332` | 基于 WGS-84 坐标系，提供高精度十进制经纬度 |
-| **时间与时区层**| `时区` | `Asia/Shanghai` | 符合 IANA Time Zone Database (TZDB) 标准时区名称 |
-| **行政属性层** | `区域代码` | `440305` | 中国六位标准行政代码（地方识别码与行政区划代码） |
-
----
-
-## 🎯 典型应用场景与用途 (Application Scenarios)
-
-### 1. DNS 智能解析
-* **国内运营商线路**：支持按电信、联通、移动、教育网、鹏博士、广电网等智能解析，细分到省份。
-* **海外地区线路**：细分到大洲、国家。
-* **自定义控制策略**：基于 IPTables 的高级访问控制 (ACL)，设置 Allow from / Deny from 规则。
-* **多维度网络接入**：支持识别阿里云、腾讯云、华为云、亚马逊/Amazon、微软/Microsoft、谷歌/Google 等主流云服务商网段。
-
-### 2. 核心业务用途
-* **内容分发与 CDN 差异化**：基于用户地理位置采用差异化内容分发策略，保障就近访问以提升用户访问体验。
-* **精准定点投放**：依赖高精度地理位置数据库实现区域化精准定点投放，提高触达率并优化运营成本。
-* **智能网络流量调度**：在高效流量调度、智能 DNS 服务、网络服务质量监测等环节起到基础支撑作用。
-* **统计分析与行为决策**：多维度分析区域流量数据，研判不同地域的用户访问行为，为制定网络策略提供决策依据。
-* **多领域业务安全防护**：广泛应用于地理位置识别、安全防护、网络管理、内容分发、电子商务等各领域企业。
-
----
-
-# 📱 手机号段归属地数据库 (Phone Location Database)
-
-> **50万+ 手机号段（前7位）**：包含归属地省市区、邮编、区号、行政代码与运营商，提供极致压缩的 `.dat` 二进制解析 SDK 与 Redis 缓存支持。详细源码请见 **[`phone-location-sdk/`](./phone-location-sdk)**。
-
-```text
-字段信息：广东|深圳|518000|0755|440300|中国移动
-编码：UTF-8    字节序：Little-Endian
-```
-
-### 存储与压缩效果 (Storage & Compression)
-
-| **版本** | **文件格式** | **文件体积** | **压缩率** | **查询时间复杂度** | **核心技术特征** |
-| :--- | :---: | :---: | :---: | :---: | :--- |
-| **原始数据** | `.txt` / `.csv` | ~30 MB | — | — | 原始纯文本明文 |
-| **v6.0 (最新版)** | `.dat` / `.db` | **1.28 MB** | **▸ 95.7%** | **$\mathcal{O}(1)$** | **超高并发微秒级响应，空间极致压缩** |
-| **v5.0** | `.dat` | 1.60 MB | ▸ 94.6% | $\mathcal{O}(1)$ | 扁平化数据块，高并发无锁检索 |
-| **v4.0** | `.dat` | 1.80 MB | ▸ 94.0% | $\mathcal{O}(\log N)$ | 区间二分索引结构 |
-| **v3.0** | `.dat` | 1.95 MB | ▸ 93.5% | $\mathcal{O}(\log N)$ | 基础二分查找，低内存占用 |
-| **v2.0** | `.dat` | 2.40 MB | ▸ 92.0% | $\mathcal{O}(\log N)$ | 早期经典二进制解析格式 |
-
----
-
-![Image text](./ip-history-sdk/qqzeng-ip-查询工具/qqzeng-ip-trace-2026.webp)
-
-* **在线演示**：https://www.qqzeng.com/ip
-* **产品购买**：https://www.qqzeng.com/service/
-* **统计分析**：https://www.qqzeng.com/tongji.html
-* **官方网站**：https://www.qqzeng.com
-
-# 🌟 未来展望
-**qqzeng-ip** 持续专注于高性能地理位置与号段解析引擎的打磨，以提供更准确、更精细、极低延迟的数据基础设施产品。
-
-![Image text](https://www.qqzeng-ip.com/res/github-qrcode.png)
+- **四层自动化质量门禁**：每次发版均通过 **L1 冒烟与损坏文件 Fail-Closed 测试**（`run_all_tests.sh`）、**L2 跨 8 语言逐字节一致性对账**（`cross_lang_verify.py`）、**L3 千万级明文黄金向量回归**（`run_batch_test_suite.py`）与 **L4 性能门禁**（`perf_gate.py`）。
+- **开源与商业授权**：本仓库所有 SDK 源码遵循 **[MIT License](LICENSE)** 免费开源；商业生产环境数据库文件（`.qzdb` / `.db` / `.dat` / `.csv`）由 **[qqzeng.com](https://www.qqzeng.com)** 按月固定全量发版更新，按独立法人实体授权，**不限服务器数量、不限部署节点数、不限调用频次**。详见 [产品分层与商业授权说明](docs/PRODUCT_TIERS.md) 或访问 [官方服务中心](https://www.qqzeng.com/service/)。
