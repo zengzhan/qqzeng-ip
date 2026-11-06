@@ -1,18 +1,12 @@
-name: SDK Publish Gate
+name: SDK Publish & Quality Gate
 
-# 本 workflow 跑在 GitHub **发布仓库**（聚合 4 条产品线，只含 SDK 源码与文档，
-# 不含测试基建、tools/ 与商业数据库）。因此它只做「发布门禁」级检查：
-#   1. 各语言源码的语法 / 编译可达性
-#   2. PHP 包定义（composer.json）合法性
-#   3. Rust crate 可打包性（cargo package，等价于 cargo publish 的前置校验）
-#
-# 需要跑测试套件与跨语言对拍的完整验证在**开发仓库**进行，那里才有 tests/ 与 tools/。
-#
-# ⚠️ 两个坑（都实际踩过）：
-#   - 路径一律是 `ip-qzdb-sdk/`（发布仓库语境），不是开发仓库的 `multi-lang/`。
-#     曾因沿用 multi-lang 导致本 workflow 每一步都 cd 进不存在的目录。
-#   - 本文件不在 tools/sync_to_github.py 的同步清单内（.github/ 手工维护），
-#     改动直接提交到发布仓库即可，不会被下次同步覆盖。
+permissions:
+  contents: read
+
+# GitHub 公开仓库 CI 门禁：
+#   1. 发布门禁：全语言 SDK 真实编译 / 语法可达性 / Cargo 与 Composer 打包校验
+#   2. 质量门禁：全要素 Schema、跨语言逐字节对拍 (374 IP)、27 组黄金向量、C SDK ASan/UBSan 零泄漏
+#   3. PHP 版本矩阵：7.4 ~ 8.5 跨版本严格兼容性校验
 
 on:
   push:
@@ -26,8 +20,63 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  quality-gate:
+    name: Quality Gate & Demo Parity (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Set up Go 1.22
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Set up PHP 8.3
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          coverage: none
+
+      - name: Install C Toolchain (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y gcc
+
+      - name: Gate 1 — Markdown Relative Links (Zero Broken)
+        run: python3 scripts/ci/check_markdown_links.py .
+
+      - name: Gate 2 — Package Versions Single Source of Truth
+        run: python3 scripts/ci/check_versions.py
+
+      - name: Gate 3 — 25-Dimension Schema Parity
+        run: python3 scripts/ci/verify_schema_parity.py
+
+      - name: Gate 4 — 27 Golden Vectors Baseline
+        run: python3 scripts/ci/test_golden_vectors.py
+
+      - name: Gate 5 — C SDK ASan/UBSan & Memory Safety
+        run: bash scripts/ci/test_c_sdk.sh
+
+      - name: Gate 6 — Multi-Language Demo Parity (All 374 IPs)
+        run: python3 scripts/ci/verify_demo_parity.py --langs c,node,go,php
+
   publish-gate:
-    name: Publish gate (data-free)
+    name: SDK Build Gate (data-free)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -59,8 +108,6 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      # 发布仓库只同步 src/main/java（测试源按同步规范不上公开仓），
-      # 故这里保持裸 javac 整树编译，不引入 Maven 依赖。
       - name: Java — compile source tree
         working-directory: ip-qzdb-sdk/java
         run: |
@@ -99,9 +146,9 @@ jobs:
         working-directory: ip-qzdb-sdk/python
         run: python3 -m py_compile qzdb.py
 
-      - name: C — syntax check
+      - name: C — build & compile check
         working-directory: ip-qzdb-sdk/c
-        run: cc -fsyntax-only -std=c11 qzdb_reader.c
+        run: cc -std=c11 -Wall -Wextra -Werror -c qzdb_reader.c
 
   php-version-matrix:
     name: PHP ${{ matrix.php }} — lint + 零告警类加载
@@ -110,8 +157,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 与 composer.json 的 "php": ">=7.4" 一一对应。
-        # 7.4 是最低支持版本，必须实测；8.5 是当前最新稳定版。
         php: ['7.4', '8.0', '8.1', '8.2', '8.3', '8.4', '8.5']
     steps:
       - name: Checkout repository
@@ -137,9 +182,6 @@ jobs:
             echo "load-ok\n";
           ' 2>&1)
           echo "$out"
-          # 弃用告警必须当失败处理：功能测试抓不到它，而它会在开发环境污染响应体。
-          # 历史案例：GeoInfo::offsetGet() 缺 mixed 返回类型，PHP 8.1+ 每次类加载都发
-          # E_DEPRECATED，但全部功能测试仍是绿的。
           if echo "$out" | grep -qiE 'deprecat|warning|notice|fatal'; then
             echo "::error::PHP ${{ matrix.php }} 下出现告警/弃用输出"
             exit 1
@@ -160,9 +202,6 @@ jobs:
           php-version: '8.3'
           coverage: none
 
-      # 用 phar + 源码 tarball 而非 composer：PHPCompatibility 10.x 只在
-      # develop 分支上（GitHub 的 latest release 停在 2019 年的 9.3.5），
-      # 且它要求 PHP_CodeSniffer 4.x（3.x 缺 Tokens::EMPTY_TOKENS）与 PHPCSUtils。
       - name: 安装 PHP_CodeSniffer 4.x + PHPCompatibility + PHPCSUtils
         run: |
           mkdir -p /tmp/pcstandards
@@ -179,8 +218,6 @@ jobs:
           cp -R /tmp/pcu/PHPCSUtils     /tmp/pcstandards/
           cp /tmp/pc/PHPCSAliases.php   /tmp/pcstandards/
 
-      # 区间上限取 8.6：composer 的 ">=7.4" 不设上限，而 PHP 8.6 改变了
-      # trim() 的默认字符集（新增 \f）——不显式写死字符集就会跨版本漂移。
       - name: PHPCompatibility (testVersion 7.4-8.6)
         run: |
           php /tmp/phpcs.phar \

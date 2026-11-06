@@ -21,7 +21,7 @@
 [![npm](https://img.shields.io/npm/v/@qqzengip/qzdb?logo=npm&label=npm&color=CB3837)](https://www.npmjs.com/package/@qqzengip/qzdb)
 [![crates.io](https://img.shields.io/crates/v/qzdb?logo=rust&label=crates.io&color=DEA584)](https://crates.io/crates/qzdb)
 [![Packagist](https://img.shields.io/packagist/v/qqzeng/qzdb?logo=composer&label=Packagist&color=F28D1A)](https://packagist.org/packages/qqzeng/qzdb)
-[![Go Module](https://img.shields.io/badge/Go%20Module-v1.0.6-00ADD8?logo=go)](https://pkg.go.dev/github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go)
+[![Go Module](https://img.shields.io/github/v/tag/zengzhan/qqzeng-ip?filter=ip-qzdb-sdk%2Fgo*&label=Go%20Module&logo=go&color=00ADD8)](https://pkg.go.dev/github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go)
 
 </div>
 
@@ -50,6 +50,7 @@
 | [📂 Project Structure & Specifications](#-project-structure--specifications) | Repository structure, file size, and 5 product editions |
 | [🗺️ Schema & Data Dimensions](#️-schema--data-dimensions) | Continent, country, province, city, coordinates, ISP, timezone |
 | [🎯 Application Scenarios](#-application-scenarios) | Smart DNS, CDN traffic scheduling, risk control |
+| [🛡️ Quality Gates & Cross-Language Consistency](#️-quality-gates--cross-language-consistency) | Memory safety, byte parity, golden vectors, local reproduction |
 | [📱 Phone Location Database](#-phone-location-database) | 500K+ mobile prefix `.dat` format & Redis solution |
 
 ---
@@ -74,7 +75,7 @@
 ## 📊 SDK Benchmark Ranking
 
 Divided into two engineering tiers: **Native / Compiled High-Performance Tier** (C, Go, Rust, Java, C#) designed for extreme throughput and low latency; **Dynamic Scripting Ecosystem** (Node.js, PHP, Python) optimized for zero-compilation simplicity and lightweight integration.  
-All metrics derived from a unified, controlled environment (Apple M4 Max, single-thread, live snapshots in `ip-qzdb-sdk/bench_reports/*.json`) continuously guarded by CI test gates. See details below and in [docs/PERFORMANCE.md](./docs/PERFORMANCE.md).
+All metrics derived from a unified, controlled environment (Apple M4 Max, single-thread, `splitmix64` fixed seed with FNV-1a checksum verification) as documented in [docs/PERFORMANCE.md](./docs/PERFORMANCE.md).
 
 | Language & Tier (Click for source) | Single-Thread Integer¹<br>**Metric A · Standard Contract** | 16-Thread Concurrency²<br>**Metric B · Multi-Core Limit** | String Lookup³<br>**Metric C · With IP Parse** | Features & Architecture |
 | :--- | :---: | :---: | :---: | :--- |
@@ -127,13 +128,13 @@ Maven:
 <dependency>
     <groupId>com.qqzeng</groupId>
     <artifactId>qzdb</artifactId>
-    <version>1.0.7</version>
+    <version>1.0.10</version>
 </dependency>
 ```
 
 Gradle:
 ```groovy
-implementation 'com.qqzeng:qzdb:1.0.7'
+implementation 'com.qqzeng:qzdb:1.0.10'
 ```
 
 </details>
@@ -148,16 +149,17 @@ All 8 languages share a unified design pattern: **Load once, keep instance activ
 ```python
 from qzdb import QzdbReader
 
-searcher = QzdbReader("qqzeng_ip_ult_china.qzdb")
+searcher = QzdbReader("demo/qqzeng-ip-ult.qzdb")
 
 # Return pipe-delimited string
-print(searcher.find_str("114.114.114.114"))
-# Asia|CN|China|Jiangsu|Nanjing|ChinaNet
+print(searcher.find_str("118.115.99.0"))
+# 亚洲|Asia|CN|CHN|中国|China|四川|Sichuan|成都|Chengdu|双流|Shuangliu|510116|103.923730|30.574440|Asia/Shanghai|zh-CN|CNY|86|🇨🇳|中国电信|4134|CHINANET BACKBONE|chinatelecom.com.cn|Broadband
 
 # Return structured GeoInfo
-loc = searcher.find("114.114.114.114")
+loc = searcher.find("118.115.99.0")
 if loc:
     print(loc.country, loc.province, loc.city, loc.isp)
+    # Output: 中国 四川 成都 中国电信
 ```
 
 </details>
@@ -169,9 +171,9 @@ if loc:
 use qzdb::QzdbReader;
 
 // from_file leverages read-only mmap, returning a Result
-let searcher = QzdbReader::from_file("qqzeng_ip_ult_china.qzdb")?;
+let searcher = QzdbReader::from_file("demo/qqzeng-ip-ult.qzdb")?;
 
-if let Some(loc) = searcher.find("114.114.114.114") {
+if let Some(loc) = searcher.find("118.115.99.0") {
     // Typed field access (O(1), zero allocation)
     println!("Country: {}, City: {}", loc.country(), loc.city());
     // Dynamic field access
@@ -193,18 +195,17 @@ import (
 )
 
 // Initialize and retain QzdbReader instance (mmap zero-copy, reuse globally)
-searcher, err := qzdb.Open("qqzeng_ip_ult_china.qzdb", 0, true)
+searcher, err := qzdb.Open("demo/qqzeng-ip-ult.qzdb", 0, true)
 if err != nil {
     log.Fatal(err)
 }
 defer searcher.Close()
 
 // Return pipe-delimited string
-fmt.Println(searcher.FindStr("114.114.114.114"))
+fmt.Println(searcher.FindStr("118.115.99.0"))
 
 // Return structured GeoInfo
-info, err := searcher.Find("114.114.114.114")
-if err == nil && info != nil {
+if info, err := searcher.Find("118.115.99.0"); err == nil && info != nil {
     fmt.Println(info.GetCountry(), info.GetProvince(), info.GetCity())
 }
 ```
@@ -219,12 +220,12 @@ import com.qqzeng.qzdb.QzdbReader;
 import com.qqzeng.qzdb.GeoInfo;
 
 // Builder pattern supporting groupIndex / verifyCrc
-try (QzdbReader reader = new QzdbReader.Builder(new File("qqzeng_ip_ult_china.qzdb")).build()) {
-    GeoInfo loc = reader.find("114.114.114.114").orElse(null);
+try (QzdbReader reader = new QzdbReader.Builder(new File("demo/qqzeng-ip-ult.qzdb")).build()) {
+    GeoInfo loc = reader.find("118.115.99.0").orElse(null);
     if (loc != null) {
         System.out.println(loc.getCountry() + " " + loc.getProvince() + " " + loc.getCity());
     }
-    System.out.println(reader.findStr("114.114.114.114"));
+    System.out.println(reader.findStr("118.115.99.0"));
 }
 ```
 
@@ -236,8 +237,8 @@ try (QzdbReader reader = new QzdbReader.Builder(new File("qqzeng_ip_ult_china.qz
 ```csharp
 using QQZeng.Qzdb;
 
-using var reader = QzdbReader.Open("qqzeng_ip_ult_china.qzdb");
-GeoInfo loc = reader.Find("114.114.114.114");
+using var reader = QzdbReader.Open("demo/qqzeng-ip-ult.qzdb");
+GeoInfo loc = reader.Find("118.115.99.0");
 if (loc != null) {
     // Typed property access
     Console.WriteLine("Province: " + loc.GetProvince());
@@ -254,8 +255,8 @@ if (loc != null) {
 ```javascript
 const QzdbReader = require('@qqzengip/qzdb');
 
-const reader = new QzdbReader.Builder("qqzeng_ip_ult_china.qzdb").build();
-const loc = reader.find("114.114.114.114");
+const reader = new QzdbReader("demo/qqzeng-ip-ult.qzdb");
+const loc = reader.find("118.115.99.0");
 console.log(loc.get("country"), loc.get("city"));
 ```
 
@@ -268,8 +269,8 @@ console.log(loc.get("country"), loc.get("city"));
 require_once __DIR__ . '/vendor/autoload.php';
 use Qqzeng\Ip\QzdbReader;
 
-$reader = new QzdbReader("qqzeng_ip_ult_china.qzdb");
-$loc = $reader->find("114.114.114.114");
+$reader = new QzdbReader("demo/qqzeng-ip-ult.qzdb");
+$loc = $reader->find("118.115.99.0");
 echo $loc->get('country') . ' ' . $loc->get('city');
 ```
 
@@ -282,9 +283,9 @@ echo $loc->get('country') . ' ' . $loc->get('city');
 #include "qzdb_reader.h"
 
 qzdb_reader_t searcher;
-qzdb_init(&searcher, "qqzeng_ip_ult_china.qzdb");   // Retain instance on stack
-char buf[256];
-qzdb_find_str(&searcher, "114.114.114.114", buf, sizeof(buf));
+qzdb_init(&searcher, "demo/qqzeng-ip-ult.qzdb");   // Retain instance on stack
+char buf[4096];
+qzdb_find_str(&searcher, "118.115.99.0", buf, sizeof(buf));
 printf("Result: %s\n", buf);
 ```
 
@@ -300,10 +301,10 @@ The QZDB engine utilizes a customized **Two-Phase Patricia Trie Search Algorithm
 
 ```mermaid
 flowchart LR
-    A["Target IP (e.g., 114.114.114.114)"] --> B["Phase 1: Jump Table (16-bit static prefix lookup)"]
+    A["Target IP (e.g., 118.115.99.0)"] --> B["Phase 1: Jump Table (16-bit static prefix lookup)"]
     B --> C["Phase 2: Patricia Trie LPM (Read-only bit traversal)"]
     C --> D["Phase 3: String Pool Offset (O(1) lock-free read)"]
-    D --> E["Output (China|Jiangsu|Nanjing|ChinaNet)"]
+    D --> E["Output (China|Sichuan|Chengdu|China Telecom)"]
 ```
 
 1. **Phase 1 (Jump Table Quick Level Skip)**:
@@ -370,6 +371,8 @@ Following the official standard (5 Editions × 2 Regions × 3 Protocols):
 | **`max` Flagship** | **15** | Geolocation + ASN + Usage Risk | `pro` fields + `asn`, `as_name`, `as_domain`, `usage_type` |
 | **`ult` Ultimate** | **25** | All-Dimension Comprehensive | `max` fields + 10 English extensions (`continent_en`, `country_alpha3`, `country_en`, `province_en`, `city_en`, `district_en`, `languages`, `currency_code`, `phone_prefix`, `emoji_flag`) |
 
+> 📌 **`usage_type` Enumeration Contract**: Official standard defines 21 network usage categories (fully supported across all SDKs; 12 categories represented in the demo database). For authoritative enum values, names, and definitions, refer to **[ip-qzdb-sdk/API_CONTRACT.md §3](ip-qzdb-sdk/API_CONTRACT.md#3-应用场景类型权威枚举-usage_type)**.
+
 ---
 
 ## 🗺️ Schema & Data Dimensions
@@ -396,6 +399,23 @@ Following the official standard (5 Editions × 2 Regions × 3 Protocols):
 - **Content Delivery (CDN) Optimization**: Route end-users to the nearest edge point of presence (PoP).
 - **Targeted Regional Delivery & Localization**: Localized content, currency, and language adaptation.
 - **Risk Control & Security Defenses**: Identify datacenter IP traffic, crawler bots, VPN/proxy proxies, and unauthorized overseas access.
+
+---
+
+## 🛡️ Quality Gates & Cross-Language Consistency
+
+- **Public Repository CI Gates (Automated Testing & Local Reproduction)**:
+  - **Memory Safety & Strict Compilation**: All languages strictly compiled; C SDK is compiled and linked with AddressSanitizer (ASan) and UndefinedBehaviorSanitizer (UBSan) running all boundary queries on the demo database (0 leaks, 0 undefined behavior).
+  - **Sample Byte-for-Byte Parity**: Based on the public [`demo/qqzeng-ip-ult.qzdb`](demo/README.md) (360 real network ranges), covering all start/end IPs and 14 boundary cases, verifying 100% byte-for-byte output parity across C, Node.js, Go, and PHP against the Python reference implementation.
+  - **27 Golden Vectors**: Verification against [`golden_vectors.json`](golden_vectors.json) (covering IPv4/IPv6, various usage types, and negative cases).
+  - **Single Source of Truth**: Automated checks for zero broken Markdown links, package version alignment across all manifests, and 25-dimension schema parity.
+  - **Local One-Line Reproduction**:
+    ```bash
+    bash scripts/ci/run_all_ci_checks.sh
+    ```
+- **Internal Development Release Gate**: Full L3 golden vectors (4,102+ vectors) regression and L4 cross-version performance benchmarks are executed against the complete commercial database. *Note: Cross-language vector verification ensures parsing algorithm consistency; physical geolocation accuracy is maintained periodically by the data collection team.*
+
+---
 
 ---
 

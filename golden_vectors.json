@@ -1,81 +1,365 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "QZDB Expected Golden Vectors",
-  "description": "SDK 跨语言对拍期望向量测试集（Expected Output，待引擎实测）",
-  "version": "1.0.0",
-  "as_of": "2026-11-03",
+  "title": "QZDB Demo Golden Vectors (Consistency Reference)",
+  "description": "基于公开 demo/qqzeng-ip-ult.qzdb 与独立源 demo/qqzeng-ip-ult.csv 生成的基准对拍向量集（涵盖 IPv4/IPv6、有无 district、全部 12 类 usage_type 与边界负例），供公开仓 CI 自动化执行",
+  "version": "2.0.0",
+  "as_of": "2026-11-06",
   "vectors": [
     {
-      "desc": "公共 DNS 节点 (江苏南京电信出口)",
-      "ip": "114.114.114.114",
+      "desc": "美国 密歇根州 萨吉诺 (v4 Backbone)",
+      "ip": "70.141.19.248",
       "expected": {
-        "country_code": "CN",
-        "country": "中国",
-        "province": "江苏省",
-        "city": "南京市",
-        "isp": "中国电信",
-        "usage_type": "DNS"
-      }
-    },
-    {
-      "desc": "公共 DNS / 任播 Anycast 网段",
-      "ip": "8.8.8.8",
-      "expected": {
+        "hit": true,
         "country_code": "US",
         "country": "美国",
-        "isp": "Google",
-        "usage_type": "DNS"
+        "province": "密歇根州",
+        "city": "萨吉诺",
+        "district": "",
+        "isp": "AT&T",
+        "asn": 7018,
+        "usage_type": "Backbone"
       }
     },
     {
-      "desc": "IPv6 国内骨干接入网段",
-      "ip": "240e:e1:8000::1",
+      "desc": "巴西 圣保罗州 因达亚图巴 (v4 Broadband)",
+      "ip": "181.217.96.0",
       "expected": {
+        "hit": true,
+        "country_code": "BR",
+        "country": "巴西",
+        "province": "圣保罗州",
+        "city": "因达亚图巴",
+        "district": "",
+        "isp": "Claro",
+        "asn": 28573,
+        "usage_type": "Broadband"
+      }
+    },
+    {
+      "desc": "中国 四川 成都 (v4 Broadband)",
+      "ip": "118.115.99.0",
+      "expected": {
+        "hit": true,
         "country_code": "CN",
         "country": "中国",
-        "province": "广东省",
-        "isp": "中国电信"
+        "province": "四川",
+        "city": "成都",
+        "district": "双流",
+        "isp": "中国电信",
+        "asn": 4134,
+        "usage_type": "Broadband"
       }
     },
     {
-      "desc": "省级骨干专线 (无法下探地级市，City 必须产出空字符串)",
-      "ip": "202.96.0.1",
+      "desc": "德国 黑森州 法兰克福 (v4 Business)",
+      "ip": "84.200.96.0",
       "expected": {
+        "hit": true,
+        "country_code": "DE",
+        "country": "德国",
+        "province": "黑森州",
+        "city": "法兰克福",
+        "district": "",
+        "isp": "First Colo",
+        "asn": 44066,
+        "usage_type": "Business"
+      }
+    },
+    {
+      "desc": "荷兰 库拉索 威廉斯塔德 (v4 CDN)",
+      "ip": "172.225.165.0",
+      "expected": {
+        "hit": true,
+        "country_code": "CW",
+        "country": "荷兰",
+        "province": "库拉索",
+        "city": "威廉斯塔德",
+        "district": "",
+        "isp": "Akamai",
+        "asn": 36183,
+        "usage_type": "CDN"
+      }
+    },
+    {
+      "desc": "澳大利亚 新南威尔士州 悉尼 (v4 Cloud)",
+      "ip": "104.44.235.246",
+      "expected": {
+        "hit": true,
+        "country_code": "AU",
+        "country": "澳大利亚",
+        "province": "新南威尔士州",
+        "city": "悉尼",
+        "district": "",
+        "isp": "微软云",
+        "asn": 8075,
+        "usage_type": "Cloud"
+      }
+    },
+    {
+      "desc": "美国 马萨诸塞州 波士顿 (v4 DataCenter)",
+      "ip": "88.223.80.0",
+      "expected": {
+        "hit": true,
+        "country_code": "US",
+        "country": "美国",
+        "province": "马萨诸塞州",
+        "city": "波士顿",
+        "district": "",
+        "isp": "Hostinger",
+        "asn": 47583,
+        "usage_type": "DataCenter"
+      }
+    },
+    {
+      "desc": "中国 北京 北京 (v4 DataCenter)",
+      "ip": "106.37.42.0",
+      "expected": {
+        "hit": true,
         "country_code": "CN",
         "country": "中国",
-        "province": "广东省",
-        "city": "",
-        "district": ""
+        "province": "北京",
+        "city": "北京",
+        "district": "丰台",
+        "isp": "中国电信",
+        "asn": 23724,
+        "usage_type": "DataCenter"
       }
     },
     {
-      "desc": "私有保留地址 (RFC 1918)",
+      "desc": "法国 奥文尼-罗讷-阿尔卑斯大区 维勒班 (v4 Education)",
+      "ip": "193.48.118.0",
+      "expected": {
+        "hit": true,
+        "country_code": "FR",
+        "country": "法国",
+        "province": "奥文尼-罗讷-阿尔卑斯大区",
+        "city": "维勒班",
+        "district": "",
+        "isp": "Renater",
+        "asn": 2200,
+        "usage_type": "Education"
+      }
+    },
+    {
+      "desc": "日本 东京都 东京 (v4 Finance)",
+      "ip": "205.228.109.0",
+      "expected": {
+        "hit": true,
+        "country_code": "JP",
+        "country": "日本",
+        "province": "东京都",
+        "city": "东京",
+        "district": "",
+        "isp": "摩根士丹利",
+        "asn": 10082,
+        "usage_type": "Finance"
+      }
+    },
+    {
+      "desc": "澳大利亚 昆士兰州 布里斯班 (v4 Government)",
+      "ip": "147.132.0.0",
+      "expected": {
+        "hit": true,
+        "country_code": "AU",
+        "country": "澳大利亚",
+        "province": "昆士兰州",
+        "city": "布里斯班",
+        "district": "",
+        "isp": "Citec",
+        "asn": 9650,
+        "usage_type": "Government"
+      }
+    },
+    {
+      "desc": "奥地利 维也纳州 维也纳 (v4 Mobile)",
+      "ip": "81.189.104.0",
+      "expected": {
+        "hit": true,
+        "country_code": "AT",
+        "country": "奥地利",
+        "province": "维也纳州",
+        "city": "维也纳",
+        "district": "",
+        "isp": "Drei",
+        "asn": 8437,
+        "usage_type": "Mobile"
+      }
+    },
+    {
+      "desc": "荷兰 北荷兰省 阿姆斯特丹 (v4 Unknown)",
+      "ip": "185.186.55.0",
+      "expected": {
+        "hit": true,
+        "country_code": "NL",
+        "country": "荷兰",
+        "province": "北荷兰省",
+        "city": "阿姆斯特丹",
+        "district": "",
+        "isp": "Host Sailor",
+        "asn": 0,
+        "usage_type": "Unknown"
+      }
+    },
+    {
+      "desc": "德国 柏林省 柏林 (v4 VPN)",
+      "ip": "94.249.238.0",
+      "expected": {
+        "hit": true,
+        "country_code": "DE",
+        "country": "德国",
+        "province": "柏林省",
+        "city": "柏林",
+        "district": "",
+        "isp": "Blazingseollc",
+        "asn": 397630,
+        "usage_type": "VPN"
+      }
+    },
+    {
+      "desc": "美国 伊利诺伊州 阿什本 (v6 Backbone)",
+      "ip": "2600:387:9421:0:0:0:0:0",
+      "expected": {
+        "hit": true,
+        "country_code": "US",
+        "country": "美国",
+        "province": "伊利诺伊州",
+        "city": "阿什本",
+        "district": "",
+        "isp": "AT&T",
+        "asn": 7018,
+        "usage_type": "Backbone"
+      }
+    },
+    {
+      "desc": "美国 北卡罗来纳州 夏洛特 (v6 Broadband)",
+      "ip": "2600:5800:2a8e:0:0:0:0:0",
+      "expected": {
+        "hit": true,
+        "country_code": "US",
+        "country": "美国",
+        "province": "北卡罗来纳州",
+        "city": "夏洛特",
+        "district": "",
+        "isp": "Charter",
+        "asn": 11426,
+        "usage_type": "Broadband"
+      }
+    },
+    {
+      "desc": "美国 伊利诺伊州 芝加哥 (v6 Business)",
+      "ip": "2601:40d:b74e:0:0:0:0:0",
+      "expected": {
+        "hit": true,
+        "country_code": "US",
+        "country": "美国",
+        "province": "伊利诺伊州",
+        "city": "芝加哥",
+        "district": "",
+        "isp": "Comcast",
+        "asn": 7922,
+        "usage_type": "Business"
+      }
+    },
+    {
+      "desc": "南苏丹 中赤道州 朱巴 (v6 CDN)",
+      "ip": "2a02:26f7:db10:4000:0:0:0:0",
+      "expected": {
+        "hit": true,
+        "country_code": "SS",
+        "country": "南苏丹",
+        "province": "中赤道州",
+        "city": "朱巴",
+        "district": "",
+        "isp": "Akamai",
+        "asn": 36183,
+        "usage_type": "CDN"
+      }
+    },
+    {
+      "desc": "捷克 南摩拉维亚州 布尔诺 (v6 Cloud)",
+      "ip": "2a01:430:306:0:0:0:0:0",
+      "expected": {
+        "hit": true,
+        "country_code": "CZ",
+        "country": "捷克",
+        "province": "南摩拉维亚州",
+        "city": "布尔诺",
+        "district": "",
+        "isp": "Master",
+        "asn": 24971,
+        "usage_type": "Cloud"
+      }
+    },
+    {
+      "desc": "美国 堪萨斯州 劳伦斯 (v6 DataCenter)",
+      "ip": "2001:48f8:b006:0:0:0:0:0",
+      "expected": {
+        "hit": true,
+        "country_code": "US",
+        "country": "美国",
+        "province": "堪萨斯州",
+        "city": "劳伦斯",
+        "district": "",
+        "isp": "Midco",
+        "asn": 11232,
+        "usage_type": "DataCenter"
+      }
+    },
+    {
+      "desc": "德国 北莱因-威斯特法伦省 杜塞尔多夫 (v6 Unknown)",
+      "ip": "2a01:198:23e:0:0:0:0:0",
+      "expected": {
+        "hit": true,
+        "country_code": "DE",
+        "country": "德国",
+        "province": "北莱因-威斯特法伦省",
+        "city": "杜塞尔多夫",
+        "district": "",
+        "isp": "Speedpartner",
+        "asn": 34225,
+        "usage_type": "Unknown"
+      }
+    },
+    {
+      "desc": "RFC 1918 私有保留地址 (192.168.1.1)",
       "ip": "192.168.1.1",
       "expected": {
-        "country": "局域网",
-        "province": "",
-        "city": "",
-        "isp": ""
+        "hit": false
       }
     },
     {
-      "desc": "环回地址 (Loopback)",
+      "desc": "RFC 1918 私有保留地址 (10.0.0.1)",
+      "ip": "10.0.0.1",
+      "expected": {
+        "hit": false
+      }
+    },
+    {
+      "desc": "IPv4 本地环回地址 (127.0.0.1)",
       "ip": "127.0.0.1",
       "expected": {
-        "country": "局域网",
-        "province": "",
-        "city": "",
-        "isp": ""
+        "hit": false
       }
     },
     {
-      "desc": "IPv6 环回地址",
+      "desc": "IPv6 本地环回地址 (::1)",
       "ip": "::1",
       "expected": {
-        "country": "局域网",
-        "province": "",
-        "city": "",
-        "isp": ""
+        "hit": false
+      }
+    },
+    {
+      "desc": "IPv6 ULA 唯一本地地址 (fd00::1)",
+      "ip": "fd00::1",
+      "expected": {
+        "hit": false
+      }
+    },
+    {
+      "desc": "无效 IP 格式文本 (invalid-ip)",
+      "ip": "invalid-ip",
+      "expected": {
+        "hit": false
       }
     }
   ]

@@ -1,6 +1,6 @@
 # QZDB: 极速 IP 解析引擎与多语言 SDK
 
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](../LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Cross--Platform-lightgrey.svg)]()
 [![Verification](https://img.shields.io/badge/Verification-100%25%20Passed-brightgreen.svg)]()
 
@@ -36,11 +36,11 @@ from qzdb import QzdbReader
 searcher = QzdbReader("qqzeng_ip_ult_china.qzdb")
 
 # 查询返回 Pipe 字符串
-print(searcher.find_str("114.114.114.114"))
+print(searcher.find_str("118.115.99.0"))
 # 亚洲|CN|中国|江苏|南京|中国电信
 
 # 查询返回结构化 GeoInfo 对象
-loc = searcher.find("114.114.114.114")
+loc = searcher.find("118.115.99.0")
 if loc:
     print(loc.country, loc.province, loc.city, loc.isp)
 ```
@@ -62,10 +62,10 @@ if err != nil {
 defer searcher.Close()
 
 // 查询 Pipe 字符串
-fmt.Println(searcher.FindStr("114.114.114.114"))
+fmt.Println(searcher.FindStr("118.115.99.0"))
 
 // 查询结构化 GeoInfo
-info, err := searcher.Find("114.114.114.114")
+info, err := searcher.Find("118.115.99.0")
 if err == nil && info != nil {
     fmt.Println(info.GetCountry(), info.GetCity())
 }
@@ -79,12 +79,12 @@ import com.qqzeng.qzdb.GeoInfo;
 // 构建读取器（Builder 模式，支持 groupIndex / verifyCrc）
 try (QzdbReader reader = new QzdbReader.Builder(new File("qqzeng_ip_ult_china.qzdb")).build()) {
     // 查询返回 GeoInfo
-    GeoInfo loc = reader.find("114.114.114.114").orElse(null);
+    GeoInfo loc = reader.find("118.115.99.0").orElse(null);
     if (loc != null) {
         System.out.println(loc.getCountry() + " " + loc.getProvince() + " " + loc.getCity());
     }
     // 查询返回 Pipe 字符串
-    System.out.println(reader.findStr("114.114.114.114"));
+    System.out.println(reader.findStr("118.115.99.0"));
 }
 ```
 
@@ -94,7 +94,7 @@ use qzdb::QzdbReader;
 
 // from_file 走只读 mmap，返回 Result —— 请在启动期用 ? / match 处理
 let searcher = QzdbReader::from_file("qqzeng_ip_ult_china.qzdb")?;
-if let Some(loc) = searcher.find("114.114.114.114") {
+if let Some(loc) = searcher.find("118.115.99.0") {
     // 直接字段访问 (O(1))
     println!("Country: {}, City: {}", loc.country(), loc.city());
     // 动态字段访问
@@ -107,7 +107,7 @@ if let Some(loc) = searcher.find("114.114.114.114") {
 using QQZeng.Qzdb;
 
 using var reader = QzdbReader.Open("qqzeng_ip_ult_china.qzdb");
-GeoInfo loc = reader.Find("114.114.114.114");
+GeoInfo loc = reader.Find("118.115.99.0");
 if (loc != null) {
     Console.WriteLine($"Province: {loc.Get("province")}");
 }
@@ -120,7 +120,7 @@ if (loc != null) {
 qzdb_reader_t searcher;
 qzdb_init(&searcher, "qqzeng_ip_ult_china.qzdb");   // 栈上持有实例
 char buf[256];
-qzdb_find_str(&searcher, "114.114.114.114", buf, sizeof(buf));
+qzdb_find_str(&searcher, "118.115.99.0", buf, sizeof(buf));
 printf("Result: %s\n", buf);
 ```
 
@@ -129,7 +129,7 @@ printf("Result: %s\n", buf);
 const QzdbReader = require('@qqzengip/qzdb');
 
 const reader = new QzdbReader.Builder("qqzeng_ip_ult_china.qzdb").build();
-const loc = reader.find("114.114.114.114");
+const loc = reader.find("118.115.99.0");
 console.log(loc.get("country"), loc.get("city"));
 ```
 
@@ -140,7 +140,7 @@ require_once __DIR__ . '/vendor/autoload.php';
 use Qqzeng\Ip\QzdbReader;
 
 $reader = new QzdbReader("qqzeng_ip_ult_china.qzdb");
-$loc = $reader->find("114.114.114.114");
+$loc = $reader->find("118.115.99.0");
 echo $loc->get('country') . ' ' . $loc->get('city');
 ```
 

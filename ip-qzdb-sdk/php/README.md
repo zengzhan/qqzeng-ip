@@ -97,8 +97,8 @@ use Qqzeng\Ip\GeoInfo;
 // 通过文件路径加载（默认：校验 CRC、加载第 0 个分组）
 $reader = QzdbBuilder::path('qqzeng_ip_std_china.qzdb')->build();
 
-// 单次查询：命中返回 GeoInfo，未命中或 IP 非法时返回 null（不会抛异常）
-$info = $reader->find('114.114.114.114');
+// 单次查询：命中返回 GeoInfo，未命中或 IP 非法时返回 null（如 demo 库中的 118.115.99.0）
+$info = $reader->find('118.115.99.0');
 if ($info !== null) {
     echo $info->toPipe() . "\n";                       // 管道符分隔：国家|省份|城市|ISP|...
     echo $info->toJson() . "\n";                       // 紧凑 JSON 字符串
@@ -656,4 +656,4 @@ php csv_oracle_test.php                    # 独立真值校验（需源 CSV + �
 
 [MIT](https://opensource.org/licenses/MIT)
 
-<!-- commit: php: PHP SDK（纯 PHP 实现，缓冲与流式双模式） sync=1793947720 -->
+<!-- commit: php: PHP SDK（纯 PHP 实现，缓冲与流式双模式） sync=1792769155 -->

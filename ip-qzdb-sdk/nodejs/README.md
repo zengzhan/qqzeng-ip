@@ -88,8 +88,8 @@ const QzdbReader = require('./qzdb');
 // 通过文件路径加载（默认：校验 CRC、加载第 0 个分组）
 const reader = new QzdbReader('qqzeng_ip_std_china.qzdb');
 
-// 单次查询：未命中或 IP 非法时返回 null（不会抛异常）
-const info = reader.find('114.114.114.114');
+// 单次查询：未命中或 IP 非法时返回 null（如 demo 库中的 118.115.99.0）
+const info = reader.find('118.115.99.0');
 if (info) {
   console.log(info.toPipe());                 // 管道符分隔：亚洲|CN|中国|江苏|南京|中国电信
   console.log(info.toJson());                 // 紧凑 JSON 字符串
@@ -502,5 +502,3 @@ node tier3_concurrent.js        # 并发安全验证
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: nodejs: Node.js SDK（BigInt 偏移解析） sync=1793947720 -->

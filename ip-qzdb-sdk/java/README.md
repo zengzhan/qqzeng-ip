@@ -102,8 +102,8 @@ public class Demo {
         // QzdbReader 实现 AutoCloseable，优先用 try-with-resources 自动释放
         try (QzdbReader reader = new QzdbReader.Builder(new File("ip_china.qzdb")).build()) {
 
-            // 单次查询：命中返回 Optional<GeoInfo>，未命中返回 Optional.empty()
-            Optional<GeoInfo> info = reader.find("114.114.114.114");
+            // 单次查询：命中返回 Optional<GeoInfo>，未命中返回 Optional.empty()（如 demo 库中的 118.115.99.0）
+            Optional<GeoInfo> info = reader.find("118.115.99.0");
             info.ifPresent(g -> {
                 System.out.println(g.toPipeString());                    // 管道符分隔：国家|省份|城市|ISP|...
                 System.out.println(g.toJson());                          // 紧凑 JSON 字符串
@@ -569,4 +569,4 @@ mvn test          # 14 tests / 106 assertions
 
 [MIT](https://opensource.org/licenses/MIT)
 
-<!-- commit: java: Java SDK（堆外内存与 Builder API） sync=1793947720 -->
+<!-- commit: java: Java SDK（堆外内存与 Builder API） sync=1792769155 -->

@@ -443,25 +443,34 @@ static void format_float_value_locale(locale_t loc, double dv, char* buf, size_t
         uint64_t total = (uint64_t)round(scaled);
         uint64_t int_part = total / 1000000ULL;
         uint32_t frac_part = (uint32_t)(total % 1000000ULL);
+
+        /* 预先计算完整格式化所需最小缓冲区容量，严禁因微小缓冲静默丢负号或部分截断 */
+        size_t int_digits = (int_part == 0) ? 1 : 0;
+        uint64_t tmp_i = int_part;
+        while (tmp_i > 0) { int_digits++; tmp_i /= 10; }
+        size_t needed = (neg ? 1 : 0) + int_digits + 1 + 6 + 1; /* 负号 + 整数 + 小数点 + 6位小数 + '\0' */
+        if (buf_size < needed) {
+            buf[0] = '\0';
+            return;
+        }
+
         size_t pos = 0;
         if (neg) {
-            if (pos + 1 < buf_size) buf[pos++] = '-';
+            buf[pos++] = '-';
         }
         int n = format_u64_fast(int_part, buf + pos, buf_size - pos);
         if (n < 0) { buf[0] = '\0'; return; }
         pos += (size_t)n;
-        if (pos + 8 < buf_size) {
-            buf[pos++] = '.';
-            for (int i = 5; i >= 0; i--) {
-                buf[pos + i] = (char)('0' + (frac_part % 10));
-                frac_part /= 10;
-            }
-            pos += 6;
-            buf[pos] = '\0';
-        } else {
-            buf[0] = '\0';
+        buf[pos++] = '.';
+        for (int i = 5; i >= 0; i--) {
+            buf[pos + i] = (char)('0' + (frac_part % 10));
+            frac_part /= 10;
         }
+        pos += 6;
+        buf[pos] = '\0';
     } else {
+        /* 防御性兜底：QZDB 经纬度坐标范围为 [-180.0, 180.0]，业务值恒小于 1e12；
+         * 若外部极端传入 >= 1e12 浮点数，使用 snprintf 作为兜底保障 */
         snprintf(buf, buf_size, "%.6f", dv);
     }
 }

@@ -83,10 +83,10 @@ func main() {
 	}
 	defer reader.Close()
 
-	// 单次查询：未命中或 IP 非法时返回 (nil, nil)（不抛异常）
-	info, _ := reader.Find("114.114.114.114")
+	// 单次查询：未命中或 IP 非法时返回 (nil, nil)（如 demo 库中的 118.115.99.0）
+	info, _ := reader.Find("118.115.99.0")
 	if info != nil {
-		fmt.Println(info.ToPipe())                                  // 管道符分隔：亚洲|CN|中国|江苏|南京|中国电信
+		fmt.Println(info.ToPipe())                                  // 管道符分隔完整字段
 		fmt.Println(info.ToJson())                                  // 紧凑 JSON 字符串
 		fmt.Printf("%s / %s / %s\n", info.GetCountry(), info.GetProvince(), info.GetCity())
 		fmt.Printf("ISP=%s, ASN=%v\n", info.GetIsp(), info.GetAsn())
@@ -146,18 +146,18 @@ reader, err := qzdb.NewBuilderReader(f).Build()
 
 > **契约约定（§4）**：Go 的 `Find` 等单条查询对「未命中」与「非法 IP」统一返回 `(nil, nil)`；golden 校验将该空值统一映射为 `""`，因此返回空值即通过。
 
-**IPv4-Mapped IPv6 自动降级**：`::ffff:114.114.114.114`（及 `::ffff:7272:7272` 十六进制形态）会自动剥离前缀走 V4 Trie，结果与 `114.114.114.114` **字段级完全一致**。
+**IPv4-Mapped IPv6 自动降级**：`::ffff:118.115.99.0`（及十六进制形态）会自动剥离前缀走 V4 Trie，结果与 `118.115.99.0` **字段级完全一致**。
 
 ```go
-a, _ := reader.Find("114.114.114.114")
-b, _ := reader.Find("::ffff:114.114.114.114")
+a, _ := reader.Find("118.115.99.0")
+b, _ := reader.Find("::ffff:118.115.99.0")
 // a.ToPipe() == b.ToPipe()
 ```
 
 **字段投影**（`FindFields` 只解析指定字段，减少池读取）：
 
 ```go
-g, _ := reader.FindFields("114.114.114.114", []string{"country", "isp"})
+g, _ := reader.FindFields("118.115.99.0", []string{"country", "isp"})
 fmt.Println(g.Get("isp")) // 中国电信
 ```
 
@@ -232,7 +232,7 @@ u := qzdb.ParseUsageType("MyCustom")                     // 未知 -> RawValue="
 数据库本身不存 CIDR，由 Trie 叶子深度重建网络地址（叶子深度 = 前缀长度 N；网络地址 = IP 高 N 位清零；V6 按 RFC 5952 压缩）。
 
 ```go
-fmt.Println(reader.LookupCidr("114.114.114.114")) // 形如 114.114.0.0/16
+fmt.Println(reader.LookupCidr("118.115.99.0")) // 形如 118.115.99.0/24
 fmt.Println(reader.LookupCidr("2408:8000:9000::1")) // 形如 2408:8000::/32
 reader.LookupCidrUint(0x01020304)                  // IPv4 uint32 入口
 reader.LookupCidrBytes(ip16[:])                    // 4/16 字节入口（IPv4-mapped 自动降级）
@@ -246,7 +246,7 @@ reader.LookupCidrBytes(ip16[:])                    // 4/16 字节入口（IPv4-m
 顺序执行、逐条保留三态语义，内部不起线程池：
 
 ```go
-ips := []string{"114.114.114.114", "223.5.5.5", "8.8.8.8"}
+ips := []string{"118.115.99.0", "84.200.96.0", "104.44.235.246"}
 
 // 批量
 results := reader.FindBatch(ips)
@@ -283,8 +283,8 @@ for {
 ```go
 chain := qzdb.NewChainedReader(readerStd, readerUlt)
 chain.Add(readerAsn)
-info, _ := chain.Find("114.114.114.114") // 第一个非空的 GeoInfo
-fmt.Println(chain.FindStr("1.2.3.4"))
+info, _ := chain.Find("118.115.99.0") // 第一个非空的 GeoInfo
+fmt.Println(chain.FindStr("84.200.96.0"))
 ```
 
 ---
@@ -298,7 +298,7 @@ reg := qzdb.NewQzdbRegistry()
 reg.Register("std", readerStd)
 reg.Register("ult", readerUlt)
 info, _ := reg.Find("2408:8000:9000::1")
-fmt.Println(reg.FindStr("114.114.114.114"))
+fmt.Println(reg.FindStr("118.115.99.0"))
 fmt.Println(reg.Names()) // ["std", "ult"]
 ```
 
@@ -436,4 +436,4 @@ go/
 └── cmd/               # demo / batch / bench / dump / regress 等示例
 ```
 
-<!-- commit: go: Go SDK（跨平台 mmap，无锁并发查询） sync=1793947720 -->
+<!-- commit: go: Go SDK（跨平台 mmap，无锁并发查询） sync=1792769155 -->

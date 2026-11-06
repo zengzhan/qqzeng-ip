@@ -256,7 +256,7 @@ const char* cidr = qzdb_geo_info_get_cidr();  /* 永远返回 ""（CIDR 非存�
 ```c
 const char* want[] = { "country", "city", "isp", NULL };
 qzdb_geo_info_t info;
-if (qzdb_find_fields(&ctx, "114.114.114.114", want, &info) == QZDB_OK) {
+if (qzdb_find_fields(&ctx, "118.115.99.0", want, &info) == QZDB_OK) {
     /* info.values 中仅 want 指定的字段被填充（按字段规范索引落位） */
     qzdb_free_geo_info(&info);
 }
@@ -308,7 +308,7 @@ IP 不在库内或非法时返回 `NULL`，`out` 不被修改。
 
 ```c
 uint32_t v4; uint8_t v6[16]; int is_v4;
-if (qzdb_parse_ip("114.114.114.114", &v4, v6, &is_v4)) {
+if (qzdb_parse_ip("118.115.99.0", &v4, v6, &is_v4)) {
     /* 合法：is_v4=1 时看 v4（主机序）；否则 v6[16] 为地址 */
 }
 ```
@@ -324,7 +324,8 @@ if (qzdb_parse_ip("114.114.114.114", &v4, v6, &is_v4)) {
 ### 9.1 一次性批量：`qzdb_find_batch`
 
 ```c
-const char* ips[] = {"114.114.114.114", "223.5.5.5", "8.8.8.8"};
+/* 批量查询多个 IP（如 demo 库中的 118.115.99.0 与 84.200.96.0） */
+const char* ips[] = {"118.115.99.0", "84.200.96.0", "104.44.235.246"};
 qzdb_batch_result_t results[3];
 
 qzdb_find_batch(&ctx, ips, 3, results);
@@ -380,7 +381,7 @@ qzdb_reader_t* readers[] = { &std_ctx, &asn_ctx };
 qzdb_chain_t* chain = qzdb_chain_new(readers, 2, QZDB_CHAIN_MERGE);
 
 qzdb_geo_info_t info;
-int rc = qzdb_chain_find(chain, "114.114.114.114", &info);
+int rc = qzdb_chain_find(chain, "118.115.99.0", &info);
 if (rc == QZDB_OK) {
     printf("country=%s asn=%s\n",
            qzdb_geo_info_get(&std_ctx, &info, "country"),
@@ -417,7 +418,7 @@ qzdb_registry_register(reg, "ult", "qqzeng_ip_ult.qzdb");
 qzdb_reader_t* r = qzdb_registry_get(reg, "ult");
 if (r) {
     char out[256];
-    qzdb_find_str(r, "114.114.114.114", out, sizeof(out));
+    qzdb_find_str(r, "118.115.99.0", out, sizeof(out));
     printf("%s\n", out);
 }
 
@@ -724,5 +725,3 @@ typedef enum { QZDB_OK=0, QZDB_ERR_NOT_FOUND=-1, QZDB_ERR_CORRUPTED=-2,
 ## License
 
 [MIT](https://opensource.org/licenses/MIT)
-
-<!-- commit: c: C SDK（零拷贝 mmap 读取，单文件集成） sync=1793947720 -->

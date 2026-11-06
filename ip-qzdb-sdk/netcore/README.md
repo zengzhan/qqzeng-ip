@@ -73,8 +73,8 @@ using QQZeng.Qzdb;
 // 通过文件路径加载（默认：校验 CRC、加载第 0 个分组）
 using var reader = QzdbReader.Open("ip_china.qzdb");
 
-// 单次查询：未命中返回 null；IP 格式非法抛 QzdbException(InvalidIp)
-GeoInfo? info = reader.Find("114.114.114.114");
+// 单次查询：未命中返回 null（如 demo 库中的 118.115.99.0）
+GeoInfo? info = reader.Find("118.115.99.0");
 if (info != null)
 {
     Console.WriteLine(info.ToPipe());                              // 管道符分隔：国家|省份|城市|ISP|...
@@ -242,7 +242,7 @@ string desc = u.Description;       // 详细描述（属性；亦可 u.GetDescri
 数据库本身不存 CIDR，由 Trie 叶子深度重建网络地址（叶子深度 = 前缀长度 N；网络地址 = IP 高 N 位清零；V6 按 RFC 5952 压缩）。
 
 ```csharp
-Console.WriteLine(reader.LookupCidr("114.114.114.114")); // 形如 114.114.0.0/16
+Console.WriteLine(reader.LookupCidr("118.115.99.0")); // 形如 118.115.99.0/24
 Console.WriteLine(reader.LookupCidr("2408:8000:9000::1")); // 形如 2408:8000::/32
 reader.LookupCidrUint(0x01020304);                  // IPv4 uint32 入口
 reader.LookupCidrBytes(ip16);                       // 4/16 字节入口（IPv4-mapped 自动降级）
@@ -495,4 +495,4 @@ BENCH_OPS=200000 dotnet run --project ../netcore.bench -c Release \
 
 [MIT](https://opensource.org/licenses/MIT)
 
-<!-- commit: netcore: C# .NET SDK（内存映射与高并发查询） sync=1793947720 -->
+<!-- commit: netcore: C# .NET SDK（内存映射与高并发查询） sync=1792769155 -->

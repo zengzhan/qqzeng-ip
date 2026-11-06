@@ -360,11 +360,15 @@ $reader->close();
 
 ## 七、质量门禁与跨语言一致性验证
 
-- **公开仓库 CI 门禁**：
-  - 零警告与内存安全：全语言严格编译门禁与 C SDK 的 ASan/UBSan 模糊边界防护；
-  - 样本逐字节对拍：基于公开 [`demo/qqzeng-ip-ult.qzdb`](demo/README.md)（360 行真实网段），自动化验证 C SDK 与 Python 参考实现输出 100% 逐字节一致；
-  - 基准样例冒烟：执行 [`golden_vectors.json`](golden_vectors.json) 跨语言一致性判定；
-  - 单一事实来源门禁：自动化执行全仓 Markdown 零断链、版本号清单与 25 维全要素 Schema 一致性校验。
+- **公开仓库 CI 门禁（自动化测试与本地一键复现）**：
+  - **内存安全与严格编译**：全语言严格编译门禁，C SDK 真实链接并执行 AddressSanitizer (ASan) 与 UndefinedBehaviorSanitizer (UBSan) 全量边界查询（0 泄漏、0 未定义行为）；
+  - **样本逐字节对拍**：基于公开 [`demo/qqzeng-ip-ult.qzdb`](demo/README.md)（360 行真实网段），覆盖全部起始/结束 IP 及 14 类边界异常值，自动化验证 C / Node.js / Go / PHP 与 Python 参考实现输出 100% 逐字节完全一致；
+  - **27 组基准向量校验**：执行 [`golden_vectors.json`](golden_vectors.json) 跨语言一致性判定（覆盖 IPv4/IPv6、各类场景及无命中负例）；
+  - **单一事实来源门禁**：自动化执行全仓 Markdown 零断链、全清单版本号对齐与 25 维全要素 Schema 一致性校验。
+  - **本地一键复现命令**：
+    ```bash
+    bash scripts/ci/run_all_ci_checks.sh
+    ```
 - **内部开发仓发版门禁**：在完整商业库（千万级全量网段）上执行全量 L3 黄金向量（4,102 条及以上）回归与跨版本 L4 性能基准门禁。请注意：跨语言向量验证用于保证各语言解析算法的一致性（Consistency），数据物理真实性由采集团队定期核验。
 
 ## 八、开源许可证与商业授权边界

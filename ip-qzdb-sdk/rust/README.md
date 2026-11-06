@@ -74,8 +74,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 通过文件路径加载（默认：校验 CRC、加载第 0 个分组）
     let reader = QzdbReader::from_file("ip_china.qzdb")?;
 
-    // 单次查询：未命中或 IP 非法时返回 None（不会抛异常）
-    if let Some(info) = reader.find("114.114.114.114") {
+    // 单次查询：未命中或 IP 非法时返回 None（如 demo 库中的 118.115.99.0）
+    if let Some(info) = reader.find("118.115.99.0") {
         println!("{}", info.to_pipe());                 // 管道符分隔：国家|省份|城市|ISP|...
         println!("{}", info.to_json());                 // 紧凑 JSON 字符串
         println!("{} / {} / {}", info.country(), info.province(), info.city());
@@ -367,7 +367,7 @@ reg.register("china", QzdbReader::from_file("ip_china.qzdb")?);
 reg.register("global", QzdbReader::from_file("ip_global.qzdb")?);
 
 if let Some(r) = reg.get("china") {
-    println!("{}", r.find_str("114.114.114.114"));
+    println!("{}", r.find_str("118.115.99.0"));
 }
 // 按注册顺序返回首个命中
 let pipe = reg.find_str("8.8.8.8");
@@ -589,4 +589,4 @@ cargo run --release --bin qzdb_mcp -- /path/to/qqzeng_ip_ult.qzdb --manifest
 
 [MIT](https://opensource.org/licenses/MIT)
 
-<!-- commit: rust: Rust SDK（mmap 只读映射，内存安全） sync=1793947720 -->
+<!-- commit: rust: Rust 极速解析引擎 (mmap + 最小 unsafe surface, 整型随机最不利 4300 万+ QPS, 口径见 docs/PERFORMANCE.md) -->
