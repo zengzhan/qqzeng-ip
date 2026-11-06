@@ -1,5 +1,8 @@
 name: Publish C# to NuGet
 
+permissions:
+  contents: read
+
 # 打 v-net-* tag 或手动 workflow_dispatch 时，构建并发布 .NET SDK 到 NuGet.org。
 # 认证走 NuGet.org Trusted Publishing（OIDC），无需任何长期 API key / secret：
 #   https://www.nuget.org/account/trustedpublishing
@@ -31,7 +34,7 @@ jobs:
       id-token: write   # NuGet Trusted Publishing (OIDC) 必需
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       # 幂等保护：本仓库是多语言 monorepo，tag 重推 / workflow 重跑时，
       # 同名版本再次上传会被 NuGet 拒绝（409）并把 workflow 打成红叉。
@@ -52,7 +55,7 @@ jobs:
 
       - name: Set up .NET
         if: steps.guard.outputs.exists == 'false'
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@3951f0dfe7a07e2313ec93c75700083e2005cbab # v4.3.0
         with:
           dotnet-version: '10.0.x'
 
@@ -63,7 +66,7 @@ jobs:
       - name: NuGet login (OIDC -> 临时 API key)
         if: steps.guard.outputs.exists == 'false' || inputs.dry_run
         id: login
-        uses: NuGet/login@v1
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
         with:
           user: qqzeng-ip
 

@@ -1,67 +1,125 @@
-# macOS junk
-.DS_Store
-
-# Commercial & sample offline data files
-*.dat
-*.db
-*.qzdb
+# Purchased IP database files (must be obtained separately)
 *.csv
+*.qzdb
+*.db
+*.dat
 *.vec
 *.bin
 data/
-dada/
-**/dada/
-!demo/*.qzdb
-!demo/*.csv
+**/data/
+ip-classic-sdk/data/
+ip-classic-sdk/**/data/
+ip-qzdb-sdk/data/
+ip-qzdb-sdk/test_data*/
+ip-history-sdk/**/data/
 
-# Python cache & build artifacts
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-# wheel / sdist 与 egg-info 不入库：由 tools/sync_to_github.py 的 clean_and_verify() 清理
-dist/
-*.egg-info/
-
-# Node.js
-node_modules/
-
-# C# / .NET build artifacts
+# Build artifacts
 bin/
+# Exception: Rust convention puts BINARY SOURCE files in src/bin/, not build output.
+# Without this negation the `bin/` rule above silently drops the 4 [[bin]] source
+# targets declared in rust/Cargo.toml, and `cargo build` fails on a fresh clone.
+!ip-qzdb-sdk/rust/src/bin/
 obj/
-*.user
+*.csproj.user
 *.suo
 
-# Rust build artifacts
-target/
-ip-qzdb-sdk/rust/target/
+# OS
+.DS_Store
+Thumbs.db
 
-# C/C++ compiled binaries & objects
+# Large raw text data (IP ranges, failure logs)
+ipv4*.txt
+failures_*.txt
+
+# Test result dumps (large IP range outputs)
+ip-qzdb-sdk/tools/results/
+tools/results/
+ip-qzdb-sdk/.test_results/
+.test_results/
+
+# Test case fixtures (large generated IP range dumps)
+ip-qzdb-sdk/tools/test_cases/
+tools/test_cases/
+
+# Compiled test binaries
+ip-qzdb-sdk/tools/batch_go
+ip-qzdb-sdk/tools/batch_c
+ip-qzdb-sdk/tools/batch_rust
+ip-qzdb-sdk/tools/bench_c
+ip-qzdb-sdk/test_runner_bin/
+ip-qzdb-sdk/tools/batch_csharp_out/
+ip-qzdb-sdk/c/qzdb_demo
+ip-qzdb-sdk/c/bench_qps
+*.exe
+
+
+# Agent / session state
+.agent/
+.omc/
+.omo/
+.omx/
+.workbuddy/
+.workbuddy-ai/
+# browser-skill (bsk) 的运行目录。默认在 ~/.bsk；当 agent 沙箱的 fs broker
+# 拦不住工作区外的写时，可把 BSK_HOME 指到这里启动 daemon。
+.bsk/
+
+# Paid data derived dumps (never commit query results of purchased DBs)
+ip-qzdb-sdk/data/verify_*.txt
+ip-qzdb-sdk/data/test.txt
+
+# Backups
+*.bak
+*.orig
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Compiled test binaries
+ip-qzdb-sdk/c/bench_qps
+ip-qzdb-sdk/c/qzdb_test
+ip-qzdb-sdk/c/golden_check
+ip-qzdb-sdk/c/test_main
+ip-qzdb-sdk/c/*.o
+ip-qzdb-sdk/rust/bench_qps
+ip-qzdb-sdk/rust/target/
+ip-qzdb-sdk/go/bench_qps
 *.o
 *.obj
-*.exe
-*.dll
-*.so
-*.dylib
-*.out
-ip-qzdb-sdk/c/qzdb_test
-ip-qzdb-sdk/c/bench_qps
 
-# Java build artifacts
+# Debug symbol bundles (macOS build artifacts)
+*.dSYM/
+ip-qzdb-sdk/c/*.dSYM/
+
+# PHP Tier1 synthetic test fixtures (generated, not source)
+ip-qzdb-sdk/php/.tier1_synthetic.qzdb*
+
+# Language specific
+node_modules/
+vendor/
+# PHP 包的 lock 文件不入库（composer.json 是库定义，锁文件属于消费方应用）；
+# 注意 vendor/ 已忽略，但 composer.lock 需要单独排除，否则本地验证时会误提交。
+/composer.lock
+target/
 build/
-.gradle/
 *.class
-*.jar
-ip-qzdb-sdk/java/build/
+*.pyc
+__pycache__/
+*.egg-info/
+# Python 构建产物（sdist / wheel / build）
+dist/
+build/python/
 
-# Local private documentation, notes & credentials
+# Local analysis and credentials
+*.local.*
 *.token
+*.asc
 *.key
 *.secret
-*.asc
-*.pem
-*.pfx
-*.local.*
 ci_settings.xml
 settings.xml
 docs/*PUBLISH*.md
@@ -69,7 +127,46 @@ docs/*CREDENTIALS*.md
 docs/archive/
 docs/audit/
 docs/design-notes/
-docs/internal/
-release-manifest.template.json
-PUBLISHING.md
 
+# Compiled Go binary
+ip-qzdb-sdk/go/main
+
+# Temp
+tmp/
+*.tmp
+# Playwright MCP browser automation artifacts (page snapshots, screenshots)
+.playwright-mcp/
+
+# NuGet pack/publish artifacts (fully rebuildable from csproj)
+ip-qzdb-sdk/netcore/nupkgs/
+
+# Test run reports (regenerated each run, timestamped filenames)
+ip-qzdb-sdk/java/test_reports/
+
+# Exception: the published demo sample (public upstream zengzeng/qqzeng-ip)
+# is intentionally tracked so CI can run data-backed verification without
+# secrets or downloads. Real/purchased databases remain ignored above.
+!demo/*.qzdb
+!demo/*.csv
+
+# 本地代理会话目录
+.agents/
+
+# C 测试本地编译产物
+ip-qzdb-sdk/c/ip_strict_test
+ip-qzdb-sdk/c/native_float_boundary_test
+ip-qzdb-sdk/c/tlv_meta_test
+
+# Local dev/build caches
+Library/
+build.log
+ip-qzdb-sdk/Library/
+ip-qzdb-sdk/netcore.Tests/.local/
+ip-qzdb-sdk/netcore.Tests/.nuget/
+ip-qzdb-sdk/netcore.Tests/Library/
+ip-qzdb-sdk/netcore/.local/
+ip-qzdb-sdk/netcore/.nuget/
+ip-qzdb-sdk/netcore/Library/
+ip-qzdb-sdk/java_build/
+ip-qzdb-sdk/tools/batch_csharp_stream/bin/
+ip-qzdb-sdk/tools/batch_csharp_stream/obj/

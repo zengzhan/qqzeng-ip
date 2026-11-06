@@ -77,23 +77,23 @@
 Divided into two engineering tiers: **Native / Compiled High-Performance Tier** (C, Go, Rust, Java, C#) designed for extreme throughput and low latency; **Dynamic Scripting Ecosystem** (Node.js, PHP, Python) optimized for zero-compilation simplicity and lightweight integration.  
 All metrics derived from a unified, controlled environment (Apple M4 Max, single-thread, `splitmix64` fixed seed with FNV-1a checksum verification) as documented in [docs/PERFORMANCE.md](./docs/PERFORMANCE.md).
 
-| Language & Tier (Click for source) | Single-Thread Integer¹<br>**Metric A · Standard Contract** | 16-Thread Concurrency²<br>**Metric B · Multi-Core Limit** | String Lookup³<br>**Metric C · With IP Parse** | Features & Architecture |
+| Language & Tier (Click for source) | Single-Thread Integer¹<br>**Metric A · Standard Contract** | Single Hot / 16-Thread Concurrency²<br>**Metric B · Multi-Core Limit** | String Lookup³<br>**Metric C · With IP Parse** | Features & Architecture |
 | :--- | :---: | :---: | :---: | :--- |
-| 👑 [C / C++](./ip-qzdb-sdk/c) | **96.5 M/s** | **506 M/s** | 12.6 M/s | Ultra-lightweight · Zero dependencies · Zero-copy mmap |
-| ⚡ [Go](./ip-qzdb-sdk/go) | **97.3 M/s** | **719 M/s** | 12.1 M/s | High concurrency Goroutines · Single binary deploy |
-| 🛡️ [Rust](./ip-qzdb-sdk/rust) *(Oct Refactor)* | **82.6 M/s** | **233 M/s** | 11.5 M/s | Value semantics · 4-way set-associative cache |
-| ☕ [Java](./ip-qzdb-sdk/java) | **48.1 M/s** *(v4: 101M)* | **136 M/s** | **11.9 M/s** | Off-heap memory views · Fastest full string parse |
-| 🚀 [C#](./ip-qzdb-sdk/netcore) | **46.9 M/s** | **550 M/s** | **20.9 M/s** | Native memory mapping · Industry-leading string throughput |
+| 👑 [C / C++](./ip-qzdb-sdk/c) | **96.5 M/s** | 101.8 M/s / **500 M/s** | 12.6 M/s | Ultra-lightweight · Zero dependencies · Zero-copy mmap |
+| ⚡ [Go](./ip-qzdb-sdk/go) | **97.3 M/s** | 105.5 M/s / **826 M/s** *(Metric A 16T: 719 M/s)* | 12.1 M/s | High concurrency Goroutines · Single binary deploy |
+| 🛡️ [Rust](./ip-qzdb-sdk/rust) *(Oct Refactor)* | **82.6 M/s** | 88.0 M/s / **233 M/s** | 11.5 M/s | Value semantics · 4-way set-associative cache |
+| ☕ [Java](./ip-qzdb-sdk/java) | **48.1 M/s** *(v4: 101M)* | 105.4 M/s / **120 M/s** *(Metric A 16T: 136 M/s)* | **11.9 M/s** | Off-heap memory views · Fastest full string parse |
+| 🚀 [C#](./ip-qzdb-sdk/netcore) | **46.9 M/s** | 132.1 M/s / **550 M/s** | **20.9 M/s** | Native memory mapping · Industry-leading string throughput |
 | ───────── | ───────── | ───────── | ───────── | *Dynamic Scripting & Application Ecosystem* |
-| 🔥 [Node.js](./ip-qzdb-sdk/nodejs) | **8.22 M/s** *(Probe: 99M)⁴* | Process cluster | 10.3 M/s | BigInt offset parsing · JS ecosystem top tier |
-| 🐘 [PHP](./ip-qzdb-sdk/php) | **5.67 M/s** *(Probe)⁴* | FPM pool | 470 K/s | Pure PHP zero extensions · Dual-mode buffering |
-| 🐍 [Python](./ip-qzdb-sdk/python) | **1.30 M/s** | Multiprocessing | 273 K/s | Zero dependencies · Quick analytics & data science |
+| 🔥 [Node.js](./ip-qzdb-sdk/nodejs) | **8.22 M/s** *(Probe: 99M)⁴* | 7.64 M/s *(Direct Loop: 99.4M)* | 10.3 M/s | BigInt offset parsing · JS ecosystem top tier |
+| 🐘 [PHP](./ip-qzdb-sdk/php) | **5.67 M/s** *(Probe)⁴* | 0.73 M/s *(FPM/Swoole)* | 470 K/s | Pure PHP zero extensions · Dual-mode buffering |
+| 🐍 [Python](./ip-qzdb-sdk/python) | **1.30 M/s** | 1.28 M/s *(Multi-process)* | 273 K/s | Zero dependencies · Quick analytics & data science |
 
 <details>
 <summary>📐 Metric Definitions, Test Environment, and Reproduction</summary>
 
 - **Metric A | Single-Thread Random Integer (Worst-case cache)**: Integer input, 500,000 scattered random IPs, 8.6MB provincial database, single-threaded — conservative baseline for capacity planning; compiled languages achieve 10~25 ns per lookup;
-- **Metric B | 16-Thread Concurrency**: Total multi-core throughput under read-only mmap and immutable snapshots across 16 worker threads;
+- **Metric B | Single Hot / 16-Thread Concurrency**: Single-core repeat cache hit / total multi-core throughput under read-only mmap across 16 worker threads;
 - **Metric C | String `find_str`**: String IP input (including IP parsing and format validation), demo database — identical to CI test suite for cross-language comparison;
 - **⁴ Contract Benchmark vs Direct Probe**: The standard contract executes PRNG progression and FNV fingerprint cross-validation; Node.js and PHP measure 8.22M and 0.72M under full contract, and reach 99.4M and 5.67M under minimal direct loop probes;
 - **Environment & Scale Effect**: Apple M4 Max (14 cores), single-thread best-of-3; x86 environments typically measure 2~4x lower; 122MB global database Metric A is approximately 1/3 of provincial database due to CPU L3 cache boundary (physical hardware reality);

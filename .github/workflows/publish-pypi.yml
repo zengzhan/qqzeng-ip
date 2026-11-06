@@ -1,5 +1,8 @@
 name: Publish Python to PyPI
 
+permissions:
+  contents: read
+
 # 打 v-python-* tag 或纯版本号 tag（v1.0.x）时，自动构建 + 发布 Python SDK 到 PyPI。
 # 需要先在仓库 Settings → Secrets and variables → Actions 配置：
 #   PYPI_API_TOKEN —— PyPI 的 API token（https://pypi.org/manage/account/token/ 创建，
@@ -18,9 +21,12 @@ on:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       # 幂等保护：本仓库是多语言 monorepo，tag `v[0-9]*` 会同时触发 PyPI / Maven /
       # crates.io 三个发布。一旦因补打 tag、重推 tag、workflow 重跑等原因再次触发，
@@ -44,7 +50,7 @@ jobs:
 
       - name: Set up Python
         if: steps.guard.outputs.exists == 'false'
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
         with:
           python-version: '3.11'
 
@@ -66,7 +72,7 @@ jobs:
 
       - name: Publish to PyPI
         if: steps.guard.outputs.exists == 'false'
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
           packages-dir: ip-qzdb-sdk/python/dist/

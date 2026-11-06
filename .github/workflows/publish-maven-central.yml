@@ -1,5 +1,8 @@
 name: Publish to Maven Central
 
+permissions:
+  contents: read
+
 # 在打 tag（v1.0.x 或 v-java-*）时自动构建 + GPG 签名 + 发布到 Maven Central。
 # 需要先在仓库 Settings → Secrets and variables → Actions 配置：
 #   CENTRAL_TOKEN      —— 从 https://central.sonatype.com 账号的 "Publish" 页生成的 token
@@ -20,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       # 幂等保护：本仓库是多语言 monorepo，tag `v[0-9]*` 会同时触发 PyPI / Maven /
       # crates.io 三个发布。一旦因补打 tag、重推 tag、workflow 重跑等原因再次触发，
@@ -59,7 +62,7 @@ jobs:
 
       - name: Set up JDK 21
         if: steps.guard.outputs.exists == 'false'
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@3a4f6e1af504cf6a31855fa899c6aa5355ba6c12 # v4.7.0
         with:
           distribution: temurin
           java-version: '21'

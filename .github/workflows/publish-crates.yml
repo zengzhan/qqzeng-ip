@@ -1,5 +1,8 @@
 name: Publish Rust crate to crates.io
 
+permissions:
+  contents: read
+
 # 打 v-rust-* tag（或手动 workflow_dispatch）时，自动发布 Rust SDK 到 crates.io。
 #
 # 需要先在仓库 Settings → Secrets and variables → Actions 配置：
@@ -25,10 +28,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
 

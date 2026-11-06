@@ -83,15 +83,62 @@ def main():
     if "requires-python = \">=3.10\"" not in pyproject_text:
         errors.append("ip-qzdb-sdk/python/pyproject.toml must declare 'requires-python = \">=3.10\"'")
 
-    ci_yml_text = ""
-    ci_path = ROOT / "tools" / "publish_meta" / "ci.yml"
+    ci_path = ROOT / ".github" / "workflows" / "ci.yml"
     if not ci_path.exists():
-        ci_path = ROOT / ".github" / "workflows" / "ci.yml"
-    if ci_path.exists():
-        ci_yml_text = ci_path.read_text(encoding="utf-8")
-        for matrix_token in ['python: "3.10"', 'python: "3.13"', 'node: "20"', 'node: "22"', 'go: "1.21"', 'go: "stable"']:
-            if matrix_token not in ci_yml_text:
-                errors.append(f"CI workflow ({ci_path.name}) missing required matrix test target: {matrix_token}")
+        errors.append(f"CI workflow missing at: {ci_path}")
+    else:
+        # 结构化解析 YAML matrix.include 配置，去除注释与虚假 token 匹配
+        entries = []
+        current_entry = None
+        in_include = False
+        include_indent = None
+        for raw_line in ci_path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.split("#", 1)[0].rstrip()
+            stripped = line.strip()
+            if not stripped:
+                continue
+            indent = len(raw_line) - len(raw_line.lstrip())
+            if stripped == "include:":
+                in_include = True
+                include_indent = indent
+                continue
+            if in_include:
+                if indent <= include_indent and not stripped.startswith("-"):
+                    break
+                if stripped.startswith("- "):
+                    if current_entry:
+                        entries.append(current_entry)
+                    current_entry = {}
+                    item = stripped[2:].strip()
+                    if ":" in item:
+                        k, v = item.split(":", 1)
+                        current_entry[k.strip()] = v.strip().strip("\"'")
+                elif ":" in stripped and current_entry is not None:
+                    k, v = stripped.split(":", 1)
+                    current_entry[k.strip()] = v.strip().strip("\"'")
+        if current_entry:
+            entries.append(current_entry)
+
+        if not entries:
+            errors.append(f"CI workflow ({ci_path.name}) missing or unparseable matrix.include block")
+        else:
+            if len(entries) < 6:
+                errors.append(f"CI workflow ({ci_path.name}) expected >= 6 matrix combinations, got {len(entries)}")
+            os_set = {e.get("os") for e in entries}
+            py_set = {e.get("python") for e in entries}
+            node_set = {e.get("node") for e in entries}
+            go_set = {e.get("go") for e in entries}
+
+            required_dims = [
+                ("os", os_set, {"ubuntu-latest", "macos-latest"}),
+                ("python", py_set, {"3.10", "3.13"}),
+                ("node", node_set, {"20", "22"}),
+                ("go", go_set, {"1.21", "stable"}),
+            ]
+            for dim, found, required in required_dims:
+                missing = required - found
+                if missing:
+                    errors.append(f"CI matrix ({ci_path.name}) missing required {dim} targets: {missing}")
 
     if errors:
         print("\nVersion verification FAILED:", file=sys.stderr)
