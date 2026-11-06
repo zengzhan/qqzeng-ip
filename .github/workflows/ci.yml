@@ -72,7 +72,7 @@ jobs:
           go-version: ${{ matrix.go }}
 
       - name: Set up PHP 8.3
-        uses: shivammathur/setup-php@a42e73e16d831796463b22b8d70a3efcad74e074 # 2.32.0
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # v2.40.0
         with:
           php-version: "8.3"
           coverage: none
@@ -192,7 +192,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up PHP ${{ matrix.php }}
-        uses: shivammathur/setup-php@a42e73e16d831796463b22b8d70a3efcad74e074 # 2.32.0
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # v2.40.0
         with:
           php-version: '${{ matrix.php }}'
           coverage: none
@@ -226,7 +226,7 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up PHP 8.3
-        uses: shivammathur/setup-php@a42e73e16d831796463b22b8d70a3efcad74e074 # 2.32.0
+        uses: shivammathur/setup-php@eb7c497e18156a6bbabfef1d3a82760b9eda3962 # v2.40.0
         with:
           php-version: '8.3'
           coverage: none
