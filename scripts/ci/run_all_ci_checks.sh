@@ -34,9 +34,28 @@ echo "[Step 5/6] C SDK 严格编译与 ASan/UBSan 全量查询内存安全验证
 
 echo ""
 echo "[Step 6/6] 多语言 SDK (C/Node/Go/PHP) 374 条全量网段逐字节对拍..."
-python3 "${SCRIPT_DIR}/verify_demo_parity.py" --langs "c,node,go,php"
+STATUS_FILE="$(mktemp)"
+trap 'rm -f "${STATUS_FILE}"' EXIT
+python3 "${SCRIPT_DIR}/verify_demo_parity.py" --langs "c,node,go,php" --status-file "${STATUS_FILE}"
 
-echo ""
-echo "================================================================="
-echo "🎉 恭喜！全部 CI 门禁检查 100% 验证通过！"
-echo "================================================================="
+FULLY_COVERED=$(python3 -c "import json; d=json.load(open('${STATUS_FILE}')); print('yes' if d.get('fully_covered') else 'no')")
+if [[ "${FULLY_COVERED}" == "yes" ]]; then
+    echo ""
+    echo "================================================================="
+    echo "🎉 恭喜！全部 CI 门禁检查验证通过（覆盖全量指定语言：C/Node/Go/PHP）！"
+    echo "================================================================="
+else
+    echo ""
+    echo "================================================================="
+    echo "⚠️  本地 CI 门禁检查结束：部分语言工具链缺失已跳过，未达全量覆盖。"
+    python3 -c "
+import json
+d = json.load(open('${STATUS_FILE}'))
+print(f\"  已验证：{len(d.get('verified', []))} 种（{', '.join(d.get('verified', []))}）\")
+if d.get('skipped'):
+    sk_str = '; '.join([f\"{item['lang']}: {item['reason']}\" for item in d['skipped']])
+    print(f\"  跳过：{len(d['skipped'])} 种（{sk_str}）\")
+"
+    echo "  若需严格全量验证，请安装缺失环境或运行带 --require 的门禁命令。"
+    echo "================================================================="
+fi

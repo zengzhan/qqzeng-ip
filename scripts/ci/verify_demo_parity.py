@@ -55,6 +55,12 @@ def get_python_reference(ips):
         ref[ip] = val if val is not None else ""
     return ref
 
+def safe_which(binary):
+    mocked_missing = [x.strip().lower() for x in os.environ.get("QZDB_MOCK_MISSING_TOOLCHAIN", "").split(",") if x.strip()]
+    if binary.lower() in mocked_missing:
+        return None
+    return shutil.which(binary)
+
 def verify_c(ips, ref, tmpdir):
     c_src = ROOT / "ip-qzdb-sdk" / "c" / "qzdb_reader.c"
     c_hdr = ROOT / "ip-qzdb-sdk" / "c" / "qzdb_reader.h"
@@ -91,8 +97,11 @@ int main(int argc, char** argv) {{
 }}
 """, encoding="utf-8")
 
-    cc = os.environ.get("CC", "cc")
-    cmd = [cc, "-std=c11", "-Wall", "-Wextra", "-Werror", "-O2", str(runner_c), str(c_src), "-o", str(runner_bin), "-lm", "-lpthread"]
+    cc_name = os.environ.get("CC", "cc")
+    cc_bin = safe_which(cc_name)
+    if not cc_bin:
+        return None, f"{cc_name} not found in PATH"
+    cmd = [cc_bin, "-std=c11", "-Wall", "-Wextra", "-Werror", "-O2", str(runner_c), str(c_src), "-o", str(runner_bin), "-lm", "-lpthread"]
     res = subprocess.run(cmd, capture_output=True, text=True)
     if res.returncode != 0:
         return False, f"C compilation failed:\n{res.stderr}"
@@ -128,7 +137,7 @@ rl.on('line', (line) => {{
 }});
 """, encoding="utf-8")
 
-    node_bin = shutil.which("node")
+    node_bin = safe_which("node")
     if not node_bin:
         return None, "node not found in PATH"
 
@@ -145,7 +154,7 @@ rl.on('line', (line) => {{
 
 def verify_php(ips, ref, tmpdir):
     php_sdk = ROOT / "ip-qzdb-sdk" / "php" / "QzdbReader.php"
-    php_bin = shutil.which("php")
+    php_bin = safe_which("php")
     if not php_bin:
         return None, "php not found in PATH"
 
@@ -177,7 +186,7 @@ while (($line = fgets(STDIN)) !== false) {{
     return True, f"PHP SDK verified ({len(ips)} IPs matched byte-for-byte)"
 
 def verify_go(ips, ref, tmpdir):
-    go_bin = shutil.which("go")
+    go_bin = safe_which("go")
     if not go_bin:
         return None, "go not found in PATH"
 
@@ -219,7 +228,7 @@ func main() {{
     return True, f"Go SDK verified ({len(ips)} IPs matched byte-for-byte)"
 
 def verify_rust(ips, ref, tmpdir):
-    cargo_bin = shutil.which("cargo")
+    cargo_bin = safe_which("cargo")
     if not cargo_bin:
         return None, "cargo not found in PATH"
 
@@ -261,7 +270,7 @@ fn main() {{
     if not target_rlib_dir.exists():
         return None, "cargo build deps directory not found"
 
-    rustc_bin = shutil.which("rustc")
+    rustc_bin = safe_which("rustc")
     if not rustc_bin:
         return None, "rustc not found in PATH"
 
@@ -284,9 +293,12 @@ fn main() {{
 def main():
     parser = argparse.ArgumentParser(description="Multi-language SDK demo output parity checker")
     parser.add_argument("--langs", default="c,node", help="Comma-separated languages to test (e.g. c,node,go,rust,php)")
+    parser.add_argument("--require", default="", help="Comma-separated required languages that MUST pass (otherwise non-zero exit)")
+    parser.add_argument("--status-file", default="", help="Optional JSON path to record verification summary")
     args = parser.parse_args()
 
     target_langs = [l.strip().lower() for l in args.langs.split(",") if l.strip()]
+    require_langs = [l.strip().lower() for l in args.require.split(",") if l.strip()]
 
     print(f"Loading IPs from {DEMO_CSV}...")
     ips = load_test_ips()
@@ -304,34 +316,106 @@ def main():
         "php": verify_php,
     }
 
-    all_passed = True
+    verified = []
+    skipped = []
+    failed = []
+
+    # Check if any required language is completely unsupported
+    for req in require_langs:
+        canonical = "node" if req == "nodejs" else req
+        if canonical not in handlers:
+            failed.append((req, f"语言 '{req}' 不受支持，无法作为必需门禁验证"))
+
     with tempfile.TemporaryDirectory() as tmpdir:
+        expanded_langs = []
         for lang in target_langs:
             if lang in ("all", "full"):
-                check_list = ["c", "node", "go", "php", "rust"]
+                expanded_langs.extend(["c", "node", "go", "php", "rust"])
             else:
-                check_list = [lang]
+                expanded_langs.append(lang)
 
-            for l in check_list:
-                handler = handlers.get(l)
-                if not handler:
-                    print(f"⚠️  Language '{l}' not supported for parity test")
-                    continue
-                print(f"Testing {l} SDK parity against Python reference...")
-                ok, msg = handler(ips, ref, tmpdir)
-                if ok is True:
-                    print(f"  ✅ {msg}")
-                elif ok is None:
-                    print(f"  ℹ️  {l.upper()}: 未验证（{msg}）")
+        # De-duplicate preserving order
+        checked_set = set()
+        for l in expanded_langs:
+            canonical = "node" if l == "nodejs" else l
+            if canonical in checked_set:
+                continue
+            checked_set.add(canonical)
+
+            handler = handlers.get(canonical)
+            if not handler:
+                msg = f"Language '{canonical}' not supported for parity test"
+                if canonical in require_langs or l in require_langs:
+                    failed.append((l, msg))
                 else:
-                    print(f"  ❌ {msg}", file=sys.stderr)
-                    all_passed = False
+                    skipped.append((l, msg))
+                continue
 
-    if not all_passed:
-        print("\n❌ Demo parity check failed!", file=sys.stderr)
+            print(f"Testing {canonical} SDK parity against Python reference...")
+            ok, msg = handler(ips, ref, tmpdir)
+            is_required = (canonical in require_langs or l in require_langs)
+            if ok is True:
+                print(f"  ✅ {msg}")
+                verified.append((canonical, msg))
+            elif ok is None:
+                print(f"  ℹ️  {canonical.upper()}: 未验证（{msg}）")
+                if is_required:
+                    failed.append((canonical, f"必需语言 {canonical} 未能执行: {msg}"))
+                else:
+                    skipped.append((canonical, msg))
+            else:
+                print(f"  ❌ {msg}", file=sys.stderr)
+                failed.append((canonical, msg))
+
+    # Also check if any required language was omitted from target_langs entirely
+    for req in require_langs:
+        canonical = "node" if req == "nodejs" else req
+        if canonical not in checked_set and not any(f[0] == req for f in failed):
+            failed.append((req, f"必需语言 {req} 未在待测语言清单 (--langs) 中被执行"))
+
+    verified_names = [v[0] for v in verified]
+    skipped_names = [s[0] for s in skipped]
+    failed_names = [f[0] for f in failed]
+
+    print("\n" + "=" * 65)
+    print("Demo 对拍统计汇总:")
+    if verified:
+        print(f"  已验证 ({len(verified)} 种): {', '.join(verified_names)}")
+    else:
+        print("  已验证: 0 种")
+    if skipped:
+        print(f"  跳过 ({len(skipped)} 种):")
+        for l, reason in skipped:
+            print(f"    - {l}: {reason}")
+    if failed:
+        print(f"  失败/未满足要求 ({len(failed)} 种):")
+        for l, reason in failed:
+            print(f"    - {l}: {reason}")
+    print("=" * 65)
+
+    if args.status_file:
+        try:
+            status_data = {
+                "verified": verified_names,
+                "skipped": [{"lang": l, "reason": r} for l, r in skipped],
+                "failed": [{"lang": l, "reason": r} for l, r in failed],
+                "success": len(failed) == 0,
+                "fully_covered": len(failed) == 0 and len(skipped) == 0
+            }
+            with open(args.status_file, "w", encoding="utf-8") as sf:
+                json.dump(status_data, sf, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"Warning: failed to write status file: {e}", file=sys.stderr)
+
+    if failed:
+        print(f"\n❌ 门禁失败: 必需语言未全部通过或存在对拍差异 (共 {len(failed)} 项失败)!", file=sys.stderr)
         return 1
 
-    print("\n🎉 Demo parity verification passed completely!")
+    if skipped:
+        print(f"\n⚠️  验证结束：本地跳过了 {len(skipped)} 种语言 ({', '.join(skipped_names)})，仅完成部分语言对拍。")
+        return 0
+
+    print(f"\n🎉 Demo parity verification passed completely! (已验证全量指定语言: {', '.join(verified_names)})")
     return 0
 
 if __name__ == "__main__":

@@ -404,16 +404,29 @@ Following the official standard (5 Editions × 2 Regions × 3 Protocols):
 
 ## 🛡️ Quality Gates & Cross-Language Consistency
 
-- **Public Repository CI Gates (Automated Testing & Local Reproduction)**:
-  - **Memory Safety & Strict Compilation**: All languages strictly compiled; C SDK is compiled and linked with AddressSanitizer (ASan) and UndefinedBehaviorSanitizer (UBSan) running all boundary queries on the demo database (0 leaks, 0 undefined behavior).
-  - **Sample Byte-for-Byte Parity**: Based on the public [`demo/qqzeng-ip-ult.qzdb`](demo/README.md) (360 real network ranges), covering all start/end IPs and 14 boundary cases, verifying 100% byte-for-byte output parity across C, Node.js, Go, and PHP against the Python reference implementation.
-  - **27 Golden Vectors**: Verification against [`golden_vectors.json`](golden_vectors.json) (covering IPv4/IPv6, various usage types, and negative cases).
-  - **Single Source of Truth**: Automated checks for zero broken Markdown links, package version alignment across all manifests, and 25-dimension schema parity.
-  - **Local One-Line Reproduction**:
-    ```bash
-    bash scripts/ci/run_all_ci_checks.sh
-    ```
-- **Internal Development Release Gate**: Full L3 golden vectors (4,102+ vectors) regression and L4 cross-version performance benchmarks are executed against the complete commercial database. *Note: Cross-language vector verification ensures parsing algorithm consistency; physical geolocation accuracy is maintained periodically by the data collection team.*
+The public repository enforces automated CI quality gates matching local reproduction commands:
+
+- **Compilation & Memory Safety Verification**:
+  - **C SDK**: Compiled and linked strictly with `-std=c11 -Wall -Wextra -Werror` and verified under AddressSanitizer (ASan) and UndefinedBehaviorSanitizer (UBSan) running all queries against the demo database (0 memory leaks, 0 undefined behavior).
+  - **Other Language SDKs**: Rust (`cargo check` + `cargo package`), Java (release 17 / JDK 21 build), C# (.NET 10 Release build), Go (`go build` / `go vet`), Node.js (`node --check`), Python (`py_compile`), and PHP (`php -l` + `composer validate` + 7.4~8.5 classloading matrix) undergo compilation and syntax gates.
+- **27 Golden Vectors Verification**: Evaluated on the Python reference implementation using [`golden_vectors.json`](golden_vectors.json) (expected values derived independently from demo CSV, covering IPv4/IPv6, all 12 usage types, and negative boundary cases).
+- **Sample Byte-for-Byte Parity (Consistency)**: Evaluates 374 IP vectors (360 real demo ranges + 14 boundary cases) from [`demo/qqzeng-ip-ult.qzdb`](demo/README.md). Verifies that C, Node.js, Go, and PHP match the Python reference output byte-for-byte (invalid inputs normalized between C error codes and Python empty strings; Rust/Java/.NET currently covered under compilation gates).
+- **Single Source of Truth & Anti-Fake-Green**: Zero broken relative Markdown links, package version alignment across all manifests, 25-dimension schema parity against CSV headers, and negative self-tests asserting non-zero exits on missing `--require` toolchains.
+
+### Quality Gate Check Matrix
+
+| Check Item | Target Scope | CI Step Name (`ci.yml`) | Local Reproduction Command |
+| :--- | :--- | :--- | :--- |
+| **Markdown Links** | All repository Markdown files | `Gate 1 — Markdown Relative Links (Zero Broken)` | `python3 scripts/ci/check_markdown_links.py .` |
+| **Version SSOT** | 7 package manifests & README | `Gate 2 — Package Versions Single Source of Truth` | `python3 scripts/ci/check_versions.py` |
+| **25-Dim Schema** | CSV header, SDK schema, docs | `Gate 3 — 25-Dimension Schema Parity` | `python3 scripts/ci/verify_schema_parity.py` |
+| **Golden Vectors** | Python reference (27 vectors) | `Gate 4 — 27 Golden Vectors Baseline` | `python3 scripts/ci/test_golden_vectors.py` |
+| **C Memory Safety** | C SDK (ASan + UBSan) | `Gate 5 — C SDK ASan/UBSan & Memory Safety` | `bash scripts/ci/test_c_sdk.sh` |
+| **Anti-Fake-Green** | Test runner `--require` behavior | `Gate 6a — Selftest (Verify Require Mechanism Anti-Fake-Green)` | `bash scripts/ci/selftest_require.sh` |
+| **Multi-Lang Parity** | C / Node.js / Go / PHP (374 IPs) | `Gate 6b — Multi-Language Demo Parity (All 374 IPs Strict)` | `python3 scripts/ci/verify_demo_parity.py --langs c,node,go,php --require c,node,go,php` |
+| **One-Line Runner** | All above checks aggregated | *(Local Developer Master Script)* | `bash scripts/ci/run_all_ci_checks.sh` |
+
+> ℹ️ **Internal Release Gate Note**: On the complete commercial database (12.5M+ network ranges), internal pipelines execute L3 golden vectors (4,102 full vectors) and L4 performance benchmarks. Cross-language vector verification ensures algorithm consistency; physical geolocation accuracy is maintained periodically by the data collection team.
 
 ---
 

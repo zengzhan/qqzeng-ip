@@ -21,34 +21,58 @@ concurrency:
 
 jobs:
   quality-gate:
-    name: Quality Gate & Demo Parity (${{ matrix.os }})
+    name: Gate (${{ matrix.os }}, Py-${{ matrix.python }}, Node-${{ matrix.node }}, Go-${{ matrix.go }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            python: "3.10"
+            node: "20"
+            go: "1.21"
+          - os: ubuntu-latest
+            python: "3.13"
+            node: "22"
+            go: "stable"
+          - os: ubuntu-latest
+            python: "3.10"
+            node: "22"
+            go: "stable"
+          - os: ubuntu-latest
+            python: "3.13"
+            node: "20"
+            go: "1.21"
+          - os: macos-latest
+            python: "3.10"
+            node: "20"
+            go: "1.21"
+          - os: macos-latest
+            python: "3.13"
+            node: "22"
+            go: "stable"
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v5.4.0
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python }}
 
-      - name: Set up Node.js 20
-        uses: actions/setup-node@v4
+      - name: Set up Node.js ${{ matrix.node }}
+        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4.2.0
         with:
-          node-version: "20"
+          node-version: ${{ matrix.node }}
 
-      - name: Set up Go 1.22
-        uses: actions/setup-go@v5
+      - name: Set up Go ${{ matrix.go }}
+        uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34 # v5.3.0
         with:
-          go-version: "1.22"
+          go-version: ${{ matrix.go }}
 
       - name: Set up PHP 8.3
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@a42e73e16d831796463b22b8d70a3efcad74e074 # 2.32.0
         with:
           php-version: "8.3"
           coverage: none
@@ -72,8 +96,11 @@ jobs:
       - name: Gate 5 — C SDK ASan/UBSan & Memory Safety
         run: bash scripts/ci/test_c_sdk.sh
 
-      - name: Gate 6 — Multi-Language Demo Parity (All 374 IPs)
-        run: python3 scripts/ci/verify_demo_parity.py --langs c,node,go,php
+      - name: Gate 6a — Selftest (Verify Require Mechanism Anti-Fake-Green)
+        run: bash scripts/ci/selftest_require.sh
+
+      - name: Gate 6b — Multi-Language Demo Parity (All 374 IPs Strict)
+        run: python3 scripts/ci/verify_demo_parity.py --langs c,node,go,php --require c,node,go,php
 
   publish-gate:
     name: SDK Build Gate (data-free)
@@ -81,7 +108,7 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: PHP — lint SDK source
         run: php -l ip-qzdb-sdk/php/QzdbReader.php
@@ -92,7 +119,7 @@ jobs:
           composer validate --strict
 
       - name: Set up Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: stable
 
@@ -103,7 +130,7 @@ jobs:
           cargo package --allow-dirty
 
       - name: Set up Java 21
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@3a4f6e1af504cf6a31855fa899c6aa5355ba6c12 # v4.7.0
         with:
           distribution: temurin
           java-version: "21"
@@ -115,7 +142,7 @@ jobs:
           javac -encoding UTF-8 -d build $(find src -name '*.java')
 
       - name: Set up .NET 10
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@3951f0dfe7a07e2313ec93c75700083e2005cbab # v4.3.0
         with:
           dotnet-version: "10.0.x"
 
@@ -125,17 +152,17 @@ jobs:
           dotnet build QQZeng.Qzdb.csproj -c Release -v:q
           -p:TargetFramework=net10.0 -p:TargetFrameworks=net10.0
 
-      - name: Set up Go 1.22
-        uses: actions/setup-go@v5
+      - name: Set up Go 1.21 (Minimum Declared Baseline)
+        uses: actions/setup-go@f111f3307d8850f501ac008e886eec1fd1932a34 # v5.3.0
         with:
-          go-version: "1.22"
+          go-version: "1.21"
 
       - name: Go — build
         working-directory: ip-qzdb-sdk/go
         run: go build ./...
 
       - name: Set up Node.js 20
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@1d0ff469b7ec7b3cb9d8673fde0c81c44821de2a # v4.2.0
         with:
           node-version: "20"
 
@@ -160,10 +187,10 @@ jobs:
         php: ['7.4', '8.0', '8.1', '8.2', '8.3', '8.4', '8.5']
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up PHP ${{ matrix.php }}
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@a42e73e16d831796463b22b8d70a3efcad74e074 # 2.32.0
         with:
           php-version: '${{ matrix.php }}'
           coverage: none
@@ -194,10 +221,10 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up PHP 8.3
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@a42e73e16d831796463b22b8d70a3efcad74e074 # 2.32.0
         with:
           php-version: '8.3'
           coverage: none

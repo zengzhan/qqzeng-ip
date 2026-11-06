@@ -75,6 +75,24 @@ def main():
         if needle not in readme_text:
             errors.append(f"README.md does not contain expected version coordinate for {lang}: '{needle}'")
 
+    # 7. Matrix SSOT verification: go.mod vs pyproject.toml vs CI matrix
+    go_mod_text = (ROOT / "ip-qzdb-sdk" / "go" / "go.mod").read_text(encoding="utf-8")
+    if "go 1.21" not in go_mod_text:
+        errors.append("ip-qzdb-sdk/go/go.mod must declare 'go 1.21' as minimum Go baseline")
+
+    if "requires-python = \">=3.10\"" not in pyproject_text:
+        errors.append("ip-qzdb-sdk/python/pyproject.toml must declare 'requires-python = \">=3.10\"'")
+
+    ci_yml_text = ""
+    ci_path = ROOT / "tools" / "publish_meta" / "ci.yml"
+    if not ci_path.exists():
+        ci_path = ROOT / ".github" / "workflows" / "ci.yml"
+    if ci_path.exists():
+        ci_yml_text = ci_path.read_text(encoding="utf-8")
+        for matrix_token in ['python: "3.10"', 'python: "3.13"', 'node: "20"', 'node: "22"', 'go: "1.21"', 'go: "stable"']:
+            if matrix_token not in ci_yml_text:
+                errors.append(f"CI workflow ({ci_path.name}) missing required matrix test target: {matrix_token}")
+
     if errors:
         print("\nVersion verification FAILED:", file=sys.stderr)
         for e in errors:

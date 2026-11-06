@@ -360,16 +360,29 @@ $reader->close();
 
 ## 七、质量门禁与跨语言一致性验证
 
-- **公开仓库 CI 门禁（自动化测试与本地一键复现）**：
-  - **内存安全与严格编译**：全语言严格编译门禁，C SDK 真实链接并执行 AddressSanitizer (ASan) 与 UndefinedBehaviorSanitizer (UBSan) 全量边界查询（0 泄漏、0 未定义行为）；
-  - **样本逐字节对拍**：基于公开 [`demo/qqzeng-ip-ult.qzdb`](demo/README.md)（360 行真实网段），覆盖全部起始/结束 IP 及 14 类边界异常值，自动化验证 C / Node.js / Go / PHP 与 Python 参考实现输出 100% 逐字节完全一致；
-  - **27 组基准向量校验**：执行 [`golden_vectors.json`](golden_vectors.json) 跨语言一致性判定（覆盖 IPv4/IPv6、各类场景及无命中负例）；
-  - **单一事实来源门禁**：自动化执行全仓 Markdown 零断链、全清单版本号对齐与 25 维全要素 Schema 一致性校验。
-  - **本地一键复现命令**：
-    ```bash
-    bash scripts/ci/run_all_ci_checks.sh
-    ```
-- **内部开发仓发版门禁**：在完整商业库（千万级全量网段）上执行全量 L3 黄金向量（4,102 条及以上）回归与跨版本 L4 性能基准门禁。请注意：跨语言向量验证用于保证各语言解析算法的一致性（Consistency），数据物理真实性由采集团队定期核验。
+公开仓库 CI 执行自动化门禁校验（CI 门禁与本地一键复现命令严格对应）：
+
+- **编译与内存安全验证**：
+  - **C SDK**：使用 `-std=c11 -Wall -Wextra -Werror` 严格编译链接，并在 AddressSanitizer (ASan) 与 UndefinedBehaviorSanitizer (UBSan) 下对公开 demo 库执行全量查询（0 内存泄漏、0 未定义行为）。
+  - **其余语言 SDK**：Rust (`cargo check` + `cargo package`)、Java (release 17 / JDK 21 编译)、C# (.NET 10 Release 构建)、Go (`go build` / `go vet`)、Node.js (`node --check`)、Python (`py_compile`)、PHP (`php -l` + `composer validate` + 7.4~8.5 跨版本类加载) 均执行编译或语法合法性门禁。
+- **27 组基准向量校验**：基于公开 [`golden_vectors.json`](golden_vectors.json)（期望值源自 demo CSV 独立数据源，覆盖 IPv4/IPv6、全部 12 类 usage_type 及负向边界），对 Python 参考实现执行字段级精准校验。
+- **样本逐字节对拍（跨语言一致性）**：基于公开 [`demo/qqzeng-ip-ult.qzdb`](demo/README.md)（360 行真实网段），提取全部起始/结束 IP 及 14 类边界异常值（共 374 条），以 Python SDK 为基准，验证 C、Node.js、Go、PHP 与参考实现输出逐字节完全一致（无效输入在 C 的错误码与 Python 的空串之间由脚本显式归一化；Rust/Java/.NET 当前仅纳入编译门禁）。
+- **单一事实来源与反假绿防护**：全仓 Markdown 相对链接零断链检查、安装清单版本号一致性校验、25 维全要素 Schema 与 CSV 表头对齐校验，以及对拍脚本 `--require` 缺失工具链拦截自测。
+
+### 检查项与 CI 步骤对照表
+
+| 检查项 | 覆盖语言 / 范围 | CI 步骤名 (`ci.yml`) | 本地复现命令 |
+| :--- | :--- | :--- | :--- |
+| **文档相对链接** | 全仓 30+ Markdown 文档 | `Gate 1 — Markdown Relative Links (Zero Broken)` | `python3 scripts/ci/check_markdown_links.py .` |
+| **版本单一来源** | 7 大包定义文件与 README | `Gate 2 — Package Versions Single Source of Truth` | `python3 scripts/ci/check_versions.py` |
+| **25 维要素对齐** | CSV 表头、SDK Schema、文档 | `Gate 3 — 25-Dimension Schema Parity` | `python3 scripts/ci/verify_schema_parity.py` |
+| **基准向量校验** | Python 参考实现 (27 向量) | `Gate 4 — 27 Golden Vectors Baseline` | `python3 scripts/ci/test_golden_vectors.py` |
+| **C 内存安全** | C SDK (ASan + UBSan) | `Gate 5 — C SDK ASan/UBSan & Memory Safety` | `bash scripts/ci/test_c_sdk.sh` |
+| **门禁自测防假绿** | 对拍脚本 `--require` 机制 | `Gate 6a — Selftest (Verify Require Mechanism Anti-Fake-Green)` | `bash scripts/ci/selftest_require.sh` |
+| **多语言样本对拍** | C / Node.js / Go / PHP (374 IP) | `Gate 6b — Multi-Language Demo Parity (All 374 IPs Strict)` | `python3 scripts/ci/verify_demo_parity.py --langs c,node,go,php --require c,node,go,php` |
+| **一键全量复现** | 上述全部质量门禁项 | *(本地开发者聚合入口)* | `bash scripts/ci/run_all_ci_checks.sh` |
+
+> ℹ️ **内部开发仓发版说明**：在包含千万级网段的完整商业库上，内部流水线会执行 L3 黄金向量（4,102 条全量对账）与跨版本 L4 性能基准门禁。跨语言向量验证用于保证解析算法在不同语言实现之间的一致性（Consistency），数据本身的物理准确性由采集团队定期核验。
 
 ## 八、开源许可证与商业授权边界
 

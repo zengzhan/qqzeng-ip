@@ -589,4 +589,4 @@ cargo run --release --bin qzdb_mcp -- /path/to/qqzeng_ip_ult.qzdb --manifest
 
 [MIT](https://opensource.org/licenses/MIT)
 
-<!-- commit: rust: Rust SDK（mmap 只读映射，内存安全） sync=1793949744 -->
+<!-- commit: rust: Rust 极速解析引擎 (mmap + 最小 unsafe surface, 整型随机最不利 4300 万+ QPS, 口径见 docs/PERFORMANCE.md) -->
