@@ -327,33 +327,7 @@ public final class QzdbReader implements AutoCloseable {
          * 在 Reload 中于 atomic swap 前调用，确保新快照的页面已预热入 OS Page Cache。
          */
         void warmup() {
-            if (data == null || !data.hasRemaining()) return;
-            final int PAGE = 4096;
-            long touchSum = 0;
-            int limit = data.limit();
-            if (hasV4 && offV4Jump > 0) {
-                int start = (int) offV4Jump;
-                int end = Math.min(limit, start + 65536 * 4);
-                for (int p = start; p < end; p += PAGE) touchSum ^= data.get(p) & 0xFF;
-                if (v4NodeCount > 0 && offV4Nodes > 0) {
-                    int nodeSize = v4Node24 ? 6 : 8;
-                    int ns = (int) offV4Nodes;
-                    int ne = Math.min(limit, ns + v4NodeCount * nodeSize);
-                    for (int p = ns; p < ne; p += PAGE) touchSum ^= data.get(p) & 0xFF;
-                }
-            }
-            if (hasV6 && offV6Jump > 0) {
-                int start = (int) offV6Jump;
-                int end = Math.min(limit, start + (1 << v6JumpBits) * 4);
-                for (int p = start; p < end; p += PAGE) touchSum ^= data.get(p) & 0xFF;
-                if (v6NodeCount > 0 && offV6Nodes > 0) {
-                    int nodeSize = v6Node24 ? 6 : 8;
-                    int ns = (int) offV6Nodes;
-                    int ne = Math.min(limit, ns + v6NodeCount * nodeSize);
-                    for (int p = ns; p < ne; p += PAGE) touchSum ^= data.get(p) & 0xFF;
-                }
-            }
-            // touchSum 仅用于防止 JIT 死代码消除；实际无副作用
+            warmupSnapshot(this, false);
         }
 
         private void parseHeader() throws QzdbException {
@@ -562,97 +536,22 @@ public final class QzdbReader implements AutoCloseable {
                 groupEntryOffsets[gi] = offGeoEntries + headerGeoOffsets[gi];
             }
 
-            // GROUP_SCHEMA 自带的 fldCount 与 GEO_ENTRIES 表里的 groupFieldCounts 是两个独立来源，
-            // 伪造文件可让二者不一致；此处记录 schema 侧取值，解析完统一做不变量对齐（见下方 reconcile 块）。
-            int[] schemaFldCounts = new int[groups];
-            java.util.Arrays.fill(schemaFldCounts, -1);
+            parseGroupSchema(groups);
 
-            if (offGroupSchema > 0 && offGroupSchema + 2 <= dataLen) {
-                int sp = (int) offGroupSchema;
-                int gsGroupCount = readU16(data, sp);
-                sp += 2;
-                int maxGsGroups = Math.min(gsGroupCount, groups);
-                for (int gi = 0; gi < maxGsGroups; gi++) {
-                    if (sp + 16 > dataLen) break;
-                    groupIds[gi] = readU16(data, sp);
-                    sp += 2;
-                    int fldCount = readU16(data, sp);
-                    sp += 2;
-                    sp += 4;
-                    long stride = readU32(data, sp) & 0xFFFFFFFFL;
-                    sp += 4;
-                    sp += 4;
-                    if (fldCount < 1 || fldCount > 255 || sp + (long) fldCount * 12 > dataLen) break;
-                    if (fldCount != groupFieldCounts[gi]) break;
-
-                    schemaFldCounts[gi] = fldCount;
-                    if (stride < 1 || stride > Integer.MAX_VALUE || stride > dataLen) {
-                        throw new QzdbException(ErrorCode.CORRUPTED,
-                                "Invalid GROUP_SCHEMA stride for group " + gi + ": " + stride);
-                    }
-                    int[] widths = new int[fldCount];
-                    int[] offsets = new int[fldCount];
-                    boolean[] natives = new boolean[fldCount];
-                    int[] natTypes = new int[fldCount];
-                    for (int fi = 0; fi < fldCount; fi++) {
-                        sp += 2;
-                        int w = data.get(sp) & 0xFF;
-                        sp += 1;
-                        int fieldFlags = data.get(sp) & 0xFF;
-                        sp += 1;
-                        long offset = readU32(data, sp) & 0xFFFFFFFFL;
-                        sp += 4;
-                        sp += 4;
-                        boolean nativeField = (fieldFlags & 0x01) != 0;
-                        int nativeType = (fieldFlags >> 1) & 0x03;
-                        boolean validWidth = nativeField
-                                ? (nativeType == 0 ? w >= 1 && w <= 4
-                                : nativeType == 1 && (w == 4 || w == 8))
-                                : w >= 1 && w <= 4;
-                        if (!validWidth || offset > Integer.MAX_VALUE || offset + w > stride) {
-                            throw new QzdbException(ErrorCode.CORRUPTED,
-                                    "Invalid GROUP_SCHEMA field " + gi + "/" + fi
-                                            + " width/offset: " + w + "/" + offset);
-                        }
-                        natives[fi] = nativeField;
-                        natTypes[fi] = nativeType;
-                        widths[fi] = w;
-                        offsets[fi] = (int) offset;
-                    }
-                    groupStrides[gi] = (int) stride;
-                    groupFieldWidths[gi] = widths;
-                    groupFieldOffsets[gi] = offsets;
-                    groupFieldNative[gi] = natives;
-                    groupFieldNativeType[gi] = natTypes;
-                }
-            }
-            // 不变量对齐：schema 的 fldCount 必须与 GEO_ENTRIES 的 groupFieldCounts 一致。
-            // 不一致说明文件被篡改或损坏——丢弃该组的 schema 布局，退回 §9.4 默认布局，
-            // 避免下游按 groupFieldCounts 索引 widths/offsets/native 数组时越界或读到错位字段。
-            for (int g = 0; g < groups; g++) {
-                if (schemaFldCounts[g] >= 0 && schemaFldCounts[g] != groupFieldCounts[g]) {
-                    groupFieldWidths[g] = null;
-                    groupFieldOffsets[g] = null;
-                    groupFieldNative[g] = null;
-                    groupFieldNativeType[g] = null;
-                    groupStrides[g] = 0;
-                }
-            }
-
-            // 兜底（stride = fieldCount × poolIdxSize，§9.4）
+            // 兜底（stride = fieldCount × poolIdxSize，§9.4）+ 不变量对齐 + 段边界校验
             for (int g = 0; g < groups; g++) {
                 int fc = groupFieldCounts[g];
-                if (groupStrides[g] == 0) groupStrides[g] = fc * poolIdxSize;
-                if (groupFieldWidths[g] == null) {
+                if (groupFieldWidths[g] == null || groupFieldWidths[g].length != fc) {
                     int[] w = new int[fc];
                     int[] o = new int[fc];
                     java.util.Arrays.fill(w, poolIdxSize);
                     for (int i = 0; i < fc; i++) o[i] = i * poolIdxSize;
+                    groupStrides[g] = fc * poolIdxSize;
                     groupFieldWidths[g] = w;
                     groupFieldOffsets[g] = o;
+                    groupFieldNative[g] = new boolean[fc];
+                    groupFieldNativeType[g] = new int[fc];
                 }
-                if (groupFieldNative[g] == null) groupFieldNative[g] = new boolean[fc];
-                if (groupFieldNativeType[g] == null) groupFieldNativeType[g] = new int[fc];
                 if (groupEntryCounts[g] > 0) {
                     long totalBytes = groupEntryCounts[g] * (long) groupStrides[g];
                     if (totalBytes < 0 || groupEntryOffsets[g] < 0 || groupEntryOffsets[g] > dataLen
@@ -661,6 +560,65 @@ public final class QzdbReader implements AutoCloseable {
                                 "Section group_" + g + "_entries out of bounds");
                     }
                 }
+            }
+        }
+
+        private void parseGroupSchema(int groups) throws QzdbException {
+            if (offGroupSchema <= 0 || offGroupSchema + 2 > dataLen) return;
+            int sp = (int) offGroupSchema;
+            int gsGroupCount = readU16(data, sp);
+            sp += 2;
+            int maxGsGroups = Math.min(gsGroupCount, groups);
+            for (int gi = 0; gi < maxGsGroups; gi++) {
+                if (sp + 16 > dataLen) break;
+                groupIds[gi] = readU16(data, sp);
+                sp += 2;
+                int fldCount = readU16(data, sp);
+                sp += 2;
+                sp += 4;
+                long stride = readU32(data, sp) & 0xFFFFFFFFL;
+                sp += 4;
+                sp += 4;
+                if (fldCount < 1 || fldCount > 255 || sp + (long) fldCount * 12 > dataLen) break;
+                if (fldCount != groupFieldCounts[gi]) break;
+                if (stride < 1 || stride > 4096 || stride > dataLen) {
+                    throw new QzdbException(ErrorCode.CORRUPTED,
+                            "Invalid GROUP_SCHEMA stride for group " + gi + ": " + stride);
+                }
+                int[] widths = new int[fldCount];
+                int[] offsets = new int[fldCount];
+                boolean[] natives = new boolean[fldCount];
+                int[] natTypes = new int[fldCount];
+                for (int fi = 0; fi < fldCount; fi++) {
+                    sp += 2;
+                    int w = data.get(sp) & 0xFF;
+                    sp += 1;
+                    int fieldFlags = data.get(sp) & 0xFF;
+                    sp += 1;
+                    long offset = readU32(data, sp) & 0xFFFFFFFFL;
+                    sp += 4;
+                    sp += 4;
+                    boolean nativeField = (fieldFlags & 0x01) != 0;
+                    int nativeType = (fieldFlags >> 1) & 0x03;
+                    boolean validWidth = nativeField
+                            ? (nativeType == 0 ? w >= 1 && w <= 4
+                            : nativeType == 1 && (w == 4 || w == 8))
+                            : w >= 1 && w <= 4;
+                    if (!validWidth || offset > Integer.MAX_VALUE || offset + w > stride) {
+                        throw new QzdbException(ErrorCode.CORRUPTED,
+                                "Invalid GROUP_SCHEMA field " + gi + "/" + fi
+                                        + " width/offset: " + w + "/" + offset);
+                    }
+                    natives[fi] = nativeField;
+                    natTypes[fi] = nativeType;
+                    widths[fi] = w;
+                    offsets[fi] = (int) offset;
+                }
+                groupStrides[gi] = (int) stride;
+                groupFieldWidths[gi] = widths;
+                groupFieldOffsets[gi] = offsets;
+                groupFieldNative[gi] = natives;
+                groupFieldNativeType[gi] = natTypes;
             }
         }
 
@@ -1766,37 +1724,17 @@ public final class QzdbReader implements AutoCloseable {
     private static void warmupSnapshot(Snapshot snap, boolean full) {
         if (snap.data == null) return;
         ByteBuffer buf = snap.data;
-        final int PAGE = 4096;
         long touchSum = 0;
-
-        if (snap.hasV4 && snap.offV4Jump > 0) {
-            long start = snap.offV4Jump;
-            long end = Math.min(snap.dataLen, start + 65536L * 4);
-            for (long p = start; p < end; p += PAGE) {
-                touchSum ^= buf.get((int) p) & 0xFFL;
+        if (snap.hasV4) {
+            touchSum ^= touchRange(buf, snap.offV4Jump, 65536L * 4);
+            if (snap.v4NodeCount > 0) {
+                touchSum ^= touchRange(buf, snap.offV4Nodes, (long) snap.v4NodeCount * (snap.v4Node24 ? 6 : 8));
             }
         }
-        if (snap.hasV4 && snap.v4NodeCount > 0 && snap.offV4Nodes > 0) {
-            int nodeSize = snap.v4Node24 ? 6 : 8;
-            long start = snap.offV4Nodes;
-            long end = Math.min(snap.dataLen, start + (long) snap.v4NodeCount * nodeSize);
-            for (long p = start; p < end; p += PAGE) {
-                touchSum ^= buf.get((int) p) & 0xFFL;
-            }
-        }
-        if (snap.hasV6 && snap.offV6Jump > 0) {
-            long start = snap.offV6Jump;
-            long end = Math.min(snap.dataLen, start + (1L << snap.v6JumpBits) * 4);
-            for (long p = start; p < end; p += PAGE) {
-                touchSum ^= buf.get((int) p) & 0xFFL;
-            }
-        }
-        if (snap.hasV6 && snap.v6NodeCount > 0 && snap.offV6Nodes > 0) {
-            int nodeSize = snap.v6Node24 ? 6 : 8;
-            long start = snap.offV6Nodes;
-            long end = Math.min(snap.dataLen, start + (long) snap.v6NodeCount * nodeSize);
-            for (long p = start; p < end; p += PAGE) {
-                touchSum ^= buf.get((int) p) & 0xFFL;
+        if (snap.hasV6) {
+            touchSum ^= touchRange(buf, snap.offV6Jump, (1L << snap.v6JumpBits) * 4);
+            if (snap.v6NodeCount > 0) {
+                touchSum ^= touchRange(buf, snap.offV6Nodes, (long) snap.v6NodeCount * (snap.v6Node24 ? 6 : 8));
             }
         }
         if (full) {

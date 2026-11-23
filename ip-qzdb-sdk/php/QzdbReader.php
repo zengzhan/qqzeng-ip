@@ -1695,10 +1695,16 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $chk($this->offRowSchema, 4, 'row_schema');
         $chk($this->offGroupSchema, 2, 'group_schema');
 
-        // ROW_SCHEMA 必须在 section 边界校验之后再解析，否则 offRowSchema
-        // 可以指到文件外并让宽度推断读到越界数据。
         $this->parseRowSchema();
+        $this->parseGroups($len, $chk);
+        $this->resolveFieldNames();
+        $this->repairDimMasks();
+        $this->poolsLoaded = false;
+        $this->groupPoolDescs = null;
+    }
 
+    private function parseGroups(int $len, callable $chk): void
+    {
         $this->groupEntryOffsets = [];
         for ($i = 0; $i < 4; $i++) {
             $this->groupEntryOffsets[] = $this->safeReadU48(168 + $i * 6);
@@ -1708,15 +1714,10 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $groupCount = $this->readByte($gmOff);
         $gmOff += 1;
 
-        $actualGroups = min($groupCount, max(1, $this->geoEntryGroupCount));
-        if ($actualGroups > 4) $actualGroups = 4;
-        // 组数为 0 的文件没有任何可查询维度，直接拒绝，避免构造出空 reader
-        // 后在取字段名/字段数时踩到 "Undefined array key 0"
-        //（与 Rust/Go/Node/Python 契约一致）。
+        $actualGroups = min($groupCount, max(1, $this->geoEntryGroupCount), 4);
         if ($actualGroups < 1) {
             throw new QzdbException('GroupMetadataTable groupCount is 0', self::ERROR_CORRUPTED);
         }
-        // 每组 = fieldCount(1) + entryCount(4) + dimensionMask(2)
         if ($actualGroups * 7 > $len - $gmOff) {
             throw new QzdbException('GroupMetadataTable truncated', self::ERROR_CORRUPTED);
         }
@@ -1741,87 +1742,10 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $this->groupFieldNativeType = array_fill(0, $actualGroups, null);
         $this->groupFieldIds = array_fill(0, $actualGroups, null);
         $this->groupPoolSectionIds = array_fill(0, $actualGroups, null);
-
-        // GROUP_SCHEMA 里各组自报的 fieldCount 是第二个"真相来源"，与
-        // GroupMetadataTable 的 fieldCount 可能被伪造成不一致；下方不变式块统一收口。
-        $schemaFldCounts = array_fill(0, $actualGroups, -1);
         $this->groupIds = array_fill(0, $actualGroups, 0);
-        if ($this->offGroupSchema > 0) {
-            $sp = $this->offGroupSchema;
-            $gsGroupCount = $this->safeReadU16($sp);
-            $sp += 2;
-            $maxGsGroups = min($gsGroupCount, $actualGroups);
-            for ($gi = 0; $gi < $maxGsGroups; $gi++) {
-                // 每组头 16 字节：groupId(2) fldCount(2) entryCount(4) stride(4) flags(4)
-                // groupId 就是该组的 one-hot 版本位掩码，与 Header.VersionMask 同一套编码
-                if (16 > $len - $sp) break;
-                $this->groupIds[$gi] = $this->safeReadU16($sp);
-                $sp += 2;
-                $fldCount = $this->safeReadU16($sp);
-                $sp += 2;
-                $sp += 4;
-                $stride = $this->safeReadU32($sp);
-                $sp += 4;
-                $sp += 4;
-                if ($fldCount * 12 > $len - $sp) break;
-                $schemaFldCounts[$gi] = $fldCount;
 
-                if ($gi < $actualGroups) {
-                    if ($stride < 1 || $stride > 4096) {
-                        throw new QzdbException("Invalid GROUP_SCHEMA stride for group {$gi}: {$stride}", self::ERROR_CORRUPTED);
-                    }
-                    $this->groupStrides[$gi] = $stride;
-                    $widths = array_fill(0, $fldCount, 0);
-                    $offsets = array_fill(0, $fldCount, 0);
-                    $natives = array_fill(0, $fldCount, false);
-                    $natTypes = array_fill(0, $fldCount, 0);
-                    $fieldIds = array_fill(0, $fldCount, 0);
-                    $poolSectionIds = array_fill(0, $fldCount, 0);
-                    for ($fi = 0; $fi < $fldCount; $fi++) {
-                        $fieldIds[$fi] = $this->safeReadU16($sp);
-                        $sp += 2;
-                        $w = $this->readByte($sp);
-                        $sp += 1;
-                        $fieldFlags = $this->readByte($sp);
-                        $sp += 1;
-                        $isNative = ($fieldFlags & 0x01) !== 0;
-                        $natType = ($fieldFlags >> 1) & 0x03;
-                        $off = $this->safeReadU32($sp);
-                        $sp += 4;
-                        $poolSectionIds[$fi] = $this->safeReadU32($sp);
-                        $sp += 4;
-                        $validW = $isNative
-                            ? ($natType === 1 ? ($w === 4 || $w === 8) : ($w >= 1 && $w <= 4))
-                            : ($w >= 1 && $w <= 4);
-                        if (!$validW || $off < 0 || $off > $stride - $w) {
-                            throw new QzdbException(
-                                "Invalid GROUP_SCHEMA field {$gi}/{$fi}: width={$w}, offset={$off}, stride={$stride}",
-                                self::ERROR_CORRUPTED
-                            );
-                        }
-                        $widths[$fi] = $w;
-                        $natives[$fi] = $isNative;
-                        $natTypes[$fi] = $natType;
-                        $offsets[$fi] = $off;
-                    }
-                    $this->groupFieldWidths[$gi] = $widths;
-                    $this->groupFieldOffsets[$gi] = $offsets;
-                    $this->groupFieldNative[$gi] = $natives;
-                    $this->groupFieldNativeType[$gi] = $natTypes;
-                    $this->groupFieldIds[$gi] = $fieldIds;
-                    $this->groupPoolSectionIds[$gi] = $poolSectionIds;
-                } else {
-                    $sp += $fldCount * 12;
-                }
-            }
-        }
+        $schemaFldCounts = $this->parseGroupSchema($len, $actualGroups);
 
-        // 不变式：widths/offsets/native/nativeType/... [g] 的长度必须等于
-        // groupFieldCounts[g]。GroupMetadataTable 与 GROUP_SCHEMA 各报一个字段数，
-        // 真实文件必然一致；伪造文件可以把 GROUP_SCHEMA 的字段数改小，而所有
-        // 下游消费者（池加载、字段抽取）都按 groupFieldCounts[g] 迭代，于是踩到
-        // "Undefined array key N"。一旦发现不一致就整组丢弃 schema，交给下面的
-        // 默认布局重建（与 Rust/Go/C/Node/Python 同一套收口逻辑）。
         for ($g = 0; $g < $actualGroups; $g++) {
             if ($schemaFldCounts[$g] >= 0 && $schemaFldCounts[$g] !== $this->groupFieldCounts[$g]) {
                 $this->groupStrides[$g] = 0;
@@ -1832,44 +1756,87 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
                 $this->groupFieldIds[$g] = null;
                 $this->groupPoolSectionIds[$g] = null;
             }
-        }
-
-        for ($g = 0; $g < $actualGroups; $g++) {
-            if ($this->groupStrides[$g] === 0) {
-                $this->groupStrides[$g] = $this->groupFieldCounts[$g] * $this->poolIdxSize;
-            }
-            if ($this->groupFieldWidths[$g] === null) {
-                $this->groupFieldWidths[$g] = array_fill(0, $this->groupFieldCounts[$g], $this->poolIdxSize);
-            }
+            $fc = $this->groupFieldCounts[$g];
+            if ($this->groupStrides[$g] === 0) $this->groupStrides[$g] = $fc * $this->poolIdxSize;
+            if ($this->groupFieldWidths[$g] === null) $this->groupFieldWidths[$g] = array_fill(0, $fc, $this->poolIdxSize);
             if ($this->groupFieldOffsets[$g] === null) {
                 $tempOffsets = [];
-                for ($i = 0; $i < $this->groupFieldCounts[$g]; $i++) {
-                    $tempOffsets[] = $i * $this->poolIdxSize;
-                }
+                for ($i = 0; $i < $fc; $i++) $tempOffsets[] = $i * $this->poolIdxSize;
                 $this->groupFieldOffsets[$g] = $tempOffsets;
             }
-            if ($this->groupFieldNative[$g] === null) {
-                $this->groupFieldNative[$g] = array_fill(0, $this->groupFieldCounts[$g], false);
-            }
-            if ($this->groupFieldNativeType[$g] === null) {
-                $this->groupFieldNativeType[$g] = array_fill(0, $this->groupFieldCounts[$g], 0);
-            }
-            if ($this->groupFieldIds[$g] === null) {
-                $this->groupFieldIds[$g] = array_fill(0, $this->groupFieldCounts[$g], -1);
-            }
-            if ($this->groupPoolSectionIds[$g] === null) {
-                $this->groupPoolSectionIds[$g] = array_fill(0, $this->groupFieldCounts[$g], 0);
-            }
+            if ($this->groupFieldNative[$g] === null) $this->groupFieldNative[$g] = array_fill(0, $fc, false);
+            if ($this->groupFieldNativeType[$g] === null) $this->groupFieldNativeType[$g] = array_fill(0, $fc, 0);
+            if ($this->groupFieldIds[$g] === null) $this->groupFieldIds[$g] = array_fill(0, $fc, -1);
+            if ($this->groupPoolSectionIds[$g] === null) $this->groupPoolSectionIds[$g] = array_fill(0, $fc, 0);
             if ($this->groupEntryCounts[$g] > 0) {
                 $gStart = $this->offGeoEntries + $this->groupEntryOffsets[$g];
                 $chk($gStart, $this->groupEntryCounts[$g] * $this->groupStrides[$g], "group_{$g}_entries");
             }
         }
+    }
 
-        $this->resolveFieldNames();
-        $this->repairDimMasks();
-        $this->poolsLoaded = false;
-        $this->groupPoolDescs = null;
+    private function parseGroupSchema(int $len, int $actualGroups): array
+    {
+        $schemaFldCounts = array_fill(0, $actualGroups, -1);
+        if ($this->offGroupSchema <= 0) {
+            return $schemaFldCounts;
+        }
+        $sp = $this->offGroupSchema;
+        $gsGroupCount = $this->safeReadU16($sp);
+        $sp += 2;
+        $maxGsGroups = min($gsGroupCount, $actualGroups);
+        for ($gi = 0; $gi < $maxGsGroups; $gi++) {
+            if (16 > $len - $sp) break;
+            $this->groupIds[$gi] = $this->safeReadU16($sp);
+            $sp += 2;
+            $fldCount = $this->safeReadU16($sp);
+            $sp += 6; // fldCount(2) + entryCount(4)
+            $stride = $this->safeReadU32($sp);
+            $sp += 8; // stride(4) + flags(4)
+            if ($fldCount * 12 > $len - $sp) break;
+            $schemaFldCounts[$gi] = $fldCount;
+
+            if ($stride < 1 || $stride > 4096) {
+                throw new QzdbException("Invalid GROUP_SCHEMA stride for group {$gi}: {$stride}", self::ERROR_CORRUPTED);
+            }
+            $this->groupStrides[$gi] = $stride;
+            $widths = array_fill(0, $fldCount, 0);
+            $offsets = array_fill(0, $fldCount, 0);
+            $natives = array_fill(0, $fldCount, false);
+            $natTypes = array_fill(0, $fldCount, 0);
+            $fieldIds = array_fill(0, $fldCount, 0);
+            $poolSectionIds = array_fill(0, $fldCount, 0);
+            for ($fi = 0; $fi < $fldCount; $fi++) {
+                $fieldIds[$fi] = $this->safeReadU16($sp);
+                $w = $this->readByte($sp + 2);
+                $fieldFlags = $this->readByte($sp + 3);
+                $isNative = ($fieldFlags & 0x01) !== 0;
+                $natType = ($fieldFlags >> 1) & 0x03;
+                $off = $this->safeReadU32($sp + 4);
+                $poolSectionIds[$fi] = $this->safeReadU32($sp + 8);
+                $sp += 12;
+                $validW = $isNative
+                    ? ($natType === 1 ? ($w === 4 || $w === 8) : ($w >= 1 && $w <= 4))
+                    : ($w >= 1 && $w <= 4);
+                if (!$validW || $off < 0 || $off > $stride - $w) {
+                    throw new QzdbException(
+                        "Invalid GROUP_SCHEMA field {$gi}/{$fi}: width={$w}, offset={$off}, stride={$stride}",
+                        self::ERROR_CORRUPTED
+                    );
+                }
+                $widths[$fi] = $w;
+                $natives[$fi] = $isNative;
+                $natTypes[$fi] = $natType;
+                $offsets[$fi] = $off;
+            }
+            $this->groupFieldWidths[$gi] = $widths;
+            $this->groupFieldOffsets[$gi] = $offsets;
+            $this->groupFieldNative[$gi] = $natives;
+            $this->groupFieldNativeType[$gi] = $natTypes;
+            $this->groupFieldIds[$gi] = $fieldIds;
+            $this->groupPoolSectionIds[$gi] = $poolSectionIds;
+        }
+        return $schemaFldCounts;
     }
 
     /**
@@ -2048,28 +2015,36 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $sp = $this->offRowSchema;
         $fCount = $this->readByte($sp);
         $stride = $this->readByte($sp + 1);
-        if ($fCount < 1 || $fCount > 8) return;
-        if ($sp + 4 + $fCount * 4 > $this->fileSize) return;
-        if ($stride != $this->ipRowSize) return;
+        if ($fCount < 1 || $fCount > 8 || $stride !== $this->ipRowSize || $sp + 4 + $fCount * 4 > $this->fileSize) {
+            throw new QzdbException(
+                "Invalid ROW_SCHEMA (fieldCount={$fCount}, stride={$stride}, ipRowSize={$this->ipRowSize})",
+                self::ERROR_CORRUPTED
+            );
+        }
 
         $geoW = 0; $asnW = 0; $usageW = 0; $total = 0;
         $wpos = $sp + 4;
-        $ok = true;
         for ($i = 0; $i < $fCount; $i++) {
             $fid = $this->readByte($wpos);
             $w = $this->readByte($wpos + 1);
+            if ($w < 1 || $w > 4) {
+                throw new QzdbException("Invalid ROW_SCHEMA field width: {$w}", self::ERROR_CORRUPTED);
+            }
             if ($fid === 0) $geoW = $w;
             elseif ($fid === 1) $asnW = $w;
             elseif ($fid === 2) $usageW = $w;
             $wpos += 4;
             $total += $w;
-            if ($w < 1 || $w > 4) $ok = false;
         }
-        if ($ok && $total === $this->ipRowSize) {
-            $this->rowGeoWidth = $geoW;
-            $this->rowAsnWidth = $asnW;
-            $this->rowUsageWidth = $usageW;
+        if ($total !== $this->ipRowSize) {
+            throw new QzdbException(
+                "ROW_SCHEMA width sum ({$total}) != ipRowSize ({$this->ipRowSize})",
+                self::ERROR_CORRUPTED
+            );
         }
+        $this->rowGeoWidth = $geoW;
+        $this->rowAsnWidth = $asnW;
+        $this->rowUsageWidth = $usageW;
     }
 
     // ------------------------------------------------------------------

@@ -1409,206 +1409,158 @@ class QzdbReader:
         _chk(self._off_row_schema, 4, 'row_schema')
         _chk(self._off_group_schema, 2, 'group_schema')
 
-        # ROW_SCHEMA parsing (v5 dynamic-width IPRow schema).
-        # On-disk layout (matches C# QZDBReader.ParseRowSchema AND the builder's
-        # WriteQzdbFile serialization):
+        self._parse_row_schema(d, dlen)
+        self._parse_groups(d, dlen, _chk)
+        self._resolve_field_names()
+        self._repair_dim_masks()
+        self._build_trie_arrays()
+
+    def _parse_row_schema(self, d, dlen):
+        # ROW_SCHEMA parsing (v5 dynamic-width IPRow schema):
         #   byte[sp+0]     = fieldCount
         #   byte[sp+1]     = stride (== IPRowSize)
         #   byte[sp+2..3]  = reserved (uint16)
-        #   then per field (4 bytes): FieldId(1) | Width(1) | FieldOffset(1) | flags(1)
-        # Field ids: 0 = geo_id, 1 = asn_id, 2 = usage_type_id.
-        #
-        # NOTE: an earlier parser read fieldCount at sp+5 and the first field at
-        # sp+9, which skipped the geo dimension (fid=0) and mis-read the asn row
-        # width. That collapsed every real ASN to the default 56554 entry — the
-        # "解析不对" regression that caused customer refunds.
+        #   per field (4B): FieldId(1) | Width(1) | FieldOffset(1) | flags(1)
         self._row_geo_width = 3
         self._row_asn_width = 3
         self._row_usage_width = 0
-        if self._off_row_schema > 0:
-            sp = self._off_row_schema
-            f_count = d[sp] & 0xFF
-            schema_stride = d[sp + 1] & 0xFF
-            wpos = sp + 4
-            # The declared field count is attacker-controlled; refuse a schema
-            # whose descriptor array does not fit in the buffer instead of
-            # walking past the end of the file.
-            if f_count * 4 > dlen - wpos:
-                raise QzdbError(
-                    f'ROW_SCHEMA truncated (fieldCount={f_count}, offset={sp}, size={dlen})',
-                    QzdbError.CORRUPTED,
-                )
-            geo_w, asn_w, usage_w = 0, 0, 0
-            for _ in range(f_count):
-                fid = d[wpos]
-                w = d[wpos + 1]
-                if fid == 0:
-                    geo_w = w
-                elif fid == 1:
-                    asn_w = w
-                elif fid == 2:
-                    usage_w = w
-                wpos += 4
-            if schema_stride == self._ip_row_size and (geo_w + asn_w + usage_w) == self._ip_row_size:
-                self._row_geo_width = geo_w
-                self._row_asn_width = asn_w
-                self._row_usage_width = usage_w
-            # else (schema absent or inconsistent): keep fallback defaults (geo=3, asn=3, usage=0)
+        if self._off_row_schema <= 0:
+            return
+        sp = self._off_row_schema
+        f_count = d[sp] & 0xFF
+        schema_stride = d[sp + 1] & 0xFF
+        wpos = sp + 4
+        if f_count < 1 or f_count > 8 or schema_stride != self._ip_row_size or f_count * 4 > dlen - wpos:
+            raise QzdbError(
+                f'Invalid ROW_SCHEMA (fieldCount={f_count}, stride={schema_stride}, ipRowSize={self._ip_row_size})',
+                QzdbError.CORRUPTED,
+            )
+        geo_w, asn_w, usage_w, total_w = 0, 0, 0, 0
+        for _ in range(f_count):
+            fid = d[wpos]
+            w = d[wpos + 1]
+            if w < 1 or w > 4:
+                raise QzdbError(f'Invalid ROW_SCHEMA field width: {w}', QzdbError.CORRUPTED)
+            if fid == 0:
+                geo_w = w
+            elif fid == 1:
+                asn_w = w
+            elif fid == 2:
+                usage_w = w
+            total_w += w
+            wpos += 4
+        if total_w != self._ip_row_size:
+            raise QzdbError(
+                f'ROW_SCHEMA width sum ({total_w}) != ip_row_size ({self._ip_row_size})',
+                QzdbError.CORRUPTED,
+            )
+        self._row_geo_width = geo_w
+        self._row_asn_width = asn_w
+        self._row_usage_width = usage_w
 
+    def _parse_groups(self, d, dlen, chk):
         # GeoEntryOffsets[4]
-        self._group_entry_offsets = []
-        for i in range(4):
-            self._group_entry_offsets.append(self.safe_read_u48(168 + i * 6))
+        self._group_entry_offsets = [self.safe_read_u48(168 + i * 6) for i in range(4)]
 
         # Parse GroupMetadataTable (at off_geo_entries).
-        # §6.2: current format stores, per group, a 1-byte fieldCount, a
-        # uint32 LE entryCount, and a uint16 LE dimensionMask — fixed widths,
-        # no version-dependent layout. (HeaderVersion != 1 is already rejected
-        # above, so no legacy width branching is needed here.)
         gm_off = self._off_geo_entries
         group_count = self.safe_read_u8(gm_off)
         gm_off += 1
 
-        actual_groups = min(group_count, max(1, self._geo_entry_group_count))
-        actual_groups = min(actual_groups, 4)
-        # A file with zero groups carries no queryable dimension at all; reject
-        # it rather than building an empty reader that would IndexError later
-        # (same contract as the Rust/Go readers).
+        actual_groups = min(group_count, max(1, self._geo_entry_group_count), 4)
         if actual_groups < 1:
             raise QzdbError('GroupMetadataTable groupCount is 0', QzdbError.CORRUPTED)
-        # Each group entry is fieldCount(1) + entryCount(4) + dimensionMask(2).
         if actual_groups * 7 > dlen - gm_off:
             raise QzdbError('GroupMetadataTable truncated', QzdbError.CORRUPTED)
         self._group_field_counts = [0] * actual_groups
         self._group_entry_counts = [0] * actual_groups
         self._group_dim_masks = [0] * actual_groups
-        # Per-group edition bitmask from GROUP_SCHEMA.groupId (0 = not declared).
         self._group_ids = [0] * actual_groups
 
         for gi in range(actual_groups):
             self._group_field_counts[gi] = self.safe_read_u8(gm_off)
             gm_off += 1
-            # §6.2: entryCount is always uint32 LE in the current format.
             self._group_entry_counts[gi] = self.safe_read_u32(gm_off)
             gm_off += 4
-            # §6.2: dimensionMask is always present (uint16 LE). A value of 0
-            # only occurs in a malformed/legacy file and is repaired below from
-            # the group's actual field composition (no groupIndex hardcoding).
             self._group_dim_masks[gi] = self.safe_read_u16(gm_off)
             gm_off += 2
 
-        # Initialize schema and widths
         self._group_strides = [0] * actual_groups
         self._group_field_widths = [None] * actual_groups
         self._group_field_offsets = [None] * actual_groups
         self._group_field_native = [None] * actual_groups
         self._group_field_native_type = [None] * actual_groups
 
-        # Field count declared by GROUP_SCHEMA for each group. This is a *second*
-        # source of truth next to GroupMetadataTable's fieldCount; a forged file
-        # can make the two disagree, and every consumer indexes the width /
-        # offset / native arrays by the GroupMetadataTable value. The mismatch is
-        # reconciled right after the walk (see the invariant block below).
         schema_fld_counts = [None] * actual_groups
-
-        # Parse GROUP_SCHEMA if present
         if self._off_group_schema > 0:
             sp = self._off_group_schema
             gs_group_count = self.safe_read_u16(sp)
             sp += 2
-            max_gs_groups = min(gs_group_count, actual_groups)
-            for gi in range(max_gs_groups):
-                # Per-group header is 16 bytes: groupId(2) fldCount(2)
-                # entryCount(4) stride(4) flags(4). Stop the walk as soon as the
-                # declared layout would run past the buffer — the groups already
-                # parsed stay valid and the rest fall back to defaults below.
+            for gi in range(min(gs_group_count, actual_groups)):
                 if 16 > dlen - sp:
                     break
-                # groupId is the per-group one-hot edition bitmask (FORMAT §3.1).
-                # It is the authoritative edition signal for this group and must
-                # not be skipped — see _resolve_field_names().
-                group_id = self.safe_read_u16(sp)
+                self._group_ids[gi] = self.safe_read_u16(sp)
                 sp += 2
-                if gi < len(self._group_ids):
-                    self._group_ids[gi] = group_id
                 fld_count = self.safe_read_u16(sp)
-                sp += 2
-                sp += 4  # skip entryCount (uint32)
+                sp += 6  # fldCount(2) + skip entryCount(4)
                 stride = self.safe_read_u32(sp)
-                sp += 4
-                sp += 4  # skip flags
+                sp += 8  # stride(4) + skip flags(4)
                 if fld_count * 12 > dlen - sp:
                     break
                 schema_fld_counts[gi] = fld_count
-
-                if gi < actual_groups:
-                    if stride < 1 or stride > 4096:
-                        raise QzdbError(f'Invalid GROUP_SCHEMA stride for group {gi}: {stride}', QzdbError.CORRUPTED)
-                    self._group_strides[gi] = stride
-                    widths = [0] * fld_count
-                    offsets = [0] * fld_count
-                    natives = [False] * fld_count
-                    nat_types = [0] * fld_count
-                    for fi in range(fld_count):
-                        # fieldId is just the slot ordinal (0..N-1); it carries no
-                        # cross-edition semantics, so it is read and discarded.
-                        sp += 2
-                        w = d[sp]
-                        sp += 1
-                        field_flags = d[sp]
-                        sp += 1
-                        is_native = (field_flags & 0x01) != 0
-                        nat_type = (field_flags >> 1) & 0x03
-                        off = self.safe_read_u32(sp)
-                        sp += 4
-                        sp += 4  # skip poolSectionId
-                        valid_w = ((w in (4, 8)) if nat_type == 1 else (1 <= w <= 4)) if is_native else (1 <= w <= 4)
-                        if not valid_w or off < 0 or off > stride - w:
-                            raise QzdbError(
-                                f'Invalid GROUP_SCHEMA field {gi}/{fi}: width={w}, offset={off}, stride={stride}',
-                                QzdbError.CORRUPTED,
-                            )
-                        widths[fi] = w
-                        natives[fi] = is_native
-                        nat_types[fi] = nat_type
-                        offsets[fi] = off
-                    self._group_field_widths[gi] = widths
-                    self._group_field_offsets[gi] = offsets
-                    self._group_field_native[gi] = natives
-                    self._group_field_native_type[gi] = nat_types
-                else:
-                    sp += fld_count * 12
+                if stride < 1 or stride > 4096:
+                    raise QzdbError(f'Invalid GROUP_SCHEMA stride for group {gi}: {stride}', QzdbError.CORRUPTED)
+                self._group_strides[gi] = stride
+                widths = [0] * fld_count
+                offsets = [0] * fld_count
+                natives = [False] * fld_count
+                nat_types = [0] * fld_count
+                for fi in range(fld_count):
+                    sp += 2  # skip slot ordinal fieldId
+                    w = d[sp]
+                    field_flags = d[sp + 1]
+                    sp += 2
+                    is_native = (field_flags & 0x01) != 0
+                    nat_type = (field_flags >> 1) & 0x03
+                    off = self.safe_read_u32(sp)
+                    sp += 8  # off(4) + skip poolSectionId(4)
+                    valid_w = ((w in (4, 8)) if nat_type == 1 else (1 <= w <= 4)) if is_native else (1 <= w <= 4)
+                    if not valid_w or off < 0 or off > stride - w:
+                        raise QzdbError(
+                            f'Invalid GROUP_SCHEMA field {gi}/{fi}: width={w}, offset={off}, stride={stride}',
+                            QzdbError.CORRUPTED,
+                        )
+                    widths[fi] = w
+                    natives[fi] = is_native
+                    nat_types[fi] = nat_type
+                    offsets[fi] = off
+                self._group_field_widths[gi] = widths
+                self._group_field_offsets[gi] = offsets
+                self._group_field_native[gi] = natives
+                self._group_field_native_type[gi] = nat_types
 
         # INVARIANT: len(widths/offsets/native/native_type[g]) == group_field_counts[g].
         for g in range(actual_groups):
-            if schema_fld_counts[g] is None:
-                continue
-            if schema_fld_counts[g] != self._group_field_counts[g]:
+            if schema_fld_counts[g] is not None and schema_fld_counts[g] != self._group_field_counts[g]:
                 self._group_strides[g] = 0
                 self._group_field_widths[g] = None
                 self._group_field_offsets[g] = None
                 self._group_field_native[g] = None
                 self._group_field_native_type[g] = None
-
-        # Fallback for groups without schema info + uniform section bounds check
-        for g in range(actual_groups):
+            fc = self._group_field_counts[g]
             if self._group_strides[g] == 0:
-                self._group_strides[g] = self._group_field_counts[g] * self._pool_idx_size
+                self._group_strides[g] = fc * self._pool_idx_size
             if self._group_field_widths[g] is None:
-                self._group_field_widths[g] = [self._pool_idx_size] * self._group_field_counts[g]
+                self._group_field_widths[g] = [self._pool_idx_size] * fc
             if self._group_field_offsets[g] is None:
-                self._group_field_offsets[g] = [i * self._pool_idx_size for i in range(self._group_field_counts[g])]
+                self._group_field_offsets[g] = [i * self._pool_idx_size for i in range(fc)]
             if self._group_field_native[g] is None:
-                self._group_field_native[g] = [False] * self._group_field_counts[g]
+                self._group_field_native[g] = [False] * fc
             if self._group_field_native_type[g] is None:
-                self._group_field_native_type[g] = [0] * self._group_field_counts[g]
+                self._group_field_native_type[g] = [0] * fc
             if self._group_entry_counts[g] > 0:
                 g_start = self._off_geo_entries + self._group_entry_offsets[g]
-                _chk(g_start, self._group_entry_counts[g] * self._group_strides[g], f'group_{g}_entries')
-
-        self._resolve_field_names()
-        self._repair_dim_masks()
-        self._build_trie_arrays()
+                chk(g_start, self._group_entry_counts[g] * self._group_strides[g], f'group_{g}_entries')
 
     def _build_trie_arrays(self):
         """把跳表与 Trie 节点装入 C 连续 array('I')，热路径免 struct.unpack_from（约快 2.3-2.8x）。"""
@@ -2492,164 +2444,202 @@ class QzdbReader:
     def _cidr_walk_v4(self, ip_int):
         if not self._has_v4 or self._off_v4_jump <= 0:
             return 0, 0
+        jump = self._v4_jump_arr
+        nodes = self._v4_nodes_arr
+        v4_node_count = self._v4_node_count
+        if jump is not None and (nodes is not None or v4_node_count == 0):
+            ptr = jump[(ip_int >> 16) & 0xFFFF]
+            if ptr == 0:
+                return 0, 0
+            if ptr & 0x80000000:
+                idx, n = 0, 16
+                for depth in range(16):
+                    if idx >= v4_node_count:
+                        break
+                    child = nodes[(idx << 1) | ((ip_int >> (31 - depth)) & 1)]
+                    if child & 0x80000000:
+                        n = depth + 1
+                        break
+                    if child == 0:
+                        break
+                    idx = child
+                return ptr & 0x7FFFFFFF, n
+            idx = ptr
+            suffix = (ip_int & 0xFFFF) << 16
+            for step in range(1, 17):
+                if idx >= v4_node_count:
+                    return 0, 0
+                child = nodes[(idx << 1) | ((suffix >> 31) & 1)]
+                if child & 0x80000000:
+                    return child & 0x7FFFFFFF, 16 + step
+                if child == 0:
+                    return 0, 0
+                idx = child
+                suffix <<= 1
+            return 0, 0
+
+        # 回退路径（仅当节点数超过 array('I') 上限时触发）
         d = self._data
         off_jump = self._off_v4_jump
         off_nodes = self._off_v4_nodes
         v4_node_24 = self._v4_node_24
-        hi16 = (ip_int >> 16) & 0xFFFF
-        ptr = _unpack_u32_from(d, off_jump + hi16 * 4)[0]
+        ptr = _unpack_u32_from(d, off_jump + ((ip_int >> 16) & 0xFFFF) * 4)[0]
         if ptr == 0:
             return 0, 0
         if ptr & SENTINEL:
-            # 跳表哨兵:该行的真实前缀可能短于跳表位数(短范围哨兵存于 trie 浅层),
-            # 跳表深度不是真实前缀。从根重走恢复真实前缀(对齐 C/Go/Node);
-            # 未命中更浅哨兵回落 16。实测 max_global:224.0.0.1 真值 224.0.0.0/4。
             idx, n = 0, 16
             for depth in range(16):
-                if idx >= self._v4_node_count:
+                if idx >= v4_node_count:
                     break
                 bit = (ip_int >> (31 - depth)) & 1
-                if v4_node_24:
-                    noff = off_nodes + idx * 6
-                    off = noff if bit == 0 else noff + 3
-                    try:
-                        child = _unpack_u32_from(d, off)[0] & 0xFFFFFF  # 1 次 C 调用替代 3 次下标
-                    except struct.error:  # 节点区紧贴 EOF 时退回逐字节读
-                        child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
-                    if child & 0x800000:
-                        n = depth + 1
-                        break
-                else:
-                    child = _unpack_u32_from(d, off_nodes + idx * 8 + bit * 4)[0]
-                    if child & SENTINEL:
-                        n = depth + 1
-                        break
+                child = self._read_raw_child(d, off_nodes, idx, bit, v4_node_24)
+                if child & SENTINEL:
+                    n = depth + 1
+                    break
                 if child == 0:
                     break
                 idx = child
             return ptr & SENTINEL_MASK_31, n
         idx = ptr
         suffix = (ip_int & 0xFFFF) << 16
-        if v4_node_24:
-            for step in range(1, 17):
-                bit = (suffix >> 31) & 1
-                if idx >= self._v4_node_count:
-                    return 0, 0
-                noff = off_nodes + idx * 6
-                off = noff if bit == 0 else noff + 3
-                try:
-                    child = _unpack_u32_from(d, off)[0] & 0xFFFFFF  # 1 次 C 调用替代 3 次下标
-                except struct.error:  # 节点区紧贴 EOF 时退回逐字节读
-                    child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
-                if child & 0x800000:
-                    return child & 0x7FFFFF, 16 + step
-                if child == 0:
-                    return 0, 0
-                idx = child
-                suffix <<= 1
-        else:
-            for step in range(1, 17):
-                bit = (suffix >> 31) & 1
-                if idx >= self._v4_node_count:
-                    return 0, 0
-                child = _unpack_u32_from(d, off_nodes + idx * 8 + bit * 4)[0]
-                if child & SENTINEL:
-                    return child & SENTINEL_MASK_31, 16 + step
-                if child == 0:
-                    return 0, 0
-                idx = child
-                suffix <<= 1
+        for step in range(1, 17):
+            if idx >= v4_node_count:
+                return 0, 0
+            child = self._read_raw_child(d, off_nodes, idx, (suffix >> 31) & 1, v4_node_24)
+            if child & SENTINEL:
+                return child & SENTINEL_MASK_31, 16 + step
+            if child == 0:
+                return 0, 0
+            idx = child
+            suffix <<= 1
         return 0, 0
 
     def _cidr_walk_v6(self, ip_int):
         if not self._has_v6 or self._off_v6_jump <= 0:
             return 0, 0
+        jump = self._v6_jump_arr
+        nodes = self._v6_nodes_arr
+        v6_node_count = self._v6_node_count
+        jump_bits = self._v6_jump_bits
+        idx_jump = (ip_int >> (128 - jump_bits)) & ((1 << jump_bits) - 1)
+        if jump is not None and (nodes is not None or v6_node_count == 0):
+            ptr = jump[idx_jump]
+            if ptr == 0:
+                return 0, 0
+            if ptr & 0x80000000:
+                idx, n = 0, jump_bits
+                for depth in range(jump_bits):
+                    if idx >= v6_node_count:
+                        break
+                    child = nodes[(idx << 1) | ((ip_int >> (127 - depth)) & 1)]
+                    if child & 0x80000000:
+                        n = depth + 1
+                        break
+                    if child == 0:
+                        break
+                    idx = child
+                return ptr & 0x7FFFFFFF, n
+            idx = ptr
+            for depth in range(jump_bits, 128):
+                if idx >= v6_node_count:
+                    return 0, 0
+                child = nodes[(idx << 1) | ((ip_int >> (127 - depth)) & 1)]
+                if child & 0x80000000:
+                    return child & 0x7FFFFFFF, depth + 1
+                if child == 0:
+                    return 0, 0
+                idx = child
+            return 0, 0
+
+        # 回退路径
         d = self._data
-        off_jump = self._off_v6_jump
         off_nodes = self._off_v6_nodes
         v6_node_24 = self._v6_node_24
-        jump_bits = self._v6_jump_bits
-        shift = 128 - jump_bits
-        idx_jump = (ip_int >> shift) & ((1 << jump_bits) - 1)
-        ptr = _unpack_u32_from(d, off_jump + idx_jump * 4)[0]
+        ptr = _unpack_u32_from(d, self._off_v6_jump + idx_jump * 4)[0]
         if ptr == 0:
             return 0, 0
         if ptr & SENTINEL:
-            # 跳表哨兵:该行的真实前缀可能短于跳表位数(短范围哨兵存于 trie 浅层),
-            # 跳表深度不是真实前缀。从根重走恢复真实前缀(对齐 C/Go/Node 的
-            # 根重走设计);未命中更浅哨兵回落 jump_bits。实测 max_global:
-            # fe80::1 真值 fe80::/10(链路本地),旧实现误报 fe80::/20。
             idx, n = 0, jump_bits
             for depth in range(jump_bits):
-                if idx >= self._v6_node_count:
+                if idx >= v6_node_count:
                     break
-                bit = (ip_int >> (127 - depth)) & 1
-                if v6_node_24:
-                    noff = off_nodes + idx * 6
-                    off = noff if bit == 0 else noff + 3
-                    try:
-                        child = _unpack_u32_from(d, off)[0] & 0xFFFFFF  # 1 次 C 调用替代 3 次下标
-                    except struct.error:  # 节点区紧贴 EOF 时退回逐字节读
-                        child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
-                    if child & 0x800000:
-                        n = depth + 1
-                        break
-                else:
-                    child = _unpack_u32_from(d, off_nodes + idx * 8 + bit * 4)[0]
-                    if child & SENTINEL:
-                        n = depth + 1
-                        break
+                child = self._read_raw_child(d, off_nodes, idx, (ip_int >> (127 - depth)) & 1, v6_node_24)
+                if child & SENTINEL:
+                    n = depth + 1
+                    break
                 if child == 0:
                     break
                 idx = child
             return ptr & SENTINEL_MASK_31, n
         idx = ptr
-        if v6_node_24:
-            for depth in range(jump_bits, 128):
-                bit = (ip_int >> (127 - depth)) & 1
-                if idx >= self._v6_node_count:
-                    return 0, 0
-                noff = off_nodes + idx * 6
-                off = noff if bit == 0 else noff + 3
-                try:
-                    child = _unpack_u32_from(d, off)[0] & 0xFFFFFF  # 1 次 C 调用替代 3 次下标
-                except struct.error:  # 节点区紧贴 EOF 时退回逐字节读
-                    child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
-                if child & 0x800000:
-                    return child & 0x7FFFFF, depth + 1
-                if child == 0:
-                    return 0, 0
-                idx = child
-        else:
-            for depth in range(jump_bits, 128):
-                bit = (ip_int >> (127 - depth)) & 1
-                if idx >= self._v6_node_count:
-                    return 0, 0
-                child = _unpack_u32_from(d, off_nodes + idx * 8 + bit * 4)[0]
-                if child & SENTINEL:
-                    return child & SENTINEL_MASK_31, depth + 1
-                if child == 0:
-                    return 0, 0
-                idx = child
+        for depth in range(jump_bits, 128):
+            if idx >= v6_node_count:
+                return 0, 0
+            child = self._read_raw_child(d, off_nodes, idx, (ip_int >> (127 - depth)) & 1, v6_node_24)
+            if child & SENTINEL:
+                return child & SENTINEL_MASK_31, depth + 1
+            if child == 0:
+                return 0, 0
+            idx = child
         return 0, 0
 
     @staticmethod
+    def _read_raw_child(d, off_nodes, idx, bit, is_24):
+        if is_24:
+            off = off_nodes + idx * 6 + (3 if bit else 0)
+            try:
+                v = _unpack_u32_from(d, off)[0] & 0xFFFFFF
+            except struct.error:
+                v = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
+            return ((v & 0x7FFFFF) | SENTINEL) if (v & 0x800000) else v
+        return _unpack_u32_from(d, off_nodes + idx * 8 + bit * 4)[0]
+
+    @staticmethod
     def _format_cidr_v4(ip_int, prefix):
-        if prefix >= 32:
-            mask = 0xFFFFFFFF
+        if prefix <= 0:
+            net = 0
+        elif prefix >= 32:
+            net = ip_int & 0xFFFFFFFF
         else:
-            mask = (~((1 << (32 - prefix)) - 1)) & 0xFFFFFFFF
-        net = ip_int & mask
-        return f'{ipaddress.IPv4Address(net)}/{prefix}'
+            net = ip_int & ((0xFFFFFFFF << (32 - prefix)) & 0xFFFFFFFF)
+        return f'{(net >> 24) & 0xFF}.{(net >> 16) & 0xFF}.{(net >> 8) & 0xFF}.{net & 0xFF}/{prefix}'
 
     @staticmethod
     def _format_cidr_v6(ip_int, prefix):
-        if prefix >= 128:
-            mask = (1 << 128) - 1
+        if prefix <= 0:
+            net = 0
+        elif prefix >= 128:
+            net = ip_int
         else:
-            mask = (~((1 << (128 - prefix)) - 1)) & ((1 << 128) - 1)
-        net = ip_int & mask
-        return f'{ipaddress.IPv6Address(net)}/{prefix}'
+            shift = 128 - prefix
+            net = (ip_int >> shift) << shift
+        g = [((net >> (112 - i * 16)) & 0xFFFF) for i in range(8)]
+        # RFC 5952：最长连续全零段（长度 >= 2 才压缩，并列取最左）
+        best_s = -1
+        best_l = 0
+        cur_s = -1
+        cur_l = 0
+        for i, v in enumerate(g):
+            if v == 0:
+                if cur_s < 0:
+                    cur_s = i
+                    cur_l = 1
+                else:
+                    cur_l += 1
+            else:
+                if cur_l > best_l:
+                    best_s = cur_s
+                    best_l = cur_l
+                cur_s = -1
+                cur_l = 0
+        if cur_l > best_l:
+            best_s = cur_s
+            best_l = cur_l
+        if best_l >= 2:
+            left = ':'.join(f'{x:x}' for x in g[:best_s])
+            right = ':'.join(f'{x:x}' for x in g[best_s + best_l:])
+            return f'{left}::{right}/{prefix}'
+        return ':'.join(f'{x:x}' for x in g) + f'/{prefix}'
 
     @_on_snapshot
     def lookup_cidr(self, ip_str):

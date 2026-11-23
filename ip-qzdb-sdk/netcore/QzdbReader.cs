@@ -299,6 +299,8 @@ public sealed class QzdbReader : IDisposable
         /// </summary>
         internal void DisposeOwner() => ((IDisposable?)_dataOwner)?.Dispose();
 
+        private static uint _warmupDrain;
+
         /// <summary>
         /// 主动触碰跳表与节点内存页（按 4096 字节步长），消除冷页在首查时的抖动。
         /// 在 Reload 中于 PublishSnapshot 前调用，确保新快照的页面已预热入 OS Page Cache。
@@ -333,7 +335,7 @@ public sealed class QzdbReader : IDisposable
                     for (long p = nStart; p < nEnd; p += PageSize) touchSum ^= span[(int)p];
                 }
             }
-            _ = touchSum;
+            Volatile.Write(ref _warmupDrain, touchSum);
             GC.KeepAlive(this);
         }
 
@@ -677,67 +679,7 @@ public sealed class QzdbReader : IDisposable
                 _groupEntryOffsets[gi] = _offGeoEntries + headerGeoOffsets[gi];
             }
 
-            if (_offGroupSchema > 0 && _offGroupSchema + 2 <= _dataLen)
-            {
-                int sp = (int)_offGroupSchema;
-                int gsGroupCount = BinaryPrimitives.ReadUInt16LittleEndian(span[sp..]);
-                int maxGsGroups = Math.Min(gsGroupCount, groups);
-                sp += 2;
-                for (int gi = 0; gi < maxGsGroups; gi++)
-                {
-                    if (sp + 14 > _dataLen)
-                        throw new QzdbException(ErrorCode.Corrupted, "Group schema is truncated");
-                    // groupId is this group's one-hot edition bitmask (FORMAT §3.1) — the
-                    // authoritative edition signal for the group, consumed by ParseMetadata().
-                    _groupIds[gi] = BinaryPrimitives.ReadUInt16LittleEndian(span[sp..]);
-                    sp += 2;
-                    int fldCount = BinaryPrimitives.ReadUInt16LittleEndian(span[sp..]);
-                    sp += 2;
-                    sp += 4;
-                    int stride = BinaryPrimitives.ReadInt32LittleEndian(span[sp..]);
-                    sp += 4;
-                    sp += 4;
-                    if (stride <= 0 || stride > 4096)
-                        throw new QzdbException(ErrorCode.Corrupted, "Invalid group schema stride");
-
-                    if (fldCount != _groupFieldCounts[gi] || fldCount > 256 || sp + (long)fldCount * 12 > _dataLen)
-                        throw new QzdbException(ErrorCode.Corrupted, "Invalid group schema field count");
-
-                    _groupStrides[gi] = stride;
-                    var widths = new int[fldCount];
-                    var offsets = new int[fldCount];
-                    var natives = new bool[fldCount];
-                    var natTypes = new int[fldCount];
-                    for (int fi = 0; fi < fldCount; fi++)
-                    {
-                        // fieldId is just the slot ordinal (0..N-1); no cross-edition meaning.
-                        sp += 2;
-                        widths[fi] = span[sp];
-                        if (widths[fi] is < 1 or > 8)
-                            throw new QzdbException(ErrorCode.Corrupted, "Invalid group field width");
-                        sp++;
-                        int fieldFlags = span[sp];
-                        sp++;
-                        bool native = (fieldFlags & 0x01) != 0;
-                        int nativeType = (fieldFlags >> 1) & 0x03;
-                        if ((!native && widths[fi] > 4) ||
-                            (native && nativeType == 1 && widths[fi] is not (4 or 8)) ||
-                            (native && nativeType != 1 && widths[fi] > 4))
-                            throw new QzdbException(ErrorCode.Corrupted, "Invalid native field width");
-                        natives[fi] = native;
-                        natTypes[fi] = nativeType;
-                        offsets[fi] = BinaryPrimitives.ReadInt32LittleEndian(span[sp..]);
-                        if (offsets[fi] < 0 || offsets[fi] > stride - widths[fi])
-                            throw new QzdbException(ErrorCode.Corrupted, "Group field exceeds stride");
-                        sp += 4;
-                        sp += 4;
-                    }
-                    _groupFieldWidths[gi] = widths;
-                    _groupFieldOffsets[gi] = offsets;
-                    _groupFieldNative[gi] = natives;
-                    _groupFieldNativeType[gi] = natTypes;
-                }
-            }
+            ParseGroupSchema(span, groups);
 
             for (int g = 0; g < groups; g++)
             {
@@ -756,6 +698,69 @@ public sealed class QzdbReader : IDisposable
                     throw new QzdbException(ErrorCode.Corrupted, "Invalid group stride");
                 CheckSection(_groupEntryOffsets[g], _groupEntryCounts[g] * (long)_groupStrides[g], _dataLen,
                     $"group_{g}_entries", required: true);
+            }
+        }
+
+        private void ParseGroupSchema(ReadOnlySpan<byte> span, int groups)
+        {
+            if (_offGroupSchema <= 0 || _offGroupSchema + 2 > _dataLen) return;
+            int sp = (int)_offGroupSchema;
+            int gsGroupCount = BinaryPrimitives.ReadUInt16LittleEndian(span[sp..]);
+            int maxGsGroups = Math.Min(gsGroupCount, groups);
+            sp += 2;
+            for (int gi = 0; gi < maxGsGroups; gi++)
+            {
+                if (sp + 14 > _dataLen)
+                    throw new QzdbException(ErrorCode.Corrupted, "Group schema is truncated");
+                // groupId is this group's one-hot edition bitmask (FORMAT §3.1) — the
+                // authoritative edition signal for the group, consumed by ParseMetadata().
+                _groupIds[gi] = BinaryPrimitives.ReadUInt16LittleEndian(span[sp..]);
+                sp += 2;
+                int fldCount = BinaryPrimitives.ReadUInt16LittleEndian(span[sp..]);
+                sp += 2;
+                sp += 4;
+                int stride = BinaryPrimitives.ReadInt32LittleEndian(span[sp..]);
+                sp += 4;
+                sp += 4;
+                if (stride <= 0 || stride > 4096)
+                    throw new QzdbException(ErrorCode.Corrupted, "Invalid group schema stride");
+
+                if (fldCount != _groupFieldCounts[gi] || fldCount > 256 || sp + (long)fldCount * 12 > _dataLen)
+                    throw new QzdbException(ErrorCode.Corrupted, "Invalid group schema field count");
+
+                _groupStrides[gi] = stride;
+                var widths = new int[fldCount];
+                var offsets = new int[fldCount];
+                var natives = new bool[fldCount];
+                var natTypes = new int[fldCount];
+                for (int fi = 0; fi < fldCount; fi++)
+                {
+                    // fieldId is just the slot ordinal (0..N-1); no cross-edition meaning.
+                    sp += 2;
+                    widths[fi] = span[sp];
+                    if (widths[fi] is < 1 or > 8)
+                        throw new QzdbException(ErrorCode.Corrupted, "Invalid group field width");
+                    sp++;
+                    int fieldFlags = span[sp];
+                    sp++;
+                    bool native = (fieldFlags & 0x01) != 0;
+                    int nativeType = (fieldFlags >> 1) & 0x03;
+                    if ((!native && widths[fi] > 4) ||
+                        (native && nativeType == 1 && widths[fi] is not (4 or 8)) ||
+                        (native && nativeType != 1 && widths[fi] > 4))
+                        throw new QzdbException(ErrorCode.Corrupted, "Invalid native field width");
+                    natives[fi] = native;
+                    natTypes[fi] = nativeType;
+                    offsets[fi] = BinaryPrimitives.ReadInt32LittleEndian(span[sp..]);
+                    if (offsets[fi] < 0 || offsets[fi] > stride - widths[fi])
+                        throw new QzdbException(ErrorCode.Corrupted, "Group field exceeds stride");
+                    sp += 4;
+                    sp += 4;
+                }
+                _groupFieldWidths[gi] = widths;
+                _groupFieldOffsets[gi] = offsets;
+                _groupFieldNative[gi] = natives;
+                _groupFieldNativeType[gi] = natTypes;
             }
         }
 
@@ -1392,7 +1397,18 @@ public sealed class QzdbReader : IDisposable
     public BatchResult[] LookupBatch(IEnumerable<string> ipStrs) => FindBatch(ipStrs);
 
     /// <summary>Batch query over an enumerable of IP strings.</summary>
-    public BatchResult[] FindBatch(IEnumerable<string> ipStrs) => FindBatch(ipStrs?.ToArray() ?? throw new ArgumentNullException(nameof(ipStrs)));
+    public BatchResult[] FindBatch(IEnumerable<string> ipStrs)
+    {
+        ArgumentNullException.ThrowIfNull(ipStrs);
+        if (ipStrs is string[] arr) return FindBatch(arr);
+        if (ipStrs is ICollection<string> col)
+        {
+            var copy = new string[col.Count];
+            col.CopyTo(copy, 0);
+            return FindBatch(copy);
+        }
+        return FindBatch(ipStrs.ToArray());
+    }
 
     /// <summary>Batch query over IP strings, resolving only the given fields.</summary>
     public BatchResult[] FindBatchFields(string[] ipStrs, string[]? fields)
@@ -1419,8 +1435,16 @@ public sealed class QzdbReader : IDisposable
     }
 
     /// <summary>Batch query over enumerables of IP strings and fields.</summary>
-    public BatchResult[] FindBatchFields(IEnumerable<string> ipStrs, IEnumerable<string>? fields) =>
-        FindBatchFields(ipStrs?.ToArray() ?? throw new ArgumentNullException(nameof(ipStrs)), fields?.ToArray());
+    public BatchResult[] FindBatchFields(IEnumerable<string> ipStrs, IEnumerable<string>? fields)
+    {
+        ArgumentNullException.ThrowIfNull(ipStrs);
+        string[] ipArr;
+        if (ipStrs is string[] a) ipArr = a;
+        else if (ipStrs is ICollection<string> col) { ipArr = new string[col.Count]; col.CopyTo(ipArr, 0); }
+        else ipArr = ipStrs.ToArray();
+        string[]? fieldArr = fields is null ? null : (fields is string[] fa ? fa : fields.ToArray());
+        return FindBatchFields(ipArr, fieldArr);
+    }
 
     /// <summary>Lazily streams batch results for an enumerable of IP strings.</summary>
     public IEnumerable<BatchResult> FindStream(IEnumerable<string> ipStrs)
@@ -2040,46 +2064,36 @@ public sealed class QzdbReader : IDisposable
 
     #region Resolve
 
-    private static GeoInfo? ResolveRowId(Snapshot snap, uint rowId)
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static uint SelectEntryId(Snapshot snap, uint rowId)
     {
-        if (rowId >= snap._rowCount) return null;
+        if (rowId >= (uint)snap._rowCount) return 0;
 
         var span = snap._data.Span;
         long rOff = snap._offIPRow + (long)rowId * snap._ipRowSize;
-        if (rOff < 0 || rOff + snap._ipRowSize > span.Length) return null;
+        if (rOff < 0 || rOff + snap._ipRowSize > span.Length) return 0;
 
         uint geoId = ReadUintWidth(span, (int)rOff, snap._rowGeoWidth);
         uint asnId = snap._rowAsnWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowGeoWidth), snap._rowAsnWidth) : 0;
         uint usageId = snap._rowUsageWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowGeoWidth + snap._rowAsnWidth), snap._rowUsageWidth) : 0;
+        GC.KeepAlive(snap);
 
         int gi = snap._groupIndex;
-        if (gi < 0 || gi >= snap._groupDimMasks.Length) return null;
+        if (gi < 0 || gi >= snap._groupDimMasks.Length) return 0;
         int mask = snap._groupDimMasks[gi];
-        uint entryId = (mask & 0x02) != 0 ? asnId : (mask & 0x04) != 0 ? usageId : geoId;
+        return (mask & 0x02) != 0 ? asnId : (mask & 0x04) != 0 ? usageId : geoId;
+    }
 
-        if (entryId == 0) return null;
-        return ResolveGeo(snap, entryId);
+    private static GeoInfo? ResolveRowId(Snapshot snap, uint rowId)
+    {
+        uint entryId = SelectEntryId(snap, rowId);
+        return entryId == 0 ? null : ResolveGeo(snap, entryId);
     }
 
     private static GeoInfo? ResolveRowIdFields(Snapshot snap, uint rowId, string[] fields)
     {
-        if (rowId >= snap._rowCount) return null;
-
-        var span = snap._data.Span;
-        long rOff = snap._offIPRow + (long)rowId * snap._ipRowSize;
-        if (rOff < 0 || rOff + snap._ipRowSize > span.Length) return null;
-
-        uint geoId = ReadUintWidth(span, (int)rOff, snap._rowGeoWidth);
-        uint asnId = snap._rowAsnWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowGeoWidth), snap._rowAsnWidth) : 0;
-        uint usageId = snap._rowUsageWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowGeoWidth + snap._rowAsnWidth), snap._rowUsageWidth) : 0;
-
-        int gi = snap._groupIndex;
-        if (gi < 0 || gi >= snap._groupDimMasks.Length) return null;
-        int mask = snap._groupDimMasks[gi];
-        uint entryId = (mask & 0x02) != 0 ? asnId : (mask & 0x04) != 0 ? usageId : geoId;
-
-        if (entryId == 0) return null;
-        return ResolveGeoFields(snap, entryId, fields);
+        uint entryId = SelectEntryId(snap, rowId);
+        return entryId == 0 ? null : ResolveGeoFields(snap, entryId, fields);
     }
 
     private static GeoInfo? ResolveGeoFields(Snapshot snap, uint entryId, string[] fields)
@@ -2531,48 +2545,7 @@ public sealed class QzdbReader : IDisposable
     /// Actively touches index pages (IPv4/IPv6 Jump Tables and Trie Nodes) to eliminate cold page fault latency spikes on first queries.
     /// Safe to call concurrently or repeatedly.
     /// </summary>
-    public void Warmup()
-    {
-        var snap = TryGetSnapshot();
-        if (snap == null) return;
-        var span = snap._data.Span;
-        if (span.IsEmpty) return;
-
-        // Touch pages with 4096-byte step (OS virtual memory page boundary)
-        const int PageSize = 4096;
-        uint touchSum = 0;
-
-        if (snap._hasV4 && snap._offV4Jump > 0)
-        {
-            long start = snap._offV4Jump;
-            long end = Math.Min(span.Length, start + 65536L * 4);
-            for (long p = start; p < end; p += PageSize)
-                touchSum ^= span[(int)p];
-            if (snap._v4NodeCount > 0 && snap._offV4Nodes > 0)
-            {
-                long nStart = snap._offV4Nodes;
-                long nEnd = Math.Min(span.Length, nStart + (long)snap._v4NodeCount * (snap._v4Node24 ? 6 : 8));
-                for (long p = nStart; p < nEnd; p += PageSize)
-                    touchSum ^= span[(int)p];
-            }
-        }
-
-        if (snap._hasV6 && snap._offV6Jump > 0)
-        {
-            long start = snap._offV6Jump;
-            long end = Math.Min(span.Length, start + (1L << snap._v6JumpBits) * 4);
-            for (long p = start; p < end; p += PageSize)
-                touchSum ^= span[(int)p];
-            if (snap._v6NodeCount > 0 && snap._offV6Nodes > 0)
-            {
-                long nStart = snap._offV6Nodes;
-                long nEnd = Math.Min(span.Length, nStart + (long)snap._v6NodeCount * (snap._v6Node24 ? 6 : 8));
-                for (long p = nStart; p < nEnd; p += PageSize)
-                    touchSum ^= span[(int)p];
-            }
-        }
-        GC.KeepAlive(snap);
-    }
+    public void Warmup() => TryGetSnapshot()?.Warmup();
 
     #endregion
 

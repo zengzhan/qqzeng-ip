@@ -311,7 +311,19 @@ func buildSnapshot(data []byte, release func(), groupIndex int, verifyCrc bool) 
 	if err := s.parsePools(); err != nil {
 		return nil, err
 	}
-	s.geoCache = newGeoCache(1 << 18)
+	// M3：按组条目数自适应容量（小库 4~32 KB，大库封顶 256K 槽 = 2 MB），避免小库/热更新无条件分配 2 MB。
+	cacheCap := uint32(1 << 18)
+	if s.groupIndex >= 0 && s.groupIndex < len(s.groupEntryCounts) {
+		ec := s.groupEntryCounts[s.groupIndex]
+		if ec < cacheCap {
+			c := uint32(256)
+			for c < ec && c < cacheCap {
+				c <<= 1
+			}
+			cacheCap = c
+		}
+	}
+	s.geoCache = newGeoCache(cacheCap)
 	return s, nil
 }
 
@@ -517,101 +529,17 @@ func (s *Snapshot) parseGroups() error {
 			fmt.Sprintf("groupIndex out of range [0,%d]: %d", groups-1, s.groupIndex))
 	}
 
-	if s.offGroupSchema > 0 && s.offGroupSchema+2 <= uint64(len(d)) {
-		sp := s.offGroupSchema
-		gsGroupCount := int(safeReadU16(d, sp))
-		sp += 2
-		maxGs := min(gsGroupCount, groups)
-		for gi := 0; gi < maxGs; gi++ {
-			if sp+16 > uint64(len(d)) {
-				break
-			}
-			s.groupIds[gi] = safeReadU16(d, sp)
-			sp += 2
-			fldCount := int(safeReadU16(d, sp))
-			sp += 2
-			sp += 4
-			strideU := uint64(safeReadU32(d, sp))
-			sp += 4
-			sp += 4
-			if fldCount < 1 || fldCount > 255 || sp+uint64(fldCount)*12 > uint64(len(d)) {
-				break
-			}
-			if fldCount != s.groupFieldCounts[gi] {
-				break
-			}
-			maxInt := uint64(^uint(0) >> 1)
-			if strideU < 1 || strideU > maxInt || strideU > uint64(len(d)) {
-				return newErr(ErrCodeCorrupted, fmt.Sprintf("invalid group schema stride for group %d: %d", gi, strideU))
-			}
-			stride := int(strideU)
-			widths := make([]int, fldCount)
-			offsets := make([]int, fldCount)
-			natives := make([]bool, fldCount)
-			natTypes := make([]int, fldCount)
-			for fi := 0; fi < fldCount; fi++ {
-				sp += 2
-				width := int(d[sp])
-				sp++
-				flags := d[sp]
-				sp++
-				offsetU := uint64(safeReadU32(d, sp))
-				sp += 4
-				sp += 4
-				nativeField := flags&0x01 != 0
-				nativeType := int((flags >> 1) & 0x03)
-				validWidth := false
-				if nativeField {
-					validWidth = nativeType == 0 && width >= 1 && width <= 4 ||
-						nativeType == 1 && (width == 4 || width == 8)
-				} else {
-					validWidth = width >= 1 && width <= 4
-				}
-				if !validWidth || offsetU > maxInt || offsetU+uint64(width) > strideU {
-					return newErr(ErrCodeCorrupted,
-						fmt.Sprintf("invalid group schema field %d/%d width/offset: %d/%d", gi, fi, width, offsetU))
-				}
-				natives[fi] = nativeField
-				natTypes[fi] = nativeType
-				widths[fi] = width
-				offsets[fi] = int(offsetU)
-			}
-			s.groupStrides[gi] = stride
-			s.groupFieldWidths[gi] = widths
-			s.groupFieldOffsets[gi] = offsets
-			s.groupFieldNative[gi] = natives
-			s.groupFieldNativeType[gi] = natTypes
-		}
+	if err := s.parseGroupSchema(groups); err != nil {
+		return err
 	}
-	for g := 0; g < groups; g++ {
-		if s.groupStrides[g] == 0 {
-			s.groupStrides[g] = s.groupFieldCounts[g] * s.poolIdxSize
-		}
-		if s.groupFieldWidths[g] == nil {
-			s.groupFieldWidths[g] = make([]int, s.groupFieldCounts[g])
-			s.groupFieldOffsets[g] = make([]int, s.groupFieldCounts[g])
-			for i := range s.groupFieldWidths[g] {
-				s.groupFieldWidths[g][i] = s.poolIdxSize
-				s.groupFieldOffsets[g][i] = i * s.poolIdxSize
-			}
-		}
-		if s.groupFieldNative[g] == nil {
-			s.groupFieldNative[g] = make([]bool, s.groupFieldCounts[g])
-		}
-		if s.groupFieldNativeType[g] == nil {
-			s.groupFieldNativeType[g] = make([]int, s.groupFieldCounts[g])
-		}
-	}
-	// 关键不变量：字段数有两个来源——GEO_ENTRIES 表的 groupFieldCounts[g]
-	// 与 GROUP_SCHEMA 的 fldCount。畸形文件可让二者不一致，而查询热路径以
-	// groupFieldCounts[g] 为循环上界直接下标访问 widths/offsets/...，长度不足
-	// 即 index out of range panic（且不在 buildSnapshot 的 recover 范围内）。
-	// 这里在解析期一次性对齐：不一致则该组回退到 poolIdxSize 默认布局，
-	// 使 len(...) == groupFieldCounts[g] 恒成立，热路径无需逐次判界。
+	// 关键不变量对齐 + §9.4 默认布局兜底 + 段边界校验：
+	// 使 len(widths/offsets/native/natTypes) == groupFieldCounts[g] 恒成立，热路径无需逐次判界。
+	dataLen := uint64(len(d))
 	for g := 0; g < groups; g++ {
 		fc := s.groupFieldCounts[g]
-		if len(s.groupFieldWidths[g]) != fc || len(s.groupFieldOffsets[g]) != fc ||
-			len(s.groupFieldNative[g]) != fc || len(s.groupFieldNativeType[g]) != fc {
+		if s.groupStrides[g] == 0 || len(s.groupFieldWidths[g]) != fc ||
+			len(s.groupFieldOffsets[g]) != fc || len(s.groupFieldNative[g]) != fc ||
+			len(s.groupFieldNativeType[g]) != fc {
 			s.groupStrides[g] = fc * s.poolIdxSize
 			widths := make([]int, fc)
 			offsets := make([]int, fc)
@@ -628,12 +556,82 @@ func (s *Snapshot) parseGroups() error {
 			cnt := uint64(s.groupEntryCounts[g])
 			stride := uint64(s.groupStrides[g])
 			base := s.groupEntryOffsets[g]
-			dataLen := uint64(len(d))
 			if base > dataLen || cnt > (dataLen-base)/stride {
 				return newErr(ErrCodeOutOfBounds,
 					fmt.Sprintf("section group_%d_entries out of bounds (off=%d, count=%d, stride=%d, size=%d)", g, base, cnt, stride, dataLen))
 			}
 		}
+	}
+	return nil
+}
+
+func (s *Snapshot) parseGroupSchema(groups int) error {
+	d := s.data
+	if s.offGroupSchema == 0 || s.offGroupSchema+2 > uint64(len(d)) {
+		return nil
+	}
+	sp := s.offGroupSchema
+	gsGroupCount := int(safeReadU16(d, sp))
+	sp += 2
+	maxGs := min(gsGroupCount, groups)
+	maxInt := uint64(^uint(0) >> 1)
+	for gi := 0; gi < maxGs; gi++ {
+		if sp+16 > uint64(len(d)) {
+			break
+		}
+		s.groupIds[gi] = safeReadU16(d, sp)
+		sp += 2
+		fldCount := int(safeReadU16(d, sp))
+		sp += 2
+		sp += 4
+		strideU := uint64(safeReadU32(d, sp))
+		sp += 4
+		sp += 4
+		if fldCount < 1 || fldCount > 255 || sp+uint64(fldCount)*12 > uint64(len(d)) {
+			break
+		}
+		if fldCount != s.groupFieldCounts[gi] {
+			break
+		}
+		if strideU < 1 || strideU > 4096 || strideU > maxInt || strideU > uint64(len(d)) {
+			return newErr(ErrCodeCorrupted, fmt.Sprintf("invalid group schema stride for group %d: %d", gi, strideU))
+		}
+		widths := make([]int, fldCount)
+		offsets := make([]int, fldCount)
+		natives := make([]bool, fldCount)
+		natTypes := make([]int, fldCount)
+		for fi := 0; fi < fldCount; fi++ {
+			sp += 2
+			width := int(d[sp])
+			sp++
+			flags := d[sp]
+			sp++
+			offsetU := uint64(safeReadU32(d, sp))
+			sp += 4
+			sp += 4
+			nativeField := flags&0x01 != 0
+			nativeType := int((flags >> 1) & 0x03)
+			validWidth := false
+			if nativeField {
+				validWidth = nativeType == 0 && width >= 1 && width <= 4 ||
+					nativeType == 1 && (width == 4 || width == 8)
+			} else {
+				validWidth = width >= 1 && width <= 4
+			}
+			if !validWidth || offsetU > maxInt || offsetU+uint64(width) > strideU {
+				return newErr(ErrCodeCorrupted,
+					fmt.Sprintf("invalid group schema field %d/%d width/offset: %d/%d", gi, fi, width, offsetU))
+			}
+			natives[fi] = nativeField
+			natTypes[fi] = nativeType
+			widths[fi] = width
+			offsets[fi] = int(offsetU)
+		}
+		s.groupStrides[gi] = int(strideU)
+		s.groupFieldWidths[gi] = widths
+		s.groupFieldOffsets[gi] = offsets
+		s.groupFieldNative[gi] = natives
+		s.groupFieldNativeType[gi] = natTypes
 	}
 	return nil
 }
@@ -1263,7 +1261,7 @@ func (s *Snapshot) computeGeoInfoEntry(entryID uint32, entryOff uint64, fc int) 
 
 // readNativeValue 原生标量字段解码：int 原样；float 按 6 位小数（NaN/Inf → ""，整数值 → 无小数点）。
 func (s *Snapshot) readNativeValue(off uint64, w int, nt int) string {
-	if int(off)+w > len(s.data) {
+	if w < 0 || off > uint64(len(s.data)) || uint64(w) > uint64(len(s.data))-off {
 		return ""
 	}
 	if nt == 1 {
@@ -1736,64 +1734,9 @@ func (r *QzdbReader) ReloadBuffer(b []byte) error {
 
 // Warmup 主动触碰跳表与节点内存页（按 4096 字节步长），消除冷页在首查时的抖动。
 func (r *QzdbReader) Warmup() {
-	s := r.snapshot()
-	if s == nil || len(s.data) == 0 {
-		return
+	if s := r.snapshot(); s != nil {
+		s.Warmup()
 	}
-	d := s.data
-	const pageSize = 4096
-	var touchSum byte
-
-	if s.hasV4 && s.offV4Jump > 0 {
-		start := s.offV4Jump
-		end := start + 65536*4
-		if end > uint64(len(d)) {
-			end = uint64(len(d))
-		}
-		for p := start; p < end; p += pageSize {
-			touchSum ^= d[p]
-		}
-		if s.v4NodeCount > 0 && s.offV4Nodes > 0 {
-			nodeSize := uint64(8)
-			if s.v4Node24 {
-				nodeSize = 6
-			}
-			nStart := s.offV4Nodes
-			nEnd := nStart + uint64(s.v4NodeCount)*nodeSize
-			if nEnd > uint64(len(d)) {
-				nEnd = uint64(len(d))
-			}
-			for p := nStart; p < nEnd; p += pageSize {
-				touchSum ^= d[p]
-			}
-		}
-	}
-
-	if s.hasV6 && s.offV6Jump > 0 {
-		start := s.offV6Jump
-		end := start + (uint64(1)<<uint(s.v6JumpBits))*4
-		if end > uint64(len(d)) {
-			end = uint64(len(d))
-		}
-		for p := start; p < end; p += pageSize {
-			touchSum ^= d[p]
-		}
-		if s.v6NodeCount > 0 && s.offV6Nodes > 0 {
-			nodeSize := uint64(8)
-			if s.v6Node24 {
-				nodeSize = 6
-			}
-			nStart := s.offV6Nodes
-			nEnd := nStart + uint64(s.v6NodeCount)*nodeSize
-			if nEnd > uint64(len(d)) {
-				nEnd = uint64(len(d))
-			}
-			for p := nStart; p < nEnd; p += pageSize {
-				touchSum ^= d[p]
-			}
-		}
-	}
-	atomic.StoreUint64(&warmupDrain, uint64(touchSum))
 }
 
 // ---------- 文件 / 字节加载 ----------

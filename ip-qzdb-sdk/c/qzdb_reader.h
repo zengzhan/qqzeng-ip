@@ -49,6 +49,14 @@ typedef struct {
  *   When the probe window is exhausted the lookup simply reports a miss and
  *   the caller falls back to get_geo_info(), which returns caller-owned
  *   strings with the proper values_mask bits set. Bounded memory, no eviction.
+ *
+ *   RELOAD LIFETIME NOTE (N2):
+ *   qzdb_reload() / qzdb_reload_buffer() frees the previous snapshot's cache
+ *   and string pools once all in-flight queries finish. Borrowed pointers
+ *   returned by earlier qzdb_find() / qzdb_get_field_names() calls become
+ *   invalid after a reload; callers that retain results across concurrent
+ *   reloads should use copy-out APIs (qzdb_find_str / qzdb_find_*_buf) or
+ *   copy the strings before releasing.
  */
 typedef struct qzdb_cache_entry {
     uint64_t key;     /* (group << 40) | entry_id */
@@ -169,6 +177,7 @@ typedef struct {
     uint32_t             generation;     /* 实例代际计数：初始化为 1，每次 reload 自增，free 置 0 */
     /* 并发热更新与安全回收原语（不透明指针，保持头文件无 pthread 依赖） */
     void*                reload_lock;
+    void*                reader_stripes; /* 64B 对齐分片读计数（消除多核缓存行乒乓） */
     int32_t              active_readers;
     int32_t              reloading;
 } qzdb_reader_t;
@@ -243,6 +252,8 @@ void qzdb_warmup(qzdb_reader_t* ctx);
 
 /* ---- Query ---- */
 int      qzdb_find(qzdb_reader_t* ctx, const char* ip_str, qzdb_geo_info_t* result);
+/* 带长度的 IP 查询入口：显式拒绝内嵌 NUL 字节，与其他 7 语言语义完全一致 */
+int      qzdb_find_n(qzdb_reader_t* ctx, const char* ip_ptr, size_t ip_len, qzdb_geo_info_t* result);
 int      qzdb_find_uint(qzdb_reader_t* ctx, uint32_t ip_int, qzdb_geo_info_t* result);
 int      qzdb_find_v6(qzdb_reader_t* ctx, const uint8_t* ip_bin, qzdb_geo_info_t* result);
 int      qzdb_find_bytes(qzdb_reader_t* ctx, const uint8_t ip_bin[16], qzdb_geo_info_t* result);

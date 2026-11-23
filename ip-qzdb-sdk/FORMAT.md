@@ -164,4 +164,4 @@ Trie 遍历得到的 `row_id` 映射到 IPRow：
 ## 五、 跨语言一致性契约摘要
 - **版本档次解析优先级**：`GROUP_SCHEMA.groupId` / `Header.VersionMask` one-hot 位 → Metadata `primary_version` / 单项 `version_list` → 唯一字段数推断 → `""`（unknown）。
 - **原生浮点格式化**：NaN / ±Inf 输出 `""`；精确整数值输出无小数点十进制；其余按 6 位小数 round-half-even 输出。
-- **Fail-Closed 加载校验**：由于 CRC32 可被重算伪造，所有 SDK 在加载期必须校验全部段偏移、节点区长度、`GROUP_SCHEMA` 字段边界（`offset + width <= stride`）以及字符串池偏移表严格单调性。
+- **Fail-Closed 加载校验**：由于 CRC32 可被重算伪造，所有 SDK 在加载期必须校验全部段偏移、节点区长度、`GROUP_SCHEMA` 字段边界（`offset + width <= stride`）以及字符串池偏移表严格单调性；任何 `ROW_SCHEMA` 或 `GROUP_SCHEMA` 不一致一律拒绝加载（Fail-Closed），禁止静默回退默认布局。

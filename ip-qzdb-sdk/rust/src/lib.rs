@@ -3,15 +3,13 @@
 //! 设计要点（对齐 API_CONTRACT.md v2.4 与认证参考实现 Java/C#）：
 //! - 不可变快照 + 原子替换（[`arc_swap::ArcSwap`]），查询路径对快照只读、无锁、热更新线程安全。
 //! - 线程本地 4 路组相联 GeoInfo 解码缓存：命中路径对共享状态零写入，随核数线性扩展。
-//! - 值表示去共享化：池字符串在装载期 `Box::leak` 成进程级生命期（`&'static str`），
-//!   数字/浮点字段在栈缓冲内格式化为 `FieldVal` 内联值（6 位小数、NaN/Inf → ""）；
-//!   构造与命中路径全程零共享原子 RMW，`to_pipe` 惰性拼接。
+//! - 零全局内存泄漏：池字符串随快照生命期持有（`Arc<str>`），
+//!   快照与响应释放时自动回收，完全消除旧版 `Box::leak` 进程级驻留；
+//!   数字/浮点字段在栈缓冲内格式化为 `FieldVal` 内联值（6 位小数、NaN/Inf → ""）。
 //! - SENTINEL 哨兵位在 Trie 返回 row_id 时即剥离。
 //!
 //! 内存语义注意：池字符串与各快照的元信息（字段名表/norm_map/数值索引）随
-//! 装载固定为进程级生命期；`reload`/`rebuild` 替换快照不会回收旧池（KB×代数
-//! 级常量，换来构造路径零 RMW/零分配），重度热更新场景若在意可 Periodically
-//! 重启进程——见 CHANGELOG "Breaking/semantic changes"。
+//! 快照引用自动释放，`reload`/`rebuild` 安全回收旧快照内存，零全局泄漏。
 
 // unsafe 仅存在于两处：map_file()（mmap 底层构造）与 find_*_ref_snap()（零拷贝借用寿命解绑，
 //!   SAFETY 论证见函数文档；两者均不改变对外 API 的安全暴露面；它被封装在 map_file() 中，
@@ -37,10 +35,6 @@ pub use bitmask::IpAttrFlags;
 // ---------------------------------------------------------------------------
 // 常量
 // ---------------------------------------------------------------------------
-
-/// 进程级池串驻留表（见 `parse_pools`）。
-static POOL_INTERNER: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<&'static str>>> =
-    std::sync::LazyLock::new(Default::default);
 
 const SENTINEL: u32 = 0x80000000;
 const SENTINEL_MASK_31: u32 = 0x7FFFFFFF;
@@ -1194,11 +1188,12 @@ fn is_json_number(v: &str) -> bool {
 
 const MAX_GEO_FIELDS: usize = 64;
 
-/// 字段值借用或内联栈存储。
-#[derive(Clone, Copy, Debug)]
+/// 字段值借用、内联栈存储或快照池 Arc<str> 引用。
+#[derive(Clone, Debug)]
 pub enum FieldVal<'a> {
     Borrowed(&'a str),
     Inline(InlineBuf),
+    Arc(Arc<str>),
 }
 
 /// 栈内联小字符串（≤32 字节的 ASCII 快路径，如格式化后的经纬度/整数）。
@@ -1237,6 +1232,7 @@ impl<'a> FieldVal<'a> {
         match self {
             FieldVal::Borrowed(s) => s,
             FieldVal::Inline(inline) => inline.as_str(),
+            FieldVal::Arc(s) => s.as_ref(),
         }
     }
 }
@@ -1245,6 +1241,36 @@ impl<'a> std::ops::Deref for FieldVal<'a> {
     type Target = str;
     #[inline(always)]
     fn deref(&self) -> &Self::Target {
+        self.as_str()
+    }
+}
+
+impl<'a, 'b> PartialEq<FieldVal<'b>> for FieldVal<'a> {
+    #[inline]
+    fn eq(&self, other: &FieldVal<'b>) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl<'a> Eq for FieldVal<'a> {}
+
+impl<'a> PartialEq<str> for FieldVal<'a> {
+    #[inline]
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl<'a> PartialEq<&str> for FieldVal<'a> {
+    #[inline]
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl<'a> AsRef<str> for FieldVal<'a> {
+    #[inline]
+    fn as_ref(&self) -> &str {
         self.as_str()
     }
 }
@@ -1696,10 +1722,8 @@ pub struct SnapshotInner {
     group_field_native: Vec<Vec<bool>>,
     group_field_native_type: Vec<Vec<usize>>,
 
-    /// 字符串池：装载期 `Box::leak` 成进程级生命期（`&'static str`）。
-    /// 构造 GeoData 的借用值零 RMW、零分配；代价是 reload 不回收旧池
-    /// （进程口径一次性、按重载次数线性——见 CHANGELOG 与 README）。
-    pools: Vec<Vec<Vec<&'static str>>>,
+    /// 字符串池：快照生命期 Arc<str> 引用，快照与响应释放时自动回收，零全局泄漏。
+    pools: Vec<Vec<Vec<Arc<str>>>>,
 
     // 模式元信息（Arc 共享，随快照与 GeoInfo 引用归零自动释放，零 Box::leak）
     schema: Arc<GeoSchema>,
@@ -1906,42 +1930,50 @@ impl SnapshotInner {
         let mut row_usage_width = 0;
         if off_row_schema > 0 {
             let sp = off_row_schema as usize;
-            // 注意：上面的 check_offset 只保证 sp 本身可读（required=1），
-            // 而这里还要读 sp+1（stride），必须各自单独收口。
             let f_count = ro!(rget(d, sp), "row_schema.field_count")? as usize;
             let stride = ro!(rget(d, sp + 1), "row_schema.stride")? as usize;
-            if (1..=8).contains(&f_count)
-                && sp + 4 + f_count * 4 <= d.len()
-                && stride == ip_row_size
+            if !(1..=8).contains(&f_count)
+                || stride != ip_row_size
+                || sp + 4 + f_count * 4 > d.len()
             {
-                let mut wpos = sp + 4;
-                let mut g2 = 0usize;
-                let mut a2 = 0usize;
-                let mut u2 = 0usize;
-                let mut total = 0usize;
-                let mut ok = true;
-                for _ in 0..f_count {
-                    let fid = d[wpos];
-                    let w = d[wpos + 1] as usize;
-                    if fid == 0 {
-                        g2 = w;
-                    } else if fid == 1 {
-                        a2 = w;
-                    } else if fid == 2 {
-                        u2 = w;
-                    }
-                    wpos += 4;
-                    total += w;
-                    if !(1..=4).contains(&w) {
-                        ok = false;
-                    }
-                }
-                if ok && total == ip_row_size {
-                    row_geo_width = g2;
-                    row_asn_width = a2;
-                    row_usage_width = u2;
-                }
+                return Err(err(
+                    ErrorCode::Corrupted,
+                    format!("invalid ROW_SCHEMA: field_count={f_count}, stride={stride}, ip_row_size={ip_row_size}"),
+                ));
             }
+            let mut wpos = sp + 4;
+            let mut g2 = 0usize;
+            let mut a2 = 0usize;
+            let mut u2 = 0usize;
+            let mut total = 0usize;
+            for _ in 0..f_count {
+                let fid = d[wpos];
+                let w = d[wpos + 1] as usize;
+                if !(1..=4).contains(&w) {
+                    return Err(err(
+                        ErrorCode::Corrupted,
+                        format!("invalid ROW_SCHEMA field width: {w}"),
+                    ));
+                }
+                if fid == 0 {
+                    g2 = w;
+                } else if fid == 1 {
+                    a2 = w;
+                } else if fid == 2 {
+                    u2 = w;
+                }
+                wpos += 4;
+                total += w;
+            }
+            if total != ip_row_size {
+                return Err(err(
+                    ErrorCode::Corrupted,
+                    format!("ROW_SCHEMA width sum ({total}) != ip_row_size ({ip_row_size})"),
+                ));
+            }
+            row_geo_width = g2;
+            row_asn_width = a2;
+            row_usage_width = u2;
         }
 
         // ---- 组入口偏移（头部 48 位） ----
@@ -2023,6 +2055,12 @@ impl SnapshotInner {
                 sp += 4;
                 sp += 4;
                 if gi < actual_groups {
+                    if !(1..=4096).contains(&stride) {
+                        return Err(err(
+                            ErrorCode::Corrupted,
+                            format!("invalid GROUP_SCHEMA stride for group {gi}: {stride}"),
+                        ));
+                    }
                     group_strides[gi] = stride;
                     let mut widths = vec![0; fld_count];
                     let mut offsets = vec![0; fld_count];
@@ -2779,8 +2817,8 @@ impl SnapshotInner {
                         // 缓冲装不下（仅当 {:.6}/{:.0} 大值浮点 >32B；合法数据
                         // 不可达，坏数据/hostile 构造）。契约（FORMAT §10.5 原生标量
                         // 浮点与零拷贝视图 fail-closed 约定）要求 owned 路径给全量字符串
-                        // 不截断、ref 路径拒绝：此处回退一次堆格式化，并接入
-                        // POOL_INTERNER 驻留去重，避免恶意数据反复查询引发无界内存泄漏。
+                        // 不截断、ref 路径拒绝：此处回退一次堆格式化，生成 Arc<str>，
+                        // 随快照与响应释放自动回收，零全局内存泄漏。
                         ref_safe = false;
                         let f = if w == 4 {
                             f32::from_bits(safe_read_u32(d, fo).unwrap_or(0)) as f64
@@ -2788,24 +2826,13 @@ impl SnapshotInner {
                             f64::from_bits(safe_read_u64(d, fo).unwrap_or(0))
                         };
                         let text = fmt_native_float(f);
-                        let mut interner = POOL_INTERNER
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        let leaked: &'static str = match interner.get(text.as_str()) {
-                            Some(&existing) => existing,
-                            None => {
-                                let l: &'static str = Box::leak(text.into_boxed_str());
-                                interner.insert(l);
-                                l
-                            }
-                        };
-                        FieldVal::Borrowed(leaked)
+                        FieldVal::Arc(Arc::from(text))
                     }
                 }
             } else {
                 let idx = self.read_uint_width(fo, w) as usize;
                 if i < pools.len() && idx < pools[i].len() {
-                    FieldVal::Borrowed(pools[i][idx])
+                    FieldVal::Arc(Arc::clone(&pools[i][idx]))
                 } else {
                     FieldVal::EMPTY
                 }
@@ -3015,7 +3042,7 @@ impl SnapshotInner {
                 .norm_map
                 .get(&key)
                 .copied()
-                .and_then(|i| full.inner.values.get(i).map(|v| (i, *v)));
+                .and_then(|i| full.inner.values.get(i).cloned().map(|v| (i, v)));
             nmap.entry(key).or_insert(names.len());
             match hit {
                 Some((i, v)) => {
@@ -3393,12 +3420,8 @@ fn parse_pools(
     off_meta: u64,
     off_row_schema: &u64,
     _pool_idx_size: usize,
-) -> Vec<Vec<Vec<&'static str>>> {
-    // 整次装载只加锁一次；驻留表让 reload 复用未变化的池串，泄漏量从
-    // “每次全量”降为“仅新增字符串”。
-    let mut interner = POOL_INTERNER
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+) -> Vec<Vec<Vec<Arc<str>>>> {
+    let mut local_interner = std::collections::HashSet::<Arc<str>>::new();
     let group_count = group_field_counts.len();
     let mut result = vec![Vec::new(); group_count];
     if off_pools == 0 {
@@ -3465,7 +3488,7 @@ fn parse_pools(
                 pool_cursor = string_data_start;
                 continue;
             }
-            let mut strings: Vec<&'static str> = vec![""; count];
+            let mut strings: Vec<Arc<str>> = Vec::with_capacity(count);
             let mut prev_end = 0usize;
             for s in 0..count {
                 let start = offsets[s];
@@ -3473,30 +3496,34 @@ fn parse_pools(
                 // end < start 会让 `end - start` 发生 usize 下溢（debug panic /
                 // release 回绕），进而使 &d[a..b] 区间倒置 panic。
                 if start < prev_end || end < start || end > tail {
+                    strings.push(Arc::from(""));
                     continue;
                 }
                 prev_end = end;
                 if end == start {
+                    strings.push(Arc::from(""));
                     continue;
                 }
                 let (Some(a), Some(b)) = (
                     string_data_start.checked_add(start),
                     string_data_start.checked_add(end),
                 ) else {
+                    strings.push(Arc::from(""));
                     continue;
                 };
                 if b <= d.len() {
-                    // 装载期唯一固定成本：'static 化一份池串（内容本身已是
-                    // 新分配副本，_CODEC 由快照持有到进程生命期，reload 不回收）。
                     let text = String::from_utf8_lossy(&d[a..b]);
-                    strings[s] = match interner.get(&*text) {
-                        Some(&shared) => shared,
+                    let arc: Arc<str> = match local_interner.get(&*text) {
+                        Some(shared) => Arc::clone(shared),
                         None => {
-                            let leaked: &'static str = Box::leak(text.into_owned().into_boxed_str());
-                            interner.insert(leaked);
-                            leaked
+                            let a: Arc<str> = Arc::from(text.into_owned().into_boxed_str());
+                            local_interner.insert(Arc::clone(&a));
+                            a
                         }
                     };
+                    strings.push(arc);
+                } else {
+                    strings.push(Arc::from(""));
                 }
             }
             pool_cursor = string_data_start.saturating_add(tail);
@@ -4800,7 +4827,7 @@ impl Default for ChainedReader {
 /// 当两侧共享同一 schema（如相同档次双库合并）时直接复用 `Arc::clone`，零元信息分配。
 fn merge_geo(base: &GeoInfo, overlay: &GeoInfo, mode: ChainMode) -> GeoInfo {
     let non_empty =
-        |value: Option<&FieldVal<'static>>| value.filter(|v| !v.as_str().is_empty()).copied();
+        |value: Option<&FieldVal<'static>>| value.filter(|v| !v.as_str().is_empty()).cloned();
 
     if Arc::ptr_eq(&base.inner.schema, &overlay.inner.schema)
         || base.inner.schema.field_names == overlay.inner.schema.field_names
@@ -4897,7 +4924,7 @@ mod tests {
         let field_names: Vec<String> = names.iter().map(|name| (*name).to_string()).collect();
         let values: Vec<FieldVal<'static>> = values
             .iter()
-            .map(|value| FieldVal::Borrowed(Box::leak((*value).to_string().into_boxed_str())))
+            .map(|value| FieldVal::Arc(Arc::from(*value)))
             .collect();
         GeoInfo {
             inner: Arc::new(super::GeoData {

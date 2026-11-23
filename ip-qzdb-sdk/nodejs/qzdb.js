@@ -921,18 +921,19 @@ class QzdbReader {
     chk(this._offRowSchema, 4, 'row_schema');
     chk(this._offGroupSchema, 2, 'group_schema');
 
-    // typed-array 快路径：跳表与 32 位节点段是纯 u32 数组。仅当底层 ArrayBuffer
-    // 视口起点与 section 偏移联合 4 字节对齐时构建视图（格式约定 section 64 字节
-    // 对齐，但这是构建方约定而非校验项，敌意文件可给未对齐偏移，此时保持
-    // safeRead 路径）。视图长度即 chk 校验过的段长，索引由 nodeCount 上限守卫，
-    // 恒在界内——与原路径语义等价，只是免掉每步的函数调用与 try/catch。
+    this._initTrieViews(d, dlen);
+    this._parseRowSchema();
+    this._parseGroups(d, dlen, chk);
+    this._parseMeta();
+    this._repairDimMasks();
+  }
+
+  _initTrieViews(d, dlen) {
+    // typed-array 快路径：跳表与 32 位节点段零拷贝视图，24 位节点一次性解包为 Uint32Array。
     this._v4JumpU32 = null;
     this._v4NodesU32 = null;
     this._v6JumpU32 = null;
     this._v6NodesU32 = null;
-    // dlen < 2^31 保证后续对偏移的 & 3 位运算不失真（巨文件走 safeRead 原路径）；
-    // Uint32Array 按本机字节序读取，仅在小端平台启用（Node 运行时均为小端，
-    // 此探测是形式正确的保险）。dlen 在上方 chk 前已定义为 this._data.length。
     const _leProbe = new Uint8Array(new Uint32Array([1]).buffer)[0] === 1;
     const _unpack24Nodes = (off, count) => {
       const arr = new Uint32Array(count * 2);
@@ -944,9 +945,9 @@ class QzdbReader {
       }
       return arr;
     };
-    if ((this._data.byteOffset & 3) === 0 && dlen <= 0x7FFFFFFF && _leProbe) {
-      const ab = this._data.buffer;
-      const base = this._data.byteOffset;
+    if ((d.byteOffset & 3) === 0 && dlen <= 0x7FFFFFFF && _leProbe) {
+      const ab = d.buffer;
+      const base = d.byteOffset;
       if (this._offV4Jump > 0 && (this._offV4Jump & 3) === 0) {
         this._v4JumpU32 = new Uint32Array(ab, base + this._offV4Jump, 65536);
       }
@@ -960,37 +961,28 @@ class QzdbReader {
         this._v6NodesU32 = new Uint32Array(ab, base + this._offV6Nodes, this._v6NodeCount * 2);
       }
     }
-    // 24 位紧凑节点快路径：加载期一次性解包成 Uint32Array（哨兵位提升到 bit31），
-    // 让 _trieWalkV4 / _trieWalkV6Buf 直接命中 typed-array 极速通道（V4 约快 1.22x，V6 约快 1.58x）。
     if (this._v4Node24 && this._offV4Nodes > 0 && this._v4NodeCount > 0 && this._v4NodeCount <= 4000000) {
       this._v4NodesU32 = _unpack24Nodes(this._offV4Nodes, this._v4NodeCount);
     }
     if (this._v6Node24 && this._offV6Nodes > 0 && this._v6NodeCount > 0 && this._v6NodeCount <= 4000000) {
       this._v6NodesU32 = _unpack24Nodes(this._offV6Nodes, this._v6NodeCount);
     }
+  }
 
-    // ROW_SCHEMA 必须在 section 边界校验之后再解析，否则 offRowSchema
-    // 可以指到文件外并让宽度推断读到越界数据。
-    this._parseRowSchema();
-
-    // GeoEntryOffsets[4]
+  _parseGroups(d, dlen, chk) {
     this._groupEntryOffsets = [];
     for (let i = 0; i < 4; i++) {
       this._groupEntryOffsets.push(this.safeReadU48(168 + i * 6));
     }
 
-    // GroupMetadataTable
     let gmOff = this._offGeoEntries;
     const tableGroups = this.safeReadU8(gmOff);
     gmOff += 1;
     let actualGroups = Math.min(tableGroups, Math.max(1, this._geoEntryGroupCount));
     if (actualGroups > 4) actualGroups = 4;
-    // 组数为 0 的文件没有任何可查询维度，直接拒绝，避免构造出一个
-    // 空 reader 后在取字段名时抛宿主 TypeError（与 Rust/Go/Python 契约一致）。
     if (!(actualGroups >= 1)) {
       throw new QzdbError('GroupMetadataTable groupCount is 0', QzdbError.CORRUPTED);
     }
-    // 每组 = fieldCount(1) + entryCount(4) + dimensionMask(2)。
     if (actualGroups * 7 > dlen - gmOff) {
       throw new QzdbError('GroupMetadataTable truncated', QzdbError.CORRUPTED);
     }
@@ -1022,8 +1014,6 @@ class QzdbReader {
     this._groupPools = null;
     this._poolsLoaded = false;
 
-    // GROUP_SCHEMA 里各组自报的 fieldCount 是第二个"真相来源"，与
-    // GroupMetadataTable 的 fieldCount 可能被伪造成不一致；下方不变式块统一收口。
     const schemaFldCounts = new Array(actualGroups).fill(-1);
     this._groupIds = new Array(actualGroups).fill(0);
     if (this._offGroupSchema > 0) {
@@ -1032,72 +1022,54 @@ class QzdbReader {
       sp += 2;
       const maxGsGroups = Math.min(gsGroupCount, actualGroups);
       for (let gi = 0; gi < maxGsGroups; gi++) {
-        // 每组头 16 字节：groupId(2) fldCount(2) entryCount(4) stride(4) flags(4)
-        // groupId 就是该组的 one-hot 版本位掩码，与 Header.VersionMask 同一套编码。
         if (16 > dlen - sp) break;
         this._groupIds[gi] = this.safeReadU16(sp);
         sp += 2;
         const fldCount = this.safeReadU16(sp);
-        sp += 2;
-        sp += 4;
+        sp += 6; // fldCount(2) + entryCount(4)
         const stride = this.safeReadU32(sp);
-        sp += 4;
-        sp += 4;
+        sp += 8; // stride(4) + flags(4)
         if (fldCount * 12 > dlen - sp) break;
         schemaFldCounts[gi] = fldCount;
-        if (gi < actualGroups) {
-          if (stride < 1 || stride > 4096) {
-            throw new QzdbError(`Invalid GROUP_SCHEMA stride for group ${gi}: ${stride}`, QzdbError.CORRUPTED);
-          }
-          this._groupStrides[gi] = stride;
-          const widths = new Array(fldCount).fill(0);
-          const offsets = new Array(fldCount).fill(0);
-          const natives = new Array(fldCount).fill(false);
-          const natTypes = new Array(fldCount).fill(0);
-          const fieldIds = new Array(fldCount).fill(0);
-          for (let fi = 0; fi < fldCount; fi++) {
-            fieldIds[fi] = this.safeReadU16(sp);
-            sp += 2;
-            const w = d[sp];
-            sp += 1;
-            const fieldFlags = d[sp];
-            sp += 1;
-            const isNative = (fieldFlags & 0x01) !== 0;
-            const natType = (fieldFlags >> 1) & 0x03;
-            const off = this.safeReadU32(sp);
-            sp += 4;
-            sp += 4;
-            const validW = isNative
-              ? (natType === 1 ? (w === 4 || w === 8) : (w >= 1 && w <= 4))
-              : (w >= 1 && w <= 4);
-            if (!validW || off < 0 || off > stride - w) {
-              throw new QzdbError(
-                `Invalid GROUP_SCHEMA field ${gi}/${fi}: width=${w}, offset=${off}, stride=${stride}`,
-                QzdbError.CORRUPTED,
-              );
-            }
-            widths[fi] = w;
-            natives[fi] = isNative;
-            natTypes[fi] = natType;
-            offsets[fi] = off;
-          }
-          this._groupFieldWidths[gi] = widths;
-          this._groupFieldOffsets[gi] = offsets;
-          this._groupFieldNative[gi] = natives;
-          this._groupFieldNativeType[gi] = natTypes;
-          this._groupFieldIds[gi] = fieldIds;
-        } else {
-          sp += fldCount * 12;
+        if (stride < 1 || stride > 4096) {
+          throw new QzdbError(`Invalid GROUP_SCHEMA stride for group ${gi}: ${stride}`, QzdbError.CORRUPTED);
         }
+        this._groupStrides[gi] = stride;
+        const widths = new Array(fldCount).fill(0);
+        const offsets = new Array(fldCount).fill(0);
+        const natives = new Array(fldCount).fill(false);
+        const natTypes = new Array(fldCount).fill(0);
+        const fieldIds = new Array(fldCount).fill(0);
+        for (let fi = 0; fi < fldCount; fi++) {
+          fieldIds[fi] = this.safeReadU16(sp);
+          const w = d[sp + 2];
+          const fieldFlags = d[sp + 3];
+          const isNative = (fieldFlags & 0x01) !== 0;
+          const natType = (fieldFlags >> 1) & 0x03;
+          const off = this.safeReadU32(sp + 4);
+          sp += 12;
+          const validW = isNative
+            ? (natType === 1 ? (w === 4 || w === 8) : (w >= 1 && w <= 4))
+            : (w >= 1 && w <= 4);
+          if (!validW || off < 0 || off > stride - w) {
+            throw new QzdbError(
+              `Invalid GROUP_SCHEMA field ${gi}/${fi}: width=${w}, offset=${off}, stride=${stride}`,
+              QzdbError.CORRUPTED,
+            );
+          }
+          widths[fi] = w;
+          natives[fi] = isNative;
+          natTypes[fi] = natType;
+          offsets[fi] = off;
+        }
+        this._groupFieldWidths[gi] = widths;
+        this._groupFieldOffsets[gi] = offsets;
+        this._groupFieldNative[gi] = natives;
+        this._groupFieldNativeType[gi] = natTypes;
+        this._groupFieldIds[gi] = fieldIds;
       }
     }
 
-    // 不变式：widths/offsets/native/nativeType[g] 的长度必须等于
-    // groupFieldCounts[g]。GroupMetadataTable 与 GROUP_SCHEMA 各报一个字段数，
-    // 真实文件必然一致；伪造文件可以把 GROUP_SCHEMA 的字段数改小，而所有下游
-    // 消费者（池加载、字段抽取）都按 groupFieldCounts[g] 迭代，于是越界。
-    // 一旦发现不一致就整组丢弃 schema，交给下面的默认布局重建
-    // （与 Rust/Go/C/Python 同一套收口逻辑）。
     for (let g = 0; g < actualGroups; g++) {
       if (schemaFldCounts[g] >= 0 && schemaFldCounts[g] !== this._groupFieldCounts[g]) {
         this._groupStrides[g] = 0;
@@ -1107,30 +1079,17 @@ class QzdbReader {
         this._groupFieldNativeType[g] = null;
         this._groupFieldIds[g] = null;
       }
-    }
-
-    for (let g = 0; g < actualGroups; g++) {
-      if (this._groupStrides[g] === 0) this._groupStrides[g] = this._groupFieldCounts[g] * this._poolIdxSize;
-      if (this._groupFieldWidths[g] === null) {
-        this._groupFieldWidths[g] = new Array(this._groupFieldCounts[g]).fill(this._poolIdxSize);
-      }
-      if (this._groupFieldOffsets[g] === null) {
-        this._groupFieldOffsets[g] = Array.from({ length: this._groupFieldCounts[g] }, (_, i) => i * this._poolIdxSize);
-      }
-      if (this._groupFieldNative[g] === null) {
-        this._groupFieldNative[g] = new Array(this._groupFieldCounts[g]).fill(false);
-      }
-      if (this._groupFieldNativeType[g] === null) {
-        this._groupFieldNativeType[g] = new Array(this._groupFieldCounts[g]).fill(0);
-      }
+      const fc = this._groupFieldCounts[g];
+      if (this._groupStrides[g] === 0) this._groupStrides[g] = fc * this._poolIdxSize;
+      if (this._groupFieldWidths[g] === null) this._groupFieldWidths[g] = new Array(fc).fill(this._poolIdxSize);
+      if (this._groupFieldOffsets[g] === null) this._groupFieldOffsets[g] = Array.from({ length: fc }, (_, i) => i * this._poolIdxSize);
+      if (this._groupFieldNative[g] === null) this._groupFieldNative[g] = new Array(fc).fill(false);
+      if (this._groupFieldNativeType[g] === null) this._groupFieldNativeType[g] = new Array(fc).fill(0);
       if (this._groupEntryCounts[g] > 0) {
         const gStart = this._offGeoEntries + this._groupEntryOffsets[g];
         chk(gStart, this._groupEntryCounts[g] * this._groupStrides[g], `group_${g}_entries`);
       }
     }
-
-    this._parseMeta();
-    this._repairDimMasks();
   }
 
   // dimensionMask 缺失时的重建：只看该组解析出来的字段名里有没有 asn。
@@ -1291,28 +1250,36 @@ class QzdbReader {
     const sp = this._offRowSchema;
     const fieldCount = d[sp];
     const stride = d[sp + 1];
-    if (fieldCount < 1 || fieldCount > 8) return;
-    if (sp + 4 + fieldCount * 4 > d.length) return;
-    if (stride !== this._ipRowSize) return;
+    if (fieldCount < 1 || fieldCount > 8 || stride !== this._ipRowSize || sp + 4 + fieldCount * 4 > d.length) {
+      throw new QzdbError(
+        `Invalid ROW_SCHEMA (fieldCount=${fieldCount}, stride=${stride}, ipRowSize=${this._ipRowSize})`,
+        QzdbError.CORRUPTED,
+      );
+    }
 
     let geoW = 0, asnW = 0, usageW = 0, total = 0;
     let wpos = sp + 4;
-    let ok = true;
     for (let i = 0; i < fieldCount; i++) {
       const fid = d[wpos];
       const w = d[wpos + 1];
+      if (w < 1 || w > 4) {
+        throw new QzdbError(`Invalid ROW_SCHEMA field width: ${w}`, QzdbError.CORRUPTED);
+      }
       if (fid === 0) geoW = w;
       else if (fid === 1) asnW = w;
       else if (fid === 2) usageW = w;
       wpos += 4;
       total += w;
-      if (w < 1 || w > 4) ok = false;
     }
-    if (ok && total === this._ipRowSize) {
-      this._rowGeoWidth = geoW;
-      this._rowAsnWidth = asnW;
-      this._rowUsageWidth = usageW;
+    if (total !== this._ipRowSize) {
+      throw new QzdbError(
+        `ROW_SCHEMA width sum (${total}) != ipRowSize (${this._ipRowSize})`,
+        QzdbError.CORRUPTED,
+      );
     }
+    this._rowGeoWidth = geoW;
+    this._rowAsnWidth = asnW;
+    this._rowUsageWidth = usageW;
   }
 
   _ensurePoolsLoaded() {
@@ -1438,7 +1405,7 @@ class QzdbReader {
       for (let step = 0; step < 16; step++) {
         if (idx >= nodeCount) return 0;
         const bit = (suffix >>> 31) & 1;
-        const child = nodesU32[(idx << 1) | bit];
+        const child = nodesU32[idx * 2 + bit];
         if (child === 0) return 0;
         if (child & SENTINEL) return child & SENTINEL_MASK_31;
         idx = child;
@@ -1494,7 +1461,7 @@ class QzdbReader {
         if (idx >= nodeCount) return 0;
         const word = depth <= 31 ? w0 : depth <= 63 ? w1 : depth <= 95 ? w2 : w3;
         const bit = (word >>> (31 - (depth & 31))) & 1;
-        const child = nodesU32[(idx << 1) | bit];
+        const child = nodesU32[idx * 2 + bit];
         if (child === 0) return 0;
         if (child & SENTINEL) return child & SENTINEL_MASK_31;
         idx = child;
@@ -1878,7 +1845,8 @@ class QzdbReader {
 
   _v4PrefixLen(ipInt) {
     if (!this._hasV4 || this._offV4Jump <= 0) return -1;
-    const ptr = this.safeReadU32(this._offV4Jump + ((ipInt >>> 16) & 0xFFFF) * 4);
+    const hi16 = (ipInt >>> 16) & 0xFFFF;
+    const ptr = this._v4JumpU32 !== null ? this._v4JumpU32[hi16] : this.safeReadU32(this._offV4Jump + hi16 * 4);
     if (ptr === 0) return -1;
     if (ptr & SENTINEL) return this._walkV4Depth(ipInt, 0, 0, 16);
     return this._walkV4Depth(ipInt, ptr, 16, 32);
@@ -1886,23 +1854,22 @@ class QzdbReader {
 
   _walkV4Depth(ipInt, startIdx, startDepth, maxDepth) {
     let idx = startIdx;
-    const d = this._data;
-    const nOff = this._offV4Nodes;
+    const nodesU32 = this._v4NodesU32;
     const nodeCount = this._v4NodeCount;
-    const node24 = this._v4Node24;
+    if (nodesU32 !== null) {
+      for (let depth = startDepth; depth < maxDepth; depth++) {
+        if (idx >= nodeCount) return -1;
+        const child = nodesU32[idx * 2 + ((ipInt >>> (31 - depth)) & 1)];
+        if (child & SENTINEL) return depth + 1;
+        if (child === 0) return -1;
+        idx = child;
+      }
+      return -1;
+    }
     for (let depth = startDepth; depth < maxDepth; depth++) {
       if (idx >= nodeCount) return -1;
-      const bit = (ipInt >>> (31 - depth)) & 1;
-      let child;
-      if (node24) {
-        const off = nOff + idx * 6 + (bit === 0 ? 0 : 3);
-        child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16);
-        if (child & SENTINEL_24) return depth + 1;
-      } else {
-        const off = nOff + idx * 8 + (bit === 0 ? 0 : 4);
-        child = this.safeReadU32(off);
-        if (child & SENTINEL) return depth + 1;
-      }
+      const child = this._getV4Child(idx, (ipInt >>> (31 - depth)) & 1);
+      if (child & SENTINEL) return depth + 1;
       if (child === 0) return -1;
       idx = child;
     }
@@ -1911,8 +1878,10 @@ class QzdbReader {
 
   _v6PrefixLen(buf) {
     if (!this._hasV6 || this._offV6Jump <= 0) return -1;
-    const pref = this._v6PrefixBits(buf, this._v6JumpBits);
-    const ptr = this.safeReadU32(this._offV6Jump + pref * 4);
+    const pref = this._v6JumpBits <= 32
+      ? (buf.readUInt32BE(0) >>> (32 - this._v6JumpBits))
+      : this._v6PrefixBits(buf, this._v6JumpBits);
+    const ptr = this._v6JumpU32 !== null ? this._v6JumpU32[pref] : this.safeReadU32(this._offV6Jump + pref * 4);
     if (ptr === 0) return -1;
     if (ptr & SENTINEL) return this._walkV6Depth(buf, 0, 0, this._v6JumpBits);
     return this._walkV6Depth(buf, ptr, this._v6JumpBits, 128);
@@ -1929,23 +1898,24 @@ class QzdbReader {
 
   _walkV6Depth(buf, startIdx, startDepth, maxDepth) {
     let idx = startIdx;
-    const d = this._data;
-    const nOff = this._offV6Nodes;
+    const nodesU32 = this._v6NodesU32;
     const nodeCount = this._v6NodeCount;
-    const node24 = this._v6Node24;
+    if (nodesU32 !== null) {
+      for (let depth = startDepth; depth < maxDepth; depth++) {
+        if (idx >= nodeCount) return -1;
+        const bit = (buf[depth >> 3] >>> (7 - (depth & 7))) & 1;
+        const child = nodesU32[idx * 2 + bit];
+        if (child & SENTINEL) return depth + 1;
+        if (child === 0) return -1;
+        idx = child;
+      }
+      return -1;
+    }
     for (let depth = startDepth; depth < maxDepth; depth++) {
       if (idx >= nodeCount) return -1;
       const bit = (buf[depth >> 3] >>> (7 - (depth & 7))) & 1;
-      let child;
-      if (node24) {
-        const off = nOff + idx * 6 + (bit === 0 ? 0 : 3);
-        child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16);
-        if (child & SENTINEL_24) return depth + 1;
-      } else {
-        const off = nOff + idx * 8 + (bit === 0 ? 0 : 4);
-        child = this.safeReadU32(off);
-        if (child & SENTINEL) return depth + 1;
-      }
+      const child = this._getV6Child(idx, bit);
+      if (child & SENTINEL) return depth + 1;
       if (child === 0) return -1;
       idx = child;
     }
