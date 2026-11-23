@@ -436,4 +436,4 @@ go/
 └── cmd/               # demo / batch / bench / dump / regress 等示例
 ```
 
-<!-- commit: go: Go SDK（跨平台 mmap，无锁并发查询） sync=1793951035 -->
+<!-- commit: go: Go SDK（跨平台 mmap，无锁并发查询） -->
