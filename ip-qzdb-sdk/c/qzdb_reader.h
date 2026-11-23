@@ -409,16 +409,20 @@ void          qzdb_chain_free(qzdb_chain_t* chain);
 #define QZDB_CHAIN_MERGE_OVERRIDE  2
 
 /* ---- Registry (spec §3.2) ----
- * 线程安全的命名 Reader 容器。
- * 注意：qzdb_registry_get() 返回借用指针。为保证无锁读性能，内部采用固定容量
- * 环形隔离队列（Quarantine Queue）延迟回收旧 Reader。register/unregister 面向
- * 低频配置管理与热更（秒/分钟级）；请避免在紧凑循环中进行毫秒级反复同名重注册。 */
+ * 线程安全的命名 Reader 容器（双轨生命周期）：
+ *   1. 推荐高频热更路径：qzdb_registry_acquire() 获取带引用计数租约的 Reader，
+ *      用毕调用 qzdb_registry_release() 归还；同名重注册/注销后，旧快照在最后一个
+ *      租约归还时立即原子回收（munmap + free），无内存增长、无并发 UAF。
+ *   2. 兼容存量路径：qzdb_registry_get() 返回无租约借用指针；被借用过的旧快照会
+ *      保守延后至 qzdb_registry_free() 统一回收，保证存量调用 100% 兼容且不 UAF。 */
 qzdb_registry_t* qzdb_registry_new(void);
 void             qzdb_registry_free(qzdb_registry_t* reg);
 int              qzdb_registry_register(qzdb_registry_t* reg, const char* name, const char* path);
 int              qzdb_registry_register_buffer(qzdb_registry_t* reg, const char* name,
                                               const uint8_t* buffer, size_t size);
 qzdb_reader_t*   qzdb_registry_get(qzdb_registry_t* reg, const char* name);
+qzdb_reader_t*   qzdb_registry_acquire(qzdb_registry_t* reg, const char* name);
+void             qzdb_registry_release(qzdb_reader_t* reader);
 void             qzdb_registry_unregister(qzdb_registry_t* reg, const char* name);
 int              qzdb_registry_count(qzdb_registry_t* reg);
 

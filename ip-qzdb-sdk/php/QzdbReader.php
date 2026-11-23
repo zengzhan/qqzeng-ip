@@ -88,7 +88,7 @@ abstract class UsageType
     {
         $raw = trim($raw, self::TRIM_CHARS);
         if ($raw === '') {
-            return KnownUsageType::fromRaw('Unknown') ?? new UnknownUsageType('');
+            return KnownUsageType::fromRaw('') ?? new UnknownUsageType('');
         }
         $known = KnownUsageType::fromRaw($raw);
         if ($known !== null) {
@@ -101,7 +101,7 @@ abstract class UsageType
 class KnownUsageType extends UsageType
 {
     public static $AI_CRAWLER, $BACKBONE, $BROADBAND, $BUSINESS, $CDN, $CLOUD, $DNS,
-           $DATA_CENTER, $EDUCATION, $FINANCE, $GOVERNMENT, $ISP, $IXP, $IOT, $MOBILE,
+           $DATA_CENTER, $EDUCATION, $FINANCE, $GOVERNMENT, $IOT, $MOBILE,
            $RESERVED, $SATELLITE, $SPIDER, $STREAMING, $UNKNOWN, $VPN;
 
     private static $RAW_MAP = null;
@@ -119,7 +119,7 @@ class KnownUsageType extends UsageType
         $this->description = $description;
     }
 
-    /** 一次性初始化全部 21 个枚举单例与 RAW_MAP。 */
+    /** 一次性初始化全部 18 个枚举单例与 RAW_MAP。 */
     private static function init(): void
     {
         if (self::$RAW_MAP !== null) return;
@@ -135,20 +135,19 @@ class KnownUsageType extends UsageType
             ['Education', '教育网', 'Education', '高校 / 科研网（CERNET 等）'],
             ['Finance', '金融', 'Finance', '银行 / 证券 / 保险等金融机构'],
             ['Government', '政府', 'Government', '政务 / 公共机构网络'],
-            ['ISP', '互联网提供商', 'ISP', '未细分类型的通用 ISP 接入'],
-            ['IXP', '交换中心', 'IXP', '互联网交换中心'],
             ['IoT', '物联网', 'IoT', '物联网设备接入网络'],
             ['Mobile', '移动网络', 'Mobile', '蜂窝移动网络（2G/3G/4G/5G）'],
             ['Reserved', '保留地址', 'Reserved', '保留 / 未分配地址'],
             ['Satellite', '卫星互联网', 'Satellite', '卫星 / 低轨星座接入（Starlink 等）'],
             ['Spider', '爬虫', 'Spider', '通用搜索引擎 / 通用网络爬虫'],
             ['Streaming', '流媒体', 'Streaming', '音视频 / 直播流媒体平台'],
-            ['Unknown', '未知', 'Unknown', '无法判定用途'],
+            ['Unknown', '', '', '无法判定用途'],
             ['VPN', 'VPN/代理', 'VPN', 'VPN / 代理 / 隐私网络出口'],
         ];
         $map = [];
         foreach ($defs as $d) {
-            $inst = new KnownUsageType($d[0], $d[1], $d[2], $d[3]);
+            $rawVal = ($d[0] === 'Unknown') ? '' : $d[0];
+            $inst = new KnownUsageType($rawVal, $d[1], $d[2], $d[3]);
             // 用稳定属性名映射（与上面声明的静态属性一一对应）
             switch ($d[0]) {
                 case 'AICrawler': self::$AI_CRAWLER = $inst; break;
@@ -162,8 +161,6 @@ class KnownUsageType extends UsageType
                 case 'Education': self::$EDUCATION = $inst; break;
                 case 'Finance': self::$FINANCE = $inst; break;
                 case 'Government': self::$GOVERNMENT = $inst; break;
-                case 'ISP': self::$ISP = $inst; break;
-                case 'IXP': self::$IXP = $inst; break;
                 case 'IoT': self::$IOT = $inst; break;
                 case 'Mobile': self::$MOBILE = $inst; break;
                 case 'Reserved': self::$RESERVED = $inst; break;
@@ -173,7 +170,12 @@ class KnownUsageType extends UsageType
                 case 'Unknown': self::$UNKNOWN = $inst; break;
                 case 'VPN': self::$VPN = $inst; break;
             }
-            $map[strtolower($inst->rawValue)] = $inst;
+            if ($d[0] === 'Unknown') {
+                $map['unknown'] = $inst;
+                $map[''] = $inst;
+            } else {
+                $map[strtolower($inst->rawValue)] = $inst;
+            }
         }
         self::$RAW_MAP = $map;
     }
@@ -201,8 +203,8 @@ class UnknownUsageType extends UsageType
     }
 
     public function rawValue(): string { return $this->rawValue ?? ''; }
-    public function getDisplayZh(): string { return $this->rawValue !== null ? $this->rawValue : '未知'; }
-    public function getDisplayEn(): string { return $this->rawValue !== null ? $this->rawValue : 'Unknown'; }
+    public function getDisplayZh(): string { return ($this->rawValue !== null && $this->rawValue !== '') ? $this->rawValue : ''; }
+    public function getDisplayEn(): string { return ($this->rawValue !== null && $this->rawValue !== '') ? $this->rawValue : ''; }
     public function getDescription(): string { return '未预期的细分场景分类: ' . ($this->rawValue ?? ''); }
     public function isKnown(): bool { return false; }
 }
@@ -3289,12 +3291,29 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         return $v === false ? null : $v;
     }
 
+    private const PARSE_MEMO_CAP = 16384;
+    private static $parseMemo = [];
+
     private static function fastParseIp($ip)
     {
         if (!is_string($ip)) return null;
+        if (isset(self::$parseMemo[$ip])) {
+            return self::$parseMemo[$ip];
+        }
         $n = strlen($ip);
         if ($n === 0 || $n > 45) return null;
-        $s = $ip;
+        $res = self::fastParseIpUncached($ip);
+        if ($res !== null) {
+            if (count(self::$parseMemo) >= self::PARSE_MEMO_CAP) {
+                self::$parseMemo = [];
+            }
+            self::$parseMemo[$ip] = $res;
+        }
+        return $res;
+    }
+
+    private static function fastParseIpUncached(string $s)
+    {
         if (strpos($s, ':') === false) {
             $v4 = self::fastParseIpv4($s);
             return $v4 !== null ? array($v4, null) : null;

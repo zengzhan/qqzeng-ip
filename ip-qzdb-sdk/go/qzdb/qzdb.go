@@ -1413,13 +1413,53 @@ func (r *QzdbReader) findV6(s *Snapshot, ip [16]byte) (*GeoInfo, error) {
 	return g, nil
 }
 
-// FindStr 返回 toPipe() 字符串；未命中/非法返回 ""。
-func (r *QzdbReader) FindStr(ipStr string) string {
-	g, _ := r.Find(ipStr)
-	if g == nil {
+func (s *Snapshot) extractGeoPipe(rowID uint32) string {
+	if rowID == 0 {
 		return ""
 	}
-	return g.ToPipe()
+	entryID, entryOff, fc, ok := s.resolveEntry(rowID)
+	if !ok {
+		return ""
+	}
+	if g := s.geoCache.get(entryID); g != nil {
+		return g.pipe
+	}
+	g := s.computeGeoInfoEntry(entryID, entryOff, fc)
+	if g != nil {
+		s.geoCache.put(entryID, g)
+		return g.pipe
+	}
+	return ""
+}
+
+// FindStr 返回 toPipe() 字符串；未命中/非法返回 ""。
+// 零拷贝快路径：缓存命中直接返回不可变字符串 g.pipe，避免 cloneGeoInfo 的 2 次堆分配。
+func (r *QzdbReader) FindStr(ipStr string) string {
+	s := r.snapshot()
+	if s == nil || ipStr == "" {
+		return ""
+	}
+	res, ok := fastParseIp(ipStr)
+	if !ok {
+		return ""
+	}
+	var rowID uint32
+	var err error
+	if res.isV4 {
+		if !s.hasV4 {
+			return ""
+		}
+		rowID, err = s.trieWalkV4(res.v4)
+	} else {
+		if !s.hasV6 {
+			return ""
+		}
+		rowID, err = s.trieWalkV6(res.v6)
+	}
+	if err != nil || rowID == 0 {
+		return ""
+	}
+	return s.extractGeoPipe(rowID)
 }
 
 // FindFields 字段投影查询：只解析 fields 指定的字段（对标 Java §9.6 投影模式）。

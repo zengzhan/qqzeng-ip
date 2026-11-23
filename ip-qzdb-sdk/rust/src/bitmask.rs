@@ -44,6 +44,7 @@ impl IpAttrFlags {
     pub const BROADBAND: u32 = 1 << 8;
     pub const VPN_PROXY: u32 = 1 << 9;
     pub const BACKBONE_IXP: u32 = 1 << 10;
+    pub const BACKBONE: u32 = 1 << 10;
     pub const SATELLITE: u32 = 1 << 11;
     pub const DNS_ANYCAST: u32 = 1 << 12;
     pub const EDU_GOV_FIN: u32 = 1 << 13;
@@ -127,7 +128,7 @@ impl IpAttrFlags {
         (self.0 & Self::DNS_ANYCAST) != 0
     }
 
-    /// O(1) 还原已知的 [`KnownUsage`] 枚举（若库含 `usage_type` 且属于 21 类已知场景）。
+    /// O(1) 还原已知的 [`KnownUsage`] 枚举（若库含 `usage_type` 且属于 18 类已知场景）。
     #[inline]
     pub const fn known_usage(self) -> Option<KnownUsage> {
         let code = (self.0 >> Self::USAGE_SHIFT) & Self::USAGE_MASK;
@@ -143,16 +144,13 @@ impl IpAttrFlags {
             9 => Some(KnownUsage::Education),
             10 => Some(KnownUsage::Finance),
             11 => Some(KnownUsage::Government),
-            12 => Some(KnownUsage::Isp),
-            13 => Some(KnownUsage::Ixp),
-            14 => Some(KnownUsage::Iot),
-            15 => Some(KnownUsage::Mobile),
-            16 => Some(KnownUsage::Reserved),
-            17 => Some(KnownUsage::Satellite),
-            18 => Some(KnownUsage::Spider),
-            19 => Some(KnownUsage::Streaming),
-            20 => Some(KnownUsage::Unknown),
-            21 => Some(KnownUsage::Vpn),
+            12 => Some(KnownUsage::Iot),
+            13 => Some(KnownUsage::Mobile),
+            14 => Some(KnownUsage::Reserved),
+            15 => Some(KnownUsage::Satellite),
+            16 => Some(KnownUsage::Spider),
+            17 => Some(KnownUsage::Streaming),
+            18 => Some(KnownUsage::Vpn),
             _ => None,
         }
     }
@@ -162,7 +160,7 @@ impl IpAttrFlags {
 fn usage_to_code_and_bits(k: KnownUsage) -> (u32, u32) {
     match k {
         KnownUsage::AiCrawler => (1, IpAttrFlags::AI_CRAWLER),
-        KnownUsage::Backbone => (2, IpAttrFlags::BACKBONE_IXP),
+        KnownUsage::Backbone => (2, IpAttrFlags::BACKBONE),
         KnownUsage::Broadband => (3, IpAttrFlags::BROADBAND),
         KnownUsage::Business => (4, 0),
         KnownUsage::Cdn => (5, IpAttrFlags::DATACENTER),
@@ -172,16 +170,13 @@ fn usage_to_code_and_bits(k: KnownUsage) -> (u32, u32) {
         KnownUsage::Education => (9, IpAttrFlags::EDU_GOV_FIN),
         KnownUsage::Finance => (10, IpAttrFlags::EDU_GOV_FIN),
         KnownUsage::Government => (11, IpAttrFlags::EDU_GOV_FIN),
-        KnownUsage::Isp => (12, 0),
-        KnownUsage::Ixp => (13, IpAttrFlags::BACKBONE_IXP),
-        KnownUsage::Iot => (14, 0),
-        KnownUsage::Mobile => (15, IpAttrFlags::MOBILE),
-        KnownUsage::Reserved => (16, IpAttrFlags::PRIVATE_RESERVED),
-        KnownUsage::Satellite => (17, IpAttrFlags::SATELLITE),
-        KnownUsage::Spider => (18, IpAttrFlags::SPIDER),
-        KnownUsage::Streaming => (19, 0),
-        KnownUsage::Unknown => (20, 0),
-        KnownUsage::Vpn => (21, IpAttrFlags::VPN_PROXY),
+        KnownUsage::Iot => (12, 0),
+        KnownUsage::Mobile => (13, IpAttrFlags::MOBILE),
+        KnownUsage::Reserved => (14, IpAttrFlags::PRIVATE_RESERVED),
+        KnownUsage::Satellite => (15, IpAttrFlags::SATELLITE),
+        KnownUsage::Spider => (16, IpAttrFlags::SPIDER),
+        KnownUsage::Streaming => (17, 0),
+        KnownUsage::Vpn => (18, IpAttrFlags::VPN_PROXY),
     }
 }
 

@@ -217,7 +217,7 @@ info.ToJson()   // 手写 JSON：longitude/latitude/asn/geo_id 输出为数字�
 | `GetPhonePrefix()` / `GetEmojiFlag()` / `GetLanguages()` | `string` | `""` |
 | `GetCidr()` | `string` | `""`（恒返回 `""`；真实网段请用 `reader.LookupCidr(ip)`） |
 
-`UsageType` 提供 21 个官方场景（`AICrawler`/`Backbone`/`Broadband`/`Business`/`CDN`/`Cloud`/`DNS`/`DataCenter`/`Education`/`Finance`/`Government`/`ISP`/`IXP`/`IoT`/`Mobile`/`Reserved`/`Satellite`/`Spider`/`Streaming`/`Unknown`/`VPN`），未知场景安全兜底（不崩溃）：
+`UsageType` 提供 18 个官方场景（`AICrawler`/`Backbone`/`Broadband`/`Business`/`CDN`/`Cloud`/`DNS`/`DataCenter`/`Education`/`Finance`/`Government`/`IoT`/`Mobile`/`Reserved`/`Satellite`/`Spider`/`Streaming`/`VPN`），未知场景安全兜底（不崩溃），空值一律为空字符串：
 
 ```go
 ut := info.GetUsageType()

@@ -189,8 +189,8 @@ ut.is_known()         # True
 ### `UsageType` 是 `str, Enum`（契约 A.5）
 
 - `issubclass(UsageType, str)` 为 `True`，成员可直接当字符串用：`UsageType.CDN == 'CDN'`、`f"{UsageType.CDN}" == 'CDN'`、`ut in {'CDN', 'VPN'}` 均成立。
-- 21 个预定义成员：`AICrawler / Backbone / Broadband / Business / CDN / Cloud / DNS / DataCenter / Education / Finance / Government / ISP / IXP / IoT / Mobile / Reserved / Satellite / Spider / Streaming / Unknown / VPN`。
-- 已知场景取成员，未知原始值经 `UsageType.from_string(raw)` **返回原生 `str`**（契约 `UsageType | str`），不抛异常；空串 / `None` 归并为 `UsageType.UNKNOWN`：
+- 18 个预定义成员：`AICrawler / Backbone / Broadband / Business / CDN / Cloud / DNS / DataCenter / Education / Finance / Government / IoT / Mobile / Reserved / Satellite / Spider / Streaming / VPN`。
+- 已知场景取成员，未知原始值经 `UsageType.from_string(raw)` **返回原生 `str`**（契约 `UsageType | str`），不抛异常；空串 / `None` 归并为 `UsageType.UNKNOWN`（值为 `""`，展示名均为空字符串）：
 
 ```python
 ut = UsageType.from_string('CDN')          # <UsageType.CDN: 'CDN'>（已知成员）

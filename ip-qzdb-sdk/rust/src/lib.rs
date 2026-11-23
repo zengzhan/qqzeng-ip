@@ -581,15 +581,12 @@ pub enum KnownUsage {
     Education,
     Finance,
     Government,
-    Isp,
-    Ixp,
     Iot,
     Mobile,
     Reserved,
     Satellite,
     Spider,
     Streaming,
-    Unknown,
     Vpn,
 }
 
@@ -607,15 +604,12 @@ impl KnownUsage {
             KnownUsage::Education => "Education",
             KnownUsage::Finance => "Finance",
             KnownUsage::Government => "Government",
-            KnownUsage::Isp => "ISP",
-            KnownUsage::Ixp => "IXP",
             KnownUsage::Iot => "IoT",
             KnownUsage::Mobile => "Mobile",
             KnownUsage::Reserved => "Reserved",
             KnownUsage::Satellite => "Satellite",
             KnownUsage::Spider => "Spider",
             KnownUsage::Streaming => "Streaming",
-            KnownUsage::Unknown => "Unknown",
             KnownUsage::Vpn => "VPN",
         }
     }
@@ -633,15 +627,12 @@ impl KnownUsage {
             KnownUsage::Education => "教育网",
             KnownUsage::Finance => "金融",
             KnownUsage::Government => "政府",
-            KnownUsage::Isp => "互联网提供商",
-            KnownUsage::Ixp => "交换中心",
             KnownUsage::Iot => "物联网",
             KnownUsage::Mobile => "移动网络",
             KnownUsage::Reserved => "保留地址",
             KnownUsage::Satellite => "卫星互联网",
             KnownUsage::Spider => "爬虫",
             KnownUsage::Streaming => "流媒体",
-            KnownUsage::Unknown => "未知",
             KnownUsage::Vpn => "VPN/代理",
         }
     }
@@ -659,15 +650,12 @@ impl KnownUsage {
             KnownUsage::Education => "Education",
             KnownUsage::Finance => "Finance",
             KnownUsage::Government => "Government",
-            KnownUsage::Isp => "ISP",
-            KnownUsage::Ixp => "IXP",
             KnownUsage::Iot => "IoT",
             KnownUsage::Mobile => "Mobile",
             KnownUsage::Reserved => "Reserved",
             KnownUsage::Satellite => "Satellite",
             KnownUsage::Spider => "Spider",
             KnownUsage::Streaming => "Streaming",
-            KnownUsage::Unknown => "Unknown",
             KnownUsage::Vpn => "VPN",
         }
     }
@@ -685,15 +673,12 @@ impl KnownUsage {
             KnownUsage::Education => "高校 / 科研网（CERNET 等）",
             KnownUsage::Finance => "银行 / 证券 / 保险等金融机构",
             KnownUsage::Government => "政务 / 公共机构网络",
-            KnownUsage::Isp => "未细分类型的通用 ISP 接入",
-            KnownUsage::Ixp => "互联网交换中心",
             KnownUsage::Iot => "物联网设备接入网络",
             KnownUsage::Mobile => "蜂窝移动网络（2G/3G/4G/5G）",
             KnownUsage::Reserved => "保留 / 未分配地址",
             KnownUsage::Satellite => "卫星 / 低轨星座接入（Starlink 等）",
             KnownUsage::Spider => "通用搜索引擎 / 通用网络爬虫",
             KnownUsage::Streaming => "音视频 / 直播流媒体平台",
-            KnownUsage::Unknown => "无法判定用途",
             KnownUsage::Vpn => "VPN / 代理 / 隐私网络出口",
         }
     }
@@ -714,19 +699,16 @@ impl UsageType {
             "education" => KnownUsage::Education,
             "finance" => KnownUsage::Finance,
             "government" => KnownUsage::Government,
-            "isp" => KnownUsage::Isp,
-            "ixp" => KnownUsage::Ixp,
             "iot" => KnownUsage::Iot,
             "mobile" => KnownUsage::Mobile,
             "reserved" => KnownUsage::Reserved,
             "satellite" => KnownUsage::Satellite,
             "spider" => KnownUsage::Spider,
             "streaming" => KnownUsage::Streaming,
-            "unknown" => KnownUsage::Unknown,
             "vpn" => KnownUsage::Vpn,
             _ => {
-                if r.is_empty() {
-                    return UsageType::Unknown("Unknown".to_string());
+                if r.is_empty() || r.eq_ignore_ascii_case("unknown") {
+                    return UsageType::Unknown(String::new());
                 }
                 return UsageType::Unknown(r.to_string());
             }
@@ -748,14 +730,14 @@ impl UsageType {
     pub fn display_zh(&self) -> &str {
         match self {
             UsageType::Known(k) => k.display_zh(),
-            UsageType::Unknown(_) => "未知",
+            UsageType::Unknown(s) => if s.is_empty() { "" } else { "未知" },
         }
     }
 
     pub fn display_en(&self) -> &str {
         match self {
             UsageType::Known(k) => k.display_en(),
-            UsageType::Unknown(_) => "Unknown",
+            UsageType::Unknown(s) => if s.is_empty() { "" } else { "Unknown" },
         }
     }
 

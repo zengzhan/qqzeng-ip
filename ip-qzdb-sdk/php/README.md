@@ -482,7 +482,7 @@ $desc  = $u->getDescription();    // 详细描述
 $raw   = $u->rawValue();          // 原始编码字符串（未知场景时保留原始值）
 ```
 
-预定义分类（共 21 个）：`AICrawler`(AI 爬虫)、`Backbone`(骨干网)、`Broadband`(宽带)、`Business`(企业)、`CDN`、`Cloud`(云服务)、`DNS`、`DataCenter`(数据中心)、`Education`(教育网)、`Finance`(金融)、`Government`(政府)、`ISP`、`IXP`(交换中心)、`IoT`(物联网)、`Mobile`(移动网络)、`Reserved`(保留地址)、`Satellite`(卫星互联网)、`Spider`(爬虫)、`Streaming`(流媒体)、`Unknown`(未知)、`VPN`(VPN/代理)。
+预定义分类（共 18 个）：`AICrawler`(AI 爬虫)、`Backbone`(骨干网)、`Broadband`(宽带)、`Business`(企业)、`CDN`、`Cloud`(云服务)、`DNS`、`DataCenter`(数据中心)、`Education`(教育网)、`Finance`(金融)、`Government`(政府)、`IoT`(物联网)、`Mobile`(移动网络)、`Reserved`(保留地址)、`Satellite`(卫星互联网)、`Spider`(爬虫)、`Streaming`(流媒体)、`VPN`(VPN/代理)。无值时统一为空字符串 `""`。
 
 未命中预定义值时 `isKnown() == false`，返回一个 `UnknownUsageType` 安全兜底（**不崩溃**），`rawValue()` 保留原始字符串。可用 `KnownUsageType::fromRaw($raw)` 把原始字符串解析为已知实例（未知时返回 `null`）。
 

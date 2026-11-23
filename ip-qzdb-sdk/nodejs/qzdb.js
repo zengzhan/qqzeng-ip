@@ -493,7 +493,7 @@ function _isJsonNumber(val) {
 }
 
 // ===========================================================================
-// UsageType（§6 / Tier1：21 个预定义 + 未知兜底）
+// UsageType（§6 / Tier1：18 个预定义 + 未知兜底）
 // ===========================================================================
 const KNOWN_USAGE = [
   ['AICrawler', 'AI 爬虫', 'AICrawler', 'AI 训练 / AI 搜索爬虫（GPTBot、ClaudeBot 等）'],
@@ -507,15 +507,12 @@ const KNOWN_USAGE = [
   ['Education', '教育网', 'Education', '高校 / 科研网（CERNET 等）'],
   ['Finance', '金融', 'Finance', '银行 / 证券 / 保险等金融机构'],
   ['Government', '政府', 'Government', '政务 / 公共机构网络'],
-  ['ISP', '互联网提供商', 'ISP', '未细分类型的通用 ISP 接入'],
-  ['IXP', '交换中心', 'IXP', '互联网交换中心'],
   ['IoT', '物联网', 'IoT', '物联网设备接入网络'],
   ['Mobile', '移动网络', 'Mobile', '蜂窝移动网络（2G/3G/4G/5G）'],
   ['Reserved', '保留地址', 'Reserved', '保留 / 未分配地址'],
   ['Satellite', '卫星互联网', 'Satellite', '卫星 / 低轨星座接入（Starlink 等）'],
   ['Spider', '爬虫', 'Spider', '通用搜索引擎 / 通用网络爬虫'],
   ['Streaming', '流媒体', 'Streaming', '音视频 / 直播流媒体平台'],
-  ['Unknown', '未知', 'Unknown', '无法判定用途'],
   ['VPN', 'VPN/代理', 'VPN', 'VPN / 代理 / 隐私网络出口'],
 ];
 
@@ -544,11 +541,12 @@ class UsageType {
   }
 }
 const USAGE_MAP = Object.create(null);
-const USAGE_UNKNOWN = new UsageType('Unknown', '未知', 'Unknown', '无法判定用途', true);
+const USAGE_UNKNOWN = new UsageType('', '', '', '无法判定用途', true);
+USAGE_MAP['unknown'] = USAGE_UNKNOWN;
+USAGE_MAP[''] = USAGE_UNKNOWN;
 for (const [raw, zh, en, desc] of KNOWN_USAGE) {
   const u = new UsageType(raw, zh, en, desc, true);
   USAGE_MAP[raw.toLowerCase()] = u;
-  if (raw === 'Unknown') { /* keep reference */ }
 }
 
 // ===========================================================================
@@ -1605,7 +1603,7 @@ class QzdbReader {
 
   find(ipStr) {
     if (!ipStr) return null;
-    return this._findParsed(fastParseIp(ipStr));
+    return this._findParsed(_fastParseIpInternal(ipStr));
   }
 
   findUint(ipInt) {
@@ -1656,7 +1654,7 @@ class QzdbReader {
   // - 全部未知时仍返回 GeoInfo（字段值全为 ''）
   // - fields=null/空 等价于 find
   findFields(ipStr, fieldNames = null) {
-    const parsed = fastParseIp(ipStr);
+    const parsed = _fastParseIpInternal(ipStr);
     if (fieldNames === null || fieldNames.length === 0) return this._findParsed(parsed);
     return this._findFieldsParsed(parsed, fieldNames);
   }
@@ -1693,7 +1691,7 @@ class QzdbReader {
     if (ips == null) return [];
     const out = [];
     for (const ip of ips) {
-      const parsed = fastParseIp(ip);
+      const parsed = _fastParseIpInternal(ip);
       if (parsed == null) {
         out.push(new BatchResult(ip, null, new QzdbError('Invalid IP: ' + ip, QzdbError.INVALID_PARAM)));
         continue;
@@ -1711,7 +1709,7 @@ class QzdbReader {
     if (ips == null) return [];
     const out = [];
     for (const ip of ips) {
-      const parsed = fastParseIp(ip);
+      const parsed = _fastParseIpInternal(ip);
       if (parsed == null) {
         out.push(new BatchResult(ip, null, new QzdbError('Invalid IP: ' + ip, QzdbError.INVALID_PARAM)));
         continue;
@@ -1731,7 +1729,7 @@ class QzdbReader {
   *findIter(ips) {
     if (ips == null) return;
     for (const ip of ips) {
-      const parsed = fastParseIp(ip);
+      const parsed = _fastParseIpInternal(ip);
       if (parsed == null) {
         yield new BatchResult(ip, null, new QzdbError('Invalid IP: ' + ip, QzdbError.INVALID_PARAM));
         continue;
@@ -1752,7 +1750,7 @@ class QzdbReader {
   lookupRowId(ipStr) {
     if (!ipStr) return 0;
     if (this._closed) return 0;
-    const result = fastParseIp(ipStr);
+    const result = _fastParseIpInternal(ipStr);
     if (!result) return 0;
     if (result.v4 !== null) return this.lookupRowIdUint(result.v4);
     if (!this._hasV6) return 0;
@@ -1802,7 +1800,7 @@ class QzdbReader {
   lookupCidr(ipStr) {
     if (!ipStr) return null;
     if (this._closed) return null;
-    const result = fastParseIp(ipStr);
+    const result = _fastParseIpInternal(ipStr);
     if (!result) return null;
     if (result.v4 !== null) {
       const n = this._v4PrefixLen(result.v4);
@@ -2138,25 +2136,27 @@ function _fastParseIPv4(s) {
 const _PARSE_MEMO_CAP = 16384;
 const _parseMemo = new Map();
 
-function fastParseIp(ip) {
+function _fastParseIpInternal(ip) {
   if (typeof ip !== 'string') return null;
   const s = ip;
   const n = s.length;
   if (n === 0 || n > 45) return null;
   const cached = _parseMemo.get(s);
-  if (cached !== undefined) {
-    if (cached.v6 !== null) {
-      return Object.freeze({ v4: null, v6: Buffer.from(cached.v6) });
-    }
-    return cached;
-  }
+  if (cached !== undefined) return cached;
   const rec = _fastParseIpUncached(s, n);
   if (rec !== null) {
-    if (_parseMemo.size < _PARSE_MEMO_CAP) _parseMemo.set(s, Object.freeze(rec));
+    const frozen = Object.freeze(rec);
+    if (_parseMemo.size < _PARSE_MEMO_CAP) _parseMemo.set(s, frozen);
     else _parseMemo.clear();
-    if (rec.v6 !== null) {
-      return Object.freeze({ v4: null, v6: Buffer.from(rec.v6) });
-    }
+    return frozen;
+  }
+  return null;
+}
+
+function fastParseIp(ip) {
+  const rec = _fastParseIpInternal(ip);
+  if (rec !== null && rec.v6 !== null) {
+    return Object.freeze({ v4: null, v6: Buffer.from(rec.v6) });
   }
   return rec;
 }
@@ -2385,7 +2385,7 @@ class ChainedReader {
   // 批量/流式三态（契约 §二.2，强制）：非法 IP 必须落 error，不得降级为未命中
   // （对齐 Java/Python ChainedReader 与 QzdbReader.findBatch）。
   _batchOne(ip, fields, withFields) {
-    if (fastParseIp(ip) === null) {
+    if (_fastParseIpInternal(ip) === null) {
       return new BatchResult(ip, null, new QzdbError('Invalid IP: ' + ip, QzdbError.INVALID_PARAM));
     }
     try {

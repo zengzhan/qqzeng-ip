@@ -324,7 +324,7 @@ static int field_index_normalized(qzdb_reader_t* ctx, const char* name) {
 }
 
 /* ========================================================================
- * UsageType (spec §6.4) — 21 official scenarios
+ * UsageType (spec §6.4) — 18 official scenarios
  * ======================================================================== */
 static const struct { const char* raw; const char* zh; const char* en; const char* desc; } usage_types[] = {
     {"AICrawler",  "AI 爬虫",     "AICrawler",  "AI 训练 / AI 搜索爬虫（GPTBot、ClaudeBot 等）"},
@@ -338,15 +338,13 @@ static const struct { const char* raw; const char* zh; const char* en; const cha
     {"Education",  "教育网",      "Education",  "高校 / 科研网（CERNET 等）"},
     {"Finance",    "金融",        "Finance",    "银行 / 证券 / 保险等金融机构"},
     {"Government", "政府",        "Government", "政务 / 公共机构网络"},
-    {"ISP",        "互联网提供商", "ISP",        "未细分类型的通用 ISP 接入"},
-    {"IXP",        "交换中心",    "IXP",        "互联网交换中心"},
     {"IoT",        "物联网",      "IoT",        "物联网设备接入网络"},
     {"Mobile",     "移动网络",    "Mobile",     "蜂窝移动网络（2G/3G/4G/5G）"},
     {"Reserved",   "保留地址",    "Reserved",   "保留 / 未分配地址"},
     {"Satellite",  "卫星互联网",  "Satellite",  "卫星 / 低轨星座接入（Starlink 等）"},
     {"Spider",     "爬虫",        "Spider",     "通用搜索引擎 / 通用网络爬虫"},
     {"Streaming",  "流媒体",      "Streaming",  "音视频 / 直播流媒体平台"},
-    {"Unknown",    "未知",        "Unknown",    "无法判定用途"},
+    {"Unknown",    "",            "",           "无法判定用途"},
     {"VPN",        "VPN/代理",    "VPN",        "VPN / 代理 / 隐私网络出口"},
     {NULL, NULL, NULL, NULL}
 };
@@ -363,21 +361,21 @@ const char* qzdb_geo_usage_type(qzdb_reader_t* ctx, const qzdb_geo_info_t* info)
 }
 
 int qzdb_usage_type_is_known(const char* raw) {
-    if (!raw) return 0;
+    if (!raw || !*raw) return 0;
     for (int i = 0; usage_types[i].raw; i++)
         if (strcmp(raw, usage_types[i].raw) == 0) return 1;
     return 0;
 }
 
 const char* qzdb_usage_type_display_zh(const char* raw) {
-    if (!raw) return "";
+    if (!raw || !*raw) return "";
     for (int i = 0; usage_types[i].raw; i++)
         if (strcmp(raw, usage_types[i].raw) == 0) return usage_types[i].zh;
     return "未知";
 }
 
 const char* qzdb_usage_type_display_en(const char* raw) {
-    if (!raw) return "";
+    if (!raw || !*raw) return "";
     for (int i = 0; usage_types[i].raw; i++)
         if (strcmp(raw, usage_types[i].raw) == 0) return usage_types[i].en;
     return "Unknown";
@@ -1909,40 +1907,57 @@ void qzdb_chain_free(qzdb_chain_t* chain) {
 }
 
 /* ========================================================================
- * Registry (spec §3.2) — simple name→reader map
+ * Registry (spec §3.2) — thread-safe name→reader map with refcounted leases
  * ======================================================================== */
 #define REG_INIT_BUCKETS 16
 
+typedef struct reg_reader_slot {
+    qzdb_reader_t reader;          /* 必须为首字段：&slot->reader == (qzdb_reader_t*)slot */
+    int32_t       refcount;        /* 原子引用计数，初始 1（由 registry 持有） */
+    uint8_t       legacy_borrowed; /* 若曾通过 qzdb_registry_get() 借出则置 1，延后至 registry_free 回收 */
+} reg_reader_slot_t;
+
 typedef struct reg_entry {
-    char*            name;
-    qzdb_reader_t*   reader;
-    struct reg_entry* next;
+    char*              name;
+    reg_reader_slot_t* slot;
+    struct reg_entry*  next;
 } reg_entry_t;
 
 typedef struct reg_retired_node {
-    qzdb_reader_t*          reader;
+    reg_reader_slot_t*       slot;
     struct reg_retired_node* next;
 } reg_retired_node_t;
 
 struct qzdb_registry {
-    reg_entry_t** buckets;
-    uint32_t      cap;
-    uint32_t      count;
-    pthread_mutex_t lock;
-    /* 安全退休链表：被替换/移除的 reader 保存在链表中直至 qzdb_registry_free()
-     * 才统一释放，避免固定 8 槽环形队列在第 9 次注册时强行释放仍在被调用方持有的
-     * 裸指针（UAF）。 */
+    reg_entry_t**       buckets;
+    uint32_t            cap;
+    uint32_t            count;
+    pthread_mutex_t     lock;
+    /* 仅存放曾被旧版 qzdb_registry_get() 借出的退休快照；
+     * 纯 acquire/release 路径的旧快照在租约归零时立即回收，不进此链表。 */
     reg_retired_node_t* retired_head;
 };
 
-/* 把 old（可能为 NULL）挂入退休链表，避免过早释放导致外部持有指针 UAF。 */
-static void reg_retire_locked(qzdb_registry_t* reg, qzdb_reader_t* old) {
-    if (!old) return;
+static void reg_slot_release(reg_reader_slot_t* slot) {
+    if (!slot) return;
+    if (__atomic_sub_fetch(&slot->refcount, 1, __ATOMIC_ACQ_REL) == 0) {
+        qzdb_free(&slot->reader);
+        free(slot);
+    }
+}
+
+/* 把被替换/移除的旧快照按双轨策略处理：
+ *   - 若曾通过 qzdb_registry_get() 借出，挂入 retired_head 延后至 qzdb_registry_free() 释放；
+ *   - 否则返回给调用方在锁外执行 reg_slot_release()，租约归零立即 munmap/free。 */
+static reg_reader_slot_t* reg_retire_locked(qzdb_registry_t* reg, reg_reader_slot_t* old) {
+    if (!old) return NULL;
+    if (!old->legacy_borrowed) return old;
     reg_retired_node_t* node = (reg_retired_node_t*)malloc(sizeof(*node));
-    if (!node) return; /* 宁可保守泄漏也不在未知借用期 UAF */
-    node->reader = old;
+    if (!node) return NULL; /* 宁可保守泄漏也不在未知借用期 UAF */
+    node->slot = old;
     node->next = reg->retired_head;
     reg->retired_head = node;
+    return NULL;
 }
 
 /* 在桶 idx 对应的链表里查找 name 的现有条目；未找到返回 NULL。
@@ -1968,103 +1983,118 @@ static uint32_t reg_hash(const char* s) {
     return h ? h : 1;
 }
 
-int qzdb_registry_register(qzdb_registry_t* reg, const char* name, const char* path) {
-    if (!reg || !name || !path) return QZDB_ERR_INVALID_PARAM;
-    qzdb_reader_t* reader = calloc(1, sizeof(qzdb_reader_t));
-    if (!reader) return QZDB_ERR_OUT_OF_MEMORY;
-    int rc = qzdb_init(reader, path);
-    if (rc != QZDB_OK) { free(reader); return rc; }
+static int reg_install_slot(qzdb_registry_t* reg, const char* name, reg_reader_slot_t* slot) {
+    reg_reader_slot_t* detach = NULL;
     pthread_mutex_lock(&reg->lock);
     uint32_t idx = reg_hash(name) & (reg->cap - 1);
     reg_entry_t* e = reg_find_locked(reg, idx, name);
     if (e) {
-        /* 同名重复注册：原地替换指针，绝不再往桶链表里插入第二个同名节点
-         * （旧代码在这里会产生重复条目 + 永久泄漏，见结构体上方注释）。
-         * 旧 reader 走退休队列延迟释放，而不是立即 free。 */
-        qzdb_reader_t* old = e->reader;
-        e->reader = reader;
-        reg_retire_locked(reg, old);
+        reg_reader_slot_t* old = e->slot;
+        e->slot = slot;
+        detach = reg_retire_locked(reg, old);
     } else {
         e = calloc(1, sizeof(reg_entry_t));
-        if (!e) { pthread_mutex_unlock(&reg->lock); qzdb_free(reader); free(reader); return QZDB_ERR_OUT_OF_MEMORY; }
+        if (!e) { pthread_mutex_unlock(&reg->lock); reg_slot_release(slot); return QZDB_ERR_OUT_OF_MEMORY; }
         e->name = strdup(name);
-        if (!e->name) { pthread_mutex_unlock(&reg->lock); free(e); qzdb_free(reader); free(reader); return QZDB_ERR_OUT_OF_MEMORY; }
-        e->reader = reader; e->next = reg->buckets[idx];
-        reg->buckets[idx] = e; reg->count++;
+        if (!e->name) { pthread_mutex_unlock(&reg->lock); free(e); reg_slot_release(slot); return QZDB_ERR_OUT_OF_MEMORY; }
+        e->slot = slot;
+        e->next = reg->buckets[idx];
+        reg->buckets[idx] = e;
+        __atomic_store_n(&reg->count, reg->count + 1u, __ATOMIC_RELEASE);
     }
     pthread_mutex_unlock(&reg->lock);
+    if (detach) reg_slot_release(detach);
     return QZDB_OK;
+}
+
+int qzdb_registry_register(qzdb_registry_t* reg, const char* name, const char* path) {
+    if (!reg || !name || !path) return QZDB_ERR_INVALID_PARAM;
+    reg_reader_slot_t* slot = calloc(1, sizeof(reg_reader_slot_t));
+    if (!slot) return QZDB_ERR_OUT_OF_MEMORY;
+    int rc = qzdb_init(&slot->reader, path);
+    if (rc != QZDB_OK) { free(slot); return rc; }
+    slot->refcount = 1;
+    return reg_install_slot(reg, name, slot);
 }
 
 int qzdb_registry_register_buffer(qzdb_registry_t* reg, const char* name, const uint8_t* buffer, size_t size) {
     if (!reg || !name || !buffer || size == 0) return QZDB_ERR_INVALID_PARAM;
-    qzdb_reader_t* reader = calloc(1, sizeof(qzdb_reader_t));
-    if (!reader) return QZDB_ERR_OUT_OF_MEMORY;
-    int rc = qzdb_init_buffer(reader, buffer, size, 1);
-    if (rc != QZDB_OK) { free(reader); return rc; }
-    pthread_mutex_lock(&reg->lock);
-    uint32_t idx = reg_hash(name) & (reg->cap - 1);
-    reg_entry_t* e = reg_find_locked(reg, idx, name);
-    if (e) {
-        qzdb_reader_t* old = e->reader;
-        e->reader = reader;
-        reg_retire_locked(reg, old);
-    } else {
-        e = calloc(1, sizeof(reg_entry_t));
-        if (!e) { pthread_mutex_unlock(&reg->lock); qzdb_free(reader); free(reader); return QZDB_ERR_OUT_OF_MEMORY; }
-        e->name = strdup(name);
-        if (!e->name) { pthread_mutex_unlock(&reg->lock); free(e); qzdb_free(reader); free(reader); return QZDB_ERR_OUT_OF_MEMORY; }
-        e->reader = reader; e->next = reg->buckets[idx];
-        reg->buckets[idx] = e; reg->count++;
-    }
-    pthread_mutex_unlock(&reg->lock);
-    return QZDB_OK;
+    reg_reader_slot_t* slot = calloc(1, sizeof(reg_reader_slot_t));
+    if (!slot) return QZDB_ERR_OUT_OF_MEMORY;
+    int rc = qzdb_init_buffer(&slot->reader, buffer, size, 1);
+    if (rc != QZDB_OK) { free(slot); return rc; }
+    slot->refcount = 1;
+    return reg_install_slot(reg, name, slot);
 }
 
 qzdb_reader_t* qzdb_registry_get(qzdb_registry_t* reg, const char* name) {
     if (!reg || !name) return NULL;
     pthread_mutex_lock(&reg->lock);
     uint32_t idx = reg_hash(name) & (reg->cap - 1);
-    for (reg_entry_t* e = reg->buckets[idx]; e; e = e->next)
-        if (strcmp(e->name, name) == 0) { pthread_mutex_unlock(&reg->lock); return e->reader; }
+    reg_entry_t* e = reg_find_locked(reg, idx, name);
+    reg_reader_slot_t* slot = e ? e->slot : NULL;
+    if (slot) slot->legacy_borrowed = 1;
     pthread_mutex_unlock(&reg->lock);
-    return NULL;
+    return slot ? &slot->reader : NULL;
+}
+
+qzdb_reader_t* qzdb_registry_acquire(qzdb_registry_t* reg, const char* name) {
+    if (!reg || !name) return NULL;
+    pthread_mutex_lock(&reg->lock);
+    uint32_t idx = reg_hash(name) & (reg->cap - 1);
+    reg_entry_t* e = reg_find_locked(reg, idx, name);
+    reg_reader_slot_t* slot = e ? e->slot : NULL;
+    if (slot) __atomic_add_fetch(&slot->refcount, 1, __ATOMIC_RELAXED);
+    pthread_mutex_unlock(&reg->lock);
+    return slot ? &slot->reader : NULL;
+}
+
+void qzdb_registry_release(qzdb_reader_t* reader) {
+    if (!reader) return;
+    reg_slot_release((reg_reader_slot_t*)reader);
 }
 
 void qzdb_registry_unregister(qzdb_registry_t* reg, const char* name) {
     if (!reg || !name) return;
+    reg_reader_slot_t* detach = NULL;
     pthread_mutex_lock(&reg->lock);
     uint32_t idx = reg_hash(name) & (reg->cap - 1);
     reg_entry_t** pp = &reg->buckets[idx];
     while (*pp) {
         if (strcmp((*pp)->name, name) == 0) {
             reg_entry_t* del = *pp; *pp = del->next;
-            reg_retire_locked(reg, del->reader);
+            detach = reg_retire_locked(reg, del->slot);
             free(del->name); free(del);
-            reg->count--; break;
+            __atomic_store_n(&reg->count, reg->count - 1u, __ATOMIC_RELEASE);
+            break;
         }
         pp = &(*pp)->next;
     }
     pthread_mutex_unlock(&reg->lock);
+    if (detach) reg_slot_release(detach);
 }
 
 int qzdb_registry_count(qzdb_registry_t* reg) {
-    return reg ? (int)reg->count : 0;
+    return reg ? (int)__atomic_load_n(&reg->count, __ATOMIC_ACQUIRE) : 0;
 }
 
 void qzdb_registry_free(qzdb_registry_t* reg) {
     if (!reg) return;
     for (uint32_t i = 0; i < reg->cap; i++) {
         reg_entry_t* e = reg->buckets[i];
-        while (e) { reg_entry_t* next = e->next; qzdb_free(e->reader); free(e->reader); free(e->name); free(e); e = next; }
+        while (e) {
+            reg_entry_t* next = e->next;
+            reg_slot_release(e->slot);
+            free(e->name); free(e);
+            e = next;
+        }
     }
-    /* qzdb_registry_free() 是终止关闭动作（同 close()/Dispose() 的约定：
-     * 调用方需自行保证此时无并发查询在途），因此这里对退休队列里尚未
-     * 释放的 reader 也一并同步冲刷释放，不再保留任何宽限期。 */
+    /* 冲刷所有曾通过旧版 qzdb_registry_get() 借出的退休快照；
+     * 若仍有 acquire 租约在途，refcount 未归零，将由最后一次 qzdb_registry_release() 释放。 */
     reg_retired_node_t* rn = reg->retired_head;
     while (rn) {
         reg_retired_node_t* next = rn->next;
-        if (rn->reader) { qzdb_free(rn->reader); free(rn->reader); }
+        reg_slot_release(rn->slot);
         free(rn);
         rn = next;
     }
@@ -3170,7 +3200,10 @@ int qzdb_lookup_ids(qzdb_reader_t* ctx, uint32_t row_id, qzdb_ids_t* out) {
 
 /* === find_str (WARN-8 fix: preserve distinct error codes) === */
 int qzdb_find_str(qzdb_reader_t* ctx, const char* ip_str, char* out, size_t out_size) {
-    if (!ctx || !ip_str || !out || out_size == 0) return QZDB_ERR_INVALID_PARAM;
+    if (!ctx || !ip_str || !out || out_size == 0) {
+        if (out && out_size > 0) out[0] = '\0';
+        return QZDB_ERR_INVALID_PARAM;
+    }
     parse_result_t res;
     if (!fast_parse_ip(ip_str, &res)) { out[0] = '\0'; return QZDB_ERR_INVALID_PARAM; }
 

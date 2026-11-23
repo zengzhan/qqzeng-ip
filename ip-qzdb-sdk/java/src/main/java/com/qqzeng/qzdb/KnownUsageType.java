@@ -19,15 +19,13 @@ public enum KnownUsageType implements UsageType {
     EDUCATION("Education", "教育网", "Education", "高校 / 科研网（CERNET 等）"),
     FINANCE("Finance", "金融", "Finance", "银行 / 证券 / 保险等金融机构"),
     GOVERNMENT("Government", "政府", "Government", "政务 / 公共机构网络"),
-    ISP("ISP", "互联网提供商", "ISP", "未细分类型的通用 ISP 接入"),
-    IXP("IXP", "交换中心", "IXP", "互联网交换中心"),
     IOT("IoT", "物联网", "IoT", "物联网设备接入网络"),
     MOBILE("Mobile", "移动网络", "Mobile", "蜂窝移动网络（2G/3G/4G/5G）"),
     RESERVED("Reserved", "保留地址", "Reserved", "保留 / 未分配地址"),
     SATELLITE("Satellite", "卫星互联网", "Satellite", "卫星 / 低轨星座接入（Starlink 等）"),
     SPIDER("Spider", "爬虫", "Spider", "通用搜索引擎 / 通用网络爬虫"),
     STREAMING("Streaming", "流媒体", "Streaming", "音视频 / 直播流媒体平台"),
-    UNKNOWN("Unknown", "未知", "Unknown", "无法判定用途"),
+    UNKNOWN("", "", "", "无法判定用途"),
     VPN("VPN", "VPN/代理", "VPN", "VPN / 代理 / 隐私网络出口");
 
     private final String rawValue;
@@ -39,13 +37,15 @@ public enum KnownUsageType implements UsageType {
 
     static {
         // Locale.ROOT(而不是不带参数的 toLowerCase()):这是一份 ASCII 英文用途分类名的
-        // 查找表(AICrawler/ISP/IXP/IoT 等含大写 I 的名字),必须用 locale 无关的规范化
+        // 查找表(AICrawler/IoT 等含大写 I 的名字),必须用 locale 无关的规范化
         // 方式,否则在土耳其语(tr-TR)等默认区域设置下,大写 I 会被转成无点的 ı 而不是 i
         // (著名的"土耳其 I 问题"),导致这里建表和下面 fromRaw() 查表用的字符串不一致,
         // 使原本应该命中的用途分类查找静默失败。
         for (KnownUsageType type : values()) {
             RAW_MAP.put(type.rawValue.toLowerCase(Locale.ROOT), type);
         }
+        RAW_MAP.put("unknown", UNKNOWN);
+        RAW_MAP.put("", UNKNOWN);
     }
 
     KnownUsageType(String rawValue, String displayZh, String displayEn, String description) {

@@ -25,10 +25,6 @@ public enum KnownUsageType
     Finance,
     /// <summary>Government / public agency network.</summary>
     Government,
-    /// <summary>Generic ISP access of unspecified subtype.</summary>
-    ISP,
-    /// <summary>Internet exchange point.</summary>
-    IXP,
     /// <summary>IoT device access network.</summary>
     IoT,
     /// <summary>Cellular mobile network (2G/3G/4G/5G).</summary>
@@ -53,15 +49,15 @@ public readonly struct UsageType
     private static readonly string[] ZhMap =
     [
         "AI 爬虫", "骨干网", "宽带", "企业", "CDN", "云服务", "DNS", "数据中心",
-        "教育网", "金融", "政府", "互联网提供商", "交换中心", "物联网", "移动网络", "保留地址",
-        "卫星互联网", "爬虫", "流媒体", "未知", "VPN/代理"
+        "教育网", "金融", "政府", "物联网", "移动网络", "保留地址",
+        "卫星互联网", "爬虫", "流媒体", "", "VPN/代理"
     ];
 
     private static readonly string[] EnMap =
     [
         "AICrawler", "Backbone", "Broadband", "Business", "CDN", "Cloud", "DNS", "DataCenter",
-        "Education", "Finance", "Government", "ISP", "IXP", "IoT", "Mobile", "Reserved",
-        "Satellite", "Spider", "Streaming", "Unknown", "VPN"
+        "Education", "Finance", "Government", "IoT", "Mobile", "Reserved",
+        "Satellite", "Spider", "Streaming", "", "VPN"
     ];
 
     private static readonly string[] DescMap =
@@ -77,8 +73,6 @@ public readonly struct UsageType
         "高校 / 科研网（CERNET 等）",
         "银行 / 证券 / 保险等金融机构",
         "政务 / 公共机构网络",
-        "未细分类型的通用 ISP 接入",
-        "互联网交换中心",
         "物联网设备接入网络",
         "蜂窝移动网络（2G/3G/4G/5G）",
         "保留 / 未分配地址",
@@ -104,7 +98,7 @@ public readonly struct UsageType
         KnownUsageType.AICrawler, KnownUsageType.Backbone, KnownUsageType.Broadband,
         KnownUsageType.Business, KnownUsageType.CDN, KnownUsageType.Cloud, KnownUsageType.DNS,
         KnownUsageType.DataCenter, KnownUsageType.Education, KnownUsageType.Finance,
-        KnownUsageType.Government, KnownUsageType.ISP, KnownUsageType.IXP, KnownUsageType.IoT,
+        KnownUsageType.Government, KnownUsageType.IoT,
         KnownUsageType.Mobile, KnownUsageType.Reserved, KnownUsageType.Satellite,
         KnownUsageType.Spider, KnownUsageType.Streaming, KnownUsageType.Unknown, KnownUsageType.VPN
     ];
@@ -112,8 +106,13 @@ public readonly struct UsageType
     private static readonly Dictionary<string, KnownUsageType> Map = new(StringComparer.OrdinalIgnoreCase);
     static UsageType()
     {
-        for (int i = 0; i < 21; i++)
-            Map[EnMap[i]] = RawToKnown[i];
+        for (int i = 0; i < EnMap.Length; i++)
+        {
+            if (!string.IsNullOrEmpty(EnMap[i]))
+                Map[EnMap[i]] = RawToKnown[i];
+        }
+        Map["Unknown"] = KnownUsageType.Unknown;
+        Map[""] = KnownUsageType.Unknown;
     }
 
     /// <summary>Parses a raw usage-type string into a <see cref="UsageType"/>; unrecognized values keep the raw string.</summary>
@@ -126,10 +125,10 @@ public readonly struct UsageType
     /// <summary>Alias of <see cref="FromString(string?)"/>; parses a raw usage-type string.</summary>
     public static UsageType Parse(string? raw) => FromString(raw);
 
-    /// <summary>Chinese display name (the predefined Chinese label, or <see cref="RawValue"/> when unknown).</summary>
-    public string DisplayZh => IsKnown ? ZhMap[(int)Known] : RawValue;
-    /// <summary>English display name (the predefined English label, or <see cref="RawValue"/> when unknown).</summary>
-    public string DisplayEn => IsKnown ? EnMap[(int)Known] : RawValue;
+    /// <summary>Chinese display name (the predefined Chinese label, or <see cref="RawValue"/> when unknown, empty when missing).</summary>
+    public string DisplayZh => IsKnown ? ZhMap[(int)Known] : (RawValue ?? "");
+    /// <summary>English display name (the predefined English label, or <see cref="RawValue"/> when unknown, empty when missing).</summary>
+    public string DisplayEn => IsKnown ? EnMap[(int)Known] : (RawValue ?? "");
     /// <summary>Human-readable description of the usage category (or a note about the unexpected value when unknown).</summary>
     public string Description => IsKnown ? DescMap[(int)Known] : $"未预期的细分场景分类: {RawValue}";
 

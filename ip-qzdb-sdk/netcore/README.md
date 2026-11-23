@@ -233,7 +233,7 @@ string en = u.DisplayEn;           // 英文名：如 "Cloud"（属性；亦可 
 string desc = u.Description;       // 详细描述（属性；亦可 u.GetDescription()）
 ```
 
-预定义分类（部分）：`AICrawler`、`Backbone`、`Broadband`、`Business`、`CDN`、`Cloud`、`DNS`、`DataCenter`、`Education`、`Finance`、`Government`、`ISP`、`IoT`、`Mobile`、`Reserved`、`Satellite`、`Spider`、`Streaming`、`Unknown`、`VPN` 等。未命中预定义值时 `IsKnown == false`，`RawValue` 保留原始字符串。
+预定义分类（18 类）：`AICrawler`、`Backbone`、`Broadband`、`Business`、`CDN`、`Cloud`、`DNS`、`DataCenter`、`Education`、`Finance`、`Government`、`IoT`、`Mobile`、`Reserved`、`Satellite`、`Spider`、`Streaming`、`VPN`。未命中预定义值时 `IsKnown == false`，`RawValue` 保留原始字符串；无值时一律为空字符串 `""`。
 
 ---
 

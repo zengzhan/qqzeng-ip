@@ -7,12 +7,12 @@ public record UnknownUsageType(String rawValue) implements UsageType {
 
     @Override
     public String getDisplayZh() {
-        return rawValue != null ? rawValue : "未知";
+        return (rawValue != null && !rawValue.isEmpty()) ? rawValue : "";
     }
 
     @Override
     public String getDisplayEn() {
-        return rawValue != null ? rawValue : "Unknown";
+        return (rawValue != null && !rawValue.isEmpty()) ? rawValue : "";
     }
 
     @Override

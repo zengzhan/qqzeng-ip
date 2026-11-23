@@ -661,15 +661,14 @@ _USAGE_META = {
     "Education": ("教育网", "Education", "高校 / 科研网（CERNET 等）"),
     "Finance": ("金融", "Finance", "银行 / 证券 / 保险等金融机构"),
     "Government": ("政府", "Government", "政务 / 公共机构网络"),
-    "ISP": ("互联网提供商", "ISP", "未细分类型的通用 ISP 接入"),
-    "IXP": ("交换中心", "IXP", "互联网交换中心"),
     "IoT": ("物联网", "IoT", "物联网设备接入网络"),
     "Mobile": ("移动网络", "Mobile", "蜂窝移动网络（2G/3G/4G/5G）"),
     "Reserved": ("保留地址", "Reserved", "保留 / 未分配地址"),
     "Satellite": ("卫星互联网", "Satellite", "卫星 / 低轨星座接入（Starlink 等）"),
     "Spider": ("爬虫", "Spider", "通用搜索引擎 / 通用网络爬虫"),
     "Streaming": ("流媒体", "Streaming", "音视频 / 直播流媒体平台"),
-    "Unknown": ("未知", "Unknown", "无法判定用途"),
+    "Unknown": ("", "", "无法判定用途"),
+    "": ("", "", ""),
     "VPN": ("VPN/代理", "VPN", "VPN / 代理 / 隐私网络出口"),
 }
 
@@ -694,19 +693,17 @@ class UsageType(str, Enum):
     EDUCATION = "Education"
     FINANCE = "Finance"
     GOVERNMENT = "Government"
-    ISP = "ISP"
-    IXP = "IXP"
     IOT = "IoT"
     MOBILE = "Mobile"
     RESERVED = "Reserved"
     SATELLITE = "Satellite"
     SPIDER = "Spider"
     STREAMING = "Streaming"
-    UNKNOWN = "Unknown"
+    UNKNOWN = ""
     VPN = "VPN"
 
     def __init__(self, value):
-        zh, en, desc = _USAGE_META.get(value, ("未知", value, f"未知用途: {value}"))
+        zh, en, desc = _USAGE_META.get(value, ("", value, f"未知用途: {value}"))
         self._zh = zh
         self._en = en
         self._desc = desc
@@ -764,7 +761,9 @@ class UsageType(str, Enum):
 
 
 # Raw -> member lookup (preserves old _KNOWN semantics for callers/tests).
-UsageType._KNOWN = {m.value.lower(): m for m in UsageType}
+UsageType._KNOWN = {m.value.lower(): m for m in UsageType if m.value}
+UsageType._KNOWN["unknown"] = UsageType.UNKNOWN
+UsageType._KNOWN[""] = UsageType.UNKNOWN
 
 
 def _on_snapshot_find_bytes(fn):
@@ -2195,19 +2194,24 @@ class QzdbReader:
             raise QzdbError(f'invalid IP address: {ip_str!r}', QzdbError.INVALID_PARAM)
         v4, v6 = parsed
         if v4 is not None:
-            return self.find_uint(v4)
-        return self.find_v6_bytes(v6)
-
-    @_on_snapshot
-    def find_uint(self, ip_int):
-        if self._closed:
+            return self._find_uint(v4)
+        if not self._has_v6:
             return None
+        return self._find_v6_bytes(v6)
+
+    def _find_uint(self, ip_int):
         if not self._has_v4:
             return None
         row_id = self._trie_walk_v4(ip_int)
         if row_id == 0:
             return None
         return self._resolve_row_id(row_id & SENTINEL_MASK_31, self._group_index)
+
+    @_on_snapshot
+    def find_uint(self, ip_int):
+        if self._closed:
+            return None
+        return self._find_uint(ip_int)
 
     @_on_snapshot
     def find_v6_bytes(self, ip_bytes):
@@ -2224,7 +2228,7 @@ class QzdbReader:
             # 前两个魔数字节匹配 + 前 10 字节全零，才是真正的 v4-mapped 地址。
             v4 = ((ip_bytes[12] & 0xFF) << 24 | (ip_bytes[13] & 0xFF) << 16
                   | (ip_bytes[14] & 0xFF) << 8 | (ip_bytes[15] & 0xFF))
-            return self.find_uint(v4)
+            return self._find_uint(v4)
         return self._find_v6_bytes(ip_bytes)
 
     def _find_v6_bytes(self, ip_bytes):
@@ -2378,17 +2382,21 @@ class QzdbReader:
 
     @_on_snapshot
     def lookup_row_id(self, ip_str):
-        if self._closed:
-            return 0
-        if not ip_str:
+        if self._closed or not ip_str:
             return 0
         parsed = _fast_parse_ip(ip_str)
         if parsed is None:
             return 0
         v4, v6 = parsed
         if v4 is not None:
-            return self.lookup_row_id_uint(v4)
-        return self.lookup_row_id_v6_bytes(v6)
+            if not self._has_v4:
+                return 0
+            rid = self._trie_walk_v4(v4)
+            return (rid & SENTINEL_MASK_31) if rid != 0 else 0
+        if not self._has_v6:
+            return 0
+        rid = self._trie_walk_v6_bytes(v6)
+        return (rid & SENTINEL_MASK_31) if rid != 0 else 0
 
     @_on_snapshot
     def lookup_row_id_uint(self, ip_int):
@@ -2425,15 +2433,19 @@ class QzdbReader:
 
     @_on_snapshot
     def find_str(self, ip_str):
-        if self._closed:
+        if self._closed or not ip_str:
             return ''
-        try:
-            info = self.find(ip_str)
-        except QzdbError:
+        parsed = _fast_parse_ip(ip_str)
+        if parsed is None:
             return ''
-        if info is None:
+        v4, v6 = parsed
+        if v4 is not None:
+            info = self._find_uint(v4)
+        elif self._has_v6:
+            info = self._find_v6_bytes(v6)
+        else:
             return ''
-        return info.to_pipe()
+        return '' if info is None else info.to_pipe()
 
     # ── CIDR reverse lookup (API contract §5 / §8.6) ───────────────
     # The DB does not store CIDR; the most-specific network is rebuilt from the

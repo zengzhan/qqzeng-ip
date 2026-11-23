@@ -415,22 +415,26 @@ qzdb_registry_register(reg, "ult", "qqzeng_ip_ult.qzdb");
 // 也可以从内存缓冲注册（CRC 校验固定开启）：
 // qzdb_registry_register_buffer(reg, "asn", buf, buf_len);
 
-qzdb_reader_t* r = qzdb_registry_get(reg, "ult");
+/* 推荐：带引用计数租约的 acquire/release（高频热更时旧快照在租约归零后立即释放） */
+qzdb_reader_t* r = qzdb_registry_acquire(reg, "ult");
 if (r) {
     char out[256];
     qzdb_find_str(r, "118.115.99.0", out, sizeof(out));
     printf("%s\n", out);
+    qzdb_registry_release(r);
 }
+
+/* 兼容旧接口：qzdb_registry_get(reg, "ult") 返回无租约借用指针 */
 
 printf("registered: %d\n", qzdb_registry_count(reg));
 
-qzdb_registry_unregister(reg, "std");  // 内部会 qzdb_free 对应 reader 并释放
+qzdb_registry_unregister(reg, "std");  // 若无未归还租约且未经 get() 借出，立即释放
 qzdb_registry_free(reg);               // 释放 registry 及其持有的全部 reader
 ```
 
 **注意事项**：
 - `qzdb_registry_register` / `_register_buffer` 内部会加载数据库，**加载失败时不会注册该条目**，函数直接返回对应错误码。
-- `qzdb_registry_free` 会级联释放所有已注册的 reader，调用方**不应该**再对通过 `qzdb_registry_get` 拿到的指针单独调用 `qzdb_free`（会造成 double free）。
+- 高频热更新场景请使用 `qzdb_registry_acquire` + `qzdb_registry_release` 成对调用；`qzdb_registry_free` 会级联释放所有已注册的 reader，调用方**不应该**再对 `get` / `acquire` 拿到的指针单独调用 `qzdb_free`（会造成 double free）。
 - 与 `qzdb_chain_t` 的区别：Registry 是“按名字取用单个 reader”，Chain 是“按顺序合并查询多个 reader”，两者可以组合使用。
 
 ---
@@ -495,7 +499,7 @@ if (qzdb_usage_type_is_known(raw)) {
 qzdb_free_geo_info(&info);
 ```
 
-已知类型覆盖：`Government`（政府）、`ISP`、`IXP`（交换中心）、`IoT`、`Mobile`、`Reserved`（保留地址）、`Satellite`（卫星互联网）、`Spider`（爬虫）、`Streaming`（流媒体）、`Unknown`、`VPN` 等；`qzdb_usage_type_display_zh/en` 对未收录标签分别兜底返回 `"未知"` / `"Unknown"`。
+已知类型覆盖（18 类）：`Broadband`、`Business`、`Backbone`、`Cloud`、`DataCenter`、`Education`、`VPN`、`Mobile`、`CDN`、`Finance`、`Government`、`Satellite`、`DNS`、`Spider`、`Streaming`、`IoT`、`AICrawler`、`Reserved`。空值统一输出为空字符串 `""`。
 
 ---
 
@@ -618,6 +622,8 @@ int              qzdb_registry_register(qzdb_registry_t* reg, const char* name, 
 int              qzdb_registry_register_buffer(qzdb_registry_t* reg, const char* name,
                                                const uint8_t* buf, size_t len);
 qzdb_reader_t*   qzdb_registry_get(qzdb_registry_t* reg, const char* name);
+qzdb_reader_t*   qzdb_registry_acquire(qzdb_registry_t* reg, const char* name);
+void             qzdb_registry_release(qzdb_reader_t* reader);
 void             qzdb_registry_unregister(qzdb_registry_t* reg, const char* name);
 int              qzdb_registry_count(qzdb_registry_t* reg);
 ```

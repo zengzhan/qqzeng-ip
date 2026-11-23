@@ -86,9 +86,9 @@ Go/Rust/C# 经 batch 二进制 `--cidr` 模式)+ `ip-qzdb-sdk/cross_lang_verify.
 - 所有字段原样以竖线 `|` 连接，字段顺序严格遵循对应版本组的物理 Schema 顺序。
 - 原生浮点字段（经纬度）按 **FORMAT §10.5 统一契约**格式化：整数值无小数点（`116.0 → "116"`）、非整数固定 6 位小数（`116.4 → "116.400000"`）、NaN / Inf 输出为空字符串 `""`；Pool 字符串存储的浮点原样透传、不再格式化。
 
-### 3. UsageType 官方场景枚举（21 类）
+### 3. UsageType 官方场景枚举（18 类）
 支持以下官方场景的标准解析与中英文转换：
-`AICrawler`, `Backbone`, `Broadband`, `Business`, `CDN`, `Cloud`, `DNS`, `DataCenter`, `Education`, `Finance`, `Government`, `ISP`, `IXP`, `IoT`, `Mobile`, `Reserved`, `Satellite`, `Spider`, `Streaming`, `Unknown`, `VPN`。未收录的自定义标签自动归类为 `Unknown`。
+`AICrawler`, `Backbone`, `Broadband`, `Business`, `CDN`, `Cloud`, `DNS`, `DataCenter`, `Education`, `Finance`, `Government`, `IoT`, `Mobile`, `Reserved`, `Satellite`, `Spider`, `Streaming`, `VPN`。实盘网络中原 `ISP` 与 `IXP` 已收敛归入 `Backbone` / `Broadband` 等类别，不再单独存在；无值或未收录的自定义标签安全兜底，空值一律输出为空字符串 `""`。
 
 ---
 
@@ -139,11 +139,11 @@ Go/Rust/C# 经 batch 二进制 `--cidr` 模式)+ `ip-qzdb-sdk/cross_lang_verify.
 | `Bit 7` | `MOBILE` | `1 << 7` | 蜂窝移动网络（`UsageType == Mobile`） |
 | `Bit 8` | `BROADBAND` | `1 << 8` | 家庭或企业宽带接入（`UsageType == Broadband`） |
 | `Bit 9` | `VPN_PROXY` | `1 << 9` | VPN 或代理出口（`UsageType == VPN`） |
-| `Bit 10` | `BACKBONE_IXP` | `1 << 10` | 骨干网或交换中心（`UsageType` 为 `Backbone` \| `IXP`） |
+| `Bit 10` | `BACKBONE_IXP` | `1 << 10` | 骨干网（`UsageType == Backbone`，兼顾历史命名兼容） |
 | `Bit 11` | `SATELLITE` | `1 << 11` | 卫星互联网接入（`UsageType == Satellite`） |
 | `Bit 12` | `DNS_ANYCAST` | `1 << 12` | 公共 DNS 基础设施（`UsageType == DNS`） |
 | `Bit 13` | `EDU_GOV_FIN` | `1 << 13` | 高校教育 / 政务 / 金融网络（`UsageType` 为 `Education` \| `Government` \| `Finance`） |
-| `Bits 16..20` | `USAGE_CODE` | `(bits >> 16) & 0x1F` | 编码 21 类官方 `KnownUsage` 的枚举序号（`1..=21`，`0` 表示未知或无此字段） |
+| `Bits 16..20` | `USAGE_CODE` | `(bits >> 16) & 0x1F` | 编码 18 类官方 `KnownUsage` 的枚举序号（`1..=18`，`0` 表示未知或无此字段） |
 
 便捷布尔方法契约：
 - `is_datacenter(ip)` ≡ `(inspect_flags(ip) & DATACENTER) != 0`
@@ -159,7 +159,7 @@ Go/Rust/C# 经 batch 二进制 `--cidr` 模式)+ `ip-qzdb-sdk/cross_lang_verify.
 - `tools`：声明 `qzdb_inspect_ip_fast`（零分配位掩码批量嗅探）与 `qzdb_lookup_geo_fields`（支持 `fields` 按需字段投影以最小化 LLM Token 消耗）。
 
 ### 3. 应用场景类型权威枚举 (`usage_type`)
-QZDB 官方定义 21 类网络应用场景枚举。在含有 `usage_type` 字段的版本（`MAX` 15 维、`ULT` 25 维、`ASN` 8 维）中，取值为以下原始英文字符串；若命中未收录场景则安全兜底为 `Unknown`，不崩溃。
+QZDB 官方与核心生产库完全对齐的 18 类网络应用场景枚举。在含有 `usage_type` 字段的版本（`MAX` 15 维、`ULT` 25 维、`ASN` 8 维）中，取值为以下原始英文字符串；若命中未收录场景或空值，则安全兜底且空值一律输出为 `""`，不崩溃。
 
 | 序号 | 原始值 (`RawValue`) | 中文名称 | 场景含义与典型特征 | 是否出现在公开 Demo 库 |
 | :---: | :--- | :--- | :--- | :---: |
@@ -174,13 +174,10 @@ QZDB 官方定义 21 类网络应用场景枚举。在含有 `usage_type` 字段
 | 9 | `Education` | 教育网 | 高校 / 科研网（如 CERNET、Internet2 等） | 是 |
 | 10 | `Finance` | 金融 | 银行 / 证券 / 保险等专有金融机构内网 | 是 |
 | 11 | `Government` | 政府 | 政务内外网 / 公共管理机构网络 | 是 |
-| 12 | `ISP` | 互联网提供商 | 未细分场景的通用网络运营商基础设施 | 否 |
-| 13 | `IXP` | 交换中心 | 互联网交换中心（Internet Exchange Point） | 否 |
-| 14 | `IoT` | 物联网 | 物联网设备 / 智能硬件蜂窝接入 | 否 |
-| 15 | `Mobile` | 移动网络 | 蜂窝移动网络（2G/3G/4G/5G 基站流量） | 是 |
-| 16 | `Reserved` | 保留地址 | RFC 1918 / RFC 6890 保留或未分配私网网段 | 否 |
-| 17 | `Satellite` | 卫星互联网 | 低轨星座 / 卫星互联网接入（Starlink、OneWeb 等） | 否 |
-| 18 | `Spider` | 爬虫 | 通用商业搜索引擎网络爬虫（Googlebot、Baiduspider 等） | 否 |
-| 19 | `Streaming` | 流媒体 | 音视频 / 游戏直播等流媒体专用加速节点 | 否 |
-| 20 | `Unknown` | 未知 | 无法明确判定用途的场景兜底 | 是 |
-| 21 | `VPN` | VPN/代理 | 数据中心代理 / VPN / 匿名隐私网络出口 | 是 |
+| 12 | `IoT` | 物联网 | 物联网设备 / 智能硬件蜂窝接入 | 否 |
+| 13 | `Mobile` | 移动网络 | 蜂窝移动网络（2G/3G/4G/5G 基站流量） | 是 |
+| 14 | `Reserved` | 保留地址 | RFC 1918 / RFC 6890 保留或未分配私网网段 | 否 |
+| 15 | `Satellite` | 卫星互联网 | 低轨星座 / 卫星互联网接入（Starlink、OneWeb 等） | 否 |
+| 16 | `Spider` | 爬虫 | 通用商业搜索引擎网络爬虫（Googlebot、Baiduspider 等） | 否 |
+| 17 | `Streaming` | 流媒体 | 音视频 / 游戏直播等流媒体专用加速节点 | 否 |
+| 18 | `VPN` | VPN/代理 | 数据中心代理 / VPN / 匿名隐私网络出口 | 是 |
