@@ -42,7 +42,7 @@ def main():
 
     # 6. PHP (composer.json)
     comp_json = json.loads((ROOT / "composer.json").read_text(encoding="utf-8"))
-    comp_ver = comp_json.get("version", "1.2.2")
+    comp_ver = comp_json.get("version", "1.2.3")
 
     versions = {
         "Java": java_ver,
@@ -51,7 +51,7 @@ def main():
         "Python": py_ver,
         "Node.js": node_ver,
         "PHP": comp_ver,
-        "Go": "v1.0.8"
+        "Go": "v1.0.9"
     }
 
     print("Current SDK Single Source of Truth Versions:")
@@ -69,7 +69,7 @@ def main():
         ("Python", f"qzdb` (`{py_ver}`)"),
         ("Node.js", f"@qqzengip/qzdb` (`{node_ver}`)"),
         ("PHP", f"qqzeng/qzdb` (`{comp_ver}`)"),
-        ("Go", f"v1.0.8")
+        ("Go", f"v1.0.9")
     ]
     for lang, needle in checks:
         if needle not in readme_text:

@@ -128,13 +128,13 @@ Maven:
 <dependency>
     <groupId>com.qqzeng</groupId>
     <artifactId>qzdb</artifactId>
-    <version>1.0.10</version>
+    <version>1.0.11</version>
 </dependency>
 ```
 
 Gradle:
 ```groovy
-implementation 'com.qqzeng:qzdb:1.0.10'
+implementation 'com.qqzeng:qzdb:1.0.11'
 ```
 
 </details>

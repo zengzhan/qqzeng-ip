@@ -48,7 +48,7 @@
 
 ```toml
 [dependencies]
-qzdb = "1.0.6"
+qzdb = "2.0.3"
 ```
 
 或执行：

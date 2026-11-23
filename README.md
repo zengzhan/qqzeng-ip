@@ -124,7 +124,7 @@
 | 24 | `phone_prefix` | 国际电话区号 | `86` | — | — | — | ✅ | — |
 | 25 | `emoji_flag` | 国旗 Emoji | `🇨🇳` | — | — | — | ✅ | — |
 
-- **`usage_type` 应用场景枚举**：官方定义 21 类网络应用场景（SDK 枚举全量支持，其中 12 类场景在公开 demo 样本库中已覆盖）。完整定义、中文名与详细释义以 [ip-qzdb-sdk/API_CONTRACT.md §3](ip-qzdb-sdk/API_CONTRACT.md#3-应用场景类型权威枚举-usage_type) 权威表为准。
+- **`usage_type` 应用场景枚举**：官方定义 18 类网络应用场景（SDK 枚举全量支持，其中 12 类场景在公开 demo 样本库中已覆盖）。完整定义、中文名与详细释义以 [ip-qzdb-sdk/API_CONTRACT.md §3](ip-qzdb-sdk/API_CONTRACT.md#3-应用场景类型权威枚举-usage_type) 权威表为准。
 - **经典版 `.dat` 16MB 容量边界提示**：经典 2.0 格式（`.dat`）采用 24-bit（16MB）字符池寻址。国内精华版字符池仅 1.6MB（总文件 6.4MB），可永久安全使用 `.dat`；全球版唯一字符池已突破 16.9MB，纯 IPv4 全球版存量用户请使用 6.0 格式（`.db`，33.2MB）或升级至新一代 `.qzdb`。详见 [docs/VERSION_COMPARISON.md](docs/VERSION_COMPARISON.md)。
 
 </details>
@@ -195,13 +195,13 @@ cd ip-qzdb-sdk && BENCH_OPS=2000000 ./c/bench_contract
 
 | 语言 | 官方包坐标 (最新版本) | 包管理器安装命令 | 源码直接拷贝入口 |
 | :--- | :--- | :--- | :--- |
-| ☕ **[Java](ip-qzdb-sdk/java/README.md)** | `com.qqzeng:qzdb:1.0.10` | Gradle: `implementation 'com.qqzeng:qzdb:1.0.10'` | 拷贝 [`com/qqzeng/qzdb/`](ip-qzdb-sdk/java/src/main/java/com/qqzeng/qzdb) 包 |
-| 🚀 **[C# (.NET)](ip-qzdb-sdk/netcore/README.md)** | `QQZeng.Qzdb` (`1.0.10`) | `dotnet add package QQZeng.Qzdb` | 拷贝 [`ip-qzdb-sdk/netcore/*.cs`](ip-qzdb-sdk/netcore) |
-| ⚡ **[Go](ip-qzdb-sdk/go/README.md)** | `v1.0.8` (Go Module) | `go get github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go@v1.0.8` | 拷贝 [`ip-qzdb-sdk/go/qzdb/`](ip-qzdb-sdk/go/qzdb) 目录 |
-| 🛡️ **[Rust](ip-qzdb-sdk/rust/README.md)** | `qzdb` (`2.0.2`) | `cargo add qzdb` | 引入 [`ip-qzdb-sdk/rust/`](ip-qzdb-sdk/rust) crate |
-| 🐍 **[Python](ip-qzdb-sdk/python/README.md)** | `qzdb` (`1.0.8`) | `pip install qzdb` | 拷贝单文件 [`qzdb.py`](ip-qzdb-sdk/python/qzdb.py) |
-| 🟢 **[Node.js](ip-qzdb-sdk/nodejs/README.md)** | `@qqzengip/qzdb` (`1.0.8`) | `npm install @qqzengip/qzdb` | 拷贝单文件 [`qzdb.js`](ip-qzdb-sdk/nodejs/qzdb.js) |
-| 🐘 **[PHP](ip-qzdb-sdk/php/README.md)** | `qqzeng/qzdb` (`1.2.2`) | `composer require qqzeng/qzdb` | 拷贝单文件 [`QzdbReader.php`](ip-qzdb-sdk/php/QzdbReader.php) |
+| ☕ **[Java](ip-qzdb-sdk/java/README.md)** | `com.qqzeng:qzdb:1.0.11` | Gradle: `implementation 'com.qqzeng:qzdb:1.0.11'` | 拷贝 [`com/qqzeng/qzdb/`](ip-qzdb-sdk/java/src/main/java/com/qqzeng/qzdb) 包 |
+| 🚀 **[C# (.NET)](ip-qzdb-sdk/netcore/README.md)** | `QQZeng.Qzdb` (`1.0.11`) | `dotnet add package QQZeng.Qzdb` | 拷贝 [`ip-qzdb-sdk/netcore/*.cs`](ip-qzdb-sdk/netcore) |
+| ⚡ **[Go](ip-qzdb-sdk/go/README.md)** | `v1.0.9` (Go Module) | `go get github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go@v1.0.9` | 拷贝 [`ip-qzdb-sdk/go/qzdb/`](ip-qzdb-sdk/go/qzdb) 目录 |
+| 🛡️ **[Rust](ip-qzdb-sdk/rust/README.md)** | `qzdb` (`2.0.3`) | `cargo add qzdb` | 引入 [`ip-qzdb-sdk/rust/`](ip-qzdb-sdk/rust) crate |
+| 🐍 **[Python](ip-qzdb-sdk/python/README.md)** | `qzdb` (`1.0.9`) | `pip install qzdb` | 拷贝单文件 [`qzdb.py`](ip-qzdb-sdk/python/qzdb.py) |
+| 🟢 **[Node.js](ip-qzdb-sdk/nodejs/README.md)** | `@qqzengip/qzdb` (`1.0.9`) | `npm install @qqzengip/qzdb` | 拷贝单文件 [`qzdb.js`](ip-qzdb-sdk/nodejs/qzdb.js) |
+| 🐘 **[PHP](ip-qzdb-sdk/php/README.md)** | `qqzeng/qzdb` (`1.2.3`) | `composer require qqzeng/qzdb` | 拷贝单文件 [`QzdbReader.php`](ip-qzdb-sdk/php/QzdbReader.php) |
 | 👑 **[C / C++](ip-qzdb-sdk/c/README.md)** | 原生 C99 库 | 随宿主项目直接编译 | 拷贝 [`qzdb_reader.c`](ip-qzdb-sdk/c/qzdb_reader.c) + [`qzdb_reader.h`](ip-qzdb-sdk/c/qzdb_reader.h) |
 
 ## 六、多语言代码示例

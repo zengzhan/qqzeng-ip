@@ -6,19 +6,28 @@
 
 | 语言 SDK | 当前版本 | 仓库子路径 | 官方包坐标与引入方式 |
 | :--- | :---: | :--- | :--- |
-| **Java** | `1.0.10` | `ip-qzdb-sdk/java` | `com.qqzeng:qzdb:1.0.10` |
-| **.NET** | `1.0.10` | `ip-qzdb-sdk/netcore` | `QQZeng.Qzdb` (`1.0.10`) |
-| **Rust** | `2.0.2` | `ip-qzdb-sdk/rust` | `qzdb = "2.0.2"` *(⚠️ 含破坏性变更，详见下方说明与迁移建议)* |
-| **Python** | `1.0.8` | `ip-qzdb-sdk/python` | `pip install qzdb==1.0.8` |
-| **Node.js** | `1.0.8` | `ip-qzdb-sdk/nodejs` | `npm install @qqzengip/qzdb@1.0.8` |
-| **PHP** | `1.2.2` | `ip-qzdb-sdk/php` | `composer require qqzeng/qzdb:1.2.2` |
-| **Go** | `v1.0.8` | `ip-qzdb-sdk/go` | `go get github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go@v1.0.8` |
+| **Java** | `1.0.11` | `ip-qzdb-sdk/java` | `com.qqzeng:qzdb:1.0.11` |
+| **.NET** | `1.0.11` | `ip-qzdb-sdk/netcore` | `QQZeng.Qzdb` (`1.0.11`) |
+| **Rust** | `2.0.3` | `ip-qzdb-sdk/rust` | `qzdb = "2.0.3"` |
+| **Python** | `1.0.9` | `ip-qzdb-sdk/python` | `pip install qzdb==1.0.9` |
+| **Node.js** | `1.0.9` | `ip-qzdb-sdk/nodejs` | `npm install @qqzengip/qzdb@1.0.9` |
+| **PHP** | `1.2.3` | `ip-qzdb-sdk/php` | `composer require qqzeng/qzdb:1.2.3` |
+| **Go** | `v1.0.9` | `ip-qzdb-sdk/go` | `go get github.com/zengzhan/qqzeng-ip/ip-qzdb-sdk/go@v1.0.9` |
 | **C / C++** | 单文件源码 | `ip-qzdb-sdk/c` | 源码拷贝 `qzdb_reader.c` 与 `qzdb_reader.h` |
 
-> ⚠️ **关于 Rust SDK 2.0.2 语义化版本声明与 Yank 策略**：
-> `qzdb` Rust 2.0.2 版本进行了高并发值语义去共享化重构，涉及 `GeoData.values` 类型（由 `Box<[Arc<str>]>` 改为 `Box<[FieldVal<'static>]>`）、`ErrorCode` 增加 `#[non_exhaustive]` 以及 `FieldVal::Inline` 封装私有化。处理策略如下：
-> 1. **下游适配**：旧代码若直接解构 `Arc<str>`，请迁移为使用 `field.as_str()` 或标准 `PartialEq`；`ErrorCode` 匹配分支请补充 `_ => ...` 通配符；
-> 2. **主版本演进建议**：建议官方后续升主版本至 `v3.0.0` 正式对齐语义化版本规范，并视社区依赖对 2.0.2 执行 `cargo yank`。
+---
+
+## [2026-11-23] - v1.2.3 (全语言 Patch 版本发布)
+
+### Changed
+- **全语言 SDK**: 权威收口 `usage_type` 字段为官方 18 类应用场景枚举；全语言统一对齐“无值统一输出为空字符串 `""`”（全面移除旧版残留的 `"Unknown"` 与 `"未知"`）。
+- **README / 文档**: 更新应用场景枚举说明与最新全语言安装版本矩阵。
+
+### Fixed
+- **Rust SDK (`2.0.3`)**: 移除已废弃的静态内部池与 `Box::leak`，改用安全引用计数字符串（`Arc<str>`），彻底杜绝热更与长时间运行下的内存泄漏；清理冗余注释与死代码。
+- **C SDK**: 引入 `qzdb_registry_acquire()` 与 `qzdb_registry_release()` 引用计数租约机制，实现双轨安全无锁回收；修复 `swap_ctx_atomic` 非原子覆写尾部并发同步字段的数据竞争隐患；`GROUP_SCHEMA` 截断解析时 Fail-Closed 返回 `QZDB_ERR_CORRUPTED`。
+- **Go SDK (`v1.0.9`)**: 新增 `getOrDecodeGeoInfo()` 复用入口，消除 `FindFields` 投影时多余的 `cloneGeoInfo` 堆分配与 GC 压力；合并 `extractGeoPipe` 复用。
+- **Java SDK (`1.0.11`)** / **.NET SDK (`1.0.11`)** / **Python SDK (`1.0.9`)** / **Node.js SDK (`1.0.9`)** / **PHP SDK (`1.2.3`)**: 同步更新并严密对齐 18 类应用场景与空值规约，100% 通过跨语言 Golden Vectors 门禁。
 
 ---
 
