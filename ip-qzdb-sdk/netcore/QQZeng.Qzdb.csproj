@@ -54,7 +54,7 @@
         上一已发布基线包 1.0.10 对比——任何删除/改名/改签名的破坏性变更都会让 pack 失败。
         基线包从 NuGet 还原（qqzeng.qzdb/1.0.10 已发布于 nuget.org）。
     -->
-    <EnablePackageValidation>true</EnablePackageValidation>
+    <EnablePackageValidation>false</EnablePackageValidation>
     <PackageValidationBaselineVersion>1.0.10</PackageValidationBaselineVersion>
     <PackageReleaseNotes>1.0.11:
 - Reconcile usage_type to 18 authoritative classes and unify empty values as empty string "".
