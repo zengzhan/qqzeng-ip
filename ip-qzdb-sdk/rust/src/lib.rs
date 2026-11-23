@@ -561,7 +561,7 @@ fn fmt_uint_buf(mut val: u32, buf: &mut [u8; 32]) -> usize {
 // 语义化用法类型（API_CONTRACT §6）
 // ---------------------------------------------------------------------------
 
-/// IP 使用场景类型。21 个已知场景 + 未知兜底。
+/// IP 使用场景类型。18 个已知场景 + 未知兜底。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UsageType {
     Known(KnownUsage),
@@ -758,10 +758,8 @@ impl UsageType {
 /// 递增，不再逐字段逐计数器克隆（跨语言对拍中 owned `find_uint` 慢于
 /// Go/C#/C 的直接原因：其他语言 GeoInfo 本就是引用语义，克隆即指针复制）。
 ///
-/// 值表示（v2.1 重构，对拍性能决定性项）：
-/// - 借用值全部指向**装载期 `Box::leak` 的快照池字符串**（`&'static str`），
-///   构造零引用计数 RMW、零堆分配——旧 `Vec<Arc<str>>` 每次构造都有 ~15 次
-///   共享池计数 RMW，16 线程同刻解码/释放同池字符串时缓存行 ping-pong；
+/// 值表示：
+/// - 池字符串持有快照池内去重后的 `Arc<str>`（无 `Box::leak`，随快照与响应释放自动回收）；
 /// - 内联值同 `GeoInfoRef`：数字/浮点在 32 字节栈缓冲内格式化，零分配；
 /// - `to_pipe` 惰性化：首次 `to_pipe` 才拼接（缓存 blob 专属 OnceLock），
 ///   常规 find_uint 契约路径不再为每个构造 spend pipe 预算。
@@ -2756,10 +2754,9 @@ impl SnapshotInner {
 
     /// 构造 owned 数据体（线程本地缓存 miss 时调用，每线程每 entry 一次）。
     ///
-    /// 值全部为 `FieldVal<'static>`：池字段借用快照池 'static 串（指针复制）；
-    /// 数字/浮点字段在栈缓冲内格式化为 InlineBuf（与 resolve_geo_ref 同构）。
-    /// 全程零共享原子 RMW、除 values 容器外零堆分配；pipe 惰性化交给
-    /// `GeoData::build_pipeText`（首次 to_pipe）。
+    /// 值全部为 `FieldVal<'static>`：池字段为快照池的 `FieldVal::Arc(Arc<str>)`（零 `Box::leak`）；
+    /// 数字/浮点字段在栈缓冲内格式化为 `InlineBuf`（与 `resolve_geo_ref` 同构）。
+    /// 命中路径全在线程本地缓存（零跨核共享写）；`pipe` 惰性化交给 `GeoData::build_pipe_text`。
     fn build_geo_data(&self, entry_id: u32) -> Arc<GeoData> {
         let gi = self.group_index;
         let fc = self.group_field_counts[gi];

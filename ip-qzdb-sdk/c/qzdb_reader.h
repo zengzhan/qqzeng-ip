@@ -413,8 +413,10 @@ void          qzdb_chain_free(qzdb_chain_t* chain);
  *   1. 推荐高频热更路径：qzdb_registry_acquire() 获取带引用计数租约的 Reader，
  *      用毕调用 qzdb_registry_release() 归还；同名重注册/注销后，旧快照在最后一个
  *      租约归还时立即原子回收（munmap + free），无内存增长、无并发 UAF。
- *   2. 兼容存量路径：qzdb_registry_get() 返回无租约借用指针；被借用过的旧快照会
- *      保守延后至 qzdb_registry_free() 统一回收，保证存量调用 100% 兼容且不 UAF。 */
+ *      性能建议：高并发场景请按 worker 线程或批次 acquire 一次复用，避免每次单条查询都
+ *      加锁/原子递增 refcount；且 qzdb_registry_release() 仅可传入 acquire() 返回的指针。
+ *   2. 遗留兼容路径（不建议在高频热更场景使用）：qzdb_registry_get() 返回无租约借用指针；
+ *      被借用过的旧快照会保守延后至 qzdb_registry_free() 统一回收，保证存量调用兼容且不 UAF。 */
 qzdb_registry_t* qzdb_registry_new(void);
 void             qzdb_registry_free(qzdb_registry_t* reg);
 int              qzdb_registry_register(qzdb_registry_t* reg, const char* name, const char* path);

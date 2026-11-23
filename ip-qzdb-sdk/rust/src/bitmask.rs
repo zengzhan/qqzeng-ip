@@ -5,7 +5,7 @@
 //! - **O(1) 预计算查表**：每个快照通过 `OnceLock<Box<[u32]>>` 惰性预计算一次 `entry_id -> IpAttrFlags`
 //!   紧凑位掩码表（单库仅数十至数百 KB），后续每次查询仅需 `Trie 寻径 + 1 次数组下标读取`。
 //! - **100% 语义自洽**：所有标志位严格由底层快照的 `country_code`、`country`、`province` 与
-//!   `usage_type`（保留 21 类历史已知 `KnownUsage` 枚举作为兼容超集，虽数据库实盘中 IXP 等已收敛归入 Backbone）确定性推导，与 `GeoInfo` 完整解码结果零偏差。
+//!   `usage_type`（18 类官方 `KnownUsage` 枚举）确定性推导，与 `GeoInfo` 完整解码结果零偏差。
 
 use crate::{KnownUsage, ParsedIp, QzdbReader, Snapshot, SnapshotInner, ToIp, UsageType};
 
@@ -22,11 +22,11 @@ use crate::{KnownUsage, ParsedIp, QzdbReader, Snapshot, SnapshotInner, ToIp, Usa
 /// - `Bit 7` (`MOBILE`)：蜂窝移动网络（`UsageType == Mobile`）。
 /// - `Bit 8` (`BROADBAND`)：家庭或企业宽带接入（`UsageType == Broadband`）。
 /// - `Bit 9` (`VPN_PROXY`)：VPN/代理/隐私出口（`UsageType == VPN`）。
-/// - `Bit 10` (`BACKBONE_IXP`)：骨干网或互联网交换中心（`UsageType` 为 `Backbone` | `IXP`）。
+/// - `Bit 10` (`BACKBONE` / 兼容别名 `BACKBONE_IXP`)：骨干网（`UsageType == Backbone`）。
 /// - `Bit 11` (`SATELLITE`)：卫星互联网接入（`UsageType == Satellite`）。
 /// - `Bit 12` (`DNS_ANYCAST`)：公共 DNS 基础设施（`UsageType == DNS`）。
 /// - `Bit 13` (`EDU_GOV_FIN`)：高校科研/政务/金融专网（`UsageType` 为 `Education` | `Government` | `Finance`）。
-/// - `Bits 16..=20`：编码已知的 [`KnownUsage`] 枚举序号（`1..=21`，保留历史枚举超集，`0` 表示未知或无此字段）。
+/// - `Bits 16..=20`：编码已知的 [`KnownUsage`] 枚举序号（`1..=18`，`0` 表示未知或无此字段）。
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct IpAttrFlags(u32);

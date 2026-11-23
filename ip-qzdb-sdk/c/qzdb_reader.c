@@ -2345,12 +2345,12 @@ static int parse_groups_and_schema(qzdb_reader_t* ctx) {
         int gs_group_count = READ_LE16(d + sp); sp += 2;
         int max_gs_groups = gs_group_count < ctx->actual_groups ? gs_group_count : ctx->actual_groups;
         for (int gi = 0; gi < max_gs_groups; gi++) {
-            if (sp + 16 > ctx->data_size) break;
+            if (sp + 16 > ctx->data_size) return QZDB_ERR_CORRUPTED;
             ctx->group_ids[gi] = READ_LE16(d + sp); sp += 2;
             int fld_count = READ_LE16(d + sp); sp += 6;
             uint32_t stride_u = READ_LE32(d + sp); sp += 8;
             if (fld_count < 0 || fld_count > QZDB_MAX_FIELDS ||
-                (uint64_t)fld_count * 12 > ctx->data_size - sp) break;
+                (uint64_t)fld_count * 12 > ctx->data_size - sp) return QZDB_ERR_CORRUPTED;
             if (stride_u < 1u || stride_u > 4096u) return QZDB_ERR_CORRUPTED;
             schema_fld_count[gi] = fld_count;
             ctx->group_strides[gi] = (int)stride_u;
@@ -2977,16 +2977,13 @@ static void swap_ctx_atomic(qzdb_reader_t* ctx, qzdb_reader_t* new_ctx) {
     new_ctx->reader_stripes = NULL;
 
     qzdb_reader_t old_ctx;
-    memcpy(&old_ctx, ctx, sizeof(old_ctx));
-    old_ctx.reload_lock = NULL;
-    old_ctx.reader_stripes = NULL;
+    memset(&old_ctx, 0, sizeof(old_ctx));
+    memcpy(&old_ctx, ctx, offsetof(qzdb_reader_t, reload_lock));
 
-    new_ctx->reload_lock = lk;
-    new_ctx->reader_stripes = stripes;
     new_ctx->generation = next_gen;
-    new_ctx->active_readers = 0;
-    new_ctx->reloading = 1;
-    memcpy(ctx, new_ctx, sizeof(*ctx));
+    /* 仅复制快照状态字段，绝不非原子覆写尾部并发控制字段（reload_lock /
+     * reader_stripes / active_readers / reloading），消除 C11 形式数据竞争。 */
+    memcpy(ctx, new_ctx, offsetof(qzdb_reader_t, reload_lock));
     __atomic_store_n(&ctx->reloading, 0, __ATOMIC_RELEASE);
     if (lk) pthread_mutex_unlock(lk);
 

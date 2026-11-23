@@ -1160,7 +1160,9 @@ func cloneGeoInfo(g *GeoInfo) *GeoInfo {
 	}
 }
 
-func (s *Snapshot) extractGeoInfo(rowID uint32) *GeoInfo {
+// getOrDecodeGeoInfo 返回缓存中的只读 *GeoInfo（不克隆，未命中时解码并写回 geoCache）。
+// 调用方不得修改返回值的字段切片；面向内部只读投影（FindFields）与 extractGeoInfo 复用。
+func (s *Snapshot) getOrDecodeGeoInfo(rowID uint32) *GeoInfo {
 	if rowID == 0 {
 		return nil
 	}
@@ -1169,13 +1171,17 @@ func (s *Snapshot) extractGeoInfo(rowID uint32) *GeoInfo {
 		return nil
 	}
 	if g := s.geoCache.get(entryID); g != nil {
-		return cloneGeoInfo(g)
+		return g
 	}
 	g := s.computeGeoInfoEntry(entryID, entryOff, fc)
 	if g != nil {
 		s.geoCache.put(entryID, g)
 	}
-	return cloneGeoInfo(g)
+	return g
+}
+
+func (s *Snapshot) extractGeoInfo(rowID uint32) *GeoInfo {
+	return cloneGeoInfo(s.getOrDecodeGeoInfo(rowID))
 }
 
 // resolveEntry 根据 row_id 解析 entryID 与 entry 字节偏移。
@@ -1414,19 +1420,7 @@ func (r *QzdbReader) findV6(s *Snapshot, ip [16]byte) (*GeoInfo, error) {
 }
 
 func (s *Snapshot) extractGeoPipe(rowID uint32) string {
-	if rowID == 0 {
-		return ""
-	}
-	entryID, entryOff, fc, ok := s.resolveEntry(rowID)
-	if !ok {
-		return ""
-	}
-	if g := s.geoCache.get(entryID); g != nil {
-		return g.pipe
-	}
-	g := s.computeGeoInfoEntry(entryID, entryOff, fc)
-	if g != nil {
-		s.geoCache.put(entryID, g)
+	if g := s.getOrDecodeGeoInfo(rowID); g != nil {
 		return g.pipe
 	}
 	return ""
@@ -1492,7 +1486,7 @@ func (r *QzdbReader) FindFields(ipStr string, fields []string) (*GeoInfo, error)
 	if rowID == 0 {
 		return nil, nil
 	}
-	return projectGeo(s.extractGeoInfo(rowID), fields), nil
+	return projectGeo(s.getOrDecodeGeoInfo(rowID), fields), nil
 }
 
 // ---------- 低级行号 ----------

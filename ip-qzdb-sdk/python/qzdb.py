@@ -1,6 +1,5 @@
 import array
 import functools
-import ipaddress
 import json
 import mmap
 import os
