@@ -197,7 +197,7 @@
         "district": "",
         "isp": "Host Sailor",
         "asn": 0,
-        "usage_type": "Unknown"
+        "usage_type": ""
       }
     },
     {
@@ -317,7 +317,7 @@
         "district": "",
         "isp": "Speedpartner",
         "asn": 34225,
-        "usage_type": "Unknown"
+        "usage_type": ""
       }
     },
     {
