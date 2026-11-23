@@ -182,7 +182,8 @@ type Snapshot struct {
 	scope            string
 
 	storedCrc uint32
-	crcHash   func() uint32
+	crcOnce   sync.Once
+	crcVal    uint32
 
 	geoCache *geoCache
 }
@@ -288,9 +289,6 @@ func buildSnapshot(data []byte, release func(), groupIndex int, verifyCrc bool) 
 		return nil, newErr(ErrCodeBadHeader, "file too small for QZDB header")
 	}
 	s := &Snapshot{data: data, release: release, groupIndex: groupIndex}
-	// crcHash 延迟到首次调用才计算（构造期单线程，OnceValue 安全）；
-	// 查询热路径无锁直接取用，避免每次 GetFileHash 重复算 CRC。
-	s.crcHash = sync.OnceValue(s.computeCanonicalCrc)
 
 	if err := s.parseHeader(); err != nil {
 		return nil, err
@@ -307,7 +305,7 @@ func buildSnapshot(data []byte, release func(), groupIndex int, verifyCrc bool) 
 	if verifyCrc {
 		if !s.verifyCrcNow() {
 			return nil, newErr(ErrCodeCorrupted,
-				fmt.Sprintf("crc32 checksum mismatch: stored=0x%08x calculated=0x%08x", s.storedCrc, s.crcHash()))
+				fmt.Sprintf("crc32 checksum mismatch: stored=0x%08x calculated=0x%08x", s.storedCrc, s.canonicalCrc()))
 		}
 	}
 	if err := s.parsePools(); err != nil {
@@ -612,21 +610,30 @@ func (s *Snapshot) parseGroups() error {
 	// 使 len(...) == groupFieldCounts[g] 恒成立，热路径无需逐次判界。
 	for g := 0; g < groups; g++ {
 		fc := s.groupFieldCounts[g]
-		if len(s.groupFieldWidths[g]) == fc && len(s.groupFieldOffsets[g]) == fc &&
-			len(s.groupFieldNative[g]) == fc && len(s.groupFieldNativeType[g]) == fc {
-			continue
+		if len(s.groupFieldWidths[g]) != fc || len(s.groupFieldOffsets[g]) != fc ||
+			len(s.groupFieldNative[g]) != fc || len(s.groupFieldNativeType[g]) != fc {
+			s.groupStrides[g] = fc * s.poolIdxSize
+			widths := make([]int, fc)
+			offsets := make([]int, fc)
+			for i := 0; i < fc; i++ {
+				widths[i] = s.poolIdxSize
+				offsets[i] = i * s.poolIdxSize
+			}
+			s.groupFieldWidths[g] = widths
+			s.groupFieldOffsets[g] = offsets
+			s.groupFieldNative[g] = make([]bool, fc)
+			s.groupFieldNativeType[g] = make([]int, fc)
 		}
-		s.groupStrides[g] = fc * s.poolIdxSize
-		widths := make([]int, fc)
-		offsets := make([]int, fc)
-		for i := 0; i < fc; i++ {
-			widths[i] = s.poolIdxSize
-			offsets[i] = i * s.poolIdxSize
+		if s.groupEntryCounts[g] > 0 && s.groupStrides[g] > 0 {
+			cnt := uint64(s.groupEntryCounts[g])
+			stride := uint64(s.groupStrides[g])
+			base := s.groupEntryOffsets[g]
+			dataLen := uint64(len(d))
+			if base > dataLen || cnt > (dataLen-base)/stride {
+				return newErr(ErrCodeOutOfBounds,
+					fmt.Sprintf("section group_%d_entries out of bounds (off=%d, count=%d, stride=%d, size=%d)", g, base, cnt, stride, dataLen))
+			}
 		}
-		s.groupFieldWidths[g] = widths
-		s.groupFieldOffsets[g] = offsets
-		s.groupFieldNative[g] = make([]bool, fc)
-		s.groupFieldNativeType[g] = make([]int, fc)
 	}
 	return nil
 }
@@ -882,8 +889,18 @@ func (s *Snapshot) computeCanonicalCrc() uint32 {
 	return crc
 }
 
+// canonicalCrc 延迟计算一次 canonical CRC 并缓存在值字段 crcVal 中。
+// 不再用 sync.OnceValue(s.computeCanonicalCrc) 存闭包，避免 Snapshot -> closure -> Snapshot
+// 自引用环导致 verifyCrc=false 时 GC 无法触发 finalizer 释放 mmap。
+func (s *Snapshot) canonicalCrc() uint32 {
+	s.crcOnce.Do(func() {
+		s.crcVal = s.computeCanonicalCrc()
+	})
+	return s.crcVal
+}
+
 func (s *Snapshot) verifyCrcNow() bool {
-	return s.crcHash() == s.storedCrc
+	return s.canonicalCrc() == s.storedCrc
 }
 
 // Warmup 主动触碰跳表与节点内存页（按 4096 字节步长），消除冷页在首查时的抖动。
@@ -946,7 +963,7 @@ func (s *Snapshot) Warmup() {
 }
 
 func (s *Snapshot) fileHashHex() string {
-	return fmt.Sprintf("%08x", s.crcHash())
+	return fmt.Sprintf("%08x", s.canonicalCrc())
 }
 
 // ---------- Trie 遍历（返回已剥离哨兵位的 row_id） ----------
@@ -1128,6 +1145,23 @@ func (s *Snapshot) readIPRow(rowID uint32) (uint32, uint32, uint32) {
 // extractGeoInfo 以 entryId 为解码缓存键（与 Java/C#/Node 语义一致）：
 // 同一 GeoEntry 被 N 个相邻 CIDR row 共享是常态，rowID 键会把同一 entry
 // 重复解码 N 次占 N 个槽；entryId 键只解码一次占一个槽，命中率更高。
+// cloneGeoInfo 返回独立 Values 副本，防止调用方改写污染共享缓存；
+// FieldNames 为全库共享 schema 元数据（与快照同源），只读元数据零拷贝共享。
+// 热路径分配预算：每命中 2 次（结构体 + Values），见 TestBatchZeroAllocHotPath。
+func cloneGeoInfo(g *GeoInfo) *GeoInfo {
+	if g == nil {
+		return nil
+	}
+	return &GeoInfo{
+		FieldNames: g.FieldNames,
+		Values:     slices.Clone(g.Values),
+		normMap:    g.normMap,
+		numeric:    g.numeric,
+		pipe:       g.pipe,
+		cacheKey:   g.cacheKey,
+	}
+}
+
 func (s *Snapshot) extractGeoInfo(rowID uint32) *GeoInfo {
 	if rowID == 0 {
 		return nil
@@ -1137,13 +1171,13 @@ func (s *Snapshot) extractGeoInfo(rowID uint32) *GeoInfo {
 		return nil
 	}
 	if g := s.geoCache.get(entryID); g != nil {
-		return g
+		return cloneGeoInfo(g)
 	}
 	g := s.computeGeoInfoEntry(entryID, entryOff, fc)
 	if g != nil {
 		s.geoCache.put(entryID, g)
 	}
-	return g
+	return cloneGeoInfo(g)
 }
 
 // resolveEntry 根据 row_id 解析 entryID 与 entry 字节偏移。

@@ -11,6 +11,7 @@ impl QzdbReader {
     pub fn export_mcp_tool_manifest(&self) -> String {
         let snap = self.inner();
         let fields_enum = snap
+            .schema
             .field_names
             .iter()
             .map(|f| format!("\"{}\"", escape_json(f)))

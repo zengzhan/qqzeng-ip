@@ -791,15 +791,45 @@ impl UsageType {
 ///   常规 find_uint 契约路径不再为每个构造 spend pipe 预算。
 ///
 /// `GeoData` 从不暴露 `&mut`。
+/// 不可变字段模式元信息：由 `Arc` 在快照、`GeoInfo`、`GeoInfoRef`、投影与合并结果间共享，
+/// 随引用归零自动回收，避免 `Box::leak` 在热更新或 `ChainedReader` Merge 查询中持续泄漏。
+#[derive(Debug)]
+struct GeoSchema {
+    field_names: Box<[String]>,
+    norm_map: HashMap<String, usize>,
+    numeric_indices: Box<[usize]>,
+    numeric_mask: u64,
+}
+
+impl GeoSchema {
+    fn new(field_names: Vec<String>) -> Arc<Self> {
+        let mut norm_map = HashMap::with_capacity(field_names.len());
+        let mut numeric_indices = Vec::new();
+        for (i, n) in field_names.iter().enumerate() {
+            norm_map.entry(normalize_key(n)).or_insert(i);
+            if is_numeric_field_name(n) {
+                numeric_indices.push(i);
+            }
+        }
+        let numeric_mask = build_numeric_mask(&numeric_indices);
+        Arc::new(GeoSchema {
+            field_names: field_names.into_boxed_slice(),
+            norm_map,
+            numeric_indices: numeric_indices.into_boxed_slice(),
+            numeric_mask,
+        })
+    }
+}
+
 #[derive(Debug)]
 struct GeoData {
-    field_names: &'static [String],
+    schema: Arc<GeoSchema>,
     values: Box<[FieldVal<'static>]>,
-    norm_map: &'static HashMap<String, usize>,
-    numeric_indices: &'static [usize],
     /// 惰性 to_pipe 缓存。blob 未跨线程共享时只有本线程 RMW；
     /// 用户手工把 `Arc<GeoInfo>` 移交他核时，OnceLock 的原子保证安全（能接受）。
     pipe: OnceLock<Arc<str>>,
+    /// FORMAT §10.5：含超 32B 原生浮点堆回退值时为 false，零拷贝视图须拒绝。
+    ref_safe: bool,
 }
 
 impl GeoData {
@@ -837,7 +867,7 @@ impl std::fmt::Debug for GeoInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // 与旧 derive(Debug) 输出形态保持一致（字段名 + 值平面展开）
         f.debug_struct("GeoInfo")
-            .field("field_names", &self.inner.field_names)
+            .field("field_names", &self.inner.schema.field_names)
             .field("values", &self.inner.values)
             .finish()
     }
@@ -845,10 +875,9 @@ impl std::fmt::Debug for GeoInfo {
 
 impl GeoInfo {
     /// 字段名列表（等价旧 `pub field_names` 字段视图）。
-    /// 快照装载期已把元信息固定为进程级生命期，实例可在快照替换后继续安全读取。
     #[inline]
     pub fn field_names(&self) -> &[String] {
-        self.inner.field_names
+        &self.inner.schema.field_names
     }
 
     /// 字段值列表（等价旧 `pub values` 字段视图）。
@@ -861,19 +890,13 @@ impl GeoInfo {
     /// 数值字段索引（to_json 数字化契约的判定来源）。
     #[inline]
     pub fn numeric_indices(&self) -> &[usize] {
-        self.inner.numeric_indices
+        &self.inner.schema.numeric_indices
     }
 
     /// to_json 数字化位掩码。等价 `build_numeric_mask(self.numeric_indices())`。
     #[inline]
     pub fn numeric_mask(&self) -> u64 {
-        let mut mask = 0u64;
-        for &i in self.inner.numeric_indices {
-            if i < 64 {
-                mask |= 1u64 << i;
-            }
-        }
-        mask
+        self.inner.schema.numeric_mask
     }
 
     /// 按字段名取值（大小写/下划线/连字符不敏感）。未匹配返回 ""，绝不 panic。
@@ -882,7 +905,9 @@ impl GeoInfo {
     /// 超长时回退到 owned 分配；常见字段名命中零堆分配。
     pub fn get(&self, name: &str) -> &str {
         let key = norm_key_buf(name);
-        self.inner.norm_map
+        self.inner
+            .schema
+            .norm_map
             .get(key.as_ref())
             .and_then(|i| self.inner.values.get(*i))
             .map(|s| s.as_str())
@@ -901,8 +926,8 @@ impl GeoInfo {
 
     /// 字段名 → 值（全 string）。
     pub fn to_map(&self) -> HashMap<String, String> {
-        let mut m = HashMap::with_capacity(self.inner.field_names.len());
-        for (i, name) in self.inner.field_names.iter().enumerate() {
+        let mut m = HashMap::with_capacity(self.inner.schema.field_names.len());
+        for (i, name) in self.inner.schema.field_names.iter().enumerate() {
             let v = self
                 .inner
                 .values
@@ -919,7 +944,7 @@ impl GeoInfo {
     pub fn to_json(&self) -> String {
         let mut out = String::from("{");
         let mut first = true;
-        for (i, name) in self.inner.field_names.iter().enumerate() {
+        for (i, name) in self.inner.schema.field_names.iter().enumerate() {
             if name.is_empty() {
                 continue;
             }
@@ -931,7 +956,7 @@ impl GeoInfo {
             out.push('"');
             out.push_str(&escape_json(name));
             out.push_str("\":");
-            let numeric = self.inner.numeric_indices.contains(&i);
+            let numeric = i < 64 && (self.inner.schema.numeric_mask >> i) & 1 != 0;
             if val.is_empty() {
                 out.push_str(if numeric { "null" } else { "\"\"" });
             } else if numeric {
@@ -1082,7 +1107,7 @@ impl std::fmt::Display for GeoInfo {
 
 impl PartialEq for GeoInfo {
     fn eq(&self, other: &Self) -> bool {
-        self.inner.field_names == other.inner.field_names
+        self.inner.schema.field_names == other.inner.schema.field_names
             && self.inner.values.len() == other.inner.values.len()
             && self
                 .inner
@@ -1226,19 +1251,11 @@ impl<'a> std::ops::Deref for FieldVal<'a> {
 
 /// 单条 IP 的地理信息响应借用视图（零拷贝，API_CONTRACT §6）。
 ///
-/// 字段值直接借用自底层快照池（装载期 `Box::leak` → `&'static str`）
-/// 或为内联栈缓冲；`find_ref(&self) -> GeoInfoRef<'_>` 的借用约束保持
-/// 与调用方关联（_snap 锚定快照存活性），但值本身不受快照存亡影响
-/// （'static 值），`to_geo_info()` 因此退化为纯拷贝，零分配零转码。
+/// 底层直接复用线程本地解码缓存中的 `Arc<GeoData>`（仅 8 字节句柄，消除旧版
+/// 2.6 KB 栈数组初始化与拷贝开销），`to_geo_info()` 退化为 O(1) `Arc::clone`。
 #[derive(Clone)]
 pub struct GeoInfoRef<'a> {
-    pub(crate) _snap: Option<Arc<SnapshotInner>>,
-    pub(crate) field_names: &'static [String],
-    pub(crate) values: [FieldVal<'static>; MAX_GEO_FIELDS],
-    pub(crate) field_count: usize,
-    pub(crate) norm_map: &'static HashMap<String, usize>,
-    /// 数值字段位掩码（bit i = 第 i 字段为数值）——to_json 热路径 O(1) 位测。
-    pub(crate) numeric_mask: u64,
+    pub(crate) inner: Arc<GeoData>,
     #[allow(dead_code)]
     pub(crate) _anchor: std::marker::PhantomData<&'a ()>,
 }
@@ -1260,62 +1277,46 @@ impl<'a> GeoInfoRef<'a> {
     #[inline]
     pub fn get(&self, name: &str) -> &str {
         let key = norm_key_buf(name);
-        self.norm_map
+        self.inner
+            .schema
+            .norm_map
             .get(key.as_ref())
-            .copied()
-            .and_then(|i| {
-                if i < self.field_count {
-                    self.values.get(i).map(|v| v.as_str())
-                } else {
-                    None
-                }
-            })
+            .and_then(|&i| self.inner.values.get(i))
+            .map(|v| v.as_str())
             .unwrap_or("")
     }
 
     /// 获取指定索引处的字段值。
     #[inline]
     pub fn get_value_at(&self, idx: usize) -> &str {
-        if idx < self.field_count {
-            self.values.get(idx).map(|v| v.as_str()).unwrap_or("")
-        } else {
-            ""
-        }
+        self.inner.values.get(idx).map(|v| v.as_str()).unwrap_or("")
     }
 
     /// 字段数量。
     #[inline]
     pub fn len(&self) -> usize {
-        self.field_count
+        self.inner.values.len()
     }
 
     /// 是否为空。
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.field_count == 0
+        self.inner.values.is_empty()
     }
 
     /// 字段名列表切片。
     #[inline]
     pub fn field_names(&self) -> &[String] {
-        let max_len = self.field_count.min(self.field_names.len());
-        &self.field_names[..max_len]
+        let max_len = self.inner.values.len().min(self.inner.schema.field_names.len());
+        &self.inner.schema.field_names[..max_len]
     }
 
     /// 全部字段以 `|` 拼接（直接拼接已解码字符串，禁止重新格式化浮点）。
     pub fn to_pipe(&self) -> String {
-        let cap = self.values[..self.field_count]
-            .iter()
-            .map(|v| v.as_str().len() + 1)
-            .sum::<usize>();
-        let mut out = String::with_capacity(cap);
-        for i in 0..self.field_count {
-            if i > 0 {
-                out.push('|');
-            }
-            out.push_str(self.get_value_at(i));
-        }
-        out
+        self.inner
+            .pipe
+            .get_or_init(|| GeoData::build_pipe_text(&self.inner.values))
+            .to_string()
     }
 
     /// `to_pipe()` 的别名。
@@ -1325,7 +1326,7 @@ impl<'a> GeoInfoRef<'a> {
 
     /// 字段名 → 值（全 String）。
     pub fn to_map(&self) -> HashMap<String, String> {
-        let mut m = HashMap::with_capacity(self.field_count);
+        let mut m = HashMap::with_capacity(self.len());
         for (i, name) in self.field_names().iter().enumerate() {
             let v = self.get_value_at(i).to_string();
             m.insert(name.clone(), v);
@@ -1339,6 +1340,7 @@ impl<'a> GeoInfoRef<'a> {
         let mut out = String::from("{");
         let mut first = true;
         let names = self.field_names();
+        let mask = self.inner.schema.numeric_mask;
         for (i, name) in names.iter().enumerate() {
             if name.is_empty() {
                 continue;
@@ -1351,7 +1353,7 @@ impl<'a> GeoInfoRef<'a> {
             out.push('"');
             out.push_str(&escape_json(name));
             out.push_str("\":");
-            let numeric = i < 64 && (self.numeric_mask >> i) & 1 != 0;
+            let numeric = i < 64 && (mask >> i) & 1 != 0;
             if val.is_empty() {
                 out.push_str(if numeric { "null" } else { "\"\"" });
             } else if numeric {
@@ -1370,31 +1372,11 @@ impl<'a> GeoInfoRef<'a> {
         out
     }
 
-    /// 转换为拥有所有权的 `GeoInfo` 实体。
-    ///
-    /// 值全部为 `FieldVal<'static>`（快照池 'static 借用或内联），本体转换
-    /// 退化为一次性 `Box<[FieldVal]>` 分配；元数据直接复用快照装载期固定
-    /// 的 'static 引用，pipe 惰性化交给 `to_pipe()`。
+    /// 转换为拥有所有权的 `GeoInfo` 实体（O(1) `Arc::clone`，零堆分配）。
+    #[inline]
     pub fn to_geo_info(&self) -> GeoInfo {
-        let values: Box<[FieldVal<'static>]> = self.values[..self.field_count].to_vec().into_boxed_slice();
-        let (names, norm, num) = if let Some(ref snap) = self._snap {
-            (snap.field_names, snap.norm_map, snap.numeric_indices)
-        } else {
-            // 无快照引用（合成实例）：名字/norm 直接复用实例内的 'static
-            // 引用；数值索引从掩码重建。仅测试/合成路径触发，低频。
-            let idxs: Vec<usize> = (0..self.field_count)
-                .filter(|&i| i < 64 && (self.numeric_mask >> i) & 1 != 0)
-                .collect();
-            (self.field_names, self.norm_map, &*Box::leak(idxs.into_boxed_slice()))
-        };
         GeoInfo {
-            inner: Arc::new(GeoData {
-                field_names: names,
-                values,
-                norm_map: norm,
-                numeric_indices: num,
-                pipe: OnceLock::new(),
-            }),
+            inner: Arc::clone(&self.inner),
         }
     }
 
@@ -1536,7 +1518,7 @@ impl<'a, 'b> PartialEq<GeoInfoRef<'b>> for GeoInfoRef<'a> {
     fn eq(&self, other: &GeoInfoRef<'b>) -> bool {
         self.field_names() == other.field_names()
             && self.len() == other.len()
-            && (0..self.field_count).all(|i| self.get_value_at(i) == other.get_value_at(i))
+            && (0..self.len()).all(|i| self.get_value_at(i) == other.get_value_at(i))
     }
 }
 
@@ -1546,7 +1528,7 @@ impl<'a> PartialEq<GeoInfo> for GeoInfoRef<'a> {
     fn eq(&self, other: &GeoInfo) -> bool {
         self.field_names() == other.field_names()
             && self.len() == other.values().len()
-            && (0..self.field_count).all(|i| {
+            && (0..self.len()).all(|i| {
                 self.get_value_at(i) == other.values().get(i).map(|s| s.as_ref()).unwrap_or("")
             })
     }
@@ -1719,12 +1701,8 @@ pub struct SnapshotInner {
     /// （进程口径一次性、按重载次数线性——见 CHANGELOG 与 README）。
     pools: Vec<Vec<Vec<&'static str>>>,
 
-    // 元信息（'static，见 from_bytes 中 Box::leak 说明）
-    field_names: &'static [String],
-    norm_map: &'static HashMap<String, usize>,
-    numeric_indices: &'static [usize],
-    /// 数值字段位掩码（装载期由 numeric_indices 预计算；ref 视图构造 O(1)）。
-    numeric_mask: u64,
+    // 模式元信息（Arc 共享，随快照与 GeoInfo 引用归零自动释放，零 Box::leak）
+    schema: Arc<GeoSchema>,
     version: String,
     description: String,
     data_month: String,
@@ -2140,6 +2118,19 @@ impl SnapshotInner {
                 && group_field_native[g].len() == fc
                 && group_field_native_type[g].len() == fc
             {
+                // 统一加载期校验：offset + width <= stride（防畸形文件越界读取）
+                for fi in 0..fc {
+                    let end = group_field_offsets[g][fi].checked_add(group_field_widths[g][fi]);
+                    if end.is_none_or(|e| e > group_strides[g]) {
+                        return Err(err(
+                            ErrorCode::Corrupted,
+                            format!(
+                                "group {} field {} out of stride bounds (offset={} + width={} > stride={})",
+                                g, fi, group_field_offsets[g][fi], group_field_widths[g][fi], group_strides[g]
+                            ),
+                        ));
+                    }
+                }
                 continue;
             }
             group_strides[g] = fc * pool_idx_size;
@@ -2278,26 +2269,7 @@ impl SnapshotInner {
         let edition = group_editions[group_index].to_string();
         let edition_source = group_edition_sources[group_index];
         let field_names_source = group_name_sources[group_index];
-        // 元信息固定为进程级生命期（Box::leak，KB 级）：GeoData/GeoInfo/ref
-        // 视图共用一份，构造零 Arc RMW、零克隆，且实例可在快照替换后继续读取。
-        let field_names: &'static [String] =
-            Box::leak(group_field_names[group_index].clone().into_boxed_slice());
-
-        let mut norm_map: HashMap<String, usize> =
-            HashMap::with_capacity(field_names.len());
-        for (i, n) in field_names.iter().enumerate() {
-            norm_map.insert(normalize_key(n), i);
-        }
-        let norm_map: &'static HashMap<String, usize> = Box::leak(Box::new(norm_map));
-
-        let numeric_indices: Vec<usize> = field_names
-            .iter()
-            .enumerate()
-            .filter(|(_, n)| is_numeric_field_name(n))
-            .map(|(i, _)| i)
-            .collect();
-        let numeric_indices: &'static [usize] = Box::leak(numeric_indices.into_boxed_slice());
-        let numeric_mask = build_numeric_mask(numeric_indices);
+        let schema = GeoSchema::new(group_field_names[group_index].clone());
 
         // ---- 维度掩码修复 ----
         // 只看该组解析出来的字段名里有没有 asn。fieldId 只是槽位序号（0..N-1），
@@ -2406,10 +2378,7 @@ impl SnapshotInner {
             group_field_native,
             group_field_native_type,
             pools,
-            field_names,
-            norm_map,
-            numeric_indices,
-            numeric_mask,
+            schema,
             version,
             description,
             data_month,
@@ -2753,84 +2722,14 @@ impl SnapshotInner {
             .map(|a| (*a).clone())
     }
 
-    pub(crate) fn resolve_geo_ref(
-        &self,
-        entry_id: u32,
-        snap_arc: Option<Arc<SnapshotInner>>,
-    ) -> Option<GeoInfoRef<'_>> {
-        if entry_id == 0 || entry_id >= self.group_entry_counts[self.group_index] {
+    #[inline]
+    pub(crate) fn resolve_geo_ref(&self, entry_id: u32) -> Option<GeoInfoRef<'_>> {
+        let geo = self.resolve_geo_shared(entry_id)?;
+        if !geo.inner.ref_safe {
             return None;
         }
-        let gi = self.group_index;
-        let fc = self.group_field_counts[gi];
-        // 借用视图的内联/借用槽位上限：解析期已对 fc > MAX_GEO_FIELDS 的文件
-        // fail-closed 拒绝，此断言仅为防御性 tripwire（理论不可达）。
-        debug_assert!(
-            fc <= MAX_GEO_FIELDS,
-            "group field count {} exceeds MAX_GEO_FIELDS {}",
-            fc,
-            MAX_GEO_FIELDS
-        );
-        let entry_off = entry_off_of(
-            self.off_geo_entries,
-            self.group_entry_offsets[gi],
-            entry_id,
-            self.group_strides[gi],
-        );
-        let d = self.data.as_slice();
-        let widths = &self.group_field_widths[gi];
-        let offsets = &self.group_field_offsets[gi];
-        let natives = &self.group_field_native[gi];
-        let nat_types = &self.group_field_native_type[gi];
-        let pools = &self.pools[gi];
-
-        let mut values = [FieldVal::EMPTY; MAX_GEO_FIELDS];
-        let limit = fc.min(MAX_GEO_FIELDS);
-        for i in 0..limit {
-            let w = widths[i];
-            let fo = entry_off.saturating_add(offsets[i]);
-            if natives[i] {
-                let t = nat_types[i];
-                if t == 1 {
-                    let mut buf = [0u8; 32];
-                    let len = if w == 4 {
-                        let bits = safe_read_u32(d, fo).unwrap_or(0);
-                        fmt_native_float_buf(f32::from_bits(bits) as f64, &mut buf)?
-                    } else {
-                        let bits = safe_read_u64(d, fo).unwrap_or(0);
-                        fmt_native_float_buf(f64::from_bits(bits), &mut buf)?
-                    };
-                    values[i] = FieldVal::Inline(InlineBuf::new(buf, len as u8));
-                } else {
-                    let mut buf = [0u8; 32];
-                    let val = self.read_uint_width(fo, w);
-                    let len = fmt_uint_buf(val, &mut buf);
-                    values[i] = FieldVal::Inline(InlineBuf::new(buf, len as u8));
-                }
-            } else {
-                let idx = self.read_uint_width(fo, w) as usize;
-                if i < pools.len() && idx < pools[i].len() {
-                    values[i] = FieldVal::Borrowed(pools[i][idx]);
-                }
-            }
-        }
-
-        // SAFETY 关联不变量（见 find_uint_ref_snap 的论证）：snap_arc 为 Some 时
-        // 必须就是 &self 所属的那个 Arc（返回引用的存活由该 Arc 保活）；
-        // None 仅允许守卫借用路径（寿命由调用方 &self 锚定，编译期约束）。
-        if let Some(a) = snap_arc.as_deref() {
-            debug_assert!(
-                std::ptr::eq(a, self),
-                "resolve_geo_ref: Some(snap) must be the Arc that owns &self"
-            );
-        }
         Some(GeoInfoRef {
-            _snap: snap_arc,
-            field_names: self.field_names,
-            values,
-            field_count: limit,
-            norm_map: self.norm_map,
-            numeric_mask: self.numeric_mask,
+            inner: Arc::clone(&geo.inner),
             _anchor: std::marker::PhantomData,
         })
     }
@@ -2856,6 +2755,7 @@ impl SnapshotInner {
         let natives = &self.group_field_native[gi];
         let nat_types = &self.group_field_native_type[gi];
         let pools = &self.pools[gi];
+        let mut ref_safe = true;
         let mut values: Vec<FieldVal<'static>> = Vec::with_capacity(fc);
         for i in 0..fc {
             let w = widths[i];
@@ -2881,6 +2781,7 @@ impl SnapshotInner {
                         // 浮点与零拷贝视图 fail-closed 约定）要求 owned 路径给全量字符串
                         // 不截断、ref 路径拒绝：此处回退一次堆格式化，并接入
                         // POOL_INTERNER 驻留去重，避免恶意数据反复查询引发无界内存泄漏。
+                        ref_safe = false;
                         let f = if w == 4 {
                             f32::from_bits(safe_read_u32(d, fo).unwrap_or(0)) as f64
                         } else {
@@ -2912,11 +2813,10 @@ impl SnapshotInner {
             values.push(val);
         }
         Arc::new(GeoData {
-            field_names: self.field_names,
+            schema: Arc::clone(&self.schema),
             values: values.into_boxed_slice(),
-            norm_map: self.norm_map,
-            numeric_indices: self.numeric_indices,
             pipe: OnceLock::new(),
+            ref_safe,
         })
     }
 
@@ -2992,7 +2892,7 @@ impl SnapshotInner {
         } else {
             geo_id
         };
-        self.resolve_geo_ref(entry_id, None)
+        self.resolve_geo_ref(entry_id)
     }
 
     pub fn find_v6_bytes_ref<'a>(&'a self, bytes: &[u8; 16]) -> Option<GeoInfoRef<'a>> {
@@ -3012,7 +2912,7 @@ impl SnapshotInner {
         } else {
             geo_id
         };
-        self.resolve_geo_ref(entry_id, None)
+        self.resolve_geo_ref(entry_id)
     }
 
     /// IP 查询（拥有所有权实体）。
@@ -3111,6 +3011,7 @@ impl SnapshotInner {
             // 防御性：norm_map 索引恒落在 values 内；畸形快照下未知化而非 panic
             let hit: Option<(usize, FieldVal<'static>)> = full
                 .inner
+                .schema
                 .norm_map
                 .get(&key)
                 .copied()
@@ -3118,7 +3019,7 @@ impl SnapshotInner {
             nmap.entry(key).or_insert(names.len());
             match hit {
                 Some((i, v)) => {
-                    if is_numeric_field_name(&full.inner.field_names[i]) {
+                    if is_numeric_field_name(&full.inner.schema.field_names[i]) {
                         nidx.push(names.len());
                     }
                     names.push((*f).to_string());
@@ -3133,13 +3034,18 @@ impl SnapshotInner {
         if names.is_empty() {
             return None;
         }
+        let numeric_mask = build_numeric_mask(&nidx);
         Some(GeoInfo {
             inner: Arc::new(GeoData {
-                field_names: Box::leak(names.into_boxed_slice()),
+                schema: Arc::new(GeoSchema {
+                    field_names: names.into_boxed_slice(),
+                    norm_map: nmap,
+                    numeric_indices: nidx.into_boxed_slice(),
+                    numeric_mask,
+                }),
                 values: values.into_boxed_slice(),
-                norm_map: Box::leak(Box::new(nmap)),
-                numeric_indices: Box::leak(nidx.into_boxed_slice()),
                 pipe: OnceLock::new(),
+                ref_safe: full.inner.ref_safe,
             }),
         })
     }
@@ -4006,11 +3912,11 @@ impl QzdbReader {
     ///
     /// 支持直接传入 `&str`、`IpAddr`、`Ipv4Addr`、`Ipv6Addr`、`u32` 等。
     pub fn find_ref(&self, ip: impl ToIp) -> Option<GeoInfoRef<'_>> {
-        let snap = self.snap.load_full();
+        let snap = self.snap.load();
         let parsed = ip.to_parsed_ip()?;
         match parsed {
-            ParsedIp::V4(v4) => self.find_uint_ref_snap(snap, v4),
-            ParsedIp::V6(b) => self.find_v6_bytes_ref_snap(snap, &b),
+            ParsedIp::V4(v4) => self.find_uint_ref_inner(&snap, v4),
+            ParsedIp::V6(b) => self.find_v6_bytes_ref_inner(&snap, &b),
         }
     }
 
@@ -4020,35 +3926,35 @@ impl QzdbReader {
     }
 
     pub fn find_ref_v4(&self, ip: u32) -> Option<GeoInfoRef<'_>> {
-        let snap = self.snap.load_full();
-        self.find_uint_ref_snap(snap, ip)
+        let snap = self.snap.load();
+        self.find_uint_ref_inner(&snap, ip)
     }
 
     pub fn find_ref_v6(&self, ip: u128) -> Option<GeoInfoRef<'_>> {
-        let snap = self.snap.load_full();
+        let snap = self.snap.load();
         if !snap.has_v6 {
             return None;
         }
         let b = ip.to_be_bytes();
-        self.find_v6_bytes_ref_snap(snap, &b)
+        self.find_v6_bytes_ref_inner(&snap, &b)
     }
 
     pub fn find_ref_bytes(&self, ip_bytes: &[u8]) -> Option<GeoInfoRef<'_>> {
-        let snap = self.snap.load_full();
+        let snap = self.snap.load();
         match ip_bytes.len() {
             16 => {
                 let mut b = [0u8; 16];
                 b.copy_from_slice(ip_bytes);
                 if is_ipv4_mapped_v6(&b) {
                     let v4 = u32::from_be_bytes([b[12], b[13], b[14], b[15]]);
-                    self.find_uint_ref_snap(snap, v4)
+                    self.find_uint_ref_inner(&snap, v4)
                 } else {
-                    self.find_v6_bytes_ref_snap(snap, &b)
+                    self.find_v6_bytes_ref_inner(&snap, &b)
                 }
             }
             4 => {
                 let v4 = u32::from_be_bytes([ip_bytes[0], ip_bytes[1], ip_bytes[2], ip_bytes[3]]);
-                self.find_uint_ref_snap(snap, v4)
+                self.find_uint_ref_inner(&snap, v4)
             }
             _ => None,
         }
@@ -4063,8 +3969,8 @@ impl QzdbReader {
     }
 
     pub fn find_v6_bytes_ref(&self, bytes: &[u8; 16]) -> Option<GeoInfoRef<'_>> {
-        let snap = self.snap.load_full();
-        self.find_v6_bytes_ref_snap(snap, bytes)
+        let snap = self.snap.load();
+        self.find_v6_bytes_ref_inner(&snap, bytes)
     }
 
     /// 使用闭包借用视图，在闭包生命周期内直接访问 `GeoInfoRef`。
@@ -4078,58 +3984,24 @@ impl QzdbReader {
         f(res)
     }
 
-    fn find_uint_ref_snap(&self, snap: Arc<SnapshotInner>, ip: u32) -> Option<GeoInfoRef<'_>> {
-        if !snap.has_v4 {
-            return None;
-        }
-        let rid = snap.trie_row_v4(ip)?;
-        if rid == 0 {
-            return None;
-        }
-        let (geo_id, asn_id, usage_id) = snap.read_ip_row(rid);
-        let mask = *snap.group_dim_masks.get(snap.group_index)?;
-        let entry_id = if mask & 0x02 != 0 {
-            asn_id
-        } else if mask & 0x04 != 0 {
-            usage_id
-        } else {
-            geo_id
-        };
-        // SAFETY（零拷贝借用寿命解绑；全 crate 仅 map_file 与两处 find_*_ref_snap
-        // 含 unsafe）：raw pointer 用于把返回寿命从本函数局部的 Arc 借用解绑到
-        // 签名约束的 '&self'。健全性 = ① Arc 被移入返回值 _snap 字段，借用所指
-        // 内存随 Arc 保活；② 被借用字段（pools/field_names/norm_map/numeric_indices）
-        // 在 from_bytes 构造期后绝无写点（不可变快照）；③ reader reload 后旧数据
-        // 仍由 _snap 持有。fc > MAX_GEO_FIELDS 的文件已在解析期 fail-closed 拒绝。
-        let snap_ptr: *const SnapshotInner = &*snap;
-        unsafe { (*snap_ptr).resolve_geo_ref(entry_id, Some(snap)) }
+    #[inline]
+    fn find_uint_ref_inner(&self, snap: &SnapshotInner, ip: u32) -> Option<GeoInfoRef<'_>> {
+        snap.find_uint_ref(ip).map(|r| GeoInfoRef {
+            inner: r.inner,
+            _anchor: std::marker::PhantomData,
+        })
     }
 
-    fn find_v6_bytes_ref_snap(
+    #[inline]
+    fn find_v6_bytes_ref_inner(
         &self,
-        snap: Arc<SnapshotInner>,
+        snap: &SnapshotInner,
         bytes: &[u8; 16],
     ) -> Option<GeoInfoRef<'_>> {
-        if !snap.has_v6 {
-            return None;
-        }
-        let rid = snap.trie_row_v6(bytes)?;
-        if rid == 0 {
-            return None;
-        }
-        let (geo_id, asn_id, usage_id) = snap.read_ip_row(rid);
-        let mask = *snap.group_dim_masks.get(snap.group_index)?;
-        let entry_id = if mask & 0x02 != 0 {
-            asn_id
-        } else if mask & 0x04 != 0 {
-            usage_id
-        } else {
-            geo_id
-        };
-        // SAFETY: 同 find_uint_ref_snap 内的论证（Arc 保活 + 不可变快照 +
-        // 寿命锚定 &self）。
-        let snap_ptr: *const SnapshotInner = &*snap;
-        unsafe { (*snap_ptr).resolve_geo_ref(entry_id, Some(snap)) }
+        snap.find_v6_bytes_ref(bytes).map(|r| GeoInfoRef {
+            inner: r.inner,
+            _anchor: std::marker::PhantomData,
+        })
     }
 
     fn find_parsed(&self, parsed: &ParsedIp) -> Option<GeoInfo> {
@@ -4514,10 +4386,10 @@ impl QzdbReader {
         )
     }
     pub fn get_field_names(&self) -> Vec<String> {
-        self.inner().field_names.to_vec()
+        self.inner().schema.field_names.to_vec()
     }
     pub fn has_field(&self, name: &str) -> bool {
-        self.inner().norm_map.contains_key(&normalize_key(name))
+        self.inner().schema.norm_map.contains_key(&normalize_key(name))
     }
     pub fn verify_crc(&self) -> bool {
         self.inner().verify_crc_inner()
@@ -4614,10 +4486,7 @@ fn empty_snapshot() -> SnapshotInner {
         group_field_native: vec![vec![]],
         group_field_native_type: vec![vec![]],
         pools: vec![vec![]],
-        field_names: Box::leak(Vec::new().into_boxed_slice()),
-        norm_map: Box::leak(Box::new(HashMap::new())),
-        numeric_indices: Box::leak(Vec::new().into_boxed_slice()),
-        numeric_mask: 0,
+        schema: GeoSchema::new(Vec::new()),
         version: String::new(),
         description: String::new(),
         data_month: String::new(),
@@ -4766,10 +4635,10 @@ impl QzdbRegistry {
         let parsed = ip.to_parsed_ip()?;
         for name in &self.order {
             if let Some(r) = self.readers.get(name) {
-                let snap = r.snap.load_full();
+                let snap = r.snap.load();
                 let hit = match parsed {
-                    ParsedIp::V4(v4) => r.find_uint_ref_snap(snap, v4),
-                    ParsedIp::V6(b) => r.find_v6_bytes_ref_snap(snap, &b),
+                    ParsedIp::V4(v4) => r.find_uint_ref_inner(&snap, v4),
+                    ParsedIp::V6(b) => r.find_v6_bytes_ref_inner(&snap, &b),
                 };
                 if hit.is_some() {
                     return hit;
@@ -4898,10 +4767,10 @@ impl ChainedReader {
         );
         let parsed = ip.to_parsed_ip()?;
         for r in &self.readers {
-            let snap = r.snap.load_full();
+            let snap = r.snap.load();
             let hit = match parsed {
-                ParsedIp::V4(v4) => r.find_uint_ref_snap(snap, v4),
-                ParsedIp::V6(b) => r.find_v6_bytes_ref_snap(snap, &b),
+                ParsedIp::V4(v4) => r.find_uint_ref_inner(&snap, v4),
+                ParsedIp::V6(b) => r.find_v6_bytes_ref_inner(&snap, &b),
             };
             if hit.is_some() {
                 return hit;
@@ -4927,11 +4796,40 @@ impl Default for ChainedReader {
 
 /// 合并两个 GeoInfo：Merge 模式下空缺补充，MergeOverride 模式下非空覆盖。
 ///
-/// 值全部为 `FieldVal<'static>` 的纯拷贝（两源快照池 'static 串或内联
-/// Copy）；除合并元数据外零分配、零转码。合并后的字段名表/norm_map 与
-/// numeric_indices 是本函数一次性产物：Box::leak 固定（低频链路：多
-/// reader 链式查询才触发）。
+/// 合并模式元信息通过 `Arc<GeoSchema>` 管理（随 `GeoInfo` 释放自动回收，零 `Box::leak`）；
+/// 当两侧共享同一 schema（如相同档次双库合并）时直接复用 `Arc::clone`，零元信息分配。
 fn merge_geo(base: &GeoInfo, overlay: &GeoInfo, mode: ChainMode) -> GeoInfo {
+    let non_empty =
+        |value: Option<&FieldVal<'static>>| value.filter(|v| !v.as_str().is_empty()).copied();
+
+    if Arc::ptr_eq(&base.inner.schema, &overlay.inner.schema)
+        || base.inner.schema.field_names == overlay.inner.schema.field_names
+    {
+        let len = base.inner.schema.field_names.len();
+        let mut values = Vec::with_capacity(len);
+        for i in 0..len {
+            let base_value = base.inner.values.get(i);
+            let overlay_value = overlay.inner.values.get(i);
+            let merged_value = match mode {
+                ChainMode::Merge => non_empty(base_value).or_else(|| non_empty(overlay_value)),
+                ChainMode::MergeOverride => {
+                    non_empty(overlay_value).or_else(|| non_empty(base_value))
+                }
+                ChainMode::Fallback => unreachable!(),
+            }
+            .unwrap_or(FieldVal::EMPTY);
+            values.push(merged_value);
+        }
+        return GeoInfo {
+            inner: Arc::new(GeoData {
+                schema: Arc::clone(&base.inner.schema),
+                values: values.into_boxed_slice(),
+                pipe: OnceLock::new(),
+                ref_safe: base.inner.ref_safe && overlay.inner.ref_safe,
+            }),
+        };
+    }
+
     let mut names = Vec::with_capacity(base.field_names().len() + overlay.field_names().len());
     let mut seen: HashMap<String, ()> =
         HashMap::with_capacity(base.field_names().len() + overlay.field_names().len());
@@ -4942,16 +4840,20 @@ fn merge_geo(base: &GeoInfo, overlay: &GeoInfo, mode: ChainMode) -> GeoInfo {
             }
         }
     }
-    let field_names: &'static [String] = Box::leak(names.into_boxed_slice());
-    let mut values = Vec::with_capacity(field_names.len());
-    let mut norm_map = HashMap::with_capacity(field_names.len());
+    let mut values = Vec::with_capacity(names.len());
+    let mut norm_map = HashMap::with_capacity(names.len());
     let mut numeric_indices = Vec::new();
-    let non_empty = |value: Option<&FieldVal<'static>>| value.filter(|v| !v.as_str().is_empty()).copied();
-    for (index, name) in field_names.iter().enumerate() {
+    for (index, name) in names.iter().enumerate() {
         let key = normalize_key(name);
-        let base_value = base.inner.norm_map.get(&key).and_then(|&i| base.inner.values.get(i));
+        let base_value = base
+            .inner
+            .schema
+            .norm_map
+            .get(&key)
+            .and_then(|&i| base.inner.values.get(i));
         let overlay_value = overlay
             .inner
+            .schema
             .norm_map
             .get(&key)
             .and_then(|&i| overlay.inner.values.get(i));
@@ -4967,13 +4869,18 @@ fn merge_geo(base: &GeoInfo, overlay: &GeoInfo, mode: ChainMode) -> GeoInfo {
         }
         values.push(merged_value);
     }
+    let numeric_mask = build_numeric_mask(&numeric_indices);
     GeoInfo {
         inner: Arc::new(GeoData {
-            field_names,
+            schema: Arc::new(GeoSchema {
+                field_names: names.into_boxed_slice(),
+                norm_map,
+                numeric_indices: numeric_indices.into_boxed_slice(),
+                numeric_mask,
+            }),
             values: values.into_boxed_slice(),
-            norm_map: Box::leak(Box::new(norm_map)),
-            numeric_indices: Box::leak(numeric_indices.into_boxed_slice()),
             pipe: OnceLock::new(),
+            ref_safe: base.inner.ref_safe && overlay.inner.ref_safe,
         }),
     }
 }
@@ -4984,33 +4891,20 @@ mod tests {
         build_numeric_mask, fmt_native_float, is_json_number, merge_geo, norm_key_buf, parse_ip,
         safe_read_uint_width, ChainMode, FieldVal, GeoInfo, GeoInfoRef, InlineBuf, MAX_GEO_FIELDS,
     };
-    use std::collections::HashMap;
     use std::sync::Arc;
 
     fn test_geo(names: &[&str], values: &[&str]) -> GeoInfo {
         let field_names: Vec<String> = names.iter().map(|name| (*name).to_string()).collect();
-        let norm_map: HashMap<String, usize> = field_names
-            .iter()
-            .enumerate()
-            .map(|(index, name)| (super::normalize_key(name), index))
-            .collect();
-        let numeric_indices: Vec<usize> = field_names
-            .iter()
-            .enumerate()
-            .filter(|(_, name)| super::is_numeric_field_name(name))
-            .map(|(index, _)| index)
-            .collect();
         let values: Vec<FieldVal<'static>> = values
             .iter()
             .map(|value| FieldVal::Borrowed(Box::leak((*value).to_string().into_boxed_str())))
             .collect();
         GeoInfo {
             inner: Arc::new(super::GeoData {
-                field_names: Box::leak(field_names.into_boxed_slice()),
+                schema: super::GeoSchema::new(field_names),
                 values: values.into_boxed_slice(),
-                norm_map: Box::leak(Box::new(norm_map)),
-                numeric_indices: Box::leak(numeric_indices.into_boxed_slice()),
                 pipe: std::sync::OnceLock::new(),
+                ref_safe: true,
             }),
         }
     }
@@ -5140,15 +5034,13 @@ mod tests {
         let name = format!("A{}", "B".repeat(64));
         let normalized = super::normalize_key(&name);
         assert_eq!(norm_key_buf(&name), normalized);
-        let field_names = vec![name.clone()];
-        let norm_map = HashMap::from([(normalized, 0)]);
         let view = GeoInfoRef {
-            _snap: None,
-            field_names: Box::leak(field_names.into_boxed_slice()),
-            values: [FieldVal::Borrowed("ok"); MAX_GEO_FIELDS],
-            field_count: 1,
-            norm_map: Box::leak(Box::new(norm_map)),
-            numeric_mask: 0,
+            inner: Arc::new(super::GeoData {
+                schema: super::GeoSchema::new(vec![name.clone()]),
+                values: vec![FieldVal::Borrowed("ok")].into_boxed_slice(),
+                pipe: std::sync::OnceLock::new(),
+                ref_safe: true,
+            }),
             _anchor: std::marker::PhantomData,
         };
         assert_eq!(view.get(&name), "ok");
@@ -5164,16 +5056,15 @@ mod tests {
             .map(|index| format!("field_{index}"))
             .collect();
         field_names[MAX_GEO_FIELDS - 1] = "geo_id".to_string();
-        let mut values = [FieldVal::EMPTY; MAX_GEO_FIELDS];
+        let mut values = vec![FieldVal::EMPTY; MAX_GEO_FIELDS];
         values[MAX_GEO_FIELDS - 1] = FieldVal::Borrowed("42");
-        let norm_map = HashMap::from([("geo_id".to_string(), MAX_GEO_FIELDS - 1)]);
         let view = GeoInfoRef {
-            _snap: None,
-            field_names: Box::leak(field_names.into_boxed_slice()),
-            values,
-            field_count: MAX_GEO_FIELDS,
-            norm_map: Box::leak(Box::new(norm_map)),
-            numeric_mask: (1u64 << 63) as _,
+            inner: Arc::new(super::GeoData {
+                schema: super::GeoSchema::new(field_names),
+                values: values.into_boxed_slice(),
+                pipe: std::sync::OnceLock::new(),
+                ref_safe: true,
+            }),
             _anchor: std::marker::PhantomData,
         };
 

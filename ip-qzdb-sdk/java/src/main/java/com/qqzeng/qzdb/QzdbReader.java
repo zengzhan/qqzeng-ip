@@ -14,9 +14,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Queue;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.stream.Stream;
@@ -171,6 +169,28 @@ public final class QzdbReader implements AutoCloseable {
          * JDK 内部实现。用 source 是否为 null 表达“是否存在需要释放的映射”才是准确语义。
          */
         MmapSource source;
+        /**
+         * 引用计数（初始为 1，归 activeSnapshot 所有；每次并发查询 +1，退出 -1）。
+         * 归零时才真正执行 unmapIfMapped()，彻底杜绝 JDK 17-21 SIGSEGV 与 JDK 25+ IllegalStateException。
+         */
+        private final AtomicInteger pinCount = new AtomicInteger(1);
+
+        boolean tryPin() {
+            if (source == null) return true;
+            while (true) {
+                int c = pinCount.get();
+                if (c <= 0) return false;
+                if (pinCount.compareAndSet(c, c + 1)) return true;
+            }
+        }
+
+        void releasePin() {
+            if (source == null) return;
+            if (pinCount.decrementAndGet() == 0) {
+                unmapIfMapped();
+            }
+        }
+
         /**
          * final：下面的 geoCache 以 entryId 单独作键，其正确性完全依赖
          * 「groupIndex 在单个 Snapshot 生命周期内不变」这一不变量。切换分组走的
@@ -633,6 +653,14 @@ public final class QzdbReader implements AutoCloseable {
                 }
                 if (groupFieldNative[g] == null) groupFieldNative[g] = new boolean[fc];
                 if (groupFieldNativeType[g] == null) groupFieldNativeType[g] = new int[fc];
+                if (groupEntryCounts[g] > 0) {
+                    long totalBytes = groupEntryCounts[g] * (long) groupStrides[g];
+                    if (totalBytes < 0 || groupEntryOffsets[g] < 0 || groupEntryOffsets[g] > dataLen
+                            || totalBytes > dataLen - groupEntryOffsets[g]) {
+                        throw new QzdbException(ErrorCode.CORRUPTED,
+                                "Section group_" + g + "_entries out of bounds");
+                    }
+                }
             }
         }
 
@@ -1057,68 +1085,12 @@ public final class QzdbReader implements AutoCloseable {
     private final AtomicReference<Snapshot> activeSnapshot = new AtomicReference<>();
 
     /**
-     * 已被替换下来、等待释放的旧快照（按退休时间 FIFO）。
-     * <p>
-     * 原因与 QzdbRegistry 的退休队列（quarantine）完全一致：查询路径是无锁的，不做
-     * 每次调用的引用计数，所以在替换的瞬间无法廉价判断是否还有线程正在这个旧快照上
-     * 跑 trie walk。因此旧快照要同时满足两个条件才会被释放：
-     * <ol>
-     *   <li>已退休满 {@link #RETIRE_GRACE_NANOS}——防止 reload 间隔极短（或线程在查询
-     *       中途被长时间挂起，例如 CPU 被打满的小规格容器）时，在途查询撞上已关闭的映射；</li>
-     *   <li>队列长度不超过 {@link #MAX_RETIRED}——reload 被高频调用时不能无界累积
-     *       （每个 Snapshot 自带 512 KB 的 64K 槽解码缓存）。</li>
-     * </ol>
-     * reload()/close() 是运维触发的低频动作（分钟级以上间隔），而单次查询是微秒级临界区，
-     * 所以常态下队列里最多只有 1 个待释放快照。改用 Arena 之后，即使这道防线被击穿，
-     * 后果也只是在途查询收到 {@link IllegalStateException}，而不再是 SIGSEGV 使整个 JVM 崩溃。
-     * <p>
-     * 注：这里刻意不用 {@code AtomicReference} 的"晚一代"写法——那种写法在两次 reload
-     * 紧邻发生时会在第二次 reload 的调用线程上**同步**释放，此时距第一次 reload 可能只过了
-     * 几微秒，在途查询毫无保护。
+     * 释放旧快照的所有者引用计数：若无在途查询则立刻 unmap，若有在途查询则由最后一个
+     * 退出查询的线程在 finally 中 releasePin() 归零后安全 unmap。
      */
-    private final Queue<Retired> retiring = new ConcurrentLinkedQueue<>();
-
-    /** 旧快照的最短宽限期（远大于任何单次查询的耗时）。 */
-    private static final long RETIRE_GRACE_NANOS = TimeUnit.SECONDS.toNanos(2);
-
-    /** 待释放快照的队列上限（兜底，防止 reload 高频调用时无界累积）。 */
-    private static final int MAX_RETIRED = 8;
-
-    private record Retired(Snapshot snapshot, long retiredAtNanos) {
-    }
-
     private void retireSnapshot(Snapshot old) {
-        if (old == null) return;
-        // 堆内快照（reloadBuffer / Builder(byte[]) 加载）没有需要显式释放的映射：在途查询
-        // 自己持有 Snapshot 强引用，GC 可达性即足够安全。若照样入队，旧的整份库字节 +
-        // 字符串池 + 512 KB 解码缓存会被队列钉住，直到下一次 reload 且满 2 s 宽限期才放手
-        // ——低频 reloadBuffer 场景下等于常驻多一份库。
-        if (old.source == null) {
-            // 队列里若还有更早的 mmap 快照，借这次 reload 顺带按宽限期回收。
-            drainRetired();
-            return;
-        }
-        retiring.add(new Retired(old, System.nanoTime()));
-
-        drainRetired();
-    }
-
-    private void drainRetired() {
-        // 1) 宽限期已过的按 FIFO 释放。
-        long now = System.nanoTime();
-        Retired head;
-        while ((head = retiring.peek()) != null && now - head.retiredAtNanos() >= RETIRE_GRACE_NANOS) {
-            // remove(head) 是原子的：并发 reload 时只有一个线程会真正释放它。
-            // 这一步不能省——MmapSource 底层的 Arena.close() 非幂等，
-            // 重复关闭必然抛 IllegalStateException。
-            if (retiring.remove(head)) head.snapshot().unmapIfMapped();
-        }
-
-        // 2) 兜底上限：超出的部分立刻释放（退化为此前"最多多晾一代"的最坏行为）。
-        while (retiring.size() > MAX_RETIRED) {
-            Retired h = retiring.poll();
-            if (h == null) break;
-            h.snapshot().unmapIfMapped();
+        if (old != null) {
+            old.releasePin();
         }
     }
 
@@ -1230,6 +1202,44 @@ public final class QzdbReader implements AutoCloseable {
         return s;
     }
 
+    /** 获取当前快照并固定引用计数；调用方必须在 finally 中调用 {@link Snapshot#releasePin()}。 */
+    private Snapshot acquireSnapshot() {
+        while (true) {
+            Snapshot s = activeSnapshot.get();
+            if (s == null) {
+                throw new IllegalStateException("QzdbReader is closed");
+            }
+            if (s.tryPin()) {
+                return s;
+            }
+        }
+    }
+
+    private Snapshot tryAcquireSnapshot() {
+        while (true) {
+            Snapshot s = activeSnapshot.get();
+            if (s == null) return null;
+            if (s.tryPin()) return s;
+        }
+    }
+
+    /** 仅裁剪 ASCII 空白（空格/制表/换行/回车），不接受 NUL 等控制字符。 */
+    private static String trimAsciiWhitespace(String s) {
+        int start = 0;
+        int end = s.length();
+        while (start < end) {
+            char c = s.charAt(start);
+            if (c == ' ' || c == '\t' || c == '\r' || c == '\n') start++;
+            else break;
+        }
+        while (end > start) {
+            char c = s.charAt(end - 1);
+            if (c == ' ' || c == '\t' || c == '\r' || c == '\n') end--;
+            else break;
+        }
+        return (start == 0 && end == s.length()) ? s : s.substring(start, end);
+    }
+
     // =========================================================================
     // 单条查询 API（所有入口共享同一套地址规范化与解析路径，见 SDK 规范 §5.3）
     // =========================================================================
@@ -1256,10 +1266,14 @@ public final class QzdbReader implements AutoCloseable {
         if (addr == null) {
             throw new QzdbException(ErrorCode.INVALID_IP, "InetAddress cannot be null");
         }
-        Snapshot snap = requireSnapshot();
-        byte[] raw = addr.getAddress();
-        int rowId = lookupRowIdFromBytes(snap, raw);
-        return resolveRow(snap, rowId, null);
+        Snapshot snap = acquireSnapshot();
+        try {
+            byte[] raw = addr.getAddress();
+            int rowId = lookupRowIdFromBytes(snap, raw);
+            return resolveRow(snap, rowId, null);
+        } finally {
+            snap.releasePin();
+        }
     }
 
     /**
@@ -1269,9 +1283,13 @@ public final class QzdbReader implements AutoCloseable {
      * @return 查询结果；未找到返回 {@link Optional#empty()}
      */
     public Optional<GeoInfo> findUint(int ipInt) {
-        Snapshot snap = requireSnapshot();
-        int rowId = lookupRowIdUintInternal(snap, ipInt);
-        return resolveRow(snap, rowId, null);
+        Snapshot snap = acquireSnapshot();
+        try {
+            int rowId = lookupRowIdUintInternal(snap, ipInt);
+            return resolveRow(snap, rowId, null);
+        } finally {
+            snap.releasePin();
+        }
     }
 
     /**
@@ -1286,12 +1304,16 @@ public final class QzdbReader implements AutoCloseable {
         if (ip16 == null) {
             throw new QzdbException(ErrorCode.INVALID_IP, "IP bytes array cannot be null");
         }
-        Snapshot snap = requireSnapshot();
-        int rowId = lookupRowIdFromBytes(snap, ip16);
-        if (rowId < 0) {
-            throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IP byte array length: " + ip16.length);
+        Snapshot snap = acquireSnapshot();
+        try {
+            int rowId = lookupRowIdFromBytes(snap, ip16);
+            if (rowId < 0) {
+                throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IP byte array length: " + ip16.length);
+            }
+            return resolveRow(snap, rowId, null);
+        } finally {
+            snap.releasePin();
         }
-        return resolveRow(snap, rowId, null);
     }
 
     /**
@@ -1312,16 +1334,35 @@ public final class QzdbReader implements AutoCloseable {
     /**
      * 查询并返回 pipe 分隔的结果字符串（格式：field1|field2|...|fieldN）。
      * 与其余 7 语言契约一致（API_CONTRACT §find_str）：非法 IP 与未命中均返回 ""。
+     * 非法 IP 走无异常快速路径，避免构造异常栈。
      *
      * @param ipStr IP 地址字符串
      * @return pipe 分隔结果；未找到或 IP 非法返回空字符串 ""
      */
     public String findStr(String ipStr) {
+        if (ipStr == null || ipStr.isEmpty()) return "";
+        String ip = trimAsciiWhitespace(ipStr);
+        if (ip.isEmpty()) return "";
+        Snapshot snap = acquireSnapshot();
         try {
-            Optional<GeoInfo> info = find(ipStr);
+            int rowId;
+            if (ip.indexOf(':') >= 0) {
+                byte[] bytes = V6_SCRATCH.get();
+                if (!tryParseIPv6Into(ip, bytes)) return "";
+                rowId = isV4MappedBytes(bytes)
+                        ? lookupRowIdUintInternal(snap, v4FromMappedBytes(bytes))
+                        : lookupV6Bytes(snap, bytes);
+            } else {
+                long v4 = tryParseIPv4Range(ip, 0, ip.length());
+                if (v4 < 0) return "";
+                rowId = lookupRowIdUintInternal(snap, (int) v4);
+            }
+            Optional<GeoInfo> info = resolveRow(snap, rowId, null);
             return info.map(GeoInfo::toPipeString).orElse("");
         } catch (QzdbException e) {
             return "";
+        } finally {
+            snap.releasePin();
         }
     }
 
@@ -1329,23 +1370,26 @@ public final class QzdbReader implements AutoCloseable {
         if (ipStr == null || ipStr.isEmpty()) {
             throw new QzdbException(ErrorCode.INVALID_IP, "IP address string cannot be empty");
         }
-        String ip = ipStr.trim();
+        String ip = trimAsciiWhitespace(ipStr);
         if (ip.isEmpty()) {
             throw new QzdbException(ErrorCode.INVALID_IP, "IP address string cannot be empty");
         }
-        Snapshot snap = requireSnapshot();
-
-        int rowId;
-        if (ip.indexOf(':') >= 0) {
-            byte[] bytes = V6_SCRATCH.get();
-            parseIPv6Into(ip, bytes);
-            rowId = isV4MappedBytes(bytes)
-                    ? lookupRowIdUintInternal(snap, v4FromMappedBytes(bytes))
-                    : lookupV6Bytes(snap, bytes);
-        } else {
-            rowId = lookupRowIdUintInternal(snap, parseIPv4Uint(ip));
+        Snapshot snap = acquireSnapshot();
+        try {
+            int rowId;
+            if (ip.indexOf(':') >= 0) {
+                byte[] bytes = V6_SCRATCH.get();
+                parseIPv6Into(ip, bytes);
+                rowId = isV4MappedBytes(bytes)
+                        ? lookupRowIdUintInternal(snap, v4FromMappedBytes(bytes))
+                        : lookupV6Bytes(snap, bytes);
+            } else {
+                rowId = lookupRowIdUintInternal(snap, parseIPv4Uint(ip));
+            }
+            return resolveRow(snap, rowId, fieldFilter);
+        } finally {
+            snap.releasePin();
         }
-        return resolveRow(snap, rowId, fieldFilter);
     }
 
     /** rowId → IPRow → dimensionMask 选维 → GeoEntry 解包（所有 find* 变体的唯一汇聚路径）。 */
@@ -1451,21 +1495,22 @@ public final class QzdbReader implements AutoCloseable {
      * @return row_id（0 表示未找到或输入非法）
      */
     public int lookupRowId(String ipStr) {
-        if (ipStr == null) return 0;
-        String ip = ipStr.trim();
+        if (ipStr == null || ipStr.isEmpty()) return 0;
+        String ip = trimAsciiWhitespace(ipStr);
         if (ip.isEmpty()) return 0;
-        Snapshot snap = requireSnapshot();
+        Snapshot snap = acquireSnapshot();
         try {
             if (ip.indexOf(':') >= 0) {
                 byte[] bytes = V6_SCRATCH.get();
-                parseIPv6Into(ip, bytes);
+                if (!tryParseIPv6Into(ip, bytes)) return 0;
                 return isV4MappedBytes(bytes)
                         ? lookupRowIdUintInternal(snap, v4FromMappedBytes(bytes))
                         : lookupV6Bytes(snap, bytes);
             }
-            return lookupRowIdUintInternal(snap, parseIPv4Uint(ip));
-        } catch (QzdbException e) {
-            return 0;
+            long v4 = tryParseIPv4Range(ip, 0, ip.length());
+            return v4 < 0 ? 0 : lookupRowIdUintInternal(snap, (int) v4);
+        } finally {
+            snap.releasePin();
         }
     }
 
@@ -1476,7 +1521,12 @@ public final class QzdbReader implements AutoCloseable {
      * @return row_id（0 表示未找到）
      */
     public int lookupRowIdUint(int ipInt) {
-        return lookupRowIdUintInternal(requireSnapshot(), ipInt);
+        Snapshot snap = acquireSnapshot();
+        try {
+            return lookupRowIdUintInternal(snap, ipInt);
+        } finally {
+            snap.releasePin();
+        }
     }
 
     /**
@@ -1487,9 +1537,13 @@ public final class QzdbReader implements AutoCloseable {
      */
     public int lookupRowIdBytes(byte[] ipBytes) {
         if (ipBytes == null) return 0;
-        Snapshot snap = requireSnapshot();
-        int rowId = lookupRowIdFromBytes(snap, ipBytes);
-        return rowId < 0 ? 0 : rowId;
+        Snapshot snap = acquireSnapshot();
+        try {
+            int rowId = lookupRowIdFromBytes(snap, ipBytes);
+            return rowId < 0 ? 0 : rowId;
+        } finally {
+            snap.releasePin();
+        }
     }
 
     /**
@@ -1499,94 +1553,88 @@ public final class QzdbReader implements AutoCloseable {
      * @return RowIds 具名结构体；越界返回 null
      */
     public RowIds lookupIds(int rowId) {
-        Snapshot s = requireSnapshot();
-        if (rowId <= 0 || rowId >= s.rowCount) return null;
-        long rOff = s.offIPRow + (long) rowId * s.ipRowSize;
-        if (rOff + s.ipRowSize > s.dataLen) return null;
-        int geoId = readUintWidth(s.data, (int) rOff, s.rowGeoWidth);
-        int asnId = s.rowAsnWidth > 0 ? readUintWidth(s.data, (int) (rOff + s.rowGeoWidth), s.rowAsnWidth) : 0;
-        int usageId = s.rowUsageWidth > 0
-                ? readUintWidth(s.data, (int) (rOff + s.rowGeoWidth + s.rowAsnWidth), s.rowUsageWidth) : 0;
-        return new RowIds(geoId, asnId, usageId);
+        Snapshot s = acquireSnapshot();
+        try {
+            if (rowId <= 0 || rowId >= s.rowCount) return null;
+            long rOff = s.offIPRow + (long) rowId * s.ipRowSize;
+            if (rOff + s.ipRowSize > s.dataLen) return null;
+            int geoId = readUintWidth(s.data, (int) rOff, s.rowGeoWidth);
+            int asnId = s.rowAsnWidth > 0 ? readUintWidth(s.data, (int) (rOff + s.rowGeoWidth), s.rowAsnWidth) : 0;
+            int usageId = s.rowUsageWidth > 0
+                    ? readUintWidth(s.data, (int) (rOff + s.rowGeoWidth + s.rowAsnWidth), s.rowUsageWidth) : 0;
+            return new RowIds(geoId, asnId, usageId);
+        } finally {
+            s.releasePin();
+        }
     }
 
     // =========================================================================
     // CIDR 反查 API（由 Trie 匹配深度重建，数据库本身不存储 CIDR）
     // =========================================================================
 
-    /**
-     * 返回包含该 IP 的最具体网段的标准 CIDR（如 "1.0.1.0/24"、"2001:218::/32"）。
-     * <p>
-     * 原理：QZDB Trie 每个叶子对应构建时的一条 CIDR 记录，叶子深度 = 前缀长度 N；
-     * 将 IP 的高 N 位保留、主机位清零即得网络地址（FORMAT §4.3 单比特步进，无跳层压缩）。
-     * Jump Table 直接命中叶子时前 16/JumpBits 位内的深度信息被压缩，内部自动从根补走重建。
-     * <p>
-     * IPv4-mapped IPv6 按规范 §9.7 剥离后走 V4 Trie，返回 V4 CIDR。
-     * 语义（QZDB_TEST_SPECIFICATION.md Tier 1 §7）：未命中返回 null；非法 IP 抛 INVALID_IP。
-     *
-     * @param ipStr IP 地址字符串（IPv4/IPv6/mapped）
-     * @return 最具体网段的标准 CIDR；未覆盖返回 null
-     * @throws QzdbException IP 格式非法时抛出（错误码 {@link ErrorCode#INVALID_IP}）
-     */
     public String lookupCidr(String ipStr) {
         if (ipStr == null || ipStr.isEmpty()) {
             throw new QzdbException(ErrorCode.INVALID_IP, "IP address string cannot be empty");
         }
-        String ip = ipStr.trim();
+        String ip = trimAsciiWhitespace(ipStr);
         if (ip.isEmpty()) {
             throw new QzdbException(ErrorCode.INVALID_IP, "IP address string cannot be empty");
         }
-        Snapshot snap = requireSnapshot();
-        if (ip.indexOf(':') >= 0) {
-            byte[] bytes = V6_SCRATCH.get();
-            parseIPv6Into(ip, bytes);
-            if (isV4MappedBytes(bytes)) {
-                int v4 = v4FromMappedBytes(bytes);
-                int n = lookupV4PrefixLen(snap, v4);
-                return n < 0 ? null : formatV4Cidr(v4, n);
+        Snapshot snap = acquireSnapshot();
+        try {
+            if (ip.indexOf(':') >= 0) {
+                byte[] bytes = V6_SCRATCH.get();
+                parseIPv6Into(ip, bytes);
+                if (isV4MappedBytes(bytes)) {
+                    int v4 = v4FromMappedBytes(bytes);
+                    int n = lookupV4PrefixLen(snap, v4);
+                    return n < 0 ? null : formatV4Cidr(v4, n);
+                }
+                int n = lookupV6PrefixLen(snap, bytes);
+                return n < 0 ? null : formatV6Cidr(bytes, n);
             }
-            int n = lookupV6PrefixLen(snap, bytes);
-            return n < 0 ? null : formatV6Cidr(bytes, n);
+            int v4 = parseIPv4Uint(ip);
+            int n = lookupV4PrefixLen(snap, v4);
+            return n < 0 ? null : formatV4Cidr(v4, n);
+        } finally {
+            snap.releasePin();
         }
-        int v4 = parseIPv4Uint(ip);
-        int n = lookupV4PrefixLen(snap, v4);
-        return n < 0 ? null : formatV4Cidr(v4, n);
     }
 
     /** IPv4 数值入口的 CIDR 反查。未覆盖返回 null。 */
     public String lookupCidrUint(int ipInt) {
-        Snapshot snap = requireSnapshot();
-        int n = lookupV4PrefixLen(snap, ipInt);
-        return n < 0 ? null : formatV4Cidr(ipInt, n);
+        Snapshot snap = acquireSnapshot();
+        try {
+            int n = lookupV4PrefixLen(snap, ipInt);
+            return n < 0 ? null : formatV4Cidr(ipInt, n);
+        } finally {
+            snap.releasePin();
+        }
     }
 
-    /**
-     * 字节数组入口的 CIDR 反查（4 字节 = V4，16 字节 = V6/mapped）。
-     * 未覆盖返回 null；字节数组为 null 或长度非法（非 4/16）抛 INVALID_IP。
-     *
-     * @param ipBytes 4 字节 (IPv4) 或 16 字节 (IPv6/mapped)
-     * @return 最具体网段的标准 CIDR；未覆盖返回 null
-     * @throws QzdbException 字节数组为 null 或长度非法时抛出（{@link ErrorCode#INVALID_IP}）
-     */
     public String lookupCidrBytes(byte[] ipBytes) {
         if (ipBytes == null || (ipBytes.length != 4 && ipBytes.length != 16)) {
             throw new QzdbException(ErrorCode.INVALID_IP,
                     "Invalid IP byte array length: " + (ipBytes == null ? "null" : ipBytes.length));
         }
-        Snapshot snap = requireSnapshot();
-        if (ipBytes.length == 16) {
-            if (isV4MappedBytes(ipBytes)) {
-                int v4 = v4FromMappedBytes(ipBytes);
-                int n = lookupV4PrefixLen(snap, v4);
-                return n < 0 ? null : formatV4Cidr(v4, n);
+        Snapshot snap = acquireSnapshot();
+        try {
+            if (ipBytes.length == 16) {
+                if (isV4MappedBytes(ipBytes)) {
+                    int v4 = v4FromMappedBytes(ipBytes);
+                    int n = lookupV4PrefixLen(snap, v4);
+                    return n < 0 ? null : formatV4Cidr(v4, n);
+                }
+                int n = lookupV6PrefixLen(snap, ipBytes);
+                return n < 0 ? null : formatV6Cidr(ipBytes, n);
             }
-            int n = lookupV6PrefixLen(snap, ipBytes);
-            return n < 0 ? null : formatV6Cidr(ipBytes, n);
+            int v4 = ((ipBytes[0] & 0xFF) << 24) | ((ipBytes[1] & 0xFF) << 16)
+                    | ((ipBytes[2] & 0xFF) << 8) | (ipBytes[3] & 0xFF);
+            int n = lookupV4PrefixLen(snap, v4);
+            return n < 0 ? null : formatV4Cidr(v4, n);
+        } finally {
+            snap.releasePin();
         }
-        int v4 = ((ipBytes[0] & 0xFF) << 24) | ((ipBytes[1] & 0xFF) << 16)
-                | ((ipBytes[2] & 0xFF) << 8) | (ipBytes[3] & 0xFF);
-        int n = lookupV4PrefixLen(snap, v4);
-        return n < 0 ? null : formatV4Cidr(v4, n);
     }
 
     // =========================================================================
@@ -1677,9 +1725,7 @@ public final class QzdbReader implements AutoCloseable {
     @Override
     public void close() {
         Snapshot last = activeSnapshot.getAndSet(null);
-        if (last != null) last.unmapIfMapped();
-        Retired old;
-        while ((old = retiring.poll()) != null) old.snapshot().unmapIfMapped();
+        if (last != null) last.releasePin();
     }
 
     /**
@@ -1708,8 +1754,17 @@ public final class QzdbReader implements AutoCloseable {
      *             与历史 {@link #warmup()} 行为完全一致。
      */
     public void warmup(boolean full) {
-        Snapshot snap = activeSnapshot.get();
-        if (snap == null || snap.data == null) return;
+        Snapshot snap = tryAcquireSnapshot();
+        if (snap == null) return;
+        try {
+            warmupSnapshot(snap, full);
+        } finally {
+            snap.releasePin();
+        }
+    }
+
+    private static void warmupSnapshot(Snapshot snap, boolean full) {
+        if (snap.data == null) return;
         ByteBuffer buf = snap.data;
         final int PAGE = 4096;
         long touchSum = 0;
@@ -1818,7 +1873,14 @@ public final class QzdbReader implements AutoCloseable {
     public String getDescription() { return requireSnapshot().description; }
 
     /** @return 文件 CRC32 十六进制字符串（8 位小写） */
-    public String getFileHash() { return requireSnapshot().fileHashHex(); }
+    public String getFileHash() {
+        Snapshot snap = acquireSnapshot();
+        try {
+            return snap.fileHashHex();
+        } finally {
+            snap.releasePin();
+        }
+    }
 
     /** @return 当前版本组的字段名数组（克隆副本，修改不影响内部状态） */
     public String[] getFieldNames() { return requireSnapshot().fieldNames.clone(); }
@@ -1835,7 +1897,12 @@ public final class QzdbReader implements AutoCloseable {
 
     /** @return 重新计算全文件 CRC32 并与 Header 存储值比对（只读操作，不影响快照） */
     public boolean verifyCrc() {
-        return requireSnapshot().verifyCrcNow();
+        Snapshot snap = acquireSnapshot();
+        try {
+            return snap.verifyCrcNow();
+        } finally {
+            snap.releasePin();
+        }
     }
 
     /** @return 文件中包含的版本组数量（1~4） */
@@ -1861,7 +1928,8 @@ public final class QzdbReader implements AutoCloseable {
      * 失败时用 {@code ip.substring(from, to)} 组消息，与旧实现的消息逐字相同
      * （错误路径允许分配：它不参与热路径）。
      */
-    private static int parseIPv4Range(String ip, int from, int to) {
+    /** 无异常严格 IPv4 解析；非法返回 -1L，合法返回无符号 uint32（高 32 位为 0）。 */
+    private static long tryParseIPv4Range(String ip, int from, int to) {
         int result = 0;
         int parts = 0;
         int i = from;
@@ -1870,32 +1938,29 @@ public final class QzdbReader implements AutoCloseable {
             int val = 0;
             while (i < to && ip.charAt(i) != '.') {
                 char c = ip.charAt(i);
-                if (c < '0' || c > '9') {
-                    throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv4 format: " + ip.substring(from, to));
-                }
+                if (c < '0' || c > '9') return -1L;
                 val = val * 10 + (c - '0');
-                if (val > 255) {
-                    throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv4 format: " + ip.substring(from, to));
-                }
+                if (val > 255) return -1L;
                 i++;
             }
             int partLen = i - start;
-            if (partLen == 0 || partLen > 3 || (partLen > 1 && ip.charAt(start) == '0')) {
-                throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv4 format: " + ip.substring(from, to));
-            }
+            if (partLen == 0 || partLen > 3 || (partLen > 1 && ip.charAt(start) == '0')) return -1L;
             result = (result << 8) | val;
             parts++;
             if (i < to) {
                 i++;
-                if (i == to) {
-                    throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv4 format: " + ip.substring(from, to));
-                }
+                if (i == to) return -1L;
             }
         }
-        if (parts != 4) {
+        return parts == 4 ? (result & 0xFFFFFFFFL) : -1L;
+    }
+
+    private static int parseIPv4Range(String ip, int from, int to) {
+        long v = tryParseIPv4Range(ip, from, to);
+        if (v < 0) {
             throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv4 format: " + ip.substring(from, to));
         }
-        return result;
+        return (int) v;
     }
 
     /**
@@ -1908,40 +1973,16 @@ public final class QzdbReader implements AutoCloseable {
         return buf;
     }
 
-    /**
-     * 严格 IPv6 解析，单遍扫描直接写入 {@code out}（长度必须为 16）——零中间分配。
-     * <p>
-     * 与 {@link #parseIPv6Bytes} 的接受/拒绝判定、输出字节、异常消息
-     * <b>逐字节一致</b>（对旧实现逐字快照做 60 万+ 输入差分对拍 + 6 路变异测试，
-     * 见 {@code docs/JAVA_PERF_OPTIMIZATION.md}）。
-     * 语义：最多一个 '::'、≤8 组、末组允许点分 IPv4、拒绝 zone id 与空组。
-     * <p>
-     * <b>为什么不能像旧实现那样先 split 再回填：</b>旧实现每次调用要分配
-     * 2 个 substring + ArrayList + Object[] + 每组 1 个 substring + 2 个 String[]，
-     * 实测 IPv6 查询路径 <b>404 B/op、180 ns/op，且解析本身占掉整条链路的 ~100%</b>
-     * （对照 IPv4 入口 0 B/op、54 ns/op）。这里改成单遍扫描 + 一次段内前移，
-     * 把分配降到 0。
-     *
-     * @param s   待解析字面量
-     * @param out 长度 16 的输出缓冲；写入前整体清零（等价于旧实现的 {@code new byte[16]}）
-     */
-    static void parseIPv6Into(String s, byte[] out) {
+    /** 无异常严格 IPv6 解析；非法返回 false。 */
+    static boolean tryParseIPv6Into(String s, byte[] out) {
         final int len = s.length();
         Arrays.fill(out, (byte) 0);
-
-        // zone id 直接拒绝（§5.3：不解析 scope id）
-        if (s.indexOf('%') >= 0) {
-            throw new QzdbException(ErrorCode.INVALID_IP, "IPv6 zone ids are not supported: " + s);
-        }
-
+        if (s.indexOf('%') >= 0) return false;
         int dc = s.indexOf("::");
-        if (dc >= 0 && s.indexOf("::", dc + 2) >= 0) {
-            throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv6 format: " + s);
-        }
-        int leftEnd = dc >= 0 ? dc : len;          // 左段 = [0, leftEnd)
-        int rightStart = dc >= 0 ? dc + 2 : len;  // 右段 = [rightStart, len)
+        if (dc >= 0 && s.indexOf("::", dc + 2) >= 0) return false;
+        int leftEnd = dc >= 0 ? dc : len;
+        int rightStart = dc >= 0 ? dc + 2 : len;
 
-        // ---- 定位末组（唯一可能承载点分 IPv4 四元组的位置）----
         int lastSegStart, lastSegEnd;
         if (rightStart < len) {
             lastSegStart = rightStart;
@@ -1963,48 +2004,30 @@ public final class QzdbReader implements AutoCloseable {
             }
             if (dot) {
                 hasV4 = true;
-                v4Int = parseIPv4Range(s, lastGroupStart, lastSegEnd);
-                // 末组被 IPv4 尾段占用，从十六进制组里摘掉。
-                // 必须连同它前面的分隔符 ':' 一起摘（末段止于 lastGroupStart-1），
-                // 否则留下悬空 ':' 会被判成空组，把 "::ffff:1.12.0.0" 这类合法地址误拒。
+                long parsedV4 = tryParseIPv4Range(s, lastGroupStart, lastSegEnd);
+                if (parsedV4 < 0) return false;
+                v4Int = (int) parsedV4;
                 int trimmedEnd = lastGroupStart > lastSegStart ? lastGroupStart - 1 : lastSegStart;
-                // ":::x.y.z.w" 型重叠：indexOf("::", dc+2) 查不到与首个 "::" 重叠的
-                // 那一处 ':'，旧实现里它是右段的一个**真实空组**（必须拒绝）。
-                // 这里若随 IPv4 尾段一起把整段摘成空段，就等于把这个拒绝语义弄丢了。
                 if (trimmedEnd == lastSegStart
                         && lastGroupStart > lastSegStart
                         && s.charAt(lastSegStart) == ':') {
-                    throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv6 format: " + s);
+                    return false;
                 }
                 if (rightStart < len) lastSegEnd = trimmedEnd;
                 else { leftEnd = trimmedEnd; lastSegEnd = trimmedEnd; }
             }
         }
+        if (hasV4 && dc >= 0 && rightStart >= len) return false;
 
-        // 缺陷修复：嵌入 IPv4 点分四元组必须位于 '::' 压缩缺口的右侧（地址末尾）。
-        // 若 '::' 存在且右侧为空，则 v4 只能落在左侧末组，形如 "1.2.3.4::" / "2001:db8:1.2.3.4::"，
-        // 这类输入非法（Go netip.ParseAddr 同样拒绝），必须拒绝。
-        if (hasV4 && dc >= 0 && rightStart >= len) {
-            throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv6 format: " + s);
-        }
-
-        int leftGroups = parseHexGroups(s, 0, leftEnd, out, 0);
-        int rightGroups = parseHexGroups(s, rightStart, lastSegEnd, out, leftGroups * 2);
+        int leftGroups = tryParseHexGroups(s, 0, leftEnd, out, 0);
+        if (leftGroups < 0) return false;
+        int rightGroups = tryParseHexGroups(s, rightStart, lastSegEnd, out, leftGroups * 2);
+        if (rightGroups < 0) return false;
 
         int ng = leftGroups + rightGroups;
         int v4Slots = hasV4 ? 2 : 0;
         if (dc >= 0) {
-            if (ng + v4Slots > 7) {
-                throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv6 format: " + s);
-            }
-            // 右段先贴着左段尾部写好，再整体前移 gap 字节（System.arraycopy 对
-            // 同数组重叠区间按规范等价于临时缓冲，移动本身结果正确）。
-            // 移动后要把腾空区清零——out 是复用的暂存缓冲而非 new byte[16]，
-            // 不清零会把上一次的前移残留当成有效字节（曾导致 "2001:db8::1"
-            // 在下标 4~5 留下 0001）。
-            // 只清 [srcOff, srcOff+min(nBytes,gap))：这是源区里**没被目标区覆盖**的部分。
-            // gap < nBytes 时源区与目标区重叠（如 "::1:2:3:4:5"），清整个源区会把
-            // 刚落位的字节又抹掉。arraycopy 已完成，本处清零不再与其重叠。
+            if (ng + v4Slots > 7) return false;
             int gap = (8 - ng - v4Slots) * 2;
             if (gap > 0 && rightGroups > 0) {
                 int srcOff = leftGroups * 2;
@@ -2013,23 +2036,18 @@ public final class QzdbReader implements AutoCloseable {
                 Arrays.fill(out, srcOff, srcOff + Math.min(nBytes, gap), (byte) 0);
             }
         } else if (ng + v4Slots != 8) {
-            throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv6 format: " + s);
+            return false;
         }
-
         if (hasV4) {
             out[12] = (byte) (v4Int >>> 24);
             out[13] = (byte) (v4Int >>> 16);
             out[14] = (byte) (v4Int >>> 8);
             out[15] = (byte) v4Int;
         }
+        return true;
     }
 
-    /**
-     * 扫描 {@code s[from, to)} 的冒号分隔十六进制组，逐组写入 {@code out[outOff..]}。
-     *
-     * @return 解析出的组数
-     */
-    private static int parseHexGroups(String s, int from, int to, byte[] out, int outOff) {
+    private static int tryParseHexGroups(String s, int from, int to, byte[] out, int outOff) {
         if (from >= to) return 0;
         int groups = 0;
         int off = outOff;
@@ -2041,33 +2059,29 @@ public final class QzdbReader implements AutoCloseable {
             while (j < to) {
                 char c = s.charAt(j);
                 if (c == ':') break;
-                if (n == 4 || c >= HEX_DIGITS.length || HEX_DIGITS[c] < 0) {
-                    throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv6 format: " + s);
-                }
+                if (n == 4 || c >= HEX_DIGITS.length || HEX_DIGITS[c] < 0) return -1;
                 v = (v << 4) | HEX_DIGITS[c];
                 n++;
                 j++;
             }
-            // 空组：段首/段尾多余的 ':'（含 ":::" 的残留），一律拒绝
-            if (n == 0) {
-                throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv6 format: " + s);
-            }
-            // 容量护栏：16 字节最多容 8 组。多于 8 组时旧实现必在组数校验处拒绝
-            // （无 '::' → ng != 8；有 '::' → ng > 7），所以这里提前抛同一条消息，
-            // 既等价又不会先写爆暂存缓冲。
-            if (off + 2 > out.length) {
-                throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv6 format: " + s);
-            }
+            if (n == 0 || off + 2 > out.length) return -1;
             out[off] = (byte) (v >>> 8);
             out[off + 1] = (byte) v;
             off += 2;
             groups++;
             if (j >= to) return groups;
-            j++;                        // 跳过 ':'
-            if (j >= to) {               // 段尾悬空 ':' → 空组
-                throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv6 format: " + s);
-            }
+            j++;
+            if (j >= to) return -1;
             i = j;
+        }
+    }
+
+    static void parseIPv6Into(String s, byte[] out) {
+        if (s.indexOf('%') >= 0) {
+            throw new QzdbException(ErrorCode.INVALID_IP, "IPv6 zone ids are not supported: " + s);
+        }
+        if (!tryParseIPv6Into(s, out)) {
+            throw new QzdbException(ErrorCode.INVALID_IP, "Invalid IPv6 format: " + s);
         }
     }
 

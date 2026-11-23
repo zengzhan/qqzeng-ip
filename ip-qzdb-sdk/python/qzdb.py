@@ -1,3 +1,4 @@
+import array
 import functools
 import ipaddress
 import json
@@ -767,16 +768,7 @@ UsageType._KNOWN = {m.value.lower(): m for m in UsageType}
 
 
 def _on_snapshot_find_bytes(fn):
-    """find_bytes 专用：快照派发必须让位给方法覆盖契约（§10.2 鸭子类型派发）。
-
-    泛型 ``_on_snapshot`` 会把整条链路派到 shadow 上执行，而 shadow 的 ``__dict__``
-    是**构建时刻**从门面复制的 —— 用户在构建之后给门面打的实例级补丁
-    （``r.find_v6_bytes = ...``）对 shadow 不可见，``find_bytes`` 就会走
-    ``shadow._find_v6_bytes`` 真查，绕过覆盖。因此派发决策必须用**门面**的
-    ``__dict__`` 做：无覆盖 → 快照快路径；有覆盖（实例级或类级）→ 链路落在
-    门面上，``self.find_v6_bytes`` 自然解析到补丁后的函数。V4 / mapped 分支
-    不受影响：无论目标是谁，``find_uint`` 链都完整落在同一个对象上。
-    """
+    """find_bytes 专用：快照派发必须让位给方法覆盖契约（§10.2 鸭子类型派发）。"""
     @functools.wraps(fn)
     def find_bytes(self, ip_bytes):
         snap = self._snap
@@ -784,46 +776,70 @@ def _on_snapshot_find_bytes(fn):
             if (type(self) is QzdbReader
                     and 'find_v6_bytes' not in self.__dict__
                     and QzdbReader.find_v6_bytes is _QZDB_READER_FIND_V6_BYTES):
-                return fn(snap, ip_bytes)
+                with snap._pin_lock:
+                    if snap._closed:
+                        return None
+                    snap._active_readers += 1
+                try:
+                    return fn(snap, ip_bytes)
+                finally:
+                    snap._pin_exit()
         return fn(self, ip_bytes)
     return find_bytes
 
 
 def _on_snapshot(fn):
-    """把公开查询入口**整条调用链**派发到当前快照对象上执行（契约 §一.3 / §五.6）。
-    一次查询会跨 ``find`` → ``find_uint`` → ``_trie_walk_v4`` → ``_resolve_row_id``
-    多次读取实例状态。若只在入口读一次 ``self._snap``、内部仍走 ``self``，换快照时
-    仍会「拿旧库的 row_id 去新库的偏移表解码」——混用窗口只是变窄，并未消失。
-
-    因此入口必须把整条链路交给**同一个**快照执行：门面持有当前快照（``self._snap``），
-    快照自身的 ``_snap`` 恒为 ``None`` 并就地执行，于是链路内所有 ``self.*`` 都落在
-    同一个快照上，一次查询要么整体读到旧库、要么整体读到新库，绝无混合。
-
-    ⚠️ 快照**不能自指**（``shadow._snap = shadow``）：那会形成引用环，旧快照就无法靠
-    引用计数释放，mmap 只能等循环 GC —— 频繁热更新时映射持续堆积，Windows 上还会
-    占住文件不让替换。``None`` + 就地执行在语义上等价于自指，但不构成环。
-
-    代价是每次查询多一层函数调用。为压低它，包装器按参数个数**特化**：热路径上
-    ``*args`` 每次会多分配一个元组、``**kwargs`` 再多分配一个 dict，在 750K QPS
-    量级上是可测的开销，而公开查询入口的签名是已知的（1 个或 2 个位置参数）。
-    ``functools.wraps`` 保留 ``__name__`` / ``__doc__``，便于自省与报错定位。
-    """
+    """把公开查询入口**整条调用链**派发到当前快照对象上执行，并固定活跃读者计数
+    以防 3.13t/3.14t/3.15 下并发 close() 触发 BufferError。"""
     nargs = fn.__code__.co_argcount  # 含 self
     if nargs == 2:                   # self + 1（find / find_uint / lookup_cidr / ...）
         @functools.wraps(fn)
         def wrapper(self, a):
             snap = self._snap
-            return fn(snap if snap is not None else self, a)
+            target = snap if snap is not None else self
+            lock = getattr(target, '_pin_lock', None)
+            if lock is None:
+                return fn(target, a)
+            with lock:
+                if target._closed:
+                    return fn(target, a)
+                target._active_readers += 1
+            try:
+                return fn(target, a)
+            finally:
+                target._pin_exit()
     elif nargs == 3:                 # self + 2（find_fields 的 field_names 带默认值）
         @functools.wraps(fn)
         def wrapper(self, a, b=None):
             snap = self._snap
-            return fn(snap if snap is not None else self, a, b)
+            target = snap if snap is not None else self
+            lock = getattr(target, '_pin_lock', None)
+            if lock is None:
+                return fn(target, a, b)
+            with lock:
+                if target._closed:
+                    return fn(target, a, b)
+                target._active_readers += 1
+            try:
+                return fn(target, a, b)
+            finally:
+                target._pin_exit()
     else:                            # 兜底：将来新增更宽签名的入口
         @functools.wraps(fn)
         def wrapper(self, *args, **kwargs):
             snap = self._snap
-            return fn(snap if snap is not None else self, *args, **kwargs)
+            target = snap if snap is not None else self
+            lock = getattr(target, '_pin_lock', None)
+            if lock is None:
+                return fn(target, *args, **kwargs)
+            with lock:
+                if target._closed:
+                    return fn(target, *args, **kwargs)
+                target._active_readers += 1
+            try:
+                return fn(target, *args, **kwargs)
+            finally:
+                target._pin_exit()
     return wrapper
 
 
@@ -835,27 +851,64 @@ class QzdbReader:
 
     @staticmethod
     def _release(obj):
-        """关闭 obj 持有的 mmap 并清空引用（幂等）。"""
+        """关闭 obj 持有的 mmap 并清空引用（幂等；捕获 BufferError 防并发退出竞态）。"""
         if getattr(obj, '_is_mmap', False) and hasattr(obj._data, 'close'):
             try:
                 obj._data.close()
-            except OSError:
+            except (OSError, BufferError):
                 pass
         obj._data = b''
         obj._is_mmap = False
+        obj._v4_jump_arr = None
+        obj._v4_nodes_arr = None
+        obj._v6_jump_arr = None
+        obj._v6_nodes_arr = None
+
+    def _pin_exit(self):
+        with self._pin_lock:
+            self._active_readers -= 1
+            should_release = self._pending_close and self._active_readers == 0
+        if should_release:
+            self._release(self)
 
     def close(self):
         """Release mapped file resources. Idempotent — safe to call multiple times.
 
-        查询实际在 ``self._snap`` 上执行，所以关闭状态必须**传播到快照**：只在门面上
-        置 ``_closed`` 的话，派发过去的查询仍会继续服务已关闭的 reader。
+        若仍有并发查询在途，延迟到最后一个活跃读者退出时关闭 mmap，
+        避免 Python 3.13t/3.14t/3.15 下并发 close() 抛出 BufferError。
         """
         self._closed = True
         snap = self.__dict__.get('_snap')
         if snap is not None and snap is not self:
-            snap._closed = True
-            self._release(snap)
-        self._release(self)
+            lock = getattr(snap, '_pin_lock', None)
+            if lock is not None:
+                with lock:
+                    snap._closed = True
+                    snap._pending_close = True
+                    release_now = snap._active_readers == 0
+                if release_now:
+                    self._release(snap)
+            else:
+                snap._closed = True
+                self._release(snap)
+            # 门面 self._data 与 snap._data 指向同一 mmap 对象；不可在此处直接 close，
+            # 否则会撕裂 snap 上仍在途的读者。仅清空门面引用，由 snap 负责最终 munmap。
+            self._data = b''
+            self._is_mmap = False
+            self._v4_jump_arr = None
+            self._v4_nodes_arr = None
+            self._v6_jump_arr = None
+            self._v6_nodes_arr = None
+            return
+        lock = getattr(self, '_pin_lock', None)
+        if lock is not None:
+            with lock:
+                self._pending_close = True
+                release_now = self._active_readers == 0
+            if release_now:
+                self._release(self)
+        else:
+            self._release(self)
 
     def __enter__(self):
         """Context-manager entry (API contract appendix A.5)."""
@@ -964,6 +1017,13 @@ class QzdbReader:
         # 串行化 load / reload / reload_buffer：并发热更新只允许一个构建者在跑，
         # 避免两个线程各自基于旧状态构建、互相覆盖（后发先至）。读路径不碰此锁。
         self._reload_lock = threading.RLock()
+        self._pin_lock = threading.Lock()
+        self._active_readers = 0
+        self._pending_close = False
+        self._v4_jump_arr = None
+        self._v4_nodes_arr = None
+        self._v6_jump_arr = None
+        self._v6_nodes_arr = None
 
         if db_path is not None:
             self.load(db_path)  # load() 内部已按 warmup 选项预热，这里不再重复
@@ -1026,6 +1086,13 @@ class QzdbReader:
         shadow._pools_loaded = False
         shadow._group_pools = None
         shadow._pools_lock = threading.Lock()
+        shadow._pin_lock = threading.Lock()
+        shadow._active_readers = 0
+        shadow._pending_close = False
+        shadow._v4_jump_arr = None
+        shadow._v4_nodes_arr = None
+        shadow._v6_jump_arr = None
+        shadow._v6_nodes_arr = None
         # Fresh per-snapshot GeoInfo cache (old snapshot's cache is dropped).
         shadow._geo_cache = {}
         shadow._closed = False
@@ -1475,6 +1542,8 @@ class QzdbReader:
                 schema_fld_counts[gi] = fld_count
 
                 if gi < actual_groups:
+                    if stride < 1 or stride > 4096:
+                        raise QzdbError(f'Invalid GROUP_SCHEMA stride for group {gi}: {stride}', QzdbError.CORRUPTED)
                     self._group_strides[gi] = stride
                     widths = [0] * fld_count
                     offsets = [0] * fld_count
@@ -1484,15 +1553,25 @@ class QzdbReader:
                         # fieldId is just the slot ordinal (0..N-1); it carries no
                         # cross-edition semantics, so it is read and discarded.
                         sp += 2
-                        widths[fi] = d[sp]
+                        w = d[sp]
                         sp += 1
                         field_flags = d[sp]
                         sp += 1
-                        natives[fi] = (field_flags & 0x01) != 0
-                        nat_types[fi] = (field_flags >> 1) & 0x03
-                        offsets[fi] = self.safe_read_u32(sp)
+                        is_native = (field_flags & 0x01) != 0
+                        nat_type = (field_flags >> 1) & 0x03
+                        off = self.safe_read_u32(sp)
                         sp += 4
                         sp += 4  # skip poolSectionId
+                        valid_w = ((w in (4, 8)) if nat_type == 1 else (1 <= w <= 4)) if is_native else (1 <= w <= 4)
+                        if not valid_w or off < 0 or off > stride - w:
+                            raise QzdbError(
+                                f'Invalid GROUP_SCHEMA field {gi}/{fi}: width={w}, offset={off}, stride={stride}',
+                                QzdbError.CORRUPTED,
+                            )
+                        widths[fi] = w
+                        natives[fi] = is_native
+                        nat_types[fi] = nat_type
+                        offsets[fi] = off
                     self._group_field_widths[gi] = widths
                     self._group_field_offsets[gi] = offsets
                     self._group_field_native[gi] = natives
@@ -1501,14 +1580,6 @@ class QzdbReader:
                     sp += fld_count * 12
 
         # INVARIANT: len(widths/offsets/native/native_type[g]) == group_field_counts[g].
-        #
-        # GroupMetadataTable and GROUP_SCHEMA each declare a field count. Real
-        # files always agree, but a forged file can shrink the GROUP_SCHEMA one
-        # while leaving GroupMetadataTable large — every downstream consumer
-        # (pool loader, field extractor) iterates `range(group_field_counts[g])`
-        # and would then index past the end of the schema arrays. Drop the
-        # inconsistent schema entirely and let the default layout below rebuild
-        # it (same reconciliation as the Rust/Go/C readers).
         for g in range(actual_groups):
             if schema_fld_counts[g] is None:
                 continue
@@ -1519,7 +1590,7 @@ class QzdbReader:
                 self._group_field_native[g] = None
                 self._group_field_native_type[g] = None
 
-        # Fallback for groups without schema info
+        # Fallback for groups without schema info + uniform section bounds check
         for g in range(actual_groups):
             if self._group_strides[g] == 0:
                 self._group_strides[g] = self._group_field_counts[g] * self._pool_idx_size
@@ -1531,9 +1602,52 @@ class QzdbReader:
                 self._group_field_native[g] = [False] * self._group_field_counts[g]
             if self._group_field_native_type[g] is None:
                 self._group_field_native_type[g] = [0] * self._group_field_counts[g]
+            if self._group_entry_counts[g] > 0:
+                g_start = self._off_geo_entries + self._group_entry_offsets[g]
+                _chk(g_start, self._group_entry_counts[g] * self._group_strides[g], f'group_{g}_entries')
 
         self._resolve_field_names()
         self._repair_dim_masks()
+        self._build_trie_arrays()
+
+    def _build_trie_arrays(self):
+        """把跳表与 Trie 节点装入 C 连续 array('I')，热路径免 struct.unpack_from（约快 2.3-2.8x）。"""
+        d = self._data
+        mv = memoryview(d)
+        need_swap = sys.byteorder != 'little'
+        max_nodes = 4_000_000
+
+        def _load_u32_arr(off, count):
+            arr = array.array('I')
+            arr.frombytes(mv[off:off + count * 4])
+            if need_swap:
+                arr.byteswap()
+            return arr
+
+        def _load_nodes_arr(off, count, node_24):
+            if count <= 0 or count > max_nodes or off <= 0:
+                return None
+            if not node_24:
+                return _load_u32_arr(off, count * 2)
+            # 24-bit packed nodes (6 bytes = 2x 24-bit LE) -> normalized uint32 array('I')
+            # with 24-bit sentinel 0x800000 promoted to 0x80000000.
+            raw = mv[off:off + count * 6]
+            arr = array.array('I', [0]) * (count * 2)
+            o = 0
+            for i in range(count * 2):
+                v = raw[o] | (raw[o + 1] << 8) | (raw[o + 2] << 16)
+                if v & 0x800000:
+                    v = (v & 0x7FFFFF) | 0x80000000
+                arr[i] = v
+                o += 3
+            return arr
+
+        if self._has_v4 and self._off_v4_jump > 0:
+            self._v4_jump_arr = _load_u32_arr(self._off_v4_jump, 65536)
+            self._v4_nodes_arr = _load_nodes_arr(self._off_v4_nodes, self._v4_node_count, self._v4_node_24)
+        if self._has_v6 and self._off_v6_jump > 0:
+            self._v6_jump_arr = _load_u32_arr(self._off_v6_jump, 1 << self._v6_jump_bits)
+            self._v6_nodes_arr = _load_nodes_arr(self._off_v6_nodes, self._v6_node_count, self._v6_node_24)
 
     def _repair_dim_masks(self):
         """Metadata-driven fallback for dimensionMask (§5.4 / §6.2).
@@ -1779,15 +1893,36 @@ class QzdbReader:
     def _trie_walk_v4(self, ip_int):
         if not self._has_v4 or self._off_v4_jump <= 0:
             return 0
+        jump = self._v4_jump_arr
+        nodes = self._v4_nodes_arr
+        v4_node_count = self._v4_node_count
+        if jump is not None and (nodes is not None or v4_node_count == 0):
+            ptr = jump[(ip_int >> 16) & 0xFFFF]
+            if ptr == 0:
+                return 0
+            if ptr & 0x80000000:
+                return ptr & 0x7FFFFFFF
+            idx = ptr
+            suffix = (ip_int & 0xFFFF) << 16
+            for _ in range(16):
+                if idx >= v4_node_count:
+                    return 0
+                child = nodes[(idx << 1) | ((suffix >> 31) & 1)]
+                if child & 0x80000000:
+                    return child & 0x7FFFFFFF
+                if child == 0:
+                    return 0
+                idx = child
+                suffix <<= 1
+            return 0
+
         d = self._data
         off_jump = self._off_v4_jump
         off_nodes = self._off_v4_nodes
-        v4_node_count = self._v4_node_count
         v4_node_24 = self._v4_node_24
 
         hi16 = (ip_int >> 16) & 0xFFFF
         ptr = _unpack_u32_from(d, off_jump + hi16 * 4)[0]
-
         if ptr == 0:
             return 0
         if ptr & SENTINEL:
@@ -1795,11 +1930,7 @@ class QzdbReader:
 
         idx = ptr
         suffix = (ip_int & 0xFFFF) << 16
-
         if v4_node_24:
-            # 有界 for：合法 trie 中每步消费 1 个后缀位，16 步内必然命中叶子或
-            # 走空（16 位 jump + 16 位后缀；与 Node/Java/Rust 同构）。畸形链路
-            # 亦在此收敛为 miss（0），不会长走。
             for _ in range(16):
                 bit = (suffix >> 31) & 1
                 if idx >= v4_node_count:
@@ -1807,8 +1938,8 @@ class QzdbReader:
                 noff = off_nodes + idx * 6
                 off = noff if bit == 0 else noff + 3
                 try:
-                    child = _unpack_u32_from(d, off)[0] & 0xFFFFFF  # 1 次 C 调用替代 3 次下标
-                except struct.error:  # 节点区紧贴 EOF 时退回逐字节读
+                    child = _unpack_u32_from(d, off)[0] & 0xFFFFFF
+                except struct.error:
                     child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
                 if child & 0x800000:
                     return child & 0x7FFFFF
@@ -1817,33 +1948,49 @@ class QzdbReader:
                 idx = child
                 suffix <<= 1
             return 0
-        else:
-            # 32-bit nodes (8 bytes each: left uint32 + right uint32)
-            # bit 31 is sentinel (SENTINEL = 0x80000000)
-            for _ in range(16):
-                bit = (suffix >> 31) & 1
-                if idx >= v4_node_count:
-                    return 0
-                child_off = off_nodes + idx * 8 + bit * 4
-                child = _unpack_u32_from(d, child_off)[0]
-                if child & SENTINEL:
-                    return child & SENTINEL_MASK_31
-                if child == 0:
-                    return 0
-                idx = child
-                suffix <<= 1
-            return 0
+        for _ in range(16):
+            bit = (suffix >> 31) & 1
+            if idx >= v4_node_count:
+                return 0
+            child = _unpack_u32_from(d, off_nodes + idx * 8 + bit * 4)[0]
+            if child & SENTINEL:
+                return child & SENTINEL_MASK_31
+            if child == 0:
+                return 0
+            idx = child
+            suffix <<= 1
+        return 0
 
     def _trie_walk_v6(self, ip_int):
         if not self._has_v6 or self._off_v6_jump <= 0:
             return 0
+        jump_bits = self._v6_jump_bits
+        jump = self._v6_jump_arr
+        nodes = self._v6_nodes_arr
+        v6_node_count = self._v6_node_count
+        if jump is not None and (nodes is not None or v6_node_count == 0):
+            idx_jump = (ip_int >> (128 - jump_bits)) & ((1 << jump_bits) - 1)
+            ptr = jump[idx_jump]
+            if ptr == 0:
+                return 0
+            if ptr & 0x80000000:
+                return ptr & 0x7FFFFFFF
+            idx = ptr
+            for depth in range(jump_bits, 128):
+                if idx >= v6_node_count:
+                    return 0
+                child = nodes[(idx << 1) | ((ip_int >> (127 - depth)) & 1)]
+                if child & 0x80000000:
+                    return child & 0x7FFFFFFF
+                if child == 0:
+                    return 0
+                idx = child
+            return 0
+
         d = self._data
         off_jump = self._off_v6_jump
         off_nodes = self._off_v6_nodes
-        v6_node_count = self._v6_node_count
         v6_node_24 = self._v6_node_24
-        jump_bits = self._v6_jump_bits
-
         shift = 128 - jump_bits
         idx_jump = (ip_int >> shift) & ((1 << jump_bits) - 1)
         ptr = _unpack_u32_from(d, off_jump + idx_jump * 4)[0]
@@ -1851,13 +1998,8 @@ class QzdbReader:
             return 0
         if ptr & SENTINEL:
             return ptr & SENTINEL_MASK_31
-
         idx = ptr
-        depth = jump_bits
-
         if v6_node_24:
-            # 有界 for：深度天然受 [jump_bits, 128) 约束，畸形链路最多 128 步
-            # 收敛为 miss（0），旧 steps 计数上限（136）在本布局下本就不可达。
             for depth in range(jump_bits, 128):
                 bit = (ip_int >> (127 - depth)) & 1
                 if idx >= v6_node_count:
@@ -1865,8 +2007,8 @@ class QzdbReader:
                 noff = off_nodes + idx * 6
                 off = noff if bit == 0 else noff + 3
                 try:
-                    child = _unpack_u32_from(d, off)[0] & 0xFFFFFF  # 1 次 C 调用替代 3 次下标
-                except struct.error:  # 节点区紧贴 EOF 时退回逐字节读
+                    child = _unpack_u32_from(d, off)[0] & 0xFFFFFF
+                except struct.error:
                     child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
                 if child & 0x800000:
                     return child & 0x7FFFFF
@@ -1878,8 +2020,7 @@ class QzdbReader:
                 bit = (ip_int >> (127 - depth)) & 1
                 if idx >= v6_node_count:
                     return 0
-                child_off = off_nodes + idx * 8 + bit * 4
-                child = _unpack_u32_from(d, child_off)[0]
+                child = _unpack_u32_from(d, off_nodes + idx * 8 + bit * 4)[0]
                 if child & SENTINEL:
                     return child & SENTINEL_MASK_31
                 if child == 0:
@@ -2019,61 +2160,74 @@ class QzdbReader:
     def _trie_walk_v6_bytes(self, ip_bytes):
         if not self._has_v6 or self._off_v6_jump <= 0:
             return 0
+        jump_bits = self._v6_jump_bits
+        jump = self._v6_jump_arr
+        nodes = self._v6_nodes_arr
+        v6_node_count = self._v6_node_count
+
+        if jump_bits <= 64:
+            hi = ((ip_bytes[0] << 56) | (ip_bytes[1] << 48) | (ip_bytes[2] << 40) | (ip_bytes[3] << 32)
+                  | (ip_bytes[4] << 24) | (ip_bytes[5] << 16) | (ip_bytes[6] << 8) | ip_bytes[7])
+            idx_jump = (hi >> (64 - jump_bits)) & ((1 << jump_bits) - 1)
+        else:
+            idx_jump = (int.from_bytes(ip_bytes, 'big') >> (128 - jump_bits)) & ((1 << jump_bits) - 1)
+
+        if jump is not None and (nodes is not None or v6_node_count == 0):
+            ptr = jump[idx_jump]
+            if ptr == 0:
+                return 0
+            if ptr & 0x80000000:
+                return ptr & 0x7FFFFFFF
+            idx = ptr
+            for depth in range(jump_bits, 128):
+                if idx >= v6_node_count:
+                    return 0
+                child = nodes[(idx << 1) | ((ip_bytes[depth >> 3] >> (7 - (depth & 7))) & 1)]
+                if child & 0x80000000:
+                    return child & 0x7FFFFFFF
+                if child == 0:
+                    return 0
+                idx = child
+            return 0
+
         d = self._data
         off_jump = self._off_v6_jump
         off_nodes = self._off_v6_nodes
-        v6_node_count = self._v6_node_count
         v6_node_24 = self._v6_node_24
-        jump_bits = self._v6_jump_bits
-
-        shift = 128 - jump_bits
-        if jump_bits <= 64:
-            hi = (ip_bytes[0] << 56) | (ip_bytes[1] << 48) | (ip_bytes[2] << 40) | (ip_bytes[3] << 32) | (ip_bytes[4] << 24) | (ip_bytes[5] << 16) | (ip_bytes[6] << 8) | ip_bytes[7]
-            idx_jump = (hi >> (64 - jump_bits)) & ((1 << jump_bits) - 1)
-        else:
-            full = int.from_bytes(ip_bytes, 'big')
-            idx_jump = (full >> shift) & ((1 << jump_bits) - 1)
         ptr = _unpack_u32_from(d, off_jump + idx_jump * 4)[0]
         if ptr == 0:
             return 0
         if ptr & SENTINEL:
             return ptr & SENTINEL_MASK_31
-
         idx = ptr
-        depth = jump_bits
-
         if v6_node_24:
-            while depth < 128:
+            for depth in range(jump_bits, 128):
                 bit = (ip_bytes[depth >> 3] >> (7 - (depth & 7))) & 1
                 if idx >= v6_node_count:
                     return 0
                 noff = off_nodes + idx * 6
                 off = noff if bit == 0 else noff + 3
                 try:
-                    child = _unpack_u32_from(d, off)[0] & 0xFFFFFF  # 1 次 C 调用替代 3 次下标
-                except struct.error:  # 节点区紧贴 EOF 时退回逐字节读
+                    child = _unpack_u32_from(d, off)[0] & 0xFFFFFF
+                except struct.error:
                     child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
                 if child & 0x800000:
                     return child & 0x7FFFFF
                 if child == 0:
                     return 0
                 idx = child
-                depth += 1
         else:
-            # 模块级预编译（原为每次调用都 struct.Struct('<I') 新建一个对象）
             unpack_u32 = _unpack_u32_from
-            while depth < 128:
+            for depth in range(jump_bits, 128):
                 bit = (ip_bytes[depth >> 3] >> (7 - (depth & 7))) & 1
                 if idx >= v6_node_count:
                     return 0
-                child_off = off_nodes + idx * 8 + bit * 4
-                child = unpack_u32(d, child_off)[0]
+                child = unpack_u32(d, off_nodes + idx * 8 + bit * 4)[0]
                 if child & SENTINEL:
                     return child & SENTINEL_MASK_31
                 if child == 0:
                     return 0
                 idx = child
-                depth += 1
         return 0
 
     # ── find / lookup ────────────────────────────────────────────────
@@ -2749,72 +2903,75 @@ class BatchResult:
 
 
 class QzdbRegistry:
-    """Multi-database registry (API contract §1 / §5).
-
-    Holds several named ``QzdbReader`` instances and answers a query by trying
-    each registered reader in insertion order, returning the first hit. Useful
-    when one logical service spans multiple physical DB editions/groups.
-    """
+    """Multi-database registry (API contract §1 / §5), thread-safe via RLock."""
 
     def __init__(self):
         self._readers = {}
+        self._lock = threading.RLock()
 
     def register(self, name, reader):
         if not isinstance(reader, QzdbReader):
             raise QzdbError('registry entry must be a QzdbReader', QzdbError.INVALID_PARAM)
-        self._readers[name] = reader
+        with self._lock:
+            self._readers[name] = reader
         return self
 
     def get(self, name):
-        return self._readers.get(name)
+        with self._lock:
+            return self._readers.get(name)
 
     def names(self):
-        return list(self._readers.keys())
+        with self._lock:
+            return list(self._readers.keys())
+
+    def _snapshot_readers(self):
+        with self._lock:
+            return list(self._readers.values())
 
     def find(self, ip_str):
-        for r in self._readers.values():
+        for r in self._snapshot_readers():
             gi = r.find(ip_str)
             if gi is not None:
                 return gi
         return None
 
     def find_uint(self, ip_int):
-        for r in self._readers.values():
+        for r in self._snapshot_readers():
             gi = r.find_uint(ip_int)
             if gi is not None:
                 return gi
         return None
 
     def find_bytes(self, ip_bytes):
-        for r in self._readers.values():
+        for r in self._snapshot_readers():
             gi = r.find_bytes(ip_bytes)
             if gi is not None:
                 return gi
         return None
 
     def find_fields(self, ip_str, fields=None):
-        for r in self._readers.values():
+        for r in self._snapshot_readers():
             gi = r.find_fields(ip_str, fields)
             if gi is not None:
                 return gi
         return None
 
     def lookup_row_id(self, ip_str):
-        for r in self._readers.values():
+        for r in self._snapshot_readers():
             rid = r.lookup_row_id(ip_str)
             if rid != 0:
                 return rid
         return 0
 
     def lookup_cidr(self, ip_str):
-        for r in self._readers.values():
+        for r in self._snapshot_readers():
             c = r.lookup_cidr(ip_str)
             if c is not None:
                 return c
         return None
 
     def close(self):
-        for r in self._readers.values():
+        for r in self._snapshot_readers():
             r.close()
 
     # ── spec-named registry management (API contract §9.5) ──────────
@@ -2822,27 +2979,31 @@ class QzdbRegistry:
     def register_path(self, name, path, **kwargs):
         """Load a DB from a file path and register it under ``name``."""
         reader = QzdbReader(path, **kwargs)
-        self._readers[name] = reader
+        with self._lock:
+            self._readers[name] = reader
         return self
 
     def register_buffer(self, name, buffer, **kwargs):
         """Load a DB from an in-memory buffer and register it under ``name``."""
         reader = QzdbReader.open_buffer(buffer, **kwargs)
-        self._readers[name] = reader
+        with self._lock:
+            self._readers[name] = reader
         return self
 
     def unregister(self, name):
         """Remove a registered reader (no-op if absent)."""
-        self._readers.pop(name, None)
+        with self._lock:
+            self._readers.pop(name, None)
         return self
 
     def find_batch(self, ips):
         """Per-IP first-hit across registered readers (three-state BatchResult)."""
+        readers = self._snapshot_readers()
         results = []
         for ip in ips:
             gi = None
             err = None
-            for r in self._readers.values():
+            for r in readers:
                 try:
                     gi = r.find(ip)
                 except QzdbError as e:

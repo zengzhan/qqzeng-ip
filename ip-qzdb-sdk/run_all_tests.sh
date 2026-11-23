@@ -66,7 +66,28 @@ for x in rows:
 print("demo oracle: %d/%d OK" % (n - bad, n)); sys.exit(1 if bad else 0)
 PYEOF
         then
-            echo "Full fixture-dependent suite skipped (no private edition/scope fixtures)."
+            # 公开仓同时执行所有数据无关（DB-free）的跨语言自检，避免只跑 Python。
+            PUB_FAIL=0
+            if [ -f "python/test_native_float.py" ]; then
+                (cd python && "$PYTHON_BIN" test_native_float.py) || PUB_FAIL=1
+            fi
+            if command -v node >/dev/null 2>&1 && [ -f "nodejs/ip_strict_test.js" ]; then
+                (cd nodejs && node ip_strict_test.js && node native_float_test.js && node trie_typedarray_test.js) || PUB_FAIL=1
+            fi
+            if command -v php >/dev/null 2>&1 && [ -f "php/ip_strict_test.php" ]; then
+                (cd php && php ip_strict_test.php) || PUB_FAIL=1
+            fi
+            if (command -v clang >/dev/null 2>&1 || command -v gcc >/dev/null 2>&1) && [ -f "c/ip_strict_test.c" ]; then
+                CC="gcc"; command -v clang >/dev/null 2>&1 && CC="clang"
+                (cd c && $CC -O2 -o /tmp/qzdb_pub_ip ip_strict_test.c -lm && /tmp/qzdb_pub_ip \
+                      && $CC -O2 -o /tmp/qzdb_pub_nf native_float_boundary_test.c -lm && /tmp/qzdb_pub_nf \
+                      && $CC -O2 -o /tmp/qzdb_pub_fast test_fast_api.c qzdb_reader.c -lm && /tmp/qzdb_pub_fast) || PUB_FAIL=1
+            fi
+            if [ "$PUB_FAIL" -ne 0 ]; then
+                echo "Public DB-free multi-language checks FAILED."
+                exit 1
+            fi
+            echo "Public demo oracle + DB-free multi-language checks PASSED (private edition/scope fixtures absent)."
             exit 0
         fi
         echo "Public demo oracle FAILED."

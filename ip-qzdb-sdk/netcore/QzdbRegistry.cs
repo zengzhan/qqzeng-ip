@@ -76,9 +76,14 @@ public sealed class QzdbRegistry
     private void Retire(QzdbReader? old)
     {
         if (old == null) return;
+        // Replaced readers are left to GC reachability: any caller still holding a
+        // reference from Get() can finish in-flight queries safely without hitting
+        // ObjectDisposedException or AccessViolation; MmapManager's finalizer releases
+        // the mapping once no references remain.
         _quarantine.Enqueue(old);
-        while (_quarantine.Count > QuarantineCapacity && _quarantine.TryDequeue(out var evicted))
-            evicted.Dispose();
+        while (_quarantine.Count > QuarantineCapacity && _quarantine.TryDequeue(out _))
+        {
+        }
     }
 
     /// <summary>Returns the reader registered under name, or null when none is registered or name is empty.</summary>

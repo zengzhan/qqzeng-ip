@@ -10,7 +10,7 @@ extern "C" {
 /* 注意：本头文件不依赖 pthread 类型（qzdb_registry_t 为不透明类型），
  * 故不在此引入 <pthread.h>；多线程同步细节仅存在于 qzdb_reader.c 内部。 */
 
-#define QZDB_MAX_FIELDS 32
+#define QZDB_MAX_FIELDS 64
 /* FORMAT §10.5：原生浮点整值定点展开最长 ~309 位（1e308）+ 符号 + NUL，取 512 留余量 */
 #define QZDB_VALUE_BUF_SIZE 512
 #define QZDB_MAX_TRIE_WALK_STEPS_V4  (32 + 8)  /* IPv4 walk cap = max(32+8,40)=40 */
@@ -97,6 +97,10 @@ typedef struct {
      * 因此可直读基址、免去 safe_read_* 的每次全量边界检查。 */
     const uint8_t* v4_nodes_base;
     const uint8_t* v6_nodes_base;
+    /* IPv4 8-bit 步长二级查找表（加载期构建，~209KB@demo，可将 IPv4 查找加速 ~4x） */
+    uint32_t* v4_l1;
+    uint32_t* v4_l2;
+    uint32_t  v4_l2_blocks;
     uint64_t off_ip_row;
     uint64_t off_geo_entries;
     uint64_t off_pools;
@@ -163,11 +167,15 @@ typedef struct {
     qzdb_cache_entry_t** geo_cache;
     uint32_t             geo_cache_cap;
     uint32_t             generation;     /* 实例代际计数：初始化为 1，每次 reload 自增，free 置 0 */
+    /* 并发热更新与安全回收原语（不透明指针，保持头文件无 pthread 依赖） */
+    void*                reload_lock;
+    int32_t              active_readers;
+    int32_t              reloading;
 } qzdb_reader_t;
 
 typedef struct {
     char*    values[QZDB_MAX_FIELDS];
-    uint32_t values_mask;  /* bit i = 1 if values[i] is heap-owned and must be freed */
+    uint64_t values_mask;  /* bit i = 1 if values[i] is heap-owned and must be freed */
     int      value_count;  /* valid entries in values[]; projection follows request order */
     int8_t   field_indices[QZDB_MAX_FIELDS]; /* schema index per output slot, -1 for unknown */
     uint8_t  projection_mode; /* 1 when values[] is a requested-field projection */

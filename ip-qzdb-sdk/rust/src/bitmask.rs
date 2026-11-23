@@ -205,7 +205,7 @@ fn is_hk_mo_tw_province(prov: &str) -> bool {
 impl SnapshotInner {
     /// 计算单条 `entry_id` 的位掩码（用于初始化预计算表）。
     pub(crate) fn compute_entry_attr_flags(&self, entry_id: u32) -> IpAttrFlags {
-        let Some(view) = self.resolve_geo_ref(entry_id, None) else {
+        let Some(view) = self.resolve_geo_ref(entry_id) else {
             return IpAttrFlags::default();
         };
         let mut bits = IpAttrFlags::HIT;

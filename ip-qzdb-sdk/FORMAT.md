@@ -111,17 +111,57 @@ IP 输入 ──> Jump Table (O(1) 预检索) ──> Trie Walk (LPM 最长前�
   };
   ```
 
-### 2. IPRow 间接层
+### 2. ROW_SCHEMA 段（OffsetRowSchema，可选）
+当 `OffsetRowSchema > 0` 时，声明 `IPRow` 各维度 ID 的动态字节宽度：
+- 段头（4 字节）：`fieldCount (uint8)` | `stride (uint8，须等于 IPRowSize)` | `reserved (uint16 LE)`
+- 其后连续 `fieldCount` 个字段描述符（每个 4 字节）：
+  - `fieldId (uint8)`：`0 = geo_id`，`1 = asn_id`，`2 = usage_type_id`
+  - `width (uint8)`：字段字节宽度（`1 ~ 4`）
+  - `fieldOffset (uint8)`：在单条 IPRow 中的字节偏移
+  - `flags (uint8)`：保留标志位
+- 校验约束：`stride == IPRowSize` 且各字段 `width` 之和等于 `IPRowSize`。
+
+### 3. IPRow 间接层（OffsetIPRow）
 Trie 遍历得到的 `row_id` 映射到 IPRow：
-- `IPRow[row_id]` 存储多维度 ID 组合（如 `geo_id (uint24)` + `asn_id (uint24)`）。
+- `IPRow[row_id]` 存储多维度 ID 组合（无 `ROW_SCHEMA` 时默认 `geo_id (uint24)` + `asn_id (uint24)`，当 `IPRowSize >= 9` 时追加 `usage_type_id (uint24)`）。
 - 行号 `0` 恒为保留空行（返回 NOT_FOUND）。
 
-### 3. GeoEntry 数据与 String Pools
-- **GroupMetadataTable** 声明各版本组的字段数、字段偏移、字段宽度（1~3 字节池索引）及原生标量类型。
-- **String Pools**：所有字段字符串全局去重存储，通过两级物理偏移 O(1) 解析为 UTF-8 字符串，热路径支持零堆分配解码。
+### 4. GROUP_SCHEMA 段（OffsetGroupSchema，可选）
+当 `OffsetGroupSchema > 0` 时，声明各版本组的行宽、字段偏移、字段宽度与原生标量类型：
+- 段头（2 字节）：`groupCount (uint16 LE)`
+- 其后按组顺序存放每个组的描述块：
+  - **组头（16 字节）**：
+    - `groupId (uint16 LE)`：该组的 one-hot 版本档次位掩码（与 `Header.VersionMask` 同编码）
+    - `fieldCount (uint16 LE)`：字段数（须与 `GroupMetadataTable` 一致，否则该组回退默认布局）
+    - `entryCount (uint32 LE)`：条目数
+    - `stride (uint32 LE)`：单条 GeoEntry 字节宽（须满足 `1 <= stride <= 4096`）
+    - `flags (uint32 LE)`：组标志位
+  - **字段描述符数组**（`fieldCount × 12` 字节，每项 12 字节）：
+    - `fieldId (uint16 LE)`：槽位序号（`0..N-1`）
+    - `width (uint8)`：字节宽（字符串池索引或整型标量 `1..4`；浮点标量 `4` 或 `8`）
+    - `fieldFlags (uint8)`：`bit0 = isNative`（1 表示原生标量，0 表示字符串池索引）；`(fieldFlags >> 1) & 0x03` 为 `nativeType`（`0 = uint`，`1 = IEEE 754 float/double`）
+    - `fieldOffset (uint32 LE)`：在单条 GeoEntry 内的字节偏移
+    - `poolSectionId (uint32 LE)`：所属字典池标识
+- **统一加载期校验（所有 SDK 强制执行）**：每字段必须满足 `width` 合法且 `fieldOffset + width <= stride`，同时每组数据区必须满足 `OffsetGeoEntries + GeoEntryOffsets[g] + entryCount * stride <= fileSize`。
 
-### 4. Metadata TLV 结构
-- Type 1：版本与格式标识（如 `"std" / "ult"`）
-- Type 2：字段名称列表（逗号分隔或动态数组）
-- Type 3：生成器与版权描述文本
-- Type 4：版本档次覆盖声明
+### 5. GeoEntry 数据与 String Pools
+- **GroupMetadataTable**（位于 `OffsetGeoEntries` 起始处）：
+  - `groupCount (uint8)`（实际组数取 `min(groupCount, GeoEntryGroupCount, 4)`，须 `>= 1`）
+  - 每组 7 字节：`fieldCount (uint8)` | `entryCount (uint32 LE)` | `dimensionMask (uint16 LE，bit0=geo, bit1=asn, bit2=usage)`
+- **String Pools**（`OffsetPools`）：所有非原生字段字符串按组×字段去重存储，每池包含 `count (uint32 LE)`（若存在 `ROW_SCHEMA` 则后跟 4 字节保留）、`count + 1` 个单调递增的 `uint32 LE` 偏移表与紧随其后的 UTF-8 字节区。
+
+### 6. Metadata TLV 结构（OffsetMeta）
+连续 TLV 条目，每条格式为 `type (uint8)` | `reserved (uint8)` | `length (uint16 LE)` | `value (UTF-8, length 字节)`；遇 `type == 0` 或 `length == 0` 终止，未知 type 跳过：
+- Type `1`：版本与格式标识（`version_list`）
+- Type `2`：字段名称列表（`|` 或 `,` 分隔）
+- Type `3`：生成器与版权描述文本（`description`）
+- Type `4`：主版本档次声明（`primary_version`）
+- Type `5`：权威数据期号（`data_month`，如 `2026-08`；缺失时回退 Header `BuildDate`）
+- Type `6`：权威数据覆盖范围（`scope`，如 `china` / `global`；缺失时为空串）
+
+---
+
+## 五、 跨语言一致性契约摘要
+- **版本档次解析优先级**：`GROUP_SCHEMA.groupId` / `Header.VersionMask` one-hot 位 → Metadata `primary_version` / 单项 `version_list` → 唯一字段数推断 → `""`（unknown）。
+- **原生浮点格式化**：NaN / ±Inf 输出 `""`；精确整数值输出无小数点十进制；其余按 6 位小数 round-half-even 输出。
+- **Fail-Closed 加载校验**：由于 CRC32 可被重算伪造，所有 SDK 在加载期必须校验全部段偏移、节点区长度、`GROUP_SCHEMA` 字段边界（`offset + width <= stride`）以及字符串池偏移表严格单调性。

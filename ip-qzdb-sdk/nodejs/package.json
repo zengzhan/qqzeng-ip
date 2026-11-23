@@ -3,8 +3,18 @@
   "version": "1.0.8",
   "description": "纯离线、零依赖、高性能的 QZDB IP 地理定位数据库 Node.js SDK（支持 IPv4 / IPv6 双栈）",
   "main": "qzdb.js",
+  "types": "qzdb.d.ts",
+  "exports": {
+    ".": {
+      "types": "./qzdb.d.ts",
+      "import": "./qzdb.mjs",
+      "require": "./qzdb.js"
+    }
+  },
   "files": [
-    "qzdb.js"
+    "qzdb.js",
+    "qzdb.mjs",
+    "qzdb.d.ts"
   ],
   "keywords": [
     "ip",

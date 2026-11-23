@@ -2617,15 +2617,12 @@ public sealed class QzdbReader : IDisposable
         lock (_lifecycleGate)
         {
             if (Interlocked.Exchange(ref _lifecycleState, 1) != 0) return;
-            var last = Interlocked.Exchange(ref _activeSnapshot, null);
-            // Dispose() is the terminal call: per the standard .NET IDisposable
-            // contract the caller must not have concurrent queries in flight once
-            // Dispose() is invoked (same expectation as FileStream/Socket), so an
-            // eager, synchronous release is correct and appropriate here — this is
-            // NOT the frequent-reload path, so no quarantine delay is needed.
-            // Dispose 是终结调用：调用方契约保证无并发查询（同 FileStream/Socket），
-            // 此处确定性释放是安全的。退役快照（若有）由 GC 兜底。
-            last?.DisposeOwner();
+            // Clear _activeSnapshot atomically; do NOT synchronously unmap _dataOwner here.
+            // Any in-flight query thread that already read _activeSnapshot onto its stack
+            // keeps Snapshot (and MmapManager) rooted until GC.KeepAlive(snap) completes,
+            // after which MmapManager's finalizer safely releases the mapping — eliminating
+            // AccessViolation races when Dispose() or QzdbRegistry swap runs concurrently.
+            Interlocked.Exchange(ref _activeSnapshot, null);
         }
     }
 
