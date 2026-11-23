@@ -348,4 +348,4 @@ python3 test_csv_oracle.py  # Tier0 独立真值校验（对源 CSV 抽样，证
 3. 字段新增/布局变化由文件头 `GROUP_SCHEMA` / `ROW_SCHEMA` 自描述，SDK 自动适配，无需改代码。
 4. 多语言行为以 `../API_CONTRACT.md` 为准；跨语言冒烟在 CI 中执行 demo 样本对拍。
 
-<!-- commit: python: Python SDK（mmap 轻量读取） sync=1793951035 -->
+<!-- commit: python: Python SDK（mmap 轻量读取） -->
