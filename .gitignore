@@ -60,6 +60,7 @@ ip-qzdb-sdk/c/bench_qps
 .omx/
 .workbuddy/
 .workbuddy-ai/
+.zcode/
 # browser-skill (bsk) 的运行目录。默认在 ~/.bsk；当 agent 沙箱的 fs broker
 # 拦不住工作区外的写时，可把 BSK_HOME 指到这里启动 daemon。
 .bsk/
@@ -138,6 +139,7 @@ tmp/
 .playwright-mcp/
 
 # NuGet pack/publish artifacts (fully rebuildable from csproj)
+ip-qzdb-sdk/netcore/nupkg/
 ip-qzdb-sdk/netcore/nupkgs/
 
 # Test run reports (regenerated each run, timestamped filenames)

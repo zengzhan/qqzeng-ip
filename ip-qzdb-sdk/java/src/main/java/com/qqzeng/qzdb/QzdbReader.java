@@ -461,6 +461,7 @@ public final class QzdbReader implements AutoCloseable {
                     throw new QzdbException(ErrorCode.CORRUPTED, "RowSchema fields truncated");
                 }
                 int g2 = 0, a2 = 0, u2 = 0, total = 0;
+                int seenMask = 0;
                 int wpos = sp + 4;
                 for (int i = 0; i < fCount; i++) {
                     int fid = data.get(wpos) & 0xFF;
@@ -468,14 +469,21 @@ public final class QzdbReader implements AutoCloseable {
                     if (w < 1 || w > 4) {
                         throw new QzdbException(ErrorCode.CORRUPTED, "Invalid RowSchema field width: " + w);
                     }
+                    if (fid <= 2) {
+                        int bit = 1 << fid;
+                        if ((seenMask & bit) != 0) {
+                            throw new QzdbException(ErrorCode.CORRUPTED, "Duplicate RowSchema field id: " + fid);
+                        }
+                        seenMask |= bit;
+                    }
                     if (fid == 0) g2 = w;
                     else if (fid == 1) a2 = w;
                     else if (fid == 2) u2 = w;
                     wpos += 4;
                     total += w;
                 }
-                if (total != ipRowSize) {
-                    throw new QzdbException(ErrorCode.CORRUPTED, "RowSchema widths do not match ipRowSize");
+                if (total != ipRowSize || g2 <= 0) {
+                    throw new QzdbException(ErrorCode.CORRUPTED, "RowSchema widths do not match ipRowSize or missing geo field");
                 }
                 geoW = g2;
                 asnW = a2;
@@ -1029,8 +1037,7 @@ public final class QzdbReader implements AutoCloseable {
          * <p>
          * 安全前提：调用方必须保证没有其他线程正在这个快照上执行查询——释放一段仍在被
          * 并发读取的映射内存会导致 JVM 直接 native 崩溃（SIGSEGV），不是可恢复的 Java 异常。
-         * 这正是 QzdbReader 用"晚一代再释放"的隔离队列而不是替换瞬间同步调用本方法的原因，
-         * 见 {@link QzdbReader#retiring}。
+         * 仅在 {@link #pinCount} 归零且已标记 {@link #unmapPending} 时由 {@link #release()} 调用。
          */
         void unmapIfMapped() {
             MmapSource src = source;
@@ -1801,7 +1808,7 @@ public final class QzdbReader implements AutoCloseable {
      */
     public String getFieldNamesSource() { return requireSnapshot().fieldNamesSource; }
 
-    /** @return 地域覆盖（当前格式 Header 尚无该字段，始终返回 ""） */
+    /** @return 数据覆盖范围（Metadata TLV type=6，权威来源；缺失时返回 ""） */
     public String getScope() { return requireSnapshot().scope; }
 
     /** @return 构建日期 "yyyy-MM-dd"（由 Header BuildDate 推算）；无则 "" */

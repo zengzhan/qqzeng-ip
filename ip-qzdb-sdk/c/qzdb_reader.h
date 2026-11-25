@@ -50,13 +50,20 @@ typedef struct {
  *   the caller falls back to get_geo_info(), which returns caller-owned
  *   strings with the proper values_mask bits set. Bounded memory, no eviction.
  *
- *   RELOAD LIFETIME NOTE (N2):
+ *   RELOAD LIFETIME NOTE (N2 / P0-1):
+ *   All standard public query entry points — qzdb_find*, qzdb_find_str,
+ *   qzdb_find_batch, qzdb_find_each, qzdb_find_*_buf, qzdb_find_fields*,
+ *   qzdb_lookup_row_id*, qzdb_lookup_ids, and qzdb_lookup_cidr* — are
+ *   concurrent-reload safe (protected by sharded reader_pin/reader_unpin).
+ *   Only the zero-copy *_fast family strictly prohibits concurrent reload.
+ *
  *   qzdb_reload() / qzdb_reload_buffer() frees the previous snapshot's cache
- *   and string pools once all in-flight queries finish. Borrowed pointers
- *   returned by earlier qzdb_find() / qzdb_get_field_names() calls become
- *   invalid after a reload; callers that retain results across concurrent
- *   reloads should use copy-out APIs (qzdb_find_str / qzdb_find_*_buf) or
- *   copy the strings before releasing.
+ *   and string pools once all in-flight pinned queries finish. Borrowed
+ *   pointers returned by qzdb_find() / qzdb_find_batch() / qzdb_find_*_buf()
+ *   / qzdb_get_field_names() become invalid after a subsequent reload; callers
+ *   that retain results across concurrent reloads should use copy-out APIs
+ *   (qzdb_find_str / qzdb_find_fields* / qzdb_lookup_cidr*) or copy strings
+ *   before a reload can occur (or use qzdb_registry_acquire/release).
  */
 typedef struct qzdb_cache_entry {
     uint64_t key;     /* (group << 40) | entry_id */

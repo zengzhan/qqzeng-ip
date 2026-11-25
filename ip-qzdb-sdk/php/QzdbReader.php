@@ -11,8 +11,8 @@
  *   GeoInfo              查询结果实体（字段归一化 / 序列化 / 语义 Getter）
  *   RowIds               行号三元组 (geoId, asnId, usageId)
  *   BatchResult          批量查询三态结果
- *   UsageType            用途分类（21 已知 + 未知兜底）
- *   KnownUsageType       21 个官方场景枚举
+ *   UsageType            用途分类（18 已知 + 未知兜底）
+ *   KnownUsageType       18 个官方场景枚举
  *   UnknownUsageType     未知场景安全兜底
  *   QzdbReader           核心读取器：加载 / Trie / 查询 / 热更新 / CRC / 元信息 / CIDR
  *   QzdbBuilder          Builder 模式加载入口
@@ -124,52 +124,32 @@ class KnownUsageType extends UsageType
     {
         if (self::$RAW_MAP !== null) return;
         $defs = [
-            ['AICrawler', 'AI 爬虫', 'AICrawler', 'AI 训练 / AI 搜索爬虫（GPTBot、ClaudeBot 等）'],
-            ['Backbone', '骨干网', 'Backbone', '运营商骨干传输网 / 国际出口'],
-            ['Broadband', '宽带', 'Broadband', '家庭/企业宽带接入（xDSL、光纤、Cable、拨号等）'],
-            ['Business', '企业', 'Business', '企业专线 / 企业组网'],
-            ['CDN', 'CDN', 'CDN', '内容分发网络'],
-            ['Cloud', '云服务', 'Cloud', '公有云 / 托管云（AWS、阿里云、Azure 等）'],
-            ['DNS', 'DNS', 'DNS', 'DNS 基础设施 / Anycast DNS'],
-            ['DataCenter', '数据中心', 'DataCenter', 'IDC / 机房托管'],
-            ['Education', '教育网', 'Education', '高校 / 科研网（CERNET 等）'],
-            ['Finance', '金融', 'Finance', '银行 / 证券 / 保险等金融机构'],
-            ['Government', '政府', 'Government', '政务 / 公共机构网络'],
-            ['IoT', '物联网', 'IoT', '物联网设备接入网络'],
-            ['Mobile', '移动网络', 'Mobile', '蜂窝移动网络（2G/3G/4G/5G）'],
-            ['Reserved', '保留地址', 'Reserved', '保留 / 未分配地址'],
-            ['Satellite', '卫星互联网', 'Satellite', '卫星 / 低轨星座接入（Starlink 等）'],
-            ['Spider', '爬虫', 'Spider', '通用搜索引擎 / 通用网络爬虫'],
-            ['Streaming', '流媒体', 'Streaming', '音视频 / 直播流媒体平台'],
-            ['Unknown', '', '', '无法判定用途'],
-            ['VPN', 'VPN/代理', 'VPN', 'VPN / 代理 / 隐私网络出口'],
+            ['AICrawler', 'AI 爬虫', 'AICrawler', 'AI 训练 / AI 搜索爬虫（GPTBot、ClaudeBot 等）', 'AI_CRAWLER'],
+            ['Backbone', '骨干网', 'Backbone', '运营商骨干传输网 / 国际出口', 'BACKBONE'],
+            ['Broadband', '宽带', 'Broadband', '家庭/企业宽带接入（xDSL、光纤、Cable、拨号等）', 'BROADBAND'],
+            ['Business', '企业', 'Business', '企业专线 / 企业组网', 'BUSINESS'],
+            ['CDN', 'CDN', 'CDN', '内容分发网络', 'CDN'],
+            ['Cloud', '云服务', 'Cloud', '公有云 / 托管云（AWS、阿里云、Azure 等）', 'CLOUD'],
+            ['DNS', 'DNS', 'DNS', 'DNS 基础设施 / Anycast DNS', 'DNS'],
+            ['DataCenter', '数据中心', 'DataCenter', 'IDC / 机房托管', 'DATA_CENTER'],
+            ['Education', '教育网', 'Education', '高校 / 科研网（CERNET 等）', 'EDUCATION'],
+            ['Finance', '金融', 'Finance', '银行 / 证券 / 保险等金融机构', 'FINANCE'],
+            ['Government', '政府', 'Government', '政务 / 公共机构网络', 'GOVERNMENT'],
+            ['IoT', '物联网', 'IoT', '物联网设备接入网络', 'IOT'],
+            ['Mobile', '移动网络', 'Mobile', '蜂窝移动网络（2G/3G/4G/5G）', 'MOBILE'],
+            ['Reserved', '保留地址', 'Reserved', '保留 / 未分配地址', 'RESERVED'],
+            ['Satellite', '卫星互联网', 'Satellite', '卫星 / 低轨星座接入（Starlink 等）', 'SATELLITE'],
+            ['Spider', '爬虫', 'Spider', '通用搜索引擎 / 通用网络爬虫', 'SPIDER'],
+            ['Streaming', '流媒体', 'Streaming', '音视频 / 直播流媒体平台', 'STREAMING'],
+            ['Unknown', '', '', '无法判定用途', 'UNKNOWN'],
+            ['VPN', 'VPN/代理', 'VPN', 'VPN / 代理 / 隐私网络出口', 'VPN'],
         ];
         $map = [];
         foreach ($defs as $d) {
             $rawVal = ($d[0] === 'Unknown') ? '' : $d[0];
             $inst = new KnownUsageType($rawVal, $d[1], $d[2], $d[3]);
-            // 用稳定属性名映射（与上面声明的静态属性一一对应）
-            switch ($d[0]) {
-                case 'AICrawler': self::$AI_CRAWLER = $inst; break;
-                case 'Backbone': self::$BACKBONE = $inst; break;
-                case 'Broadband': self::$BROADBAND = $inst; break;
-                case 'Business': self::$BUSINESS = $inst; break;
-                case 'CDN': self::$CDN = $inst; break;
-                case 'Cloud': self::$CLOUD = $inst; break;
-                case 'DNS': self::$DNS = $inst; break;
-                case 'DataCenter': self::$DATA_CENTER = $inst; break;
-                case 'Education': self::$EDUCATION = $inst; break;
-                case 'Finance': self::$FINANCE = $inst; break;
-                case 'Government': self::$GOVERNMENT = $inst; break;
-                case 'IoT': self::$IOT = $inst; break;
-                case 'Mobile': self::$MOBILE = $inst; break;
-                case 'Reserved': self::$RESERVED = $inst; break;
-                case 'Satellite': self::$SATELLITE = $inst; break;
-                case 'Spider': self::$SPIDER = $inst; break;
-                case 'Streaming': self::$STREAMING = $inst; break;
-                case 'Unknown': self::$UNKNOWN = $inst; break;
-                case 'VPN': self::$VPN = $inst; break;
-            }
+            $prop = $d[4];
+            self::$$prop = $inst;
             if ($d[0] === 'Unknown') {
                 $map['unknown'] = $inst;
                 $map[''] = $inst;
@@ -732,12 +712,6 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     private $buildDate = 0;
     private $storedCrc = 0;
 
-    // FFI mmap 资源（可选零拷贝加载）
-    private $mmapPtr = null;
-    private $mmapFd = -1;
-    private $mmapSize = 0;
-    private $ffi = null;
-
     // Offsets
     private $offV4Jump = 0;
     private $offV4Nodes = 0;
@@ -765,8 +739,6 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     private $groupFieldOffsets = [];
     private $groupFieldNative = [];
     private $groupFieldNativeType = [];
-    private $groupFieldIds = [];
-    private $groupPoolSectionIds = [];
 
     private $groupPoolDescs = null;
     private $poolsLoaded = false;
@@ -807,9 +779,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     // 无单例。v2.4 起全语言删除 getInstance()：进程级共享一个可变实例在并发下
     // 无法回答「现在查的是哪个库」。需要按路径复用请用 QzdbRegistry。
 
-    private static $HEX = null;
-    private static $crc32bTable = null;
-    private static $usageInit = false;
+
 
     public function __construct($dbPath = null, $groupIndex = 0, bool $verifyCrc = true)
     {
@@ -829,17 +799,6 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     {
         if ($this->stream !== null && is_resource($this->stream) && $this->ownsStream) {
             @fclose($this->stream);
-        }
-        // 释放 mmap 映射
-        if ($this->mmapPtr !== null && $this->mmapFd >= 0) {
-            if (extension_loaded('ffi') && isset($this->ffi)) {
-                try { $this->ffi->munmap($this->mmapPtr, $this->mmapSize); } catch (\Throwable $e) {}
-                // $mmapFd 恒为 int(-1)（mmap 路径当前桩实现）；未来接通时必为 resource，
-                // 此处守卫避免 fclose(int) 在 PHP 8 抛 TypeError
-                if (is_resource($this->mmapFd)) { @fclose($this->mmapFd); }
-            }
-            $this->mmapPtr = null;
-            $this->mmapFd = -1;
         }
         $this->stream = null;
         $this->streamPages = [];
@@ -915,20 +874,6 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             throw new QzdbException("Cannot stat database file: " . $dbPath, self::ERROR_INVALID_PARAM);
         }
 
-        if ($this->tryMmapLoad($dbPath)) {
-            $this->releaseOwnedStream();
-            $this->fileSize = $size;
-            $this->parseHeader();
-            if ($this->verifyCrc && !$this->rawVerifyCrc()) {
-                throw new QzdbException('CRC32 checksum mismatch — the .qzdb file is corrupted or truncated', self::ERROR_CORRUPTED);
-            }
-            $this->geoCache = [];
-            $this->poolCache = [];
-            $this->poolCacheOrder = [];
-            $this->closed = false;
-            return;
-        }
-
         $memLimit = $this->parseMemoryLimitBytes();
         $useStreaming = $this->memoryMode === self::MEMORY_LOW
             || ($memLimit > 0 && $size > (int)($memLimit * 0.5));
@@ -954,13 +899,18 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $this->dataLen = $newData === null ? 0 : strlen($newData);
         $this->stream = $newStream;
         $this->ownsStream = $newOwnsStream;
+        $this->finalizeLoad('file', $warmup);
+    }
+
+    private function finalizeLoad(string $sourceLabel, bool $warmup = false): void
+    {
         $this->geoCache = [];
         $this->poolCache = [];
         $this->poolCacheOrder = [];
         try {
             $this->parseHeader();
             if ($this->verifyCrc && !$this->rawVerifyCrc()) {
-                throw new QzdbException('CRC32 checksum mismatch — the .qzdb file is corrupted or truncated', self::ERROR_CORRUPTED);
+                throw new QzdbException("CRC32 checksum mismatch — the .qzdb {$sourceLabel} is corrupted or truncated", self::ERROR_CORRUPTED);
             }
         } catch (\Throwable $e) {
             if ($this->stream !== null && is_resource($this->stream) && $this->ownsStream) {
@@ -979,20 +929,6 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         }
     }
 
-    /**
-     * 尝试使用 FFI mmap 零拷贝加载数据库文件。
-     * 需要 PHP FFI 扩展和操作系统支持 mmap。
-     * 成功后 $this->data 指向 mmap 映射内存，close() 时自动 munmap。
-     * 失败时返回 false 并回退到常规加载路径。
-     */
-    private function tryMmapLoad(string $dbPath): bool
-    {
-        // FFI mmap 零拷贝加载：macOS 下 FFI 调用系统函数兼容性不稳定，
-        // 当前阶段回退到常规加载路径；FFI mmap 保留作为可选的性能增强入口。
-        return false;
-    }
-
-
     public function loadBytes(string $bytes, bool $verifyCrc = true, bool $warmup = false): void
     {
         self::assertSupportedPlatform();
@@ -1002,25 +938,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $this->data = $bytes;
         $this->dataLen = strlen($bytes);
         $this->ownsStream = false;
-        $this->geoCache = [];
-        $this->poolCache = [];
-        $this->poolCacheOrder = [];
-        try {
-            $this->parseHeader();
-            if ($this->verifyCrc && !$this->rawVerifyCrc()) {
-                throw new QzdbException('CRC32 checksum mismatch — the .qzdb buffer is corrupted or truncated', self::ERROR_CORRUPTED);
-            }
-        } catch (\Throwable $e) {
-            $this->data = null;
-            $this->dataLen = 0;
-            $this->closed = true;
-            throw $e;
-        }
-        $this->geoCache = [];
-        $this->closed = false;
-        if ($warmup) {
-            $this->warmup();
-        }
+        $this->finalizeLoad('buffer', $warmup);
     }
 
     /**
@@ -1083,26 +1001,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             $this->ownsStream = $takeOwnership;
             $this->data = null;
             $this->dataLen = 0;
-            $this->geoCache = [];
-            $this->poolCache = [];
-            $this->poolCacheOrder = [];
-            try {
-                $this->parseHeader();
-                if ($this->verifyCrc && !$this->rawVerifyCrc()) {
-                    throw new QzdbException('CRC32 checksum mismatch — the .qzdb stream is corrupted or truncated', self::ERROR_CORRUPTED);
-                }
-            } catch (\Throwable $e) {
-                if ($this->stream !== null && is_resource($this->stream) && $this->ownsStream) {
-                    @fclose($this->stream);
-                    $this->stream = null;
-                }
-                $this->data = null;
-                $this->dataLen = 0;
-                $this->closed = true;
-                throw $e;
-            }
-            $this->geoCache = [];
-            $this->closed = false;
+            $this->finalizeLoad('stream', false);
             return;
         }
 
@@ -1216,29 +1115,17 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     private function assign(QzdbReader $src): void
     {
         // 1. 先回收本实例旧数据内存，避免 reload 期间双倍内存峰值
-        // 同时释放 mmap 资源
-        if ($this->mmapPtr !== null && $this->mmapFd >= 0 && isset($this->ffi)) {
-            try { $this->ffi->munmap($this->mmapPtr, $this->mmapSize); } catch (\Throwable $e) {}
-            // 同 close()：$mmapFd 未来接通时方为 resource，守卫避免 fclose(int) TypeError
-            if (is_resource($this->mmapFd)) { @fclose($this->mmapFd); }
-        }
-        $this->mmapPtr = null;
-        $this->mmapFd = -1;
         $this->data = null;
         $this->dataLen = 0;
         $this->releaseOwnedStream();
-        // 3. 拷贝快照状态（跳过静态单例与共享表）
-        // 先清空旧缓存，避免 reload 期间旧池字符串内存滞留
+        // 2. 拷贝快照状态并清空旧缓存
         $this->poolCache = [];
         $this->poolCacheOrder = [];
         foreach (get_object_vars($src) as $k => $v) {
-            if ($k === 'instance' || $k === 'HEX' || $k === 'crc32bTable' || $k === 'usageInit') continue;
             $this->$k = $v;
         }
-        // 4. 所有权转移：断开 $src 对流句柄的持有，使其析构不再误关本实例正在使用的句柄
+        // 3. 所有权转移：断开 $src 对流句柄的持有，使其析构不再误关本实例正在使用的句柄
         $src->stream = null;
-        $src->mmapPtr = null;
-        $src->mmapFd = -1;
         $src->closed = true;
     }
 
@@ -1742,8 +1629,6 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $this->groupFieldOffsets = array_fill(0, $actualGroups, null);
         $this->groupFieldNative = array_fill(0, $actualGroups, null);
         $this->groupFieldNativeType = array_fill(0, $actualGroups, null);
-        $this->groupFieldIds = array_fill(0, $actualGroups, null);
-        $this->groupPoolSectionIds = array_fill(0, $actualGroups, null);
         $this->groupIds = array_fill(0, $actualGroups, 0);
 
         $schemaFldCounts = $this->parseGroupSchema($len, $actualGroups);
@@ -1755,8 +1640,6 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
                 $this->groupFieldOffsets[$g] = null;
                 $this->groupFieldNative[$g] = null;
                 $this->groupFieldNativeType[$g] = null;
-                $this->groupFieldIds[$g] = null;
-                $this->groupPoolSectionIds[$g] = null;
             }
             $fc = $this->groupFieldCounts[$g];
             if ($this->groupStrides[$g] === 0) $this->groupStrides[$g] = $fc * $this->poolIdxSize;
@@ -1768,8 +1651,6 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             }
             if ($this->groupFieldNative[$g] === null) $this->groupFieldNative[$g] = array_fill(0, $fc, false);
             if ($this->groupFieldNativeType[$g] === null) $this->groupFieldNativeType[$g] = array_fill(0, $fc, 0);
-            if ($this->groupFieldIds[$g] === null) $this->groupFieldIds[$g] = array_fill(0, $fc, -1);
-            if ($this->groupPoolSectionIds[$g] === null) $this->groupPoolSectionIds[$g] = array_fill(0, $fc, 0);
             if ($this->groupEntryCounts[$g] > 0) {
                 $gStart = $this->offGeoEntries + $this->groupEntryOffsets[$g];
                 $chk($gStart, $this->groupEntryCounts[$g] * $this->groupStrides[$g], "group_{$g}_entries");
@@ -1806,16 +1687,12 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             $offsets = array_fill(0, $fldCount, 0);
             $natives = array_fill(0, $fldCount, false);
             $natTypes = array_fill(0, $fldCount, 0);
-            $fieldIds = array_fill(0, $fldCount, 0);
-            $poolSectionIds = array_fill(0, $fldCount, 0);
             for ($fi = 0; $fi < $fldCount; $fi++) {
-                $fieldIds[$fi] = $this->safeReadU16($sp);
                 $w = $this->readByte($sp + 2);
                 $fieldFlags = $this->readByte($sp + 3);
                 $isNative = ($fieldFlags & 0x01) !== 0;
                 $natType = ($fieldFlags >> 1) & 0x03;
                 $off = $this->safeReadU32($sp + 4);
-                $poolSectionIds[$fi] = $this->safeReadU32($sp + 8);
                 $sp += 12;
                 $validW = $isNative
                     ? ($natType === 1 ? ($w === 4 || $w === 8) : ($w >= 1 && $w <= 4))
@@ -1835,8 +1712,6 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             $this->groupFieldOffsets[$gi] = $offsets;
             $this->groupFieldNative[$gi] = $natives;
             $this->groupFieldNativeType[$gi] = $natTypes;
-            $this->groupFieldIds[$gi] = $fieldIds;
-            $this->groupPoolSectionIds[$gi] = $poolSectionIds;
         }
         return $schemaFldCounts;
     }
@@ -1904,8 +1779,18 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             }
         }
 
-        // --- edition：先用本组自己的掩码，再回落到文件级掩码 ----------------------
-        $mask = (isset($this->groupIds[$gi]) && $this->groupIds[$gi]) ? $this->groupIds[$gi] : $this->versionMask;
+        list($this->edition, $this->editionSource, $this->fieldNames, $this->fieldNamesSource) =
+            $this->resolveGroupSchemaMeta($gi, $metaNames);
+        $this->normalizedFieldMap = GeoInfo::buildNormalizedMap($this->fieldNames);
+    }
+
+    /**
+     * 按统一优先级链推导指定组的 [edition, editionSource, fieldNames, fieldNamesSource]。
+     */
+    private function resolveGroupSchemaMeta(int $g, ?array $metaNames): array
+    {
+        $numFields = $this->groupFieldCounts[$g];
+        $mask = (isset($this->groupIds[$g]) && $this->groupIds[$g]) ? $this->groupIds[$g] : $this->versionMask;
         $edition = self::editionFromMask($mask);
         $source = self::EDITION_SOURCE_VERSION_MASK;
         if ($edition === '') {
@@ -1925,10 +1810,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             $edition = self::editionByFieldCount($numFields);
             $source = $edition !== '' ? self::EDITION_SOURCE_INFERRED : self::EDITION_SOURCE_UNKNOWN;
         }
-        $this->edition = $edition;
-        $this->editionSource = $source;
 
-        // --- 字段名 -------------------------------------------------------------
         if ($metaNames !== null && count($metaNames) === $numFields) {
             $names = $metaNames;
             $namesSource = self::FIELD_NAMES_SOURCE_METADATA;
@@ -1943,10 +1825,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             }
             $namesSource = self::FIELD_NAMES_SOURCE_SYNTHETIC;
         }
-
-        $this->fieldNames = $names;
-        $this->fieldNamesSource = $namesSource;
-        $this->normalizedFieldMap = GeoInfo::buildNormalizedMap($names);
+        return [$edition, $source, $names, $namesSource];
     }
 
     /**
@@ -1962,7 +1841,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
                 continue;
             }
             $hasAsn = false;
-            foreach ($this->resolveGroupNamesForRepair($g) as $nm) {
+            foreach ($this->resolveGroupSchemaMeta($g, $this->metaFieldNames)[2] as $nm) {
                 if (GeoInfo::normalizeKey($nm) === 'asn') {
                     $hasAsn = true;
                     break;
@@ -1970,42 +1849,6 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             }
             $this->groupDimMasks[$g] = $hasAsn ? 0x02 : 0x01;
         }
-    }
-
-    /**
-     * 组 g 的字段名推导（与 resolveFieldNames 同一规则链，但面向任意组）：
-     * Metadata field_names（基数一致时）→ 该组掩码判定的档次规范表 → synthetic 占位符。
-     */
-    private function resolveGroupNamesForRepair(int $g): array
-    {
-        $numFields = $this->groupFieldCounts[$g];
-        if ($this->metaFieldNames !== null && count($this->metaFieldNames) === $numFields) {
-            return $this->metaFieldNames;
-        }
-        $mask = (isset($this->groupIds[$g]) && $this->groupIds[$g]) ? $this->groupIds[$g] : $this->versionMask;
-        $edition = self::editionFromMask($mask);
-        if ($edition === '') {
-            $edition = trim($this->primaryVersion, self::TRIM_CHARS);
-            if ($edition === '') {
-                $tokens = array_values(array_filter(array_map('trim', explode(',', $this->versionName)),
-                    static function ($s) { return $s !== ''; }));
-                if (count($tokens) === 1) {
-                    $edition = $tokens[0];
-                }
-            }
-        }
-        if ($edition === '') {
-            $edition = self::editionByFieldCount($numFields);
-        }
-        if ($edition !== '' && isset(self::EDITION_FIELD_NAMES[$edition])
-            && count(self::EDITION_FIELD_NAMES[$edition]) === $numFields) {
-            return self::EDITION_FIELD_NAMES[$edition];
-        }
-        $names = [];
-        for ($i = 0; $i < $numFields; $i++) {
-            $names[] = "field_{$i}";
-        }
-        return $names;
     }
 
     private function parseRowSchema(): void
@@ -2024,7 +1867,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             );
         }
 
-        $geoW = 0; $asnW = 0; $usageW = 0; $total = 0;
+        $geoW = 0; $asnW = 0; $usageW = 0; $total = 0; $seenMask = 0;
         $wpos = $sp + 4;
         for ($i = 0; $i < $fCount; $i++) {
             $fid = $this->readByte($wpos);
@@ -2032,15 +1875,22 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             if ($w < 1 || $w > 4) {
                 throw new QzdbException("Invalid ROW_SCHEMA field width: {$w}", self::ERROR_CORRUPTED);
             }
+            if ($fid <= 2) {
+                $bit = 1 << $fid;
+                if (($seenMask & $bit) !== 0) {
+                    throw new QzdbException("Duplicate ROW_SCHEMA field id: {$fid}", self::ERROR_CORRUPTED);
+                }
+                $seenMask |= $bit;
+            }
             if ($fid === 0) $geoW = $w;
             elseif ($fid === 1) $asnW = $w;
             elseif ($fid === 2) $usageW = $w;
             $wpos += 4;
             $total += $w;
         }
-        if ($total !== $this->ipRowSize) {
+        if ($total !== $this->ipRowSize || $geoW <= 0) {
             throw new QzdbException(
-                "ROW_SCHEMA width sum ({$total}) != ipRowSize ({$this->ipRowSize})",
+                "ROW_SCHEMA width sum ({$total}) != ipRowSize ({$this->ipRowSize}) or missing geo field",
                 self::ERROR_CORRUPTED
             );
         }
@@ -2686,22 +2536,22 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
 
     private function lookupV4PrefixLen($ipInt): int
     {
-        $this->curV4 = $ipInt & 0xFFFFFFFF;
+        $v4 = $ipInt & 0xFFFFFFFF;
         if (!$this->hasV4 || $this->offV4Jump <= 0) return -1;
-        $ptr = $this->safeReadU32($this->offV4Jump + (($ipInt >> 16) & 0xFFFF) * 4);
+        $ptr = $this->safeReadU32($this->offV4Jump + (($v4 >> 16) & 0xFFFF) * 4);
         if ($ptr === 0) return -1;
         if ($ptr & self::SENTINEL) {
-            return $this->walkV4Depth(0, 0, 16);
+            return $this->walkV4Depth($v4, 0, 0, 16);
         }
-        return $this->walkV4Depth($ptr, 16, 32);
+        return $this->walkV4Depth($v4, $ptr, 16, 32);
     }
 
-    private function walkV4Depth($idx, $startDepth, $maxDepth): int
+    private function walkV4Depth(int $v4, $idx, $startDepth, $maxDepth): int
     {
         if ($startDepth >= $maxDepth) return -1;
         for ($depth = $startDepth; $depth < $maxDepth; $depth++) {
             if ($idx >= $this->v4NodeCount) return -1;
-            $bit = ($this->curV4 >> (31 - $depth)) & 1;
+            $bit = ($v4 >> (31 - $depth)) & 1;
             $child = $this->getV4Child($idx, $bit);
             if ($child === 0) return -1;
             if ($child & self::SENTINEL) return $depth + 1;
@@ -3254,14 +3104,6 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     // IP 解析（严格，拒绝前导零 / 缺段 / 越界 / 双 :: / zone-id）
     // ------------------------------------------------------------------
 
-    private static function initHex(): void
-    {
-        if (self::$HEX !== null) return;
-        self::$HEX = array_fill(0, 128, 0);
-        for ($i = 0; $i < 10; $i++) self::$HEX[48 + $i] = $i;
-        for ($i = 0; $i < 6; $i++) { self::$HEX[97 + $i] = 10 + $i; self::$HEX[65 + $i] = 10 + $i; }
-    }
-
     /**
      * 严格 IPv4 解析：恰 4 段、每段 0-255、禁前导零、禁 0x/八进制、禁空白与端口等后缀。
      *
@@ -3365,7 +3207,6 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         } else {
             if ($ng + $v4Slots !== 8) return null;
         }
-        self::initHex();
         foreach ($allg as $g) {
             $gl = strlen($g);
             if ($gl === 0 || $gl > 4) return null;
@@ -3408,8 +3249,6 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         return array(null, $buf);
     }
 
-    // 当前正在 CIDR 深度遍历的 V4 整数（walkV4Depth 使用）
-    private $curV4 = 0;
 }
 
 /* ===========================================================================
@@ -3827,27 +3666,5 @@ class ChainedReader
     public function getReaders(): array
     {
         return $this->readers;
-    }
-
-    private static function uintToIpv4(int $ipInt): string
-    {
-        return (($ipInt >> 24) & 0xFF) . '.' . (($ipInt >> 16) & 0xFF) . '.'
-            . (($ipInt >> 8) & 0xFF) . '.' . ($ipInt & 0xFF);
-    }
-
-    private static function bytesToIpString(string $bytes): string
-    {
-        $len = strlen($bytes);
-        if ($len === 4) return self::uintToIpv4(
-            ((ord($bytes[0]) & 0xFF) << 24) | ((ord($bytes[1]) & 0xFF) << 16)
-            | ((ord($bytes[2]) & 0xFF) << 8) | (ord($bytes[3]) & 0xFF));
-        if ($len === 16) {
-            $parts = [];
-            for ($i = 0; $i < 8; $i++) {
-                $parts[] = dechex(((ord($bytes[2 * $i]) & 0xFF) << 8) | (ord($bytes[2 * $i + 1]) & 0xFF));
-            }
-            return implode(':', $parts);
-        }
-        return '';
     }
 }

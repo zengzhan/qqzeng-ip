@@ -2,7 +2,7 @@
 
 > 纯离线、零第三方依赖的 **QZDB IP 地理定位数据库**官方 Node.js SDK（支持 IPv4 / IPv6 双栈）。
 
-- **包名 / 模块名**：npm 包 `@qqzengip/qzdb`（1.0.5 已发布，Public）；核心单文件 `qzdb.js`，`module.exports = QzdbReader`
+- **包名 / 模块名**：npm 包 `@qqzengip/qzdb`（1.0.9 已发布，Public）；核心单文件 `qzdb.js`，`module.exports = QzdbReader`
 - **定位**：离线解析 `.qzdb` 二进制数据库文件，不依赖任何外部网络请求
 - **架构**：不可变快照（immutable snapshot）+ 有界 `GeoInfo` 解码缓存，并发查询互不阻塞；`reload` 原子替换
 - **运行要求**：Node.js **14+**（使用了 `Buffer`、`class`、Generator 等特性；建议 18+）
@@ -47,7 +47,7 @@
 
 ### 2.1 npm 安装（推荐）
 
-包已发布到 npm（`@qqzengip/qzdb@1.0.5`，Public）：
+包已发布到 npm（`@qqzengip/qzdb@1.0.9`，Public）：
 
 ```bash
 npm install @qqzengip/qzdb

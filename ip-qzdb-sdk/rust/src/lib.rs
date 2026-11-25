@@ -1926,6 +1926,7 @@ impl SnapshotInner {
             let mut a2 = 0usize;
             let mut u2 = 0usize;
             let mut total = 0usize;
+            let mut seen_mask: u8 = 0;
             for _ in 0..f_count {
                 let fid = d[wpos];
                 let w = d[wpos + 1] as usize;
@@ -1934,6 +1935,15 @@ impl SnapshotInner {
                         ErrorCode::Corrupted,
                         format!("invalid ROW_SCHEMA field width: {w}"),
                     ));
+                }
+                if fid < 8 {
+                    if seen_mask & (1u8 << fid) != 0 {
+                        return Err(err(
+                            ErrorCode::Corrupted,
+                            format!("duplicate ROW_SCHEMA field id: {fid}"),
+                        ));
+                    }
+                    seen_mask |= 1u8 << fid;
                 }
                 if fid == 0 {
                     g2 = w;
@@ -1945,10 +1955,10 @@ impl SnapshotInner {
                 wpos += 4;
                 total += w;
             }
-            if total != ip_row_size {
+            if g2 == 0 || total != ip_row_size {
                 return Err(err(
                     ErrorCode::Corrupted,
-                    format!("ROW_SCHEMA width sum ({total}) != ip_row_size ({ip_row_size})"),
+                    format!("invalid ROW_SCHEMA widths: geo={g2}, sum={total}, ip_row_size={ip_row_size}"),
                 ));
             }
             row_geo_width = g2;
@@ -2353,9 +2363,6 @@ impl SnapshotInner {
                 ));
             }
         }
-
-        let total_entries: usize = group_entry_counts.iter().map(|&c| c as usize).sum();
-        let _ = total_entries;
 
         Ok(SnapshotInner {
             data,
@@ -3302,35 +3309,49 @@ impl SnapshotInner {
         let mut touch_sum: u8 = 0;
         if self.has_v4 && self.off_v4_jump > 0 {
             let start = self.off_v4_jump as usize;
-            let end = (start + 65536 * 4).min(d.len());
+            let end = start.saturating_add(65536usize.saturating_mul(4)).min(d.len());
             for p in (start..end).step_by(PAGE) {
-                touch_sum ^= d[p];
+                if let Some(&b) = d.get(p) {
+                    touch_sum ^= b;
+                }
             }
             if self.v4_node_count > 0 && self.off_v4_nodes > 0 {
-                let node_size = if self.v4_node_24 { 6 } else { 8 };
+                let node_size: usize = if self.v4_node_24 { 6 } else { 8 };
                 let ns = self.off_v4_nodes as usize;
-                let ne = (ns + self.v4_node_count as usize * node_size).min(d.len());
+                let ne = ns
+                    .saturating_add((self.v4_node_count as usize).saturating_mul(node_size))
+                    .min(d.len());
                 for p in (ns..ne).step_by(PAGE) {
-                    touch_sum ^= d[p];
+                    if let Some(&b) = d.get(p) {
+                        touch_sum ^= b;
+                    }
                 }
             }
         }
         if self.has_v6 && self.off_v6_jump > 0 {
             let start = self.off_v6_jump as usize;
-            let end = (start + (1usize << self.v6_jump_bits) * 4).min(d.len());
+            let end = start
+                .saturating_add((1usize << self.v6_jump_bits).saturating_mul(4))
+                .min(d.len());
             for p in (start..end).step_by(PAGE) {
-                touch_sum ^= d[p];
+                if let Some(&b) = d.get(p) {
+                    touch_sum ^= b;
+                }
             }
             if self.v6_node_count > 0 && self.off_v6_nodes > 0 {
-                let node_size = if self.v6_node_24 { 6 } else { 8 };
+                let node_size: usize = if self.v6_node_24 { 6 } else { 8 };
                 let ns = self.off_v6_nodes as usize;
-                let ne = (ns + self.v6_node_count as usize * node_size).min(d.len());
+                let ne = ns
+                    .saturating_add((self.v6_node_count as usize).saturating_mul(node_size))
+                    .min(d.len());
                 for p in (ns..ne).step_by(PAGE) {
-                    touch_sum ^= d[p];
+                    if let Some(&b) = d.get(p) {
+                        touch_sum ^= b;
+                    }
                 }
             }
         }
-        let _ = touch_sum;
+        std::hint::black_box(touch_sum);
     }
 }
 
@@ -3822,78 +3843,7 @@ impl QzdbReader {
     /// 首次查询时的缺页延迟。XOR 累加防止编译器把读取优化为空操作；所有索引
     /// 均经 `.get()` 边界检查（范围已在加载期校验）。
     pub fn warmup(&self) {
-        let snap = self.snap.load_full();
-        let d = snap.data.as_slice();
-        if d.is_empty() {
-            return;
-        }
-        const PAGE: usize = 4096;
-        let mut touch_sum: u8 = 0;
-
-        if snap.has_v4 && snap.off_v4_jump > 0 {
-            let start = snap.off_v4_jump as usize;
-            let mut end = start.saturating_add(65536usize.saturating_mul(4));
-            if end > d.len() {
-                end = d.len();
-            }
-            let mut p = start;
-            while p < end {
-                if let Some(&b) = d.get(p) {
-                    touch_sum ^= b;
-                }
-                p += PAGE;
-            }
-            if snap.v4_node_count > 0 && snap.off_v4_nodes > 0 {
-                let node_size: usize = if snap.v4_node_24 { 6 } else { 8 };
-                let n_start = snap.off_v4_nodes as usize;
-                let mut n_end =
-                    n_start.saturating_add((snap.v4_node_count as usize).saturating_mul(node_size));
-                if n_end > d.len() {
-                    n_end = d.len();
-                }
-                let mut q = n_start;
-                while q < n_end {
-                    if let Some(&b) = d.get(q) {
-                        touch_sum ^= b;
-                    }
-                    q += PAGE;
-                }
-            }
-        }
-
-        if snap.has_v6 && snap.off_v6_jump > 0 {
-            let start = snap.off_v6_jump as usize;
-            let jump_len = (1usize << snap.v6_jump_bits).saturating_mul(4);
-            let mut end = start.saturating_add(jump_len);
-            if end > d.len() {
-                end = d.len();
-            }
-            let mut p = start;
-            while p < end {
-                if let Some(&b) = d.get(p) {
-                    touch_sum ^= b;
-                }
-                p += PAGE;
-            }
-            if snap.v6_node_count > 0 && snap.off_v6_nodes > 0 {
-                let node_size: usize = if snap.v6_node_24 { 6 } else { 8 };
-                let n_start = snap.off_v6_nodes as usize;
-                let mut n_end =
-                    n_start.saturating_add((snap.v6_node_count as usize).saturating_mul(node_size));
-                if n_end > d.len() {
-                    n_end = d.len();
-                }
-                let mut q = n_start;
-                while q < n_end {
-                    if let Some(&b) = d.get(q) {
-                        touch_sum ^= b;
-                    }
-                    q += PAGE;
-                }
-            }
-        }
-
-        std::hint::black_box(touch_sum);
+        self.snap.load().warmup();
     }
 
     // ---- 单条查询 ----
@@ -4613,14 +4563,7 @@ impl QzdbRegistry {
 
     /// 按注册顺序返回首个命中（非 None）；全未命中返回 None。
     pub fn find(&self, ip: &str) -> Option<GeoInfo> {
-        for name in &self.order {
-            if let Some(r) = self.readers.get(name) {
-                if let Some(g) = r.find(ip) {
-                    return Some(g);
-                }
-            }
-        }
-        None
+        self.find_ip(ip)
     }
 
     /// 支持多种 IP 类型的注册表查询。
@@ -4709,28 +4652,7 @@ impl ChainedReader {
     }
 
     pub fn find(&self, ip: &str) -> Option<GeoInfo> {
-        match self.mode {
-            ChainMode::Fallback => {
-                for r in &self.readers {
-                    if let Some(g) = r.find(ip) {
-                        return Some(g);
-                    }
-                }
-                None
-            }
-            ChainMode::Merge | ChainMode::MergeOverride => {
-                let mut merged: Option<GeoInfo> = None;
-                for r in &self.readers {
-                    if let Some(g) = r.find(ip) {
-                        merged = Some(match &merged {
-                            None => g,
-                            Some(base) => merge_geo(base, &g, self.mode),
-                        });
-                    }
-                }
-                merged
-            }
-        }
+        self.find_ip(ip)
     }
 
     pub fn find_ip(&self, ip: impl ToIp) -> Option<GeoInfo> {

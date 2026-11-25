@@ -632,14 +632,12 @@ class QzdbReader {
     this._groupFieldOffsets = [];
     this._groupFieldNative = [];
     this._groupFieldNativeType = [];
-    this._groupFieldIds = [];
     this._groupEntryOffsets = [];
     this._groupFieldNames = [];
     this._groupIds = [];
     this._groupPools = null;
     this._poolsLoaded = false;
     this._fieldNames = [];
-    this._fieldNameToIdx = Object.create(null);
     this._normFieldMap = Object.create(null);
     this._floatFlags = [];
     this._versionName = '';
@@ -675,15 +673,15 @@ class QzdbReader {
   // -------------------------------------------------------------------------
   // 加载
   // -------------------------------------------------------------------------
-  load(dbPath, verifyCrc = null) {
+  _loadData(data, verifyCrc, sourceLabel) {
     if (verifyCrc !== null) this._verifyCrc = verifyCrc;
     this._resetState();
     try {
-      this._data = fs.readFileSync(dbPath);
+      this._data = data;
       this._parseHeader();
       if (this._verifyCrc && !this.verifyCrc()) {
         throw new QzdbError(
-          'CRC32 checksum mismatch — the .qzdb file is corrupted or truncated',
+          `CRC32 checksum mismatch — the ${sourceLabel} is corrupted or truncated`,
           QzdbError.CORRUPTED,
         );
       }
@@ -697,6 +695,10 @@ class QzdbReader {
     }
   }
 
+  load(dbPath, verifyCrc = null) {
+    return this._loadData(fs.readFileSync(dbPath), verifyCrc, '.qzdb file');
+  }
+
   /**
    * 从内存 Buffer 加载。传入 Buffer 时采用零拷贝别名（不复制）：
    * reader 打开期间调用方不得修改该 Buffer 内容，否则查询结果不可预期；
@@ -704,27 +706,10 @@ class QzdbReader {
    * （Uint8Array / ArrayBuffer 等）仍会复制一次。
    */
   loadBuffer(bytes, verifyCrc = null) {
-    if (verifyCrc !== null) this._verifyCrc = verifyCrc;
-    this._resetState();
-    try {
-      // 零拷贝：SDK 内部从不写入 _data（仅读 + 只读 typed-array 视图），
-      // 因此可直接别名调用方的 Buffer；非 Buffer 输入仍需一次拷贝成 Buffer。
-      this._data = Buffer.isBuffer(bytes) ? bytes : _copyLoadBuffer(bytes);
-      this._parseHeader();
-      if (this._verifyCrc && !this.verifyCrc()) {
-        throw new QzdbError(
-          'CRC32 checksum mismatch — the buffer is corrupted or truncated',
-          QzdbError.CORRUPTED,
-        );
-      }
-      this._initCache();
-      this._closed = false;
-      if (this._warmup) this.warmup();
-      return this;
-    } catch (error) {
-      this._resetState();
-      throw error;
-    }
+    // 零拷贝：SDK 内部从不写入 _data（仅读 + 只读 typed-array 视图），
+    // 因此可直接别名调用方的 Buffer；非 Buffer 输入仍需一次拷贝成 Buffer。
+    const data = Buffer.isBuffer(bytes) ? bytes : _copyLoadBuffer(bytes);
+    return this._loadData(data, verifyCrc, 'buffer');
   }
 
   warmup() {
@@ -1008,7 +993,6 @@ class QzdbReader {
     this._groupFieldOffsets = new Array(actualGroups).fill(null);
     this._groupFieldNative = new Array(actualGroups).fill(null);
     this._groupFieldNativeType = new Array(actualGroups).fill(null);
-    this._groupFieldIds = new Array(actualGroups).fill(null);
     this._groupPools = null;
     this._poolsLoaded = false;
 
@@ -1037,9 +1021,7 @@ class QzdbReader {
         const offsets = new Array(fldCount).fill(0);
         const natives = new Array(fldCount).fill(false);
         const natTypes = new Array(fldCount).fill(0);
-        const fieldIds = new Array(fldCount).fill(0);
         for (let fi = 0; fi < fldCount; fi++) {
-          fieldIds[fi] = this.safeReadU16(sp);
           const w = d[sp + 2];
           const fieldFlags = d[sp + 3];
           const isNative = (fieldFlags & 0x01) !== 0;
@@ -1064,7 +1046,6 @@ class QzdbReader {
         this._groupFieldOffsets[gi] = offsets;
         this._groupFieldNative[gi] = natives;
         this._groupFieldNativeType[gi] = natTypes;
-        this._groupFieldIds[gi] = fieldIds;
       }
     }
 
@@ -1075,7 +1056,6 @@ class QzdbReader {
         this._groupFieldOffsets[g] = null;
         this._groupFieldNative[g] = null;
         this._groupFieldNativeType[g] = null;
-        this._groupFieldIds[g] = null;
       }
       const fc = this._groupFieldCounts[g];
       if (this._groupStrides[g] === 0) this._groupStrides[g] = fc * this._poolIdxSize;
@@ -1209,10 +1189,8 @@ class QzdbReader {
     this._editionSource = groupEditionSources[gi] || EDITION_SOURCE_UNKNOWN;
     this._fieldNamesSource = groupNameSources[gi] || FIELD_NAMES_SOURCE_SYNTHETIC;
 
-    this._fieldNameToIdx = Object.create(null);
     this._normFieldMap = Object.create(null);
     for (let i = 0; i < this._fieldNames.length; i++) {
-      this._fieldNameToIdx[this._fieldNames[i]] = i;
       const nk = GeoInfo.normalizeKey(this._fieldNames[i]);
       if (!(nk in this._normFieldMap)) this._normFieldMap[nk] = i;
     }
@@ -1255,7 +1233,7 @@ class QzdbReader {
       );
     }
 
-    let geoW = 0, asnW = 0, usageW = 0, total = 0;
+    let geoW = 0, asnW = 0, usageW = 0, total = 0, seenMask = 0;
     let wpos = sp + 4;
     for (let i = 0; i < fieldCount; i++) {
       const fid = d[wpos];
@@ -1263,15 +1241,21 @@ class QzdbReader {
       if (w < 1 || w > 4) {
         throw new QzdbError(`Invalid ROW_SCHEMA field width: ${w}`, QzdbError.CORRUPTED);
       }
+      if (fid < 8) {
+        if (seenMask & (1 << fid)) {
+          throw new QzdbError(`Duplicate ROW_SCHEMA field id: ${fid}`, QzdbError.CORRUPTED);
+        }
+        seenMask |= (1 << fid);
+      }
       if (fid === 0) geoW = w;
       else if (fid === 1) asnW = w;
       else if (fid === 2) usageW = w;
       wpos += 4;
       total += w;
     }
-    if (total !== this._ipRowSize) {
+    if (geoW <= 0 || total !== this._ipRowSize) {
       throw new QzdbError(
-        `ROW_SCHEMA width sum (${total}) != ipRowSize (${this._ipRowSize})`,
+        `ROW_SCHEMA invalid widths (geoW=${geoW}, sum=${total}, ipRowSize=${this._ipRowSize})`,
         QzdbError.CORRUPTED,
       );
     }
@@ -1687,59 +1671,38 @@ class QzdbReader {
   // -------------------------------------------------------------------------
   // 批量 / 流式（§5）
   // -------------------------------------------------------------------------
+  _batchOne(ip, fields) {
+    const parsed = _fastParseIpInternal(ip);
+    if (parsed == null) {
+      return new BatchResult(ip, null, new QzdbError('Invalid IP: ' + ip, QzdbError.INVALID_PARAM));
+    }
+    try {
+      const result = fields == null || fields.length === 0
+        ? this._findParsed(parsed)
+        : this._findFieldsParsed(parsed, fields);
+      return new BatchResult(ip, result, null);
+    } catch (e) {
+      return new BatchResult(ip, null, e instanceof QzdbError ? e : new QzdbError(String(e), QzdbError.CORRUPTED));
+    }
+  }
+
   findBatch(ips) {
     if (ips == null) return [];
     const out = [];
-    for (const ip of ips) {
-      const parsed = _fastParseIpInternal(ip);
-      if (parsed == null) {
-        out.push(new BatchResult(ip, null, new QzdbError('Invalid IP: ' + ip, QzdbError.INVALID_PARAM)));
-        continue;
-      }
-      try {
-        out.push(new BatchResult(ip, this._findParsed(parsed), null));
-      } catch (e) {
-        out.push(new BatchResult(ip, null, e instanceof QzdbError ? e : new QzdbError(String(e), QzdbError.CORRUPTED)));
-      }
-    }
+    for (const ip of ips) out.push(this._batchOne(ip, null));
     return out;
   }
 
   findBatchFields(ips, fields) {
     if (ips == null) return [];
     const out = [];
-    for (const ip of ips) {
-      const parsed = _fastParseIpInternal(ip);
-      if (parsed == null) {
-        out.push(new BatchResult(ip, null, new QzdbError('Invalid IP: ' + ip, QzdbError.INVALID_PARAM)));
-        continue;
-      }
-      try {
-        const result = fields == null || fields.length === 0
-          ? this._findParsed(parsed)
-          : this._findFieldsParsed(parsed, fields);
-        out.push(new BatchResult(ip, result, null));
-      } catch (e) {
-        out.push(new BatchResult(ip, null, e instanceof QzdbError ? e : new QzdbError(String(e), QzdbError.CORRUPTED)));
-      }
-    }
+    for (const ip of ips) out.push(this._batchOne(ip, fields));
     return out;
   }
 
   *findIter(ips) {
     if (ips == null) return;
-    for (const ip of ips) {
-      const parsed = _fastParseIpInternal(ip);
-      if (parsed == null) {
-        yield new BatchResult(ip, null, new QzdbError('Invalid IP: ' + ip, QzdbError.INVALID_PARAM));
-        continue;
-      }
-      try {
-        yield new BatchResult(ip, this._findParsed(parsed), null);
-      } catch (e) {
-        yield new BatchResult(ip, null, e instanceof QzdbError ? e : new QzdbError(String(e), QzdbError.CORRUPTED));
-      }
-    }
+    for (const ip of ips) yield this._batchOne(ip, null);
   }
 
   *findStream(ips) { yield* this.findIter(ips); }
@@ -1963,22 +1926,23 @@ class QzdbReader {
   // 与 Reader 打开时的 verifyCrc 配置无关（与 Go/PHP/Rust 对齐）。新快照先在
   // 临时 Reader 上完整构建，成功后才整体替换；构建失败时抛错，原 Reader 状态
   // 保持不变（旧数据继续可查）。Reader 自身的 _verifyCrc 配置不被 reload 改变。
-  reload(dbPath) {
-    const tmp = new QzdbReader(null, this._groupIndex, true, this._warmup);
-    tmp.load(dbPath, true);
+  _commitReload(tmp) {
     const keepVerifyCrc = this._verifyCrc;
     Object.assign(this, tmp);
     this._verifyCrc = keepVerifyCrc;
     return this;
   }
 
+  reload(dbPath) {
+    const tmp = new QzdbReader(null, this._groupIndex, true, this._warmup);
+    tmp.load(dbPath, true);
+    return this._commitReload(tmp);
+  }
+
   reloadBuffer(bytes) {
     const tmp = new QzdbReader(null, this._groupIndex, true, this._warmup);
     tmp.loadBuffer(bytes, true);
-    const keepVerifyCrc = this._verifyCrc;
-    Object.assign(this, tmp);
-    this._verifyCrc = keepVerifyCrc;
-    return this;
+    return this._commitReload(tmp);
   }
 
   close() {
@@ -2034,7 +1998,6 @@ QzdbReader.Builder = class {
     this._groupIndex = 0;
     this._verifyCrc = true;
     if (typeof arg === 'string') this._file = arg;
-    else if (arg instanceof QzdbReader) { /* 忽略，仅接受源 */ }
     else if (Buffer.isBuffer(arg) || arg instanceof Uint8Array || arg instanceof ArrayBuffer
       || (typeof SharedArrayBuffer !== 'undefined' && arg instanceof SharedArrayBuffer)) {
       this._buffer = _copyLoadBuffer(arg);
@@ -2143,7 +2106,7 @@ function _fastParseIpInternal(ip) {
   if (n === 0 || n > 45) return null;
   const cached = _parseMemo.get(s);
   if (cached !== undefined) return cached;
-  const rec = _fastParseIpUncached(s, n);
+  const rec = _fastParseIpUncached(s);
   if (rec !== null) {
     const frozen = Object.freeze(rec);
     if (_parseMemo.size < _PARSE_MEMO_CAP) _parseMemo.set(s, frozen);
@@ -2161,7 +2124,7 @@ function fastParseIp(ip) {
   return rec;
 }
 
-function _fastParseIpUncached(s, n) {
+function _fastParseIpUncached(s) {
   // Fail-Closed：不静默 trim，空白一律拒绝。
   // 原先此处有一趟独立的逐字符空白预扫描（32/9/10/13/11/12），已删除——它完全冗余：
   // v4 的单遍解析只接受数字与点；v6 的十六进制组校验
@@ -2330,17 +2293,18 @@ class ChainedReader {
   static chainMerge(...readers) { return new ChainedReader(readers, 'MERGE'); }
   static chainMergeOverride(...readers) { return new ChainedReader(readers, 'MERGE_OVERRIDE'); }
 
-  find(ipStr) {
+  _resolve(lookup) {
     if (this._mode === 'FALLBACK') {
       for (const r of this._readers) {
-        const res = r.find(ipStr);
+        const res = lookup(r);
         if (res !== null) return res;
       }
       return null;
     }
     const merged = Object.create(null);
+    let hit = false;
     for (const r of this._readers) {
-      const res = r.find(ipStr);
+      const res = lookup(r);
       if (res === null) continue;
       const fields = res.fieldNames();
       const vals = res.values();
@@ -2352,27 +2316,27 @@ class ChainedReader {
         } else {
           if (v !== '' || !(f in merged)) merged[f] = v;
         }
+        hit = true;
       }
     }
-    if (Object.keys(merged).length === 0) return null;
+    if (!hit) return null;
     const fieldNames = Object.keys(merged);
     const values = fieldNames.map((f) => merged[f]);
     return new GeoInfo(values, fieldNames, fieldNames.map((n) => GeoInfo.isNumericFieldName(n)), null);
   }
 
+  find(ipStr) {
+    return this._resolve((r) => r.find(ipStr));
+  }
+
   findUint(ipInt) {
     if (!_isUint32(ipInt)) return null;
-    return this.find(uintToStr(ipInt));
+    return this._resolve((r) => r.findUint(ipInt));
   }
+
   findBytes(ip16) {
-    if (this._mode === 'FALLBACK') {
-      for (const r of this._readers) {
-        const res = r.findBytes(ip16);
-        if (res !== null) return res;
-      }
-      return null;
-    }
-    return this.find(bytesToStr(ip16));
+    if (ip16 == null) return null;
+    return this._resolve((r) => r.findBytes(ip16));
   }
 
   findFields(ipStr, fields) {
@@ -2415,17 +2379,6 @@ class ChainedReader {
   scopes() { return this._readers.map((r) => r.getScope()); }
   dataMonths() { return this._readers.map((r) => r.getDataMonth()); }
   readers() { return this._readers.slice(); }
-}
-
-function uintToStr(ipInt) {
-  return `${(ipInt >>> 24) & 0xFF}.${(ipInt >>> 16) & 0xFF}.${(ipInt >>> 8) & 0xFF}.${ipInt & 0xFF}`;
-}
-function bytesToStr(ip16) {
-  if (ip16.length === 4) return uintToStr((((ip16[0] & 0xFF) << 24) | ((ip16[1] & 0xFF) << 16) | ((ip16[2] & 0xFF) << 8) | (ip16[3] & 0xFF)) >>> 0);
-  const b = Buffer.isBuffer(ip16) ? ip16 : Buffer.from(ip16);
-  const g = [];
-  for (let i = 0; i < 8; i++) g.push(((b[2 * i] << 8) | b[2 * i + 1]).toString(16));
-  return g.join(':');
 }
 
 // ===========================================================================

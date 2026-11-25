@@ -119,8 +119,9 @@ func (g *GeoInfo) Get(name string) string {
 			idx = v
 		}
 	} else {
+		norm := normalizeKey(name)
 		for i, n := range g.FieldNames {
-			if n == name {
+			if equalNormalized(n, norm) {
 				idx = i
 				break
 			}
@@ -231,22 +232,36 @@ func (c *geoCache) put(key uint32, g *GeoInfo) {
 // ---------- 字段投影 ----------
 
 // projectGeo 从全集 GeoInfo 投影出 fields 指定的子集（未知字段补空串）。
+// 小字段集（<=8，覆盖绝大多数按需投影场景）省略 normMap 哈希表分配，由 Get 走零分配线性归一化匹配。
 func projectGeo(full *GeoInfo, fields []string) *GeoInfo {
 	if full == nil {
 		return nil
 	}
-	fns := append([]string(nil), fields...)
-	vals := make([]string, len(fields))
-	num := make([]bool, len(fields))
-	pm := make(map[string]int, len(fields))
+	n := len(fields)
+	fns := make([]string, n)
+	copy(fns, fields)
+	vals := make([]string, n)
+	num := make([]bool, n)
+	var pm map[string]int
+	if n > 8 {
+		pm = make(map[string]int, n)
+	}
 	for i, f := range fields {
 		key := normalizeKey(f)
-		if _, exists := pm[key]; !exists {
-			pm[key] = i
+		if pm != nil {
+			if _, exists := pm[key]; !exists {
+				pm[key] = i
+			}
 		}
 		if full.normMap != nil {
 			if idx, ok := full.normMap[key]; ok && idx >= 0 && idx < len(full.Values) {
 				vals[i] = full.Values[idx]
+				if idx < len(full.numeric) {
+					num[i] = full.numeric[idx]
+				} else {
+					num[i] = isNumericFieldName(f)
+				}
+				continue
 			}
 		}
 		num[i] = isNumericFieldName(f)

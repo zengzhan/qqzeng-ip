@@ -454,12 +454,20 @@ func (s *Snapshot) parseRowSchema() error {
 		return newErr(ErrCodeOutOfBounds, "row_schema fields truncated")
 	}
 	geoW, asnW, usageW, total := 0, 0, 0, 0
+	var seenMask uint8
 	wpos := sp + 4
 	for i := 0; i < fCount; i++ {
 		fid := int(d[wpos])
 		w := int(d[wpos+1])
 		if w < 1 || w > 4 {
 			return newErr(ErrCodeCorrupted, "invalid row_schema field width")
+		}
+		if fid < 8 {
+			bit := uint8(1) << uint(fid)
+			if seenMask&bit != 0 {
+				return newErr(ErrCodeCorrupted, "duplicate row_schema field id")
+			}
+			seenMask |= bit
 		}
 		switch fid {
 		case 0:
@@ -472,7 +480,7 @@ func (s *Snapshot) parseRowSchema() error {
 		wpos += 4
 		total += w
 	}
-	if total != s.ipRowSize {
+	if geoW <= 0 || total != s.ipRowSize {
 		return newErr(ErrCodeCorrupted, "row_schema widths do not match ip_row_size")
 	}
 	s.rowGeoWidth, s.rowAsnWidth, s.rowUsageWidth = geoW, asnW, usageW

@@ -21,8 +21,6 @@ if sys.version_info < (3, 10):
 SENTINEL = 0x80000000
 SENTINEL_MASK_24 = 0x7FFFFF
 SENTINEL_MASK_31 = 0x7FFFFFFF
-MAX_TRIE_WALK_STEPS_V4 = 32 + 8   # IPv4 walk cap = max(32+8,40) = 40
-MAX_TRIE_WALK_STEPS_V6 = 128 + 8  # IPv6 walk cap = max(128+8,40) = 136
 # 走查热路径专用：模块级预绑定，免去每次调用 struct.Struct('<I') 的构造开销
 _unpack_u32_from = struct.Struct('<I').unpack_from
 _unpack_u16_from = struct.Struct('<H').unpack_from
@@ -30,10 +28,6 @@ _unpack_u64_from = struct.Struct('<Q').unpack_from
 _unpack_f32_from = struct.Struct('<f').unpack_from
 _unpack_f64_from = struct.Struct('<d').unpack_from
 MAX_POOL_COUNT = 1 << 26
-FLOAT_FIELDS = frozenset(['longitude', 'latitude'])
-
-# toJson numeric fields (API contract §6): output as JSON numbers, not strings.
-NUMERIC_FIELDS = frozenset(['longitude', 'latitude', 'asn', 'geo_id'])
 
 
 def _is_json_number(val):
@@ -510,13 +504,7 @@ class GeoInfo:
         return self.get('district')
 
     def get_geo_id(self):
-        v = self.get('geo_id')
-        if not v:
-            return None
-        try:
-            return int(v)
-        except ValueError:
-            return None
+        return self.geo_id
 
     @property
     def timezone(self):
@@ -527,13 +515,7 @@ class GeoInfo:
         return self.get('isp_en')
 
     def get_asn(self):
-        v = self.get('asn')
-        if not v:
-            return None
-        try:
-            return int(v)
-        except ValueError:
-            return None
+        return self.asn
 
     @property
     def as_name(self):
@@ -544,7 +526,7 @@ class GeoInfo:
         return self.get('as_domain')
 
     def get_usage_type(self):
-        return UsageType.from_string(self.get('usage_type'))
+        return self.usage_type
 
     @property
     def country_alpha2(self):
@@ -1434,11 +1416,16 @@ class QzdbReader:
                 QzdbError.CORRUPTED,
             )
         geo_w, asn_w, usage_w, total_w = 0, 0, 0, 0
+        seen_fids = 0
         for _ in range(f_count):
             fid = d[wpos]
             w = d[wpos + 1]
             if w < 1 or w > 4:
                 raise QzdbError(f'Invalid ROW_SCHEMA field width: {w}', QzdbError.CORRUPTED)
+            if fid < 8:
+                if seen_fids & (1 << fid):
+                    raise QzdbError(f'Duplicate ROW_SCHEMA field id: {fid}', QzdbError.CORRUPTED)
+                seen_fids |= (1 << fid)
             if fid == 0:
                 geo_w = w
             elif fid == 1:
@@ -1447,9 +1434,9 @@ class QzdbReader:
                 usage_w = w
             total_w += w
             wpos += 4
-        if total_w != self._ip_row_size:
+        if geo_w <= 0 or total_w != self._ip_row_size:
             raise QzdbError(
-                f'ROW_SCHEMA width sum ({total_w}) != ip_row_size ({self._ip_row_size})',
+                f'ROW_SCHEMA invalid widths (geo_w={geo_w}, sum={total_w}, ip_row_size={self._ip_row_size})',
                 QzdbError.CORRUPTED,
             )
         self._row_geo_width = geo_w
@@ -1912,71 +1899,9 @@ class QzdbReader:
         return 0
 
     def _trie_walk_v6(self, ip_int):
-        if not self._has_v6 or self._off_v6_jump <= 0:
+        if not self._has_v6 or self._off_v6_jump <= 0 or ip_int < 0 or ip_int >= (1 << 128):
             return 0
-        jump_bits = self._v6_jump_bits
-        jump = self._v6_jump_arr
-        nodes = self._v6_nodes_arr
-        v6_node_count = self._v6_node_count
-        if jump is not None and (nodes is not None or v6_node_count == 0):
-            idx_jump = (ip_int >> (128 - jump_bits)) & ((1 << jump_bits) - 1)
-            ptr = jump[idx_jump]
-            if ptr == 0:
-                return 0
-            if ptr & 0x80000000:
-                return ptr & 0x7FFFFFFF
-            idx = ptr
-            for depth in range(jump_bits, 128):
-                if idx >= v6_node_count:
-                    return 0
-                child = nodes[(idx << 1) | ((ip_int >> (127 - depth)) & 1)]
-                if child & 0x80000000:
-                    return child & 0x7FFFFFFF
-                if child == 0:
-                    return 0
-                idx = child
-            return 0
-
-        d = self._data
-        off_jump = self._off_v6_jump
-        off_nodes = self._off_v6_nodes
-        v6_node_24 = self._v6_node_24
-        shift = 128 - jump_bits
-        idx_jump = (ip_int >> shift) & ((1 << jump_bits) - 1)
-        ptr = _unpack_u32_from(d, off_jump + idx_jump * 4)[0]
-        if ptr == 0:
-            return 0
-        if ptr & SENTINEL:
-            return ptr & SENTINEL_MASK_31
-        idx = ptr
-        if v6_node_24:
-            for depth in range(jump_bits, 128):
-                bit = (ip_int >> (127 - depth)) & 1
-                if idx >= v6_node_count:
-                    return 0
-                noff = off_nodes + idx * 6
-                off = noff if bit == 0 else noff + 3
-                try:
-                    child = _unpack_u32_from(d, off)[0] & 0xFFFFFF
-                except struct.error:
-                    child = d[off] | (d[off + 1] << 8) | (d[off + 2] << 16)
-                if child & 0x800000:
-                    return child & 0x7FFFFF
-                if child == 0:
-                    return 0
-                idx = child
-        else:
-            for depth in range(jump_bits, 128):
-                bit = (ip_int >> (127 - depth)) & 1
-                if idx >= v6_node_count:
-                    return 0
-                child = _unpack_u32_from(d, off_nodes + idx * 8 + bit * 4)[0]
-                if child & SENTINEL:
-                    return child & SENTINEL_MASK_31
-                if child == 0:
-                    return 0
-                idx = child
-        return 0
+        return self._trie_walk_v6_bytes(ip_int.to_bytes(16, 'big'))
 
     def _read_ip_row(self, row_id):
         if row_id <= 0 or row_id >= self._row_count:
@@ -2212,6 +2137,13 @@ class QzdbReader:
             return None
         return self._find_uint(ip_int)
 
+    @staticmethod
+    def _extract_v4_mapped(ip_bytes):
+        if ip_bytes[10] == 0xFF and ip_bytes[11] == 0xFF and ip_bytes[:10] == b'\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00':
+            return ((ip_bytes[12] & 0xFF) << 24 | (ip_bytes[13] & 0xFF) << 16
+                    | (ip_bytes[14] & 0xFF) << 8 | (ip_bytes[15] & 0xFF))
+        return None
+
     @_on_snapshot
     def find_v6_bytes(self, ip_bytes):
         """IPv6 lookup using 16-byte packed representation (zero BigInteger alloc).
@@ -2223,11 +2155,10 @@ class QzdbReader:
             return None
         if not self._has_v6:
             return None
-        if len(ip_bytes) == 16 and ip_bytes[10] == 0xFF and ip_bytes[11] == 0xFF and ip_bytes[:10] == b'\x00' * 10:
-            # 前两个魔数字节匹配 + 前 10 字节全零，才是真正的 v4-mapped 地址。
-            v4 = ((ip_bytes[12] & 0xFF) << 24 | (ip_bytes[13] & 0xFF) << 16
-                  | (ip_bytes[14] & 0xFF) << 8 | (ip_bytes[15] & 0xFF))
-            return self._find_uint(v4)
+        if len(ip_bytes) == 16:
+            v4 = self._extract_v4_mapped(ip_bytes)
+            if v4 is not None:
+                return self._find_uint(v4)
         return self._find_v6_bytes(ip_bytes)
 
     def _find_v6_bytes(self, ip_bytes):
@@ -2265,13 +2196,8 @@ class QzdbReader:
                   | (ip_bytes[2] & 0xFF) << 8 | (ip_bytes[3] & 0xFF))
             return self.find_uint(v4)
         if len(ip_bytes) == 16:
-            if (ip_bytes[10] == 0xFF and ip_bytes[11] == 0xFF
-                    and ip_bytes[0] == 0 and ip_bytes[1] == 0 and ip_bytes[2] == 0
-                    and ip_bytes[3] == 0 and ip_bytes[4] == 0 and ip_bytes[5] == 0
-                    and ip_bytes[6] == 0 and ip_bytes[7] == 0 and ip_bytes[8] == 0
-                    and ip_bytes[9] == 0):
-                v4 = ((ip_bytes[12] & 0xFF) << 24 | (ip_bytes[13] & 0xFF) << 16
-                      | (ip_bytes[14] & 0xFF) << 8 | (ip_bytes[15] & 0xFF))
+            v4 = self._extract_v4_mapped(ip_bytes)
+            if v4 is not None:
                 return self.find_uint(v4)
             if (type(self) is QzdbReader
                     and 'find_v6_bytes' not in self.__dict__
@@ -2689,13 +2615,8 @@ class QzdbReader:
                   | (ip_bytes[2] & 0xFF) << 8 | (ip_bytes[3] & 0xFF))
             return self.lookup_cidr_uint(v4)
         if len(ip_bytes) == 16:
-            if (ip_bytes[10] == 0xFF and ip_bytes[11] == 0xFF
-                    and ip_bytes[0] == 0 and ip_bytes[1] == 0 and ip_bytes[2] == 0
-                    and ip_bytes[3] == 0 and ip_bytes[4] == 0 and ip_bytes[5] == 0
-                    and ip_bytes[6] == 0 and ip_bytes[7] == 0 and ip_bytes[8] == 0
-                    and ip_bytes[9] == 0):
-                v4 = ((ip_bytes[12] & 0xFF) << 24 | (ip_bytes[13] & 0xFF) << 16
-                      | (ip_bytes[14] & 0xFF) << 8 | (ip_bytes[15] & 0xFF))
+            v4 = self._extract_v4_mapped(ip_bytes)
+            if v4 is not None:
                 return self.lookup_cidr_uint(v4)
             v6_int = int.from_bytes(ip_bytes, 'big')
             row_id, prefix = self._cidr_walk_v6(v6_int)
@@ -3075,64 +2996,37 @@ class ChainedReader:
 
     def __init__(self, readers, masks=None, mode=None):
         self._readers = list(readers) if readers else []
-        self._masks = list(masks) if masks else None
         self._mode = mode or self.MODE_FALLBACK
 
     def add(self, reader, mask=None):
         if not isinstance(reader, QzdbReader):
             raise QzdbError('chained entry must be a QzdbReader', QzdbError.INVALID_PARAM)
         self._readers.append(reader)
-        if self._masks is not None:
-            self._masks.append(mask)
         return self
 
     @property
     def mode(self):
         return self._mode
 
-    def _find_merge(self, ip_str, override):
-        """Field-level union across readers. ``override=False`` → first non-empty
-        wins (MERGE); ``override=True`` → last non-empty wins (MERGE_OVERRIDE).
-        Field order = first-seen order across readers (union, deduped)."""
-        infos = []
+    def _resolve(self, lookup):
+        if self._mode != self.MODE_FALLBACK:
+            override = self._mode == self.MODE_MERGE_OVERRIDE
+            infos = [gi for gi in (lookup(r) for r in self._readers) if gi is not None]
+            return _merge_geo_infos(infos, override)
         for r in self._readers:
-            gi = r.find(ip_str)
+            gi = lookup(r)
             if gi is not None:
-                infos.append(gi)
-        return _merge_geo_infos(infos, override)
+                return gi
+        return None
 
     def find(self, ip_str):
-        if self._mode == self.MODE_MERGE:
-            return self._find_merge(ip_str, override=False)
-        if self._mode == self.MODE_MERGE_OVERRIDE:
-            return self._find_merge(ip_str, override=True)
-        for r in self._readers:
-            gi = r.find(ip_str)
-            if gi is not None:
-                return gi
-        return None
+        return self._resolve(lambda r: r.find(ip_str))
 
     def find_uint(self, ip_int):
-        if self._mode != self.MODE_FALLBACK:
-            override = self._mode == self.MODE_MERGE_OVERRIDE
-            infos = [gi for gi in (r.find_uint(ip_int) for r in self._readers) if gi is not None]
-            return _merge_geo_infos(infos, override)
-        for r in self._readers:
-            gi = r.find_uint(ip_int)
-            if gi is not None:
-                return gi
-        return None
+        return self._resolve(lambda r: r.find_uint(ip_int))
 
     def find_bytes(self, ip_bytes):
-        if self._mode != self.MODE_FALLBACK:
-            override = self._mode == self.MODE_MERGE_OVERRIDE
-            infos = [gi for gi in (r.find_bytes(ip_bytes) for r in self._readers) if gi is not None]
-            return _merge_geo_infos(infos, override)
-        for r in self._readers:
-            gi = r.find_bytes(ip_bytes)
-            if gi is not None:
-                return gi
-        return None
+        return self._resolve(lambda r: r.find_bytes(ip_bytes))
 
     def find_fields(self, ip_str, fields=None):
         if self._mode != self.MODE_FALLBACK and fields:

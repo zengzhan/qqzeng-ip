@@ -605,7 +605,7 @@ public sealed class QzdbReader : IDisposable
             if (fCount < 1 || fCount > 8 || sp + 4 + fCount * 4 > _dataLen || stride != _ipRowSize)
                 throw new QzdbException(ErrorCode.Corrupted, "Invalid row schema");
 
-            int g2 = 0, a2 = 0, u2 = 0, total = 0;
+            int g2 = 0, a2 = 0, u2 = 0, total = 0, seenMask = 0;
             int wpos = sp + 4;
             bool ok = true;
             for (int i = 0; i < fCount; i++)
@@ -613,6 +613,11 @@ public sealed class QzdbReader : IDisposable
                 int fid = span[wpos];
                 int w = span[wpos + 1];
                 if (w < 1 || w > 4) ok = false;
+                if (fid < 8)
+                {
+                    if ((seenMask & (1 << fid)) != 0) ok = false;
+                    seenMask |= 1 << fid;
+                }
                 if (fid == 0) g2 = w;
                 else if (fid == 1) a2 = w;
                 else if (fid == 2) u2 = w;
