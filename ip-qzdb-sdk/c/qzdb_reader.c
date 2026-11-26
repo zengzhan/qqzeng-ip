@@ -1277,15 +1277,12 @@ static int read_ip_row(qzdb_reader_t* ctx, uint32_t row_id, uint32_t* geo_id, ui
     uint64_t off = ctx->off_ip_row + (uint64_t)row_id * ctx->ip_row_size;
     *geo_id = 0; *asn_id = 0; *usage_id = 0;
     if (ctx->off_row_schema > 0) {
-        uint64_t p = off;
-        if (safe_read_uint_width(ctx->data, ctx->data_size, p, ctx->row_geo_width, geo_id) != QZDB_OK) return QZDB_ERR_BOUNDS;
-        p += ctx->row_geo_width;
+        if (safe_read_uint_width(ctx->data, ctx->data_size, off + (uint64_t)ctx->row_geo_offset, ctx->row_geo_width, geo_id) != QZDB_OK) return QZDB_ERR_BOUNDS;
         if (ctx->row_asn_width > 0) {
-            if (safe_read_uint_width(ctx->data, ctx->data_size, p, ctx->row_asn_width, asn_id) != QZDB_OK) return QZDB_ERR_BOUNDS;
-            p += ctx->row_asn_width;
+            if (safe_read_uint_width(ctx->data, ctx->data_size, off + (uint64_t)ctx->row_asn_offset, ctx->row_asn_width, asn_id) != QZDB_OK) return QZDB_ERR_BOUNDS;
         }
         if (ctx->row_usage_width > 0) {
-            if (safe_read_uint_width(ctx->data, ctx->data_size, p, ctx->row_usage_width, usage_id) != QZDB_OK) return QZDB_ERR_BOUNDS;
+            if (safe_read_uint_width(ctx->data, ctx->data_size, off + (uint64_t)ctx->row_usage_offset, ctx->row_usage_width, usage_id) != QZDB_OK) return QZDB_ERR_BOUNDS;
         }
     } else {
         if (safe_read_u24(ctx->data, ctx->data_size, off, geo_id) != QZDB_OK) return QZDB_ERR_BOUNDS;
@@ -2286,6 +2283,12 @@ static int ensure_pools_loaded(qzdb_reader_t* ctx) {
             for (int f = 0; f < field_count; f++) {
                 pool_scan_t* sc = &scans[g][f];
                 if (!sc->offsets || !ctx->group_pools[g][f]) continue;
+                int is_usage = 0;
+                if (ctx->group_field_names && ctx->group_field_names[g] && ctx->group_field_names[g][f]) {
+                    char norm[64];
+                    normalize_field_name(ctx->group_field_names[g][f], norm, sizeof(norm));
+                    if (strcmp(norm, "usagetype") == 0) is_usage = 1;
+                }
                 uint32_t prev_end = 0;
                 for (uint32_t s = 0; s < sc->count; s++) {
                     uint32_t start = sc->offsets[s];
@@ -2300,6 +2303,9 @@ static int ensure_pools_loaded(qzdb_reader_t* ctx) {
                     char* dst = arena + arena_off;
                     if (length > 0) memcpy(dst, d + sc->data_base + start, length);
                     dst[length] = '\0';
+                    if (is_usage && length == 7 && memcmp(dst, "Unknown", 7) == 0) {
+                        dst[0] = '\0';
+                    }
                     ctx->group_pools[g][f][s] = dst;
                     arena_off += length + 1;
                 }
@@ -2331,6 +2337,7 @@ int qzdb_init(qzdb_reader_t* ctx, const char* db_path) {
 static int parse_row_schema_section(qzdb_reader_t* ctx) {
     const uint8_t* d = ctx->data;
     ctx->row_geo_width = 3; ctx->row_asn_width = 3; ctx->row_usage_width = 0;
+    ctx->row_geo_offset = 0; ctx->row_asn_offset = 3; ctx->row_usage_offset = 6;
     if (ctx->off_row_schema == 0) return QZDB_OK;
     uint64_t sp = ctx->off_row_schema;
     uint8_t f_count = d[sp]; uint8_t stride = d[sp + 1];
@@ -2339,20 +2346,30 @@ static int parse_row_schema_section(qzdb_reader_t* ctx) {
         return QZDB_ERR_CORRUPTED;
     }
     uint64_t wpos = sp + 4;
-    int geo_w = 0, asn_w = 0, usage_w = 0, total = 0;
+    int geo_w = 0, asn_w = 0, usage_w = 0;
+    int geo_off = 0, asn_off = 0, usage_off = 0;
     uint8_t seen_mask = 0;
+    uint8_t used[64];
+    memset(used, 0, sizeof(used));
     for (uint8_t i = 0; i < f_count; i++) {
-        uint8_t fid = d[wpos]; uint8_t w = d[wpos + 1];
-        if (w < 1 || w > 4) return QZDB_ERR_CORRUPTED;
+        uint8_t fid = d[wpos]; uint8_t w = d[wpos + 1]; uint8_t foff = d[wpos + 2];
+        if (w < 1 || w > 4 || (uint16_t)foff + (uint16_t)w > (uint16_t)stride) return QZDB_ERR_CORRUPTED;
+        for (uint8_t b = foff; b < foff + w; b++) {
+            if (used[b]) return QZDB_ERR_CORRUPTED;
+            used[b] = 1;
+        }
         if (fid < 8) {
             if (seen_mask & (uint8_t)(1u << fid)) return QZDB_ERR_CORRUPTED;
             seen_mask |= (uint8_t)(1u << fid);
         }
-        if (fid == 0) geo_w = w; else if (fid == 1) asn_w = w; else if (fid == 2) usage_w = w;
-        wpos += 4; total += w;
+        if (fid == 0) { geo_w = w; geo_off = foff; }
+        else if (fid == 1) { asn_w = w; asn_off = foff; }
+        else if (fid == 2) { usage_w = w; usage_off = foff; }
+        wpos += 4;
     }
-    if (geo_w <= 0 || total != (int)ctx->ip_row_size) return QZDB_ERR_CORRUPTED;
+    if (geo_w <= 0) return QZDB_ERR_CORRUPTED;
     ctx->row_geo_width = geo_w; ctx->row_asn_width = asn_w; ctx->row_usage_width = usage_w;
+    ctx->row_geo_offset = geo_off; ctx->row_asn_offset = asn_off; ctx->row_usage_offset = usage_off;
     return QZDB_OK;
 }
 

@@ -1430,6 +1430,9 @@ class QzdbReader:
         self._row_geo_width = 3
         self._row_asn_width = 3
         self._row_usage_width = 0
+        self._row_geo_offset = 0
+        self._row_asn_offset = 3
+        self._row_usage_offset = 6
         if self._off_row_schema <= 0:
             return
         sp = self._off_row_schema
@@ -1441,33 +1444,42 @@ class QzdbReader:
                 f'Invalid ROW_SCHEMA (fieldCount={f_count}, stride={schema_stride}, ipRowSize={self._ip_row_size})',
                 QzdbError.CORRUPTED,
             )
-        geo_w, asn_w, usage_w, total_w = 0, 0, 0, 0
+        geo_w, asn_w, usage_w = 0, 0, 0
+        geo_off, asn_off, usage_off = 0, 0, 0
         seen_fids = 0
+        used = [False] * 64
         for _ in range(f_count):
             fid = d[wpos]
             w = d[wpos + 1]
-            if w < 1 or w > 4:
-                raise QzdbError(f'Invalid ROW_SCHEMA field width: {w}', QzdbError.CORRUPTED)
+            foff = d[wpos + 2]
+            if w < 1 or w > 4 or foff + w > schema_stride:
+                raise QzdbError(f'Invalid ROW_SCHEMA field width/offset: width={w}, offset={foff}', QzdbError.CORRUPTED)
+            for b in range(foff, foff + w):
+                if used[b]:
+                    raise QzdbError(f'Overlapping ROW_SCHEMA field offset: {foff}', QzdbError.CORRUPTED)
+                used[b] = True
             if fid < 8:
                 if seen_fids & (1 << fid):
                     raise QzdbError(f'Duplicate ROW_SCHEMA field id: {fid}', QzdbError.CORRUPTED)
                 seen_fids |= (1 << fid)
             if fid == 0:
-                geo_w = w
+                geo_w, geo_off = w, foff
             elif fid == 1:
-                asn_w = w
+                asn_w, asn_off = w, foff
             elif fid == 2:
-                usage_w = w
-            total_w += w
+                usage_w, usage_off = w, foff
             wpos += 4
-        if geo_w <= 0 or total_w != self._ip_row_size:
+        if geo_w <= 0:
             raise QzdbError(
-                f'ROW_SCHEMA invalid widths (geo_w={geo_w}, sum={total_w}, ip_row_size={self._ip_row_size})',
+                f'ROW_SCHEMA missing geo field (geo_w={geo_w})',
                 QzdbError.CORRUPTED,
             )
         self._row_geo_width = geo_w
         self._row_asn_width = asn_w
         self._row_usage_width = usage_w
+        self._row_geo_offset = geo_off
+        self._row_asn_offset = asn_off
+        self._row_usage_offset = usage_off
 
     def _parse_groups(self, d, dlen, chk):
         # GeoEntryOffsets[4]
@@ -1842,6 +1854,8 @@ class QzdbReader:
                     if tail > avail:
                         group_pool_list.append([])
                         continue
+                    g_names = self._group_field_names[g] if g < len(self._group_field_names) else None
+                    is_usage = bool(g_names and f < len(g_names) and _norm_key(g_names[f]) == 'usagetype')
                     strings = [''] * count
                     prev_end = 0
                     for s in range(count):
@@ -1851,8 +1865,11 @@ class QzdbReader:
                             continue
                         prev_end = end
                         if end > start:
-                            strings[s] = d[str_base + start:str_base + end].decode(
+                            val = d[str_base + start:str_base + end].decode(
                                 'utf-8', errors='replace')
+                            if is_usage and val == 'Unknown':
+                                val = ''
+                            strings[s] = val
                     pool_cursor += tail
                     group_pool_list.append(strings)
                 pools[g] = group_pool_list
@@ -1948,16 +1965,13 @@ class QzdbReader:
             return 0, 0, 0
         off = self._off_ip_row + row_id * self._ip_row_size
         if self._off_row_schema > 0:
-            p = off
-            geo_id = self.safe_read_uint_width(p, self._row_geo_width)
-            p += self._row_geo_width
+            geo_id = self.safe_read_uint_width(off + self._row_geo_offset, self._row_geo_width)
             asn_id = 0
             if self._row_asn_width > 0:
-                asn_id = self.safe_read_uint_width(p, self._row_asn_width)
-                p += self._row_asn_width
+                asn_id = self.safe_read_uint_width(off + self._row_asn_offset, self._row_asn_width)
             usage_type_id = 0
             if self._row_usage_width > 0:
-                usage_type_id = self.safe_read_uint_width(p, self._row_usage_width)
+                usage_type_id = self.safe_read_uint_width(off + self._row_usage_offset, self._row_usage_width)
         else:
             geo_id = self.safe_read_u24(off)
             asn_id = self.safe_read_u24(off + 3)

@@ -99,27 +99,32 @@ IP 输入 ──> Jump Table (O(1) 预检索) ──> Trie Walk (LPM 最长前�
 ## 四、 核心数据段规范
 
 ### 1. Jump Table 与 Trie 节点
-- **DAG 共享声明**：节点区物理拓扑为有向无环图（DAG），子树去重后允许多父指针共享同一子树节点；Reader 实现不得假设节点入度为 1，寻径步数严格受 IP 位宽约束，确保遍历有界与前缀等价。
-- **V4 Jump Table**：固定 65,536 个槽位（覆盖 IPv4 前 16 位），单槽 4 字节（uint32 LE）。
-  - 最高位 `MSB (0x80000000)` 为 1 表示直接命中**叶子行号**（`val & 0x7FFFFFFF` = `row_id`）；
-  - 为 0 且非 0 表示指向 **Trie 内部节点索引**；为 0 表示未命中。
-- **Trie 节点结构 (8 字节标准 / 6 字节压缩)**：
+- **DAG 共享声明**：节点区物理拓扑为有向无环图（DAG），子树去重后允许多父指针共享同一子树节点；Reader 实现不得假设节点入度为 1，寻径步数严格受 IP 位宽约束（V4 最多 16 步、V6 最多 `128 - V6JumpBits` 步），确保遍历有界与前缀等价。
+- **V4 / V6 Jump Table**：
+  - V4 固定 65,536 个槽位（覆盖 IPv4 前 16 位），单槽 4 字节（`uint32 LE`）。
+  - V6 为 `2^V6JumpBits` 个槽位（`8 <= V6JumpBits <= 20`），单槽 4 字节（`uint32 LE`）。
+  - 最高位 `MSB (0x80000000)` 为 1 表示直接命中**叶子行号**（`val & 0x7FFFFFFF` = `row_id`）；为 0 且非 0 表示指向 **Trie 内部节点索引**；为 0 表示未命中。
+- **Trie 节点结构（8 字节标准 / 6 字节压缩）**：
+  - **8 字节标准节点**（`v4Node24=0` / `v6Node24=0`）：`left (uint32 LE)` + `right (uint32 LE)`，叶子标志为 `bit31 (0x80000000)`，有效负载掩码为 `0x7FFFFFFF`。
+  - **6 字节压缩节点**（`Flags.bit4 v4Node24=1` / `Flags.bit5 v6Node24=1`）：`left (uint24 LE)` + `right (uint24 LE)`，叶子标志为 **`bit23 (0x800000)`**，有效负载掩码为 **`0x7FFFFF`**。
+  - **节点数与跳表门禁**：若分区启用（`hasV4=1` 或 `hasV6=1`），对应 Jump Table 偏移必须非零且落入文件边界；若对应 `NodeCount > 0`，则节点区偏移必须非零且节点数组完全落入边界（仅当所有前缀均在跳表内命中时允许 `NodeCount == 0` 且节点偏移为 `0`）。
   ```c
-  struct TrieNode {
-      uint32 LE left;   // 0-bit 分支（MSB=1 为叶子 row_id，否则为子节点索引）
-      uint32 LE right;  // 1-bit 分支（MSB=1 为叶子 row_id，否则为子节点索引）
-  };
+  // 24 位压缩节点解码伪代码
+  uint32_t child = b[off] | (b[off+1] << 8) | (b[off+2] << 16);
+  if (child == 0) return NOT_FOUND;
+  if (child & 0x800000) return child & 0x7FFFFF; // 叶子 row_id
+  idx = child & 0x7FFFFF;                          // 内部节点索引
   ```
 
 ### 2. ROW_SCHEMA 段（OffsetRowSchema，可选）
-当 `OffsetRowSchema > 0` 时，声明 `IPRow` 各维度 ID 的动态字节宽度：
+当 `OffsetRowSchema > 0` 时，声明 `IPRow` 各维度 ID 的动态字节宽度与偏移：
 - 段头（4 字节）：`fieldCount (uint8)` | `stride (uint8，须等于 IPRowSize)` | `reserved (uint16 LE)`
 - 其后连续 `fieldCount` 个字段描述符（每个 4 字节）：
-  - `fieldId (uint8)`：`0 = geo_id`，`1 = asn_id`，`2 = usage_type_id`
+  - `fieldId (uint8)`：`0 = geo_id`，`1 = asn_id`，`2 = usage_type_id`（不得重复）
   - `width (uint8)`：字段字节宽度（`1 ~ 4`）
   - `fieldOffset (uint8)`：在单条 IPRow 中的字节偏移
   - `flags (uint8)`：保留标志位
-- 校验约束：`stride == IPRowSize` 且各字段 `width` 之和等于 `IPRowSize`。
+- 校验约束：`1 <= fieldCount <= 8`、`stride == IPRowSize`、`geo_id (fid=0)` 必须存在、各字段 `fieldOffset + width <= stride` 且区间两两不重叠；Reader 必须按 `fieldId` 对应的 `(fieldOffset, width)` 读取，禁止假设固定顺序。
 
 ### 3. IPRow 间接层（OffsetIPRow）
 Trie 遍历得到的 `row_id` 映射到 IPRow：
@@ -132,7 +137,7 @@ Trie 遍历得到的 `row_id` 映射到 IPRow：
 - 其后按组顺序存放每个组的描述块：
   - **组头（16 字节）**：
     - `groupId (uint16 LE)`：该组的 one-hot 版本档次位掩码（与 `Header.VersionMask` 同编码）
-    - `fieldCount (uint16 LE)`：字段数（须与 `GroupMetadataTable` 一致，否则该组回退默认布局）
+    - `fieldCount (uint16 LE)`：字段数（必须满足 `fieldCount >= 1` 且与 `GroupMetadataTable` 一致；任何不一致或 `fieldCount == 0` 一律返回 `CORRUPTED` 拒绝加载，禁止静默回退默认布局）
     - `entryCount (uint32 LE)`：条目数
     - `stride (uint32 LE)`：单条 GeoEntry 字节宽（须满足 `1 <= stride <= 4096`）
     - `flags (uint32 LE)`：组标志位
@@ -142,13 +147,17 @@ Trie 遍历得到的 `row_id` 映射到 IPRow：
     - `fieldFlags (uint8)`：`bit0 = isNative`（1 表示原生标量，0 表示字符串池索引）；`(fieldFlags >> 1) & 0x03` 为 `nativeType`（`0 = uint`，`1 = IEEE 754 float/double`）
     - `fieldOffset (uint32 LE)`：在单条 GeoEntry 内的字节偏移
     - `poolSectionId (uint32 LE)`：所属字典池标识
-- **统一加载期校验（所有 SDK 强制执行）**：每字段必须满足 `width` 合法且 `fieldOffset + width <= stride`，同时每组数据区必须满足 `OffsetGeoEntries + GeoEntryOffsets[g] + entryCount * stride <= fileSize`。
+- **统一加载期校验（所有 SDK 强制执行）**：每字段必须满足 `width` 合法且 `fieldOffset + width <= stride`，同时每组数据区必须满足 `OffsetGeoEntries + GeoEntryOffsets[g] + entryCount * stride <= fileSize`；任一失败均返回 `CORRUPTED`。
 
 ### 5. GeoEntry 数据与 String Pools
 - **GroupMetadataTable**（位于 `OffsetGeoEntries` 起始处）：
   - `groupCount (uint8)`（实际组数取 `min(groupCount, GeoEntryGroupCount, 4)`，须 `>= 1`）
-  - 每组 7 字节：`fieldCount (uint8)` | `entryCount (uint32 LE)` | `dimensionMask (uint16 LE，bit0=geo, bit1=asn, bit2=usage)`
-- **String Pools**（`OffsetPools`）：所有非原生字段字符串按组×字段去重存储，每池包含 `count (uint32 LE)`（若存在 `ROW_SCHEMA` 则后跟 4 字节保留）、`count + 1` 个单调递增的 `uint32 LE` 偏移表与紧随其后的 UTF-8 字节区。
+  - 每组 7 字节：`fieldCount (uint8，须 >= 1)` | `entryCount (uint32 LE)` | `dimensionMask (uint16 LE，bit0=geo, bit1=asn, bit2=usage)`
+- **String Pools**（`OffsetPools`）：所有非原生字段字符串按组×字段顺序存储，每池结构如下：
+  1. `count (uint32 LE)`；若 `OffsetRowSchema > 0` 则后跟 `4` 字节保留字段；
+  2. `offsets[count + 1]`（共 `(count + 1) × 4` 字节 `uint32 LE`）；
+  3. UTF-8 字符串字节区，总字节数为 `tail = offsets[count]`。
+  - **加载期强制校验（Fail-Closed）**：`count` 与偏移表必须完全落入 `Pools` 段边界内；`tail <= avail`；且偏移表必须严格单调不减（`offsets[0] <= offsets[1] <= ... <= offsets[count]`），任何越界、截断或非单调一律返回 `CORRUPTED`。
 
 ### 6. Metadata TLV 结构（OffsetMeta）
 连续 TLV 条目，每条格式为 `type (uint8)` | `reserved (uint8)` | `length (uint16 LE)` | `value (UTF-8, length 字节)`；遇 `type == 0` 或 `length == 0` 终止，未知 type 跳过：
@@ -164,4 +173,13 @@ Trie 遍历得到的 `row_id` 映射到 IPRow：
 ## 五、 跨语言一致性契约摘要
 - **版本档次解析优先级**：`GROUP_SCHEMA.groupId` / `Header.VersionMask` one-hot 位 → Metadata `primary_version` / 单项 `version_list` → 唯一字段数推断 → `""`（unknown）。
 - **原生浮点格式化**：NaN / ±Inf 输出 `""`；精确整数值输出无小数点十进制；其余按 6 位小数 round-half-even 输出。
-- **Fail-Closed 加载校验**：由于 CRC32 可被重算伪造，所有 SDK 在加载期必须校验全部段偏移、节点区长度、`GROUP_SCHEMA` 字段边界（`offset + width <= stride`）以及字符串池偏移表严格单调性；任何 `ROW_SCHEMA` 或 `GROUP_SCHEMA` 不一致一律拒绝加载（Fail-Closed），禁止静默回退默认布局。
+- **CRC32 参数与校验**：采用标准 IEEE 802.3 CRC32（多项式 `0xEDB88320` 反射），将 Header 偏移 `16..19`（4 字节 `CRC32` 字段）视为 `0x00000000` 后对全文件分段计算：
+  ```c
+  uint32_t crc = crc32(0, data, 16);
+  static const uint8_t zero4[4] = {0, 0, 0, 0};
+  crc = crc32(crc, zero4, 4);
+  crc = crc32(crc, data + 20, file_size - 20);
+  ```
+- **IPv4-Mapped IPv6 降级**：形如 `::ffff:a.b.c.d`（前 80 位为 `0`、第 `10..11` 字节为 `0xFF, 0xFF`）的 16 字节地址在解析或字节查询入口必须自动提取低 32 位走 IPv4 Trie。
+- **`usage_type` 解码规范化**：数据文件若存储字面量 `"Unknown"`，所有 SDK 在解码与 `GeoInfo` 构造/查询边界统一将其规范化为 `""`（与 `golden_vectors.json` 保持一致）。
+- **Fail-Closed 加载校验**：由于 CRC32 可被重算伪造，所有 SDK 在加载期必须校验全部段偏移、跳表/节点区长度、`fieldCount >= 1`、`GROUP_SCHEMA` 字段一致与边界（`offset + width <= stride`）以及字符串池偏移表严格单调性；任何不一致一律返回 `CORRUPTED` 拒绝加载（Fail-Closed），禁止静默回退默认布局。

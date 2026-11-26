@@ -727,6 +727,9 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
     private $rowGeoWidth = 3;
     private $rowAsnWidth = 3;
     private $rowUsageWidth = 0;
+    private $rowGeoOffset = 0;
+    private $rowAsnOffset = 3;
+    private $rowUsageOffset = 6;
 
     // Schema
     private $groupFieldCounts = [];
@@ -1856,6 +1859,9 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $this->rowGeoWidth = 3;
         $this->rowAsnWidth = 3;
         $this->rowUsageWidth = 0;
+        $this->rowGeoOffset = 0;
+        $this->rowAsnOffset = 3;
+        $this->rowUsageOffset = 6;
         if ($this->offRowSchema <= 0) return;
         $sp = $this->offRowSchema;
         $fCount = $this->readByte($sp);
@@ -1867,36 +1873,47 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             );
         }
 
-        $geoW = 0; $asnW = 0; $usageW = 0; $total = 0; $seenMask = 0;
+        $geoW = 0; $asnW = 0; $usageW = 0; $seenMask = 0;
+        $geoOff = 0; $asnOff = 0; $usageOff = 0;
+        $used = array_fill(0, $stride, false);
         $wpos = $sp + 4;
         for ($i = 0; $i < $fCount; $i++) {
             $fid = $this->readByte($wpos);
             $w = $this->readByte($wpos + 1);
-            if ($w < 1 || $w > 4) {
-                throw new QzdbException("Invalid ROW_SCHEMA field width: {$w}", self::ERROR_CORRUPTED);
+            $foff = $this->readByte($wpos + 2);
+            if ($w < 1 || $w > 4 || $foff + $w > $stride) {
+                throw new QzdbException("Invalid ROW_SCHEMA field width/offset: width={$w}, offset={$foff}", self::ERROR_CORRUPTED);
             }
-            if ($fid <= 2) {
+            for ($b = $foff; $b < $foff + $w; $b++) {
+                if ($used[$b]) {
+                    throw new QzdbException("Overlapping ROW_SCHEMA field offset: {$foff}", self::ERROR_CORRUPTED);
+                }
+                $used[$b] = true;
+            }
+            if ($fid < 8) {
                 $bit = 1 << $fid;
                 if (($seenMask & $bit) !== 0) {
                     throw new QzdbException("Duplicate ROW_SCHEMA field id: {$fid}", self::ERROR_CORRUPTED);
                 }
                 $seenMask |= $bit;
             }
-            if ($fid === 0) $geoW = $w;
-            elseif ($fid === 1) $asnW = $w;
-            elseif ($fid === 2) $usageW = $w;
+            if ($fid === 0) { $geoW = $w; $geoOff = $foff; }
+            elseif ($fid === 1) { $asnW = $w; $asnOff = $foff; }
+            elseif ($fid === 2) { $usageW = $w; $usageOff = $foff; }
             $wpos += 4;
-            $total += $w;
         }
-        if ($total !== $this->ipRowSize || $geoW <= 0) {
+        if ($geoW <= 0) {
             throw new QzdbException(
-                "ROW_SCHEMA width sum ({$total}) != ipRowSize ({$this->ipRowSize}) or missing geo field",
+                "ROW_SCHEMA missing geo field",
                 self::ERROR_CORRUPTED
             );
         }
         $this->rowGeoWidth = $geoW;
         $this->rowAsnWidth = $asnW;
         $this->rowUsageWidth = $usageW;
+        $this->rowGeoOffset = $geoOff;
+        $this->rowAsnOffset = $asnOff;
+        $this->rowUsageOffset = $usageOff;
     }
 
     // ------------------------------------------------------------------
@@ -1920,6 +1937,7 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             $fieldCount = $this->groupFieldCounts[$g];
             $groupDescs = [];
             $natives = $this->groupFieldNative[$g];
+            $gNames = $this->resolveGroupSchemaMeta($g, $this->metaFieldNames)[2];
             for ($f = 0; $f < $fieldCount; $f++) {
                 if ($natives && $f < count($natives) && $natives[$f]) {
                     $groupDescs[] = null;
@@ -1959,11 +1977,13 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
                 // 偏移表留在数据库字节里按需读 8 字节（start/end），不展开成 PHP 数组：
                 // 一个 32 位偏移进 PHP 数组要放大到几十字节，max_global 的 25 万项
                 // 曾占 ~30MB 峰值；缓冲模式下 ord() 直读比数组下标并不慢。
+                $isUsage = isset($gNames[$f]) && GeoInfo::normalizeKey($gNames[$f]) === 'usagetype';
                 $groupDescs[] = [
                     'ot' => $offsetTableBase,
                     'db' => $dataBase,
                     'count' => $count,
                     'total' => $totalLen,
+                    'isUsage' => $isUsage,
                 ];
             }
             $this->groupPoolDescs[$g] = $groupDescs;
@@ -2012,6 +2032,9 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $val = ($d !== null && $desc['db'] + $end <= $this->dataLen)
             ? substr($d, $desc['db'] + $start, $length)
             : $this->readBytes($desc['db'] + $start, $length);
+        if (!empty($desc['isUsage']) && $val === 'Unknown') {
+            $val = '';
+        }
         // 写入 LRU 缓存（超过容量时淘汰最久未使用）
         if ($cacheEnabled && count($this->poolCache) >= self::POOL_CACHE_LIMIT) {
             // array_key_first() was added in PHP 7.3; keep the SDK usable on
@@ -2233,15 +2256,12 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
         $usageTypeId = 0;
 
         if ($this->offRowSchema > 0) {
-            $p = $off;
-            $geoId = $this->safeReadUintWidth($p, $this->rowGeoWidth);
-            $p += $this->rowGeoWidth;
+            $geoId = $this->safeReadUintWidth($off + $this->rowGeoOffset, $this->rowGeoWidth);
             if ($this->rowAsnWidth > 0) {
-                $asnId = $this->safeReadUintWidth($p, $this->rowAsnWidth);
-                $p += $this->rowAsnWidth;
+                $asnId = $this->safeReadUintWidth($off + $this->rowAsnOffset, $this->rowAsnWidth);
             }
             if ($this->rowUsageWidth > 0) {
-                $usageTypeId = $this->safeReadUintWidth($p, $this->rowUsageWidth);
+                $usageTypeId = $this->safeReadUintWidth($off + $this->rowUsageOffset, $this->rowUsageWidth);
             }
         } else {
             $geoId = $this->safeReadU24($off);
@@ -2282,14 +2302,15 @@ const MAX_TRIE_WALK_STEPS_V6 = 128 + 8;  // IPv6 walk cap = max(128+8,40) = 136
             if ($mask & 0x02) {
                 $w = $this->rowAsnWidth;
                 if ($w <= 0) return 0;
-                $off += $this->rowGeoWidth;
+                $off += $this->rowAsnOffset;
             } elseif ($mask & 0x04) {
                 $w = $this->rowUsageWidth;
                 if ($w <= 0) return 0;
-                $off += $this->rowGeoWidth + $this->rowAsnWidth;
+                $off += $this->rowUsageOffset;
             } else {
                 // readIPRow 对 geo 维无条件走 safeReadUintWidth：宽度 ≤1 时读 1 字节
                 $w = $this->rowGeoWidth;
+                $off += $this->rowGeoOffset;
             }
             if ($w < 1) $w = 1;
         } else {

@@ -147,9 +147,12 @@ type Snapshot struct {
 	offRowSchema   uint64
 	offGroupSchema uint64
 
-	rowGeoWidth   int
-	rowAsnWidth   int
-	rowUsageWidth int
+	rowGeoWidth    int
+	rowAsnWidth    int
+	rowUsageWidth  int
+	rowGeoOffset   int
+	rowAsnOffset   int
+	rowUsageOffset int
 
 	// Group layout
 	actualGroups         int
@@ -438,6 +441,7 @@ func (s *Snapshot) parseHeader() error {
 
 func (s *Snapshot) parseRowSchema() error {
 	s.rowGeoWidth, s.rowAsnWidth, s.rowUsageWidth = 3, 3, 0
+	s.rowGeoOffset, s.rowAsnOffset, s.rowUsageOffset = 0, 3, 6
 	if s.offRowSchema <= 0 {
 		return nil
 	}
@@ -458,14 +462,23 @@ func (s *Snapshot) parseRowSchema() error {
 	if uint64(len(d))-sp < 4+need {
 		return newErr(ErrCodeOutOfBounds, "row_schema fields truncated")
 	}
-	geoW, asnW, usageW, total := 0, 0, 0, 0
+	geoW, asnW, usageW := 0, 0, 0
+	geoOff, asnOff, usageOff := 0, 0, 0
 	var seenMask uint8
+	var used [64]bool
 	wpos := sp + 4
 	for i := 0; i < fCount; i++ {
 		fid := int(d[wpos])
 		w := int(d[wpos+1])
-		if w < 1 || w > 4 {
-			return newErr(ErrCodeCorrupted, "invalid row_schema field width")
+		foff := int(d[wpos+2])
+		if w < 1 || w > 4 || foff+w > stride {
+			return newErr(ErrCodeCorrupted, "invalid row_schema field width or offset")
+		}
+		for b := foff; b < foff+w; b++ {
+			if used[b] {
+				return newErr(ErrCodeCorrupted, "overlapping row_schema field intervals")
+			}
+			used[b] = true
 		}
 		if fid < 8 {
 			bit := uint8(1) << uint(fid)
@@ -477,18 +490,21 @@ func (s *Snapshot) parseRowSchema() error {
 		switch fid {
 		case 0:
 			geoW = w
+			geoOff = foff
 		case 1:
 			asnW = w
+			asnOff = foff
 		case 2:
 			usageW = w
+			usageOff = foff
 		}
 		wpos += 4
-		total += w
 	}
-	if geoW <= 0 || total != s.ipRowSize {
-		return newErr(ErrCodeCorrupted, "row_schema widths do not match ip_row_size")
+	if geoW <= 0 {
+		return newErr(ErrCodeCorrupted, "row_schema missing geo field")
 	}
 	s.rowGeoWidth, s.rowAsnWidth, s.rowUsageWidth = geoW, asnW, usageW
+	s.rowGeoOffset, s.rowAsnOffset, s.rowUsageOffset = geoOff, asnOff, usageOff
 	return nil
 }
 
@@ -875,6 +891,7 @@ func (s *Snapshot) parsePools() error {
 				arena = make([]byte, tail)
 				copy(arena, d[strBase:strBase+tail])
 			}
+			isUsage := g < len(s.groupFieldNames) && f < len(s.groupFieldNames[g]) && normalizeKey(s.groupFieldNames[g][f]) == "usagetype"
 			var prevEnd uint32
 			for idx := uint32(0); idx < count; idx++ {
 				start := offsets[idx]
@@ -885,7 +902,11 @@ func (s *Snapshot) parsePools() error {
 				prevEnd = end
 				if end > start {
 					// arena 为 Go 堆上独立 []byte（不依赖 mmap），unsafe.String 零拷贝共享且 GC 安全。
-					strs[idx] = unsafe.String(&arena[start], end-start)
+					v := unsafe.String(&arena[start], end-start)
+					if isUsage && v == "Unknown" {
+						v = ""
+					}
+					strs[idx] = v
 				}
 			}
 			poolCursor = strBase + tail
@@ -1188,16 +1209,14 @@ func (s *Snapshot) readIPRow(rowID uint32) (uint32, uint32, uint32) {
 	}
 	off := s.offIPRow + uint64(rowID)*uint64(s.ipRowSize)
 	if s.offRowSchema > 0 {
-		geoID := s.readUintWidth(off, s.rowGeoWidth)
+		geoID := s.readUintWidth(off+uint64(s.rowGeoOffset), s.rowGeoWidth)
 		asnID := uint32(0)
 		usageID := uint32(0)
-		p := off + uint64(s.rowGeoWidth)
 		if s.rowAsnWidth > 0 {
-			asnID = s.readUintWidth(p, s.rowAsnWidth)
-			p += uint64(s.rowAsnWidth)
+			asnID = s.readUintWidth(off+uint64(s.rowAsnOffset), s.rowAsnWidth)
 		}
 		if s.rowUsageWidth > 0 {
-			usageID = s.readUintWidth(p, s.rowUsageWidth)
+			usageID = s.readUintWidth(off+uint64(s.rowUsageOffset), s.rowUsageWidth)
 		}
 		return geoID, asnID, usageID
 	}

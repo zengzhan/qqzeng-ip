@@ -252,6 +252,7 @@ public sealed class QzdbReader : IDisposable
         internal long _offIPRow, _offGeoEntries, _offPools, _offMeta;
 
         internal int _rowGeoWidth, _rowAsnWidth, _rowUsageWidth;
+        internal int _rowGeoOffset, _rowAsnOffset, _rowUsageOffset;
 
         internal int _actualGroups;
         internal int[] _groupFieldCounts = null!;
@@ -608,6 +609,7 @@ public sealed class QzdbReader : IDisposable
         internal void ParseRowSchema()
         {
             _rowGeoWidth = 3; _rowAsnWidth = 3; _rowUsageWidth = 0;
+            _rowGeoOffset = 0; _rowAsnOffset = 3; _rowUsageOffset = 6;
             var span = _data.Span;
             if (_offRowSchema <= 0 || _offRowSchema + 4 > _dataLen) return;
             int sp = (int)_offRowSchema;
@@ -616,30 +618,46 @@ public sealed class QzdbReader : IDisposable
             if (fCount < 1 || fCount > 8 || sp + 4 + fCount * 4 > _dataLen || stride != _ipRowSize)
                 throw new QzdbException(ErrorCode.Corrupted, "Invalid row schema");
 
-            int g2 = 0, a2 = 0, u2 = 0, total = 0, seenMask = 0;
+            int g2 = 0, a2 = 0, u2 = 0, seenMask = 0;
+            int go2 = 0, ao2 = 0, uo2 = 0;
+            Span<bool> used = stride <= 64 ? stackalloc bool[stride] : new bool[stride];
             int wpos = sp + 4;
             bool ok = true;
             for (int i = 0; i < fCount; i++)
             {
                 int fid = span[wpos];
                 int w = span[wpos + 1];
-                if (w < 1 || w > 4) ok = false;
+                int foff = span[wpos + 2];
+                if (w < 1 || w > 4 || foff + w > stride)
+                {
+                    ok = false;
+                }
+                else
+                {
+                    for (int b = foff; b < foff + w; b++)
+                    {
+                        if (used[b]) { ok = false; break; }
+                        used[b] = true;
+                    }
+                }
                 if (fid < 8)
                 {
                     if ((seenMask & (1 << fid)) != 0) ok = false;
                     seenMask |= 1 << fid;
                 }
-                if (fid == 0) g2 = w;
-                else if (fid == 1) a2 = w;
-                else if (fid == 2) u2 = w;
+                if (fid == 0) { g2 = w; go2 = foff; }
+                else if (fid == 1) { a2 = w; ao2 = foff; }
+                else if (fid == 2) { u2 = w; uo2 = foff; }
                 wpos += 4;
-                total += w;
             }
-            if (!ok || total != _ipRowSize || g2 <= 0)
-                throw new QzdbException(ErrorCode.Corrupted, "Invalid row schema widths");
+            if (!ok || g2 <= 0)
+                throw new QzdbException(ErrorCode.Corrupted, "Invalid row schema widths or offsets");
             _rowGeoWidth = g2;
             _rowAsnWidth = a2;
             _rowUsageWidth = u2;
+            _rowGeoOffset = go2;
+            _rowAsnOffset = ao2;
+            _rowUsageOffset = uo2;
         }
 
         internal void ParseGroups()
@@ -974,6 +992,8 @@ public sealed class QzdbReader : IDisposable
                     // UTF8.GetString 分配（同类构造实测达 7.2 GB → OOM）。
                     // 加上 strOff >= prevEnd 后各段互不重叠，总解码量必 <= section 长度。
                     var strings = new string[cnt];
+                    bool isUsage = _groupFieldNames != null && g < _groupFieldNames.Length && f < _groupFieldNames[g].Length
+                        && string.Equals(GeoInfo.NormalizeKey(_groupFieldNames[g][f]), "usagetype", StringComparison.Ordinal);
                     int prevEnd = 0;
                     for (int i = 0; i < cnt; i++)
                     {
@@ -983,7 +1003,9 @@ public sealed class QzdbReader : IDisposable
                             throw new QzdbException(ErrorCode.Corrupted, "Pool string offset is out of bounds");
                         prevEnd = nextOff;
                         int len = nextOff - strOff;
-                        strings[i] = len == 0 ? "" : Encoding.UTF8.GetString(span.Slice((int)(stringDataStart + strOff), len));
+                        string val = len == 0 ? "" : Encoding.UTF8.GetString(span.Slice((int)(stringDataStart + strOff), len));
+                        if (isUsage && val == "Unknown") val = "";
+                        strings[i] = val;
                     }
                     groupPoolList[f] = strings;
                     int finalOffset = BinaryPrimitives.ReadInt32LittleEndian(span[(int)(poolCursor + count * 4)..]);
@@ -1357,9 +1379,9 @@ public sealed class QzdbReader : IDisposable
         var span = snap._data.Span;
         long rOff = snap._offIPRow + (long)rowId * snap._ipRowSize;
 
-        uint geoId = ReadUintWidth(span, (int)rOff, snap._rowGeoWidth);
-        uint asnId = snap._rowAsnWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowGeoWidth), snap._rowAsnWidth) : 0;
-        uint usageId = snap._rowUsageWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowGeoWidth + snap._rowAsnWidth), snap._rowUsageWidth) : 0;
+        uint geoId = ReadUintWidth(span, (int)(rOff + snap._rowGeoOffset), snap._rowGeoWidth);
+        uint asnId = snap._rowAsnWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowAsnOffset), snap._rowAsnWidth) : 0;
+        uint usageId = snap._rowUsageWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowUsageOffset), snap._rowUsageWidth) : 0;
         GC.KeepAlive(snap);
 
         return (geoId, asnId, usageId);
@@ -2089,9 +2111,9 @@ public sealed class QzdbReader : IDisposable
         long rOff = snap._offIPRow + (long)rowId * snap._ipRowSize;
         if (rOff < 0 || rOff + snap._ipRowSize > span.Length) return 0;
 
-        uint geoId = ReadUintWidth(span, (int)rOff, snap._rowGeoWidth);
-        uint asnId = snap._rowAsnWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowGeoWidth), snap._rowAsnWidth) : 0;
-        uint usageId = snap._rowUsageWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowGeoWidth + snap._rowAsnWidth), snap._rowUsageWidth) : 0;
+        uint geoId = ReadUintWidth(span, (int)(rOff + snap._rowGeoOffset), snap._rowGeoWidth);
+        uint asnId = snap._rowAsnWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowAsnOffset), snap._rowAsnWidth) : 0;
+        uint usageId = snap._rowUsageWidth > 0 ? ReadUintWidth(span, (int)(rOff + snap._rowUsageOffset), snap._rowUsageWidth) : 0;
         GC.KeepAlive(snap);
 
         int gi = snap._groupIndex;

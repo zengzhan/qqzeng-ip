@@ -654,6 +654,9 @@ class QzdbReader {
     this._rowGeoWidth = 3;
     this._rowAsnWidth = 3;
     this._rowUsageWidth = 0;
+    this._rowGeoOffset = 0;
+    this._rowAsnOffset = 3;
+    this._rowUsageOffset = 6;
     this._geoCache = null;
     this._geoMetaCache = [];
     this._geoCacheMask = GEO_CACHE_CAP - 1;
@@ -1221,6 +1224,9 @@ class QzdbReader {
     this._rowGeoWidth = 3;
     this._rowAsnWidth = 3;
     this._rowUsageWidth = 0;
+    this._rowGeoOffset = 0;
+    this._rowAsnOffset = 3;
+    this._rowUsageOffset = 6;
     if (this._offRowSchema <= 0) return;
     const d = this._data;
     const sp = this._offRowSchema;
@@ -1233,13 +1239,23 @@ class QzdbReader {
       );
     }
 
-    let geoW = 0, asnW = 0, usageW = 0, total = 0, seenMask = 0;
+    let geoW = 0, asnW = 0, usageW = 0;
+    let geoOff = 0, asnOff = 0, usageOff = 0;
+    let seenMask = 0;
+    const used = new Uint8Array(64);
     let wpos = sp + 4;
     for (let i = 0; i < fieldCount; i++) {
       const fid = d[wpos];
       const w = d[wpos + 1];
-      if (w < 1 || w > 4) {
-        throw new QzdbError(`Invalid ROW_SCHEMA field width: ${w}`, QzdbError.CORRUPTED);
+      const foff = d[wpos + 2];
+      if (w < 1 || w > 4 || foff + w > stride) {
+        throw new QzdbError(`Invalid ROW_SCHEMA field width/offset: width=${w}, offset=${foff}`, QzdbError.CORRUPTED);
+      }
+      for (let b = foff; b < foff + w; b++) {
+        if (used[b]) {
+          throw new QzdbError(`Overlapping ROW_SCHEMA field offset: ${foff}`, QzdbError.CORRUPTED);
+        }
+        used[b] = 1;
       }
       if (fid < 8) {
         if (seenMask & (1 << fid)) {
@@ -1247,21 +1263,23 @@ class QzdbReader {
         }
         seenMask |= (1 << fid);
       }
-      if (fid === 0) geoW = w;
-      else if (fid === 1) asnW = w;
-      else if (fid === 2) usageW = w;
+      if (fid === 0) { geoW = w; geoOff = foff; }
+      else if (fid === 1) { asnW = w; asnOff = foff; }
+      else if (fid === 2) { usageW = w; usageOff = foff; }
       wpos += 4;
-      total += w;
     }
-    if (geoW <= 0 || total !== this._ipRowSize) {
+    if (geoW <= 0) {
       throw new QzdbError(
-        `ROW_SCHEMA invalid widths (geoW=${geoW}, sum=${total}, ipRowSize=${this._ipRowSize})`,
+        `ROW_SCHEMA missing geo field (geoW=${geoW})`,
         QzdbError.CORRUPTED,
       );
     }
     this._rowGeoWidth = geoW;
     this._rowAsnWidth = asnW;
     this._rowUsageWidth = usageW;
+    this._rowGeoOffset = geoOff;
+    this._rowAsnOffset = asnOff;
+    this._rowUsageOffset = usageOff;
   }
 
   _ensurePoolsLoaded() {
@@ -1312,6 +1330,8 @@ class QzdbReader {
         // 有 start >= prevEnd && end <= tail 后各段互不重叠且落在 [0, tail]，总量必 <= tail。
         const tail = offsets[count];
         if (tail > avail) { groupPoolList.push([]); continue; }
+        const gNames = this._groupFieldNames[g];
+        const isUsage = !!(gNames && f < gNames.length && GeoInfo.normalizeKey(gNames[f]) === 'usagetype');
         const strings = new Array(count).fill('');
         let prevEnd = 0;
         for (let s = 0; s < count; s++) {
@@ -1319,7 +1339,11 @@ class QzdbReader {
           const end = offsets[s + 1];
           if (start < prevEnd || end < start || end > tail) continue;
           prevEnd = end;
-          if (end > start) strings[s] = d.toString('utf8', strBase + start, strBase + end);
+          if (end > start) {
+            let str = d.toString('utf8', strBase + start, strBase + end);
+            if (isUsage && str === 'Unknown') str = '';
+            strings[s] = str;
+          }
         }
         poolCursor += tail;
         groupPoolList.push(strings);
@@ -1474,11 +1498,9 @@ class QzdbReader {
     let asnId = 0;
     let usageTypeId = 0;
     if (this._offRowSchema > 0) {
-      let p = off;
-      geoId = this.safeReadUintWidth(p, this._rowGeoWidth);
-      p += this._rowGeoWidth;
-      if (this._rowAsnWidth > 0) { asnId = this.safeReadUintWidth(p, this._rowAsnWidth); p += this._rowAsnWidth; }
-      if (this._rowUsageWidth > 0) usageTypeId = this.safeReadUintWidth(p, this._rowUsageWidth);
+      geoId = this.safeReadUintWidth(off + this._rowGeoOffset, this._rowGeoWidth);
+      if (this._rowAsnWidth > 0) asnId = this.safeReadUintWidth(off + this._rowAsnOffset, this._rowAsnWidth);
+      if (this._rowUsageWidth > 0) usageTypeId = this.safeReadUintWidth(off + this._rowUsageOffset, this._rowUsageWidth);
     } else {
       geoId = this.safeReadU24(off);
       asnId = this.safeReadU24(off + 3);

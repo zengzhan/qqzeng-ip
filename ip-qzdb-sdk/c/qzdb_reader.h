@@ -103,6 +103,9 @@ typedef struct {
     int row_geo_width;
     int row_asn_width;
     int row_usage_width;
+    int row_geo_offset;
+    int row_asn_offset;
+    int row_usage_offset;
 
     uint64_t off_v4_jump;
     uint64_t off_v4_nodes;

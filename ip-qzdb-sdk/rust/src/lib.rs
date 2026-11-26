@@ -1699,6 +1699,9 @@ pub struct SnapshotInner {
     row_geo_width: usize,
     row_asn_width: usize,
     row_usage_width: usize,
+    row_geo_offset: usize,
+    row_asn_offset: usize,
+    row_usage_offset: usize,
 
     off_v4_jump: u64,
     off_v4_nodes: u64,
@@ -1927,6 +1930,9 @@ impl SnapshotInner {
         let mut row_geo_width = 3;
         let mut row_asn_width = 3;
         let mut row_usage_width = 0;
+        let mut row_geo_offset = 0;
+        let mut row_asn_offset = 3;
+        let mut row_usage_offset = 6;
         if off_row_schema > 0 {
             let sp = off_row_schema as usize;
             let f_count = ro!(rget(d, sp), "row_schema.field_count")? as usize;
@@ -1944,16 +1950,29 @@ impl SnapshotInner {
             let mut g2 = 0usize;
             let mut a2 = 0usize;
             let mut u2 = 0usize;
-            let mut total = 0usize;
+            let mut go2 = 0usize;
+            let mut ao2 = 0usize;
+            let mut uo2 = 0usize;
+            let mut used = vec![false; stride];
             let mut seen_mask: u8 = 0;
             for _ in 0..f_count {
                 let fid = d[wpos];
                 let w = d[wpos + 1] as usize;
-                if !(1..=4).contains(&w) {
+                let foff = d[wpos + 2] as usize;
+                if !(1..=4).contains(&w) || foff + w > stride {
                     return Err(err(
                         ErrorCode::Corrupted,
-                        format!("invalid ROW_SCHEMA field width: {w}"),
+                        format!("invalid ROW_SCHEMA field width/offset: width={w}, offset={foff}"),
                     ));
+                }
+                for b in &mut used[foff..foff + w] {
+                    if *b {
+                        return Err(err(
+                            ErrorCode::Corrupted,
+                            format!("overlapping ROW_SCHEMA field offset: {foff}"),
+                        ));
+                    }
+                    *b = true;
                 }
                 if fid < 8 {
                     if seen_mask & (1u8 << fid) != 0 {
@@ -1966,23 +1985,28 @@ impl SnapshotInner {
                 }
                 if fid == 0 {
                     g2 = w;
+                    go2 = foff;
                 } else if fid == 1 {
                     a2 = w;
+                    ao2 = foff;
                 } else if fid == 2 {
                     u2 = w;
+                    uo2 = foff;
                 }
                 wpos += 4;
-                total += w;
             }
-            if g2 == 0 || total != ip_row_size {
+            if g2 == 0 {
                 return Err(err(
                     ErrorCode::Corrupted,
-                    format!("invalid ROW_SCHEMA widths: geo={g2}, sum={total}, ip_row_size={ip_row_size}"),
+                    "invalid ROW_SCHEMA: missing geo field",
                 ));
             }
             row_geo_width = g2;
             row_asn_width = a2;
             row_usage_width = u2;
+            row_geo_offset = go2;
+            row_asn_offset = ao2;
+            row_usage_offset = uo2;
         }
 
         // ---- 组入口偏移（头部 48 位） ----
@@ -2338,6 +2362,7 @@ impl SnapshotInner {
             d,
             &group_field_counts,
             &group_field_native,
+            &group_field_names,
             off_pools,
             off_meta,
             &off_row_schema,
@@ -2402,6 +2427,9 @@ impl SnapshotInner {
             row_geo_width,
             row_asn_width,
             row_usage_width,
+            row_geo_offset,
+            row_asn_offset,
+            row_usage_offset,
             off_v4_jump,
             off_v4_nodes,
             off_v6_jump,
@@ -2671,16 +2699,14 @@ impl SnapshotInner {
         let off = self.off_ip_row as usize + row_id as usize * self.ip_row_size;
         let d = self.data.as_slice();
         if self.off_row_schema > 0 {
-            let mut p = off;
-            let geo_id = safe_read_uint_width(d, p, self.row_geo_width);
-            p += self.row_geo_width;
+            let geo_id = safe_read_uint_width(d, off + self.row_geo_offset, self.row_geo_width);
             let asn_id = if self.row_asn_width > 0 {
-                safe_read_uint_width(d, p, self.row_asn_width)
+                safe_read_uint_width(d, off + self.row_asn_offset, self.row_asn_width)
             } else {
                 0
             };
             let usage_id = if self.row_usage_width > 0 {
-                safe_read_uint_width(d, p + self.row_asn_width, self.row_usage_width)
+                safe_read_uint_width(d, off + self.row_usage_offset, self.row_usage_width)
             } else {
                 0
             };
@@ -3435,6 +3461,7 @@ fn parse_pools(
     d: &[u8],
     group_field_counts: &[usize],
     group_field_native: &[Vec<bool>],
+    group_field_names: &[Vec<String>],
     off_pools: u64,
     off_meta: u64,
     off_row_schema: &u64,
@@ -3507,6 +3534,11 @@ fn parse_pools(
                 pool_cursor = string_data_start;
                 continue;
             }
+            let is_usage = group_field_names
+                .get(g)
+                .and_then(|names| names.get(f))
+                .map(|n| normalize_key(n) == "usagetype")
+                .unwrap_or(false);
             let mut strings: Vec<Arc<str>> = Vec::with_capacity(count);
             let mut prev_end = 0usize;
             for s in 0..count {
@@ -3532,10 +3564,15 @@ fn parse_pools(
                 };
                 if b <= d.len() {
                     let text = String::from_utf8_lossy(&d[a..b]);
-                    let arc: Arc<str> = match local_interner.get(&*text) {
+                    let normalized = if is_usage && text.as_ref() == "Unknown" {
+                        ""
+                    } else {
+                        text.as_ref()
+                    };
+                    let arc: Arc<str> = match local_interner.get(normalized) {
                         Some(shared) => Arc::clone(shared),
                         None => {
-                            let a: Arc<str> = Arc::from(text.into_owned().into_boxed_str());
+                            let a: Arc<str> = Arc::from(normalized);
                             local_interner.insert(Arc::clone(&a));
                             a
                         }
@@ -4446,6 +4483,9 @@ fn empty_snapshot() -> SnapshotInner {
         row_geo_width: 3,
         row_asn_width: 3,
         row_usage_width: 0,
+        row_geo_offset: 0,
+        row_asn_offset: 3,
+        row_usage_offset: 6,
         off_v4_jump: 0,
         off_v4_nodes: 0,
         off_v6_jump: 0,

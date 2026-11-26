@@ -232,10 +232,13 @@ public final class QzdbReader implements AutoCloseable {
         long offPools;
         long offMeta;
 
-        // IPRow 动态宽度（ROW_SCHEMA 驱动，默认 3/3/0）
+        // IPRow 动态宽度与偏移（ROW_SCHEMA 驱动，默认 3/3/0, 0/3/6）
         int rowGeoWidth;
         int rowAsnWidth;
         int rowUsageWidth;
+        int rowGeoOffset;
+        int rowAsnOffset;
+        int rowUsageOffset;
 
         // 版本组布局（GroupMetadataTable + GROUP_SCHEMA + 兜底）
         int actualGroups;
@@ -450,6 +453,7 @@ public final class QzdbReader implements AutoCloseable {
 
         private void parseRowSchema() throws QzdbException {
             int geoW = 3, asnW = 3, usageW = 0;
+            int geoOff = 0, asnOff = 3, usageOff = 6;
             if (offRowSchema > 0) {
                 if (offRowSchema > Integer.MAX_VALUE || offRowSchema > dataLen || dataLen - offRowSchema < 4) {
                     throw new QzdbException(ErrorCode.CORRUPTED, "RowSchema header out of bounds");
@@ -467,38 +471,52 @@ public final class QzdbReader implements AutoCloseable {
                 if (required > dataLen - offRowSchema) {
                     throw new QzdbException(ErrorCode.CORRUPTED, "RowSchema fields truncated");
                 }
-                int g2 = 0, a2 = 0, u2 = 0, total = 0;
+                int g2 = 0, a2 = 0, u2 = 0;
+                int go2 = 0, ao2 = 0, uo2 = 0;
                 int seenMask = 0;
+                boolean[] used = new boolean[stride];
                 int wpos = sp + 4;
                 for (int i = 0; i < fCount; i++) {
                     int fid = data.get(wpos) & 0xFF;
                     int w = data.get(wpos + 1) & 0xFF;
-                    if (w < 1 || w > 4) {
-                        throw new QzdbException(ErrorCode.CORRUPTED, "Invalid RowSchema field width: " + w);
+                    int foff = data.get(wpos + 2) & 0xFF;
+                    if (w < 1 || w > 4 || foff + w > stride) {
+                        throw new QzdbException(ErrorCode.CORRUPTED, "Invalid RowSchema field width/offset: width=" + w + ", offset=" + foff);
                     }
-                    if (fid <= 2) {
+                    for (int b = foff; b < foff + w; b++) {
+                        if (used[b]) {
+                            throw new QzdbException(ErrorCode.CORRUPTED, "Overlapping RowSchema field offset: " + foff);
+                        }
+                        used[b] = true;
+                    }
+                    if (fid < 8) {
                         int bit = 1 << fid;
                         if ((seenMask & bit) != 0) {
                             throw new QzdbException(ErrorCode.CORRUPTED, "Duplicate RowSchema field id: " + fid);
                         }
                         seenMask |= bit;
                     }
-                    if (fid == 0) g2 = w;
-                    else if (fid == 1) a2 = w;
-                    else if (fid == 2) u2 = w;
+                    if (fid == 0) { g2 = w; go2 = foff; }
+                    else if (fid == 1) { a2 = w; ao2 = foff; }
+                    else if (fid == 2) { u2 = w; uo2 = foff; }
                     wpos += 4;
-                    total += w;
                 }
-                if (total != ipRowSize || g2 <= 0) {
-                    throw new QzdbException(ErrorCode.CORRUPTED, "RowSchema widths do not match ipRowSize or missing geo field");
+                if (g2 <= 0) {
+                    throw new QzdbException(ErrorCode.CORRUPTED, "RowSchema missing geo field");
                 }
                 geoW = g2;
                 asnW = a2;
                 usageW = u2;
+                geoOff = go2;
+                asnOff = ao2;
+                usageOff = uo2;
             }
             rowGeoWidth = geoW;
             rowAsnWidth = asnW;
             rowUsageWidth = usageW;
+            rowGeoOffset = geoOff;
+            rowAsnOffset = asnOff;
+            rowUsageOffset = usageOff;
         }
 
         private void parseGroups() throws QzdbException {
@@ -886,6 +904,9 @@ public final class QzdbReader implements AutoCloseable {
                     }
 
                     String[] strings = new String[cnt];
+                    String[] gNames = (groupFieldNames != null && g < groupFieldNames.length) ? groupFieldNames[g] : null;
+                    boolean isUsage = gNames != null && f < gNames.length && gNames[f] != null
+                            && "usagetype".equals(GeoInfo.normalizeKey(gNames[f]));
                     long prevEnd = 0;
                     for (int i = 0; i < cnt; i++) {
                         long start = readU32(data, (int) (offsetsStart + (long) i * 4)) & 0xFFFFFFFFL;
@@ -895,7 +916,11 @@ public final class QzdbReader implements AutoCloseable {
                             continue;
                         }
                         prevEnd = end;
-                        strings[i] = (end == start) ? "" : readUtf8(data, (int) (stringDataStart + start), (int) (end - start));
+                        String val = (end == start) ? "" : readUtf8(data, (int) (stringDataStart + start), (int) (end - start));
+                        if (isUsage && "Unknown".equals(val)) {
+                            val = "";
+                        }
+                        strings[i] = val;
                     }
                     groupPoolList[f] = strings;
                     poolCursor = stringDataStart + tail;
@@ -1195,23 +1220,6 @@ public final class QzdbReader implements AutoCloseable {
         }
     }
 
-    /** 仅裁剪 ASCII 空白（空格/制表/换行/回车），不接受 NUL 等控制字符。 */
-    private static String trimAsciiWhitespace(String s) {
-        int start = 0;
-        int end = s.length();
-        while (start < end) {
-            char c = s.charAt(start);
-            if (c == ' ' || c == '\t' || c == '\r' || c == '\n') start++;
-            else break;
-        }
-        while (end > start) {
-            char c = s.charAt(end - 1);
-            if (c == ' ' || c == '\t' || c == '\r' || c == '\n') end--;
-            else break;
-        }
-        return (start == 0 && end == s.length()) ? s : s.substring(start, end);
-    }
-
     // =========================================================================
     // 单条查询 API（所有入口共享同一套地址规范化与解析路径，见 SDK 规范 §5.3）
     // =========================================================================
@@ -1313,8 +1321,7 @@ public final class QzdbReader implements AutoCloseable {
      */
     public String findStr(String ipStr) {
         if (ipStr == null || ipStr.isEmpty()) return "";
-        String ip = trimAsciiWhitespace(ipStr);
-        if (ip.isEmpty()) return "";
+        String ip = ipStr;
         Snapshot snap = acquireSnapshot();
         try {
             int rowId;
@@ -1357,10 +1364,7 @@ public final class QzdbReader implements AutoCloseable {
         if (ipStr == null || ipStr.isEmpty()) {
             throw new QzdbException(ErrorCode.INVALID_IP, "IP address string cannot be empty");
         }
-        String ip = trimAsciiWhitespace(ipStr);
-        if (ip.isEmpty()) {
-            throw new QzdbException(ErrorCode.INVALID_IP, "IP address string cannot be empty");
-        }
+        String ip = ipStr;
         int rowId;
         if (ip.indexOf(':') >= 0) {
             byte[] bytes = V6_SCRATCH.get();
@@ -1383,10 +1387,10 @@ public final class QzdbReader implements AutoCloseable {
         if (rowId >= s.rowCount || rOff + s.ipRowSize > s.dataLen) {
             return Optional.empty();
         }
-        int geoId = readUintWidth(s.data, (int) rOff, s.rowGeoWidth);
-        int asnId = s.rowAsnWidth > 0 ? readUintWidth(s.data, (int) (rOff + s.rowGeoWidth), s.rowAsnWidth) : 0;
+        int geoId = readUintWidth(s.data, (int) (rOff + s.rowGeoOffset), s.rowGeoWidth);
+        int asnId = s.rowAsnWidth > 0 ? readUintWidth(s.data, (int) (rOff + s.rowAsnOffset), s.rowAsnWidth) : 0;
         int usageId = s.rowUsageWidth > 0
-                ? readUintWidth(s.data, (int) (rOff + s.rowGeoWidth + s.rowAsnWidth), s.rowUsageWidth) : 0;
+                ? readUintWidth(s.data, (int) (rOff + s.rowUsageOffset), s.rowUsageWidth) : 0;
 
         int dimMask = s.groupDimMasks[s.groupIndex];
         int entryId;
@@ -1483,8 +1487,7 @@ public final class QzdbReader implements AutoCloseable {
      */
     public int lookupRowId(String ipStr) {
         if (ipStr == null || ipStr.isEmpty()) return 0;
-        String ip = trimAsciiWhitespace(ipStr);
-        if (ip.isEmpty()) return 0;
+        String ip = ipStr;
         Snapshot snap = acquireSnapshot();
         try {
             if (ip.indexOf(':') >= 0) {
@@ -1545,10 +1548,10 @@ public final class QzdbReader implements AutoCloseable {
             if (rowId <= 0 || rowId >= s.rowCount) return null;
             long rOff = s.offIPRow + (long) rowId * s.ipRowSize;
             if (rOff + s.ipRowSize > s.dataLen) return null;
-            int geoId = readUintWidth(s.data, (int) rOff, s.rowGeoWidth);
-            int asnId = s.rowAsnWidth > 0 ? readUintWidth(s.data, (int) (rOff + s.rowGeoWidth), s.rowAsnWidth) : 0;
+            int geoId = readUintWidth(s.data, (int) (rOff + s.rowGeoOffset), s.rowGeoWidth);
+            int asnId = s.rowAsnWidth > 0 ? readUintWidth(s.data, (int) (rOff + s.rowAsnOffset), s.rowAsnWidth) : 0;
             int usageId = s.rowUsageWidth > 0
-                    ? readUintWidth(s.data, (int) (rOff + s.rowGeoWidth + s.rowAsnWidth), s.rowUsageWidth) : 0;
+                    ? readUintWidth(s.data, (int) (rOff + s.rowUsageOffset), s.rowUsageWidth) : 0;
             return new RowIds(geoId, asnId, usageId);
         } finally {
             s.releasePin();
@@ -1563,10 +1566,7 @@ public final class QzdbReader implements AutoCloseable {
         if (ipStr == null || ipStr.isEmpty()) {
             throw new QzdbException(ErrorCode.INVALID_IP, "IP address string cannot be empty");
         }
-        String ip = trimAsciiWhitespace(ipStr);
-        if (ip.isEmpty()) {
-            throw new QzdbException(ErrorCode.INVALID_IP, "IP address string cannot be empty");
-        }
+        String ip = ipStr;
         Snapshot snap = acquireSnapshot();
         try {
             if (ip.indexOf(':') >= 0) {
