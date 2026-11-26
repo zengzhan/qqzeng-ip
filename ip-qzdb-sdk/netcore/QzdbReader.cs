@@ -383,17 +383,28 @@ public sealed class QzdbReader : IDisposable
                 {
                     var view = mmf.CreateViewAccessor(0, len, MemoryMappedFileAccess.Read);
                     byte* ptr = null;
+                    MmapManager? manager = null;
                     try
                     {
                         view.SafeMemoryMappedViewHandle.AcquirePointer(ref ptr);
-                        var manager = new MmapManager(mmf, view, ptr, len);
+                        manager = new MmapManager(mmf, view, ptr, len);
                         return new Snapshot(manager.Memory, manager.Pointer, manager, groupIndex, verifyCrc);
                     }
                     catch
                     {
-                        if (ptr != null) { try { view.SafeMemoryMappedViewHandle.ReleasePointer(); } catch { /* best effort */ } }
-                        view.Dispose();
-                        mmf.Dispose();
+                        if (manager != null)
+                        {
+                            // MmapManager 已接管 mmf/view/ptr 所有权：通过 Dispose() 释放并
+                            // GC.SuppressFinalize，避免在 catch 提前 ReleasePointer 后终结器二次
+                            // ReleasePointer 抛出 ObjectDisposedException 杀掉终结器线程。
+                            ((IDisposable)manager).Dispose();
+                        }
+                        else
+                        {
+                            if (ptr != null) { try { view.SafeMemoryMappedViewHandle.ReleasePointer(); } catch { /* best effort */ } }
+                            view.Dispose();
+                            mmf.Dispose();
+                        }
                         throw;
                     }
                 }

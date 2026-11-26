@@ -1052,9 +1052,11 @@ func (s *Snapshot) trieWalkV4(ip uint32) (uint32, error) {
 	d := s.data
 	ptr := binary.LittleEndian.Uint32(d[s.offV4Jump+uint64(ip>>16)*4:])
 	if ptr == 0 {
+		runtime.KeepAlive(s)
 		return 0, nil
 	}
 	if ptr&SENTINEL != 0 {
+		runtime.KeepAlive(s)
 		return ptr & SENTINEL_MASK_31, nil
 	}
 	idx := ptr & SENTINEL_MASK_31
@@ -1064,36 +1066,44 @@ func (s *Snapshot) trieWalkV4(ip uint32) (uint32, error) {
 	if s.v4Node24 {
 		for steps := 0; steps < maxTrieWalkSteps; steps++ {
 			if idx >= nodeCount {
+				runtime.KeepAlive(s)
 				return 0, nil
 			}
 			off := offNodes + uint64(idx)*6 + uint64((suffix>>31)&1)*3
 			child := uint32(d[off]) | uint32(d[off+1])<<8 | uint32(d[off+2])<<16
 			if child == 0 {
+				runtime.KeepAlive(s)
 				return 0, nil
 			}
 			if child&0x800000 != 0 {
+				runtime.KeepAlive(s)
 				return child & SENTINEL_MASK_24, nil
 			}
 			idx = child & SENTINEL_MASK_24
 			suffix <<= 1
 		}
+		runtime.KeepAlive(s)
 		return 0, ErrCorrupted
 	}
 	for steps := 0; steps < maxTrieWalkSteps; steps++ {
 		if idx >= nodeCount {
+			runtime.KeepAlive(s)
 			return 0, nil
 		}
 		off := offNodes + uint64(idx)*8 + uint64((suffix>>31)&1)*4
 		child := binary.LittleEndian.Uint32(d[off:])
 		if child == 0 {
+			runtime.KeepAlive(s)
 			return 0, nil
 		}
 		if child&SENTINEL != 0 {
+			runtime.KeepAlive(s)
 			return child & SENTINEL_MASK_31, nil
 		}
 		idx = child & SENTINEL_MASK_31
 		suffix <<= 1
 	}
+	runtime.KeepAlive(s)
 	return 0, ErrCorrupted
 }
 
@@ -1105,9 +1115,11 @@ func (s *Snapshot) trieWalkV6(ip [16]byte) (uint32, error) {
 	d := s.data
 	ptr := binary.LittleEndian.Uint32(d[s.offV6Jump+uint64(readV6Prefix(ip, s.v6JumpBits))*4:])
 	if ptr == 0 {
+		runtime.KeepAlive(s)
 		return 0, nil
 	}
 	if ptr&SENTINEL != 0 {
+		runtime.KeepAlive(s)
 		return ptr & SENTINEL_MASK_31, nil
 	}
 	idx := ptr & SENTINEL_MASK_31
@@ -1116,38 +1128,46 @@ func (s *Snapshot) trieWalkV6(ip [16]byte) (uint32, error) {
 	if s.v6Node24 {
 		for depth := s.v6JumpBits; depth < 128; depth++ {
 			if idx >= nodeCount {
+				runtime.KeepAlive(s)
 				return 0, nil
 			}
 			bit := uint32((ip[depth>>3] >> (7 - uint(depth&7))) & 1)
 			off := offNodes + uint64(idx)*6 + uint64(bit)*3
 			child := uint32(d[off]) | uint32(d[off+1])<<8 | uint32(d[off+2])<<16
 			if child == 0 {
+				runtime.KeepAlive(s)
 				return 0, nil
 			}
 			if child&0x800000 != 0 {
+				runtime.KeepAlive(s)
 				return child & SENTINEL_MASK_24, nil
 			}
 			idx = child & SENTINEL_MASK_24
 		}
+		runtime.KeepAlive(s)
 		return 0, ErrCorrupted
 	}
 	for depth := s.v6JumpBits; depth < 128; depth++ {
 		if idx >= nodeCount {
+			runtime.KeepAlive(s)
 			return 0, nil
 		}
 		bit := uint32((ip[depth>>3] >> (7 - uint(depth&7))) & 1)
 		off := offNodes + uint64(idx)*8 + uint64(bit)*4
 		child := binary.LittleEndian.Uint32(d[off:])
 		if child == 0 {
+			runtime.KeepAlive(s)
 			return 0, nil
 		}
 		if child&SENTINEL != 0 {
+			runtime.KeepAlive(s)
 			return child & SENTINEL_MASK_31, nil
 		}
 		idx = child & SENTINEL_MASK_31
 	}
 	// 128 位全部消费完仍未命中叶子：合法 Patricia 树最后一层必然以叶子
 	// 或空子结束，走到这里说明链路退化/畸形，按 V4 同款语义 fail-closed。
+	runtime.KeepAlive(s)
 	return 0, ErrCorrupted
 }
 

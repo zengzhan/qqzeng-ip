@@ -2032,11 +2032,11 @@ impl SnapshotInner {
         // `fc.min(MAX_GEO_FIELDS)` 静默截断——release 构建下丢字段、
         // to_pipe 域数与 C#/Java 分叉，违背 fail-closed 契约。
         for (gi, &field_count) in group_field_counts.iter().enumerate().take(actual_groups) {
-            if field_count > MAX_GEO_FIELDS {
+            if field_count == 0 || field_count > MAX_GEO_FIELDS {
                 return Err(err(
-                    ErrorCode::Unsupported,
+                    ErrorCode::Corrupted,
                     format!(
-                        "group {} field count {} exceeds MAX_GEO_FIELDS {}",
+                        "group {} field count {} out of range [1, {}]",
                         gi, field_count, MAX_GEO_FIELDS
                     ),
                 ));
@@ -2217,8 +2217,8 @@ impl SnapshotInner {
                 0
             } else {
                 match (avail - span).checked_div(stride) {
-                    // stride 为 0：全部条目重叠在同一处，只要首条读得下就不限制条数。
-                    None => group_entry_counts[g],
+                    // stride 为 0 不应发生（已在上方拒绝 fc=0 及 stride=0）；兜底收敛为 0。
+                    None => 0,
                     Some(n) => n.saturating_add(1).min(u32::MAX as usize) as u32,
                 }
             };

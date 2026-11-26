@@ -1245,7 +1245,7 @@ static int get_geo_info_buf(qzdb_reader_t* ctx, uint32_t entry_id, int group_ind
         return QZDB_ERR_INVALID_PARAM;
     int field_count = ctx->group_field_counts[group_index];
     if (field_count <= 0 || field_count > QZDB_MAX_FIELDS) return QZDB_ERR_CORRUPTED;
-    for (int i = 0; i < QZDB_MAX_FIELDS; i++) values[i] = "";
+    for (int i = 0; i < field_count; i++) values[i] = "";
     for (int i = 0; i < field_count; i++) {
         int rc = decode_geo_field_buf(ctx, entry_id, group_index, i, bufs[i], buf_size, &values[i]);
         if (rc != QZDB_OK) {
@@ -1349,6 +1349,7 @@ static int resolve_row_id_buf(qzdb_reader_t* ctx, uint32_t row_id, int group_ind
 int qzdb_find_each(qzdb_reader_t* ctx, const char** ips, int count,
                     qzdb_find_callback cb, void* user_data) {
     if (!ctx || !ips || !cb || count <= 0) return QZDB_ERR_INVALID_PARAM;
+    reader_pin(ctx);
     for (int i = 0; i < count; i++) {
         qzdb_batch_result_t res;
         memset(&res.info, 0, sizeof(res.info));
@@ -1357,6 +1358,7 @@ int qzdb_find_each(qzdb_reader_t* ctx, const char** ips, int count,
         free_geo_info(&res.info);  /* 释放缓存未命中时 get_geo_info 分配的堆字符串；
                                     * 缓存命中时 values_mask=0，此调用为空操作。 */
     }
+    reader_unpin(ctx);
     return QZDB_OK;
 }
 
@@ -1365,25 +1367,38 @@ int qzdb_find_each(qzdb_reader_t* ctx, const char** ips, int count,
  * ======================================================================== */
 const char* qzdb_geo_info_get(qzdb_reader_t* ctx, const qzdb_geo_info_t* info, const char* name) {
     if (!ctx || !info || !name) return "";
+    reader_pin(ctx);
     int schema_index = field_index_normalized(ctx, name);
+    const char* ret = "";
     if (info->projection_mode) {
-        if (schema_index < 0) return "";
-        for (int i = 0; i < info->value_count && i < QZDB_MAX_FIELDS; i++) {
-            if (info->field_indices[i] == schema_index)
-                return info->values[i] ? info->values[i] : "";
+        if (schema_index >= 0) {
+            for (int i = 0; i < info->value_count && i < QZDB_MAX_FIELDS; i++) {
+                if (info->field_indices[i] == schema_index) {
+                    ret = info->values[i] ? info->values[i] : "";
+                    break;
+                }
+            }
         }
-        return "";
+        reader_unpin(ctx);
+        return ret;
     }
-    if (schema_index < 0 || schema_index >= QZDB_MAX_FIELDS) return "";
-    if (info->value_count > 0 && schema_index >= info->value_count) return "";
-    if (info->value_count == 0 && schema_index >= ctx->field_count) return "";
-    return info->values[schema_index] ? info->values[schema_index] : "";
+    if (schema_index >= 0 && schema_index < QZDB_MAX_FIELDS &&
+        !(info->value_count > 0 && schema_index >= info->value_count) &&
+        !(info->value_count == 0 && schema_index >= ctx->field_count)) {
+        ret = info->values[schema_index] ? info->values[schema_index] : "";
+    }
+    reader_unpin(ctx);
+    return ret;
 }
 
 int qzdb_geo_info_to_pipe(qzdb_reader_t* ctx, const qzdb_geo_info_t* info, char* out, size_t out_size) {
     if (!ctx || !info || !out || out_size == 0) return QZDB_ERR_INVALID_PARAM;
+    reader_pin(ctx);
     if (ctx->group_index < 0 || ctx->group_index >= ctx->actual_groups ||
-        !ctx->group_field_counts) return QZDB_ERR_INVALID_PARAM;
+        !ctx->group_field_counts) {
+        reader_unpin(ctx);
+        return QZDB_ERR_INVALID_PARAM;
+    }
     int fc = info->value_count;
     if (!info->projection_mode && fc == 0) fc = ctx->group_field_counts[ctx->group_index];
     if (fc < 0) fc = 0;
@@ -1404,6 +1419,7 @@ int qzdb_geo_info_to_pipe(qzdb_reader_t* ctx, const qzdb_geo_info_t* info, char*
         pos += len;
     }
     out[pos] = '\0';
+    reader_unpin(ctx);
     return QZDB_OK;
 }
 
@@ -1430,7 +1446,8 @@ const char* qzdb_get_description(qzdb_reader_t* ctx) { return ctx && ctx->descri
 
 int qzdb_get_file_hash(qzdb_reader_t* ctx, char* out, size_t out_size) {
     if (!ctx || !out || out_size < 9) return QZDB_ERR_INVALID_PARAM;
-    if (!ctx->data || ctx->data_size < 20) return QZDB_ERR_CORRUPTED;
+    reader_pin(ctx);
+    if (!ctx->data || ctx->data_size < 20) { reader_unpin(ctx); return QZDB_ERR_CORRUPTED; }
     int valid = __atomic_load_n(&ctx->crc_valid, __ATOMIC_ACQUIRE);
     if (!valid) {
         uint32_t computed = crc32_compute_file(ctx->data, ctx->data_size);
@@ -1441,14 +1458,39 @@ int qzdb_get_file_hash(qzdb_reader_t* ctx, char* out, size_t out_size) {
     }
     uint32_t value = __atomic_load_n(&ctx->file_crc, __ATOMIC_ACQUIRE);
     snprintf(out, out_size, "%08x", value);
+    reader_unpin(ctx);
     return QZDB_OK;
 }
 
 const char** qzdb_get_field_names(qzdb_reader_t* ctx) { return ctx ? (const char**)ctx->field_names : NULL; }
-int qzdb_get_field_count(qzdb_reader_t* ctx) { return ctx ? ctx->field_count : 0; }
-int qzdb_has_field(qzdb_reader_t* ctx, const char* name) { return field_index_normalized(ctx, name) >= 0 ? 1 : 0; }
-int qzdb_get_group_count(qzdb_reader_t* ctx) { return ctx ? ctx->actual_groups : 0; }
-int qzdb_get_pool_count(qzdb_reader_t* ctx) { return ctx ? ctx->pool_count : 0; }
+int qzdb_get_field_count(qzdb_reader_t* ctx) {
+    if (!ctx) return 0;
+    reader_pin(ctx);
+    int fc = ctx->field_count;
+    reader_unpin(ctx);
+    return fc;
+}
+int qzdb_has_field(qzdb_reader_t* ctx, const char* name) {
+    if (!ctx) return 0;
+    reader_pin(ctx);
+    int ok = field_index_normalized(ctx, name) >= 0 ? 1 : 0;
+    reader_unpin(ctx);
+    return ok;
+}
+int qzdb_get_group_count(qzdb_reader_t* ctx) {
+    if (!ctx) return 0;
+    reader_pin(ctx);
+    int g = ctx->actual_groups;
+    reader_unpin(ctx);
+    return g;
+}
+int qzdb_get_pool_count(qzdb_reader_t* ctx) {
+    if (!ctx) return 0;
+    reader_pin(ctx);
+    int p = ctx->pool_count;
+    reader_unpin(ctx);
+    return p;
+}
 
 /* ========================================================================
  * IPv4-mapped IPv6 detection (spec §5.3)
@@ -2906,7 +2948,20 @@ static inline uint32_t reader_stripe_index(void) {
  *   - 16×64B 分片读计数消除多核缓存行乒乓；
  *   - 读写两侧对 reloading 与 stripe->count 均使用 __ATOMIC_SEQ_CST（Dekker 全序），
  *     杜绝 ARM64 弱内存模型下 store→load 重排导致的 UAF。 */
+#define QZDB_TL_PIN_SLOTS 8
+typedef struct {
+    const qzdb_reader_t* ctx;
+    int depth;
+} qzdb_tl_pin_t;
+static __thread qzdb_tl_pin_t tl_pins[QZDB_TL_PIN_SLOTS];
+
 static inline void reader_pin(qzdb_reader_t* ctx) {
+    for (int i = 0; i < QZDB_TL_PIN_SLOTS; i++) {
+        if (tl_pins[i].ctx == ctx) {
+            tl_pins[i].depth++;
+            return;
+        }
+    }
     qzdb_reader_stripe_t* stripes = (qzdb_reader_stripe_t*)ctx->reader_stripes;
     int32_t* cnt = stripes ? &stripes[reader_stripe_index()].count : &ctx->active_readers;
     for (;;) {
@@ -2924,14 +2979,36 @@ static inline void reader_pin(qzdb_reader_t* ctx) {
             __atomic_fetch_sub(cnt, 1, __ATOMIC_RELEASE);
             continue;
         }
-        return;
+        break;
+    }
+    for (int i = 0; i < QZDB_TL_PIN_SLOTS; i++) {
+        if (tl_pins[i].ctx == NULL) {
+            tl_pins[i].ctx = ctx;
+            tl_pins[i].depth = 1;
+            return;
+        }
     }
 }
 
 static inline void reader_unpin(qzdb_reader_t* ctx) {
+    for (int i = 0; i < QZDB_TL_PIN_SLOTS; i++) {
+        if (tl_pins[i].ctx == ctx) {
+            if (--tl_pins[i].depth > 0) return;
+            tl_pins[i].ctx = NULL;
+            break;
+        }
+    }
     qzdb_reader_stripe_t* stripes = (qzdb_reader_stripe_t*)ctx->reader_stripes;
     int32_t* cnt = stripes ? &stripes[reader_stripe_index()].count : &ctx->active_readers;
     __atomic_fetch_sub(cnt, 1, __ATOMIC_RELEASE);
+}
+
+void qzdb_read_begin(qzdb_reader_t* ctx) {
+    if (ctx) reader_pin(ctx);
+}
+
+void qzdb_read_end(qzdb_reader_t* ctx) {
+    if (ctx) reader_unpin(ctx);
 }
 
 void qzdb_free(qzdb_reader_t* ctx) {
@@ -3130,13 +3207,6 @@ int qzdb_find_batch(qzdb_reader_t* ctx, const char** ips, int count, qzdb_batch_
     int gi = ctx->group_index;
     const uint32_t* l1 = ctx->v4_l1;
     for (int base = 0; base < count; base += 8) {
-        if (base > 0 && (base & 255) == 0 &&
-            QZDB_UNLIKELY(__atomic_load_n(&ctx->reloading, __ATOMIC_RELAXED))) {
-            reader_unpin(ctx);
-            reader_pin(ctx);
-            gi = ctx->group_index;
-            l1 = ctx->v4_l1;
-        }
         int chunk = (count - base < 8) ? (count - base) : 8;
         parse_result_t parsed[8];
         uint8_t valid[8];
@@ -3374,7 +3444,7 @@ static int resolve_row_id_fields(qzdb_reader_t* ctx, uint32_t row_id, int group_
         return QZDB_ERR_INVALID_PARAM;
     int count = projection_field_count(field_names);
     if (count < 0) return QZDB_ERR_INVALID_PARAM;
-    for (int i = 0; i < QZDB_MAX_FIELDS; i++) values[i] = "";
+    for (int i = 0; i < count; i++) values[i] = "";
     if (count == 0) return 0;
     uint32_t entry_id = 0;
     int rc = resolve_entry_id_for_row(ctx, row_id, group_index, &entry_id);
@@ -3519,13 +3589,16 @@ int qzdb_find_fields(qzdb_reader_t* ctx, const char* ip_str,
 int qzdb_resolve_field_indices(qzdb_reader_t* ctx, const char** field_names, int count, int* out_indices) {
     if (!ctx || !field_names || !out_indices || count < 0 || count > QZDB_MAX_FIELDS)
         return QZDB_ERR_INVALID_PARAM;
+    reader_pin(ctx);
+    int ret = QZDB_OK;
     for (int i = 0; i < count; i++) {
-        if (!field_names[i]) return QZDB_ERR_INVALID_PARAM;
+        if (!field_names[i]) { ret = QZDB_ERR_INVALID_PARAM; break; }
         int idx = field_index_normalized(ctx, field_names[i]);
-        if (idx < 0) return QZDB_ERR_INVALID_PARAM;  /* 严格 fail-closed，杜绝未知字段名 */
+        if (idx < 0) { ret = QZDB_ERR_INVALID_PARAM; break; }  /* 严格 fail-closed，杜绝未知字段名 */
         out_indices[i] = idx;
     }
-    return QZDB_OK;
+    reader_unpin(ctx);
+    return ret;
 }
 
 static inline int fast_resolve_entry_base(qzdb_reader_t* ctx, uint32_t row_id, int group,
@@ -3700,18 +3773,32 @@ int qzdb_find_values_uint_fast(qzdb_reader_t* ctx, uint32_t ip_int,
                                 const int* indices, int count, qzdb_value_t* out_values) {
     if (!ctx || !indices || !out_values || count < 0 || count > QZDB_MAX_FIELDS)
         return QZDB_ERR_INVALID_PARAM;
-    if (!ctx->has_v4) return QZDB_ERR_NOT_FOUND;
-    uint32_t row_id = trie_walk_v4(ctx, ip_int);
-    return resolve_row_id_values_fast_impl(ctx, row_id, ctx->group_index, indices, count, out_values);
+    reader_pin(ctx);
+    int ret;
+    if (!ctx->has_v4) {
+        ret = QZDB_ERR_NOT_FOUND;
+    } else {
+        uint32_t row_id = trie_walk_v4(ctx, ip_int);
+        ret = resolve_row_id_values_fast_impl(ctx, row_id, ctx->group_index, indices, count, out_values);
+    }
+    reader_unpin(ctx);
+    return ret;
 }
 
 int qzdb_find_values_v6_fast(qzdb_reader_t* ctx, const uint8_t* ip_bin,
                               const int* indices, int count, qzdb_value_t* out_values) {
     if (!ctx || !ip_bin || !indices || !out_values || count < 0 || count > QZDB_MAX_FIELDS)
         return QZDB_ERR_INVALID_PARAM;
-    if (!ctx->has_v6) return QZDB_ERR_NOT_FOUND;
-    uint32_t row_id = trie_walk_v6(ctx, ip_bin);
-    return resolve_row_id_values_fast_impl(ctx, row_id, ctx->group_index, indices, count, out_values);
+    reader_pin(ctx);
+    int ret;
+    if (!ctx->has_v6) {
+        ret = QZDB_ERR_NOT_FOUND;
+    } else {
+        uint32_t row_id = trie_walk_v6(ctx, ip_bin);
+        ret = resolve_row_id_values_fast_impl(ctx, row_id, ctx->group_index, indices, count, out_values);
+    }
+    reader_unpin(ctx);
+    return ret;
 }
 
 int qzdb_find_values_fast(qzdb_reader_t* ctx, const char* ip_str,
@@ -3728,24 +3815,34 @@ int qzdb_find_fields_uint_fast(qzdb_reader_t* ctx, uint32_t ip_int,
                                 const int* indices, int count, const char** out_ptrs) {
     if (!ctx || !indices || !out_ptrs || count < 0 || count > QZDB_MAX_FIELDS)
         return QZDB_ERR_INVALID_PARAM;
+    reader_pin(ctx);
+    int ret;
     if (!ctx->has_v4) {
         for (int i = 0; i < count; i++) out_ptrs[i] = "";
-        return QZDB_ERR_NOT_FOUND;
+        ret = QZDB_ERR_NOT_FOUND;
+    } else {
+        uint32_t row_id = trie_walk_v4(ctx, ip_int);
+        ret = resolve_row_id_fields_fast_impl(ctx, row_id, ctx->group_index, indices, count, out_ptrs);
     }
-    uint32_t row_id = trie_walk_v4(ctx, ip_int);
-    return resolve_row_id_fields_fast_impl(ctx, row_id, ctx->group_index, indices, count, out_ptrs);
+    reader_unpin(ctx);
+    return ret;
 }
 
 int qzdb_find_fields_v6_fast(qzdb_reader_t* ctx, const uint8_t* ip_bin,
                               const int* indices, int count, const char** out_ptrs) {
     if (!ctx || !ip_bin || !indices || !out_ptrs || count < 0 || count > QZDB_MAX_FIELDS)
         return QZDB_ERR_INVALID_PARAM;
+    reader_pin(ctx);
+    int ret;
     if (!ctx->has_v6) {
         for (int i = 0; i < count; i++) out_ptrs[i] = "";
-        return QZDB_ERR_NOT_FOUND;
+        ret = QZDB_ERR_NOT_FOUND;
+    } else {
+        uint32_t row_id = trie_walk_v6(ctx, ip_bin);
+        ret = resolve_row_id_fields_fast_impl(ctx, row_id, ctx->group_index, indices, count, out_ptrs);
     }
-    uint32_t row_id = trie_walk_v6(ctx, ip_bin);
-    return resolve_row_id_fields_fast_impl(ctx, row_id, ctx->group_index, indices, count, out_ptrs);
+    reader_unpin(ctx);
+    return ret;
 }
 
 int qzdb_find_fields_fast(qzdb_reader_t* ctx, const char* ip_str,
@@ -3773,7 +3870,9 @@ uint32_t qzdb_get_generation(const qzdb_reader_t* ctx) {
  * compiler cannot elide them), then discarded.
  * ======================================================================== */
 void qzdb_warmup(qzdb_reader_t* reader) {
-    if (reader == NULL || reader->data == NULL || reader->data_size == 0) return;
+    if (reader == NULL) return;
+    reader_pin(reader);
+    if (reader->data == NULL || reader->data_size == 0) { reader_unpin(reader); return; }
     const size_t page = 4096;
     uint8_t touch_sum = 0;
     if (reader->has_v4 && reader->off_v4_jump > 0) {
@@ -3803,4 +3902,5 @@ void qzdb_warmup(qzdb_reader_t* reader) {
         }
     }
     (void)touch_sum;
+    reader_unpin(reader);
 }

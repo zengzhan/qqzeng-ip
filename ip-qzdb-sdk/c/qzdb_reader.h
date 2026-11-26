@@ -258,6 +258,12 @@ int  qzdb_verify_crc(qzdb_reader_t* ctx);
  * Safe to call any time after a successful init. */
 void qzdb_warmup(qzdb_reader_t* ctx);
 
+/* Nestable read-guard for callers holding borrowed pointers across multiple
+ * queries (e.g. qzdb_find / qzdb_find_fields_fast / metadata getters) while
+ * another thread may call qzdb_reload / qzdb_reload_buffer. */
+void qzdb_read_begin(qzdb_reader_t* ctx);
+void qzdb_read_end(qzdb_reader_t* ctx);
+
 /* ---- Query ---- */
 int      qzdb_find(qzdb_reader_t* ctx, const char* ip_str, qzdb_geo_info_t* result);
 /* 带长度的 IP 查询入口：显式拒绝内嵌 NUL 字节，与其他 7 语言语义完全一致 */

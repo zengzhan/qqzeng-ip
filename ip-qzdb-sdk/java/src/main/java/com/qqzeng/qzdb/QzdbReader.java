@@ -170,13 +170,19 @@ public final class QzdbReader implements AutoCloseable {
          */
         MmapSource source;
         /**
+         * 构造期固化的映射标志：绝不可用会被 {@link #unmapIfMapped()} 置空的 {@code source}
+         * 判定是否映射快照，否则已退役快照被置空后会被 {@link #tryPin()} 误判为堆内快照，
+         * 进而放行并发读者去读已 munmap 的内存（JDK 17-21 SIGSEGV / JDK 25+ 异常）。
+         */
+        final boolean mapped;
+        /**
          * 引用计数（初始为 1，归 activeSnapshot 所有；每次并发查询 +1，退出 -1）。
          * 归零时才真正执行 unmapIfMapped()，彻底杜绝 JDK 17-21 SIGSEGV 与 JDK 25+ IllegalStateException。
          */
         private final AtomicInteger pinCount = new AtomicInteger(1);
 
         boolean tryPin() {
-            if (source == null) return true;
+            if (!mapped) return true;
             while (true) {
                 int c = pinCount.get();
                 if (c <= 0) return false;
@@ -185,7 +191,7 @@ public final class QzdbReader implements AutoCloseable {
         }
 
         void releasePin() {
-            if (source == null) return;
+            if (!mapped) return;
             if (pinCount.decrementAndGet() == 0) {
                 unmapIfMapped();
             }
@@ -302,6 +308,7 @@ public final class QzdbReader implements AutoCloseable {
             this.dataLen = data.capacity();
             this.groupIndex = groupIndex;
             this.source = source;
+            this.mapped = (source != null);
 
             parseHeader();
             parseSectionBounds();
