@@ -902,7 +902,8 @@ static void geo_cache_free(qzdb_reader_t* ctx) {
  * 旧实现每条目 ~cnt+4 次 malloc/strdup/realloc（指针数组 + 逐字段 strdup +
  * entry + pipe 两次分配），填充期 allocator 开销与堆碎片随条目数放大；现在
  * 字符串只解码一次，各段先记栈上偏移、末尾统一落指针，realloc 移动 base
- * 无需修复指针，全生命周期至多三次 realloc，destroy 单次 free。
+ * 无需修复指针，初始 1024B arena 覆盖常规 6~25 字段条目（0 次扩容 realloc），
+ * 仅超长条目按倍增扩容，末尾收紧到实际大小，destroy 单次 free。
  * pipe 始终建入块内（OOM 则整块放弃报 miss，回退无缓存路径，fail-closed）。
  * 语义不变：构建到完整才返回，不做缓存交互。 */
 static qzdb_cache_entry_t* geo_cache_build(qzdb_reader_t* ctx, int group,

@@ -198,7 +198,10 @@ def _fast_parse_ip(s):
         return r
     r = _parse_memo_prev.get(s, _PARSE_MEMO_MISS)
     if r is not _PARSE_MEMO_MISS:
-        _parse_memo_insert(s, r)  # 上代命中：晋升，热点跨代存活
+        # 仅当当前代尚有空位时才晋升，绝不在上代命中时触发整代轮换，
+        # 否则两组各 8192 个高频 IP 交替访问时会在命中 prev 的瞬间将同代其余 8191 个条目全部驱逐。
+        if len(_parse_memo) < _PARSE_MEMO_GEN_CAP:
+            _parse_memo[s] = r
         return r
     if ':' not in s:
         r = _fast_parse_ipv4(s)

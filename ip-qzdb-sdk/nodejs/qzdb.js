@@ -2122,7 +2122,10 @@ function _fastParseIpInternal(ip) {
   if (cached !== undefined) return cached;
   cached = _parseMemoPrev.get(s);
   if (cached !== undefined) {
-    _parseMemoInsert(s, cached); // 上代命中：晋升，热点跨代存活
+    // 仅当当前代尚有空位时才晋升，绝不在上代命中时触发整代轮换（防 A/B 8192 交替全灭）。
+    if (_parseMemo.size < _PARSE_MEMO_GEN_CAP) {
+      _parseMemo.set(s, cached);
+    }
     return cached;
   }
   const rec = _fastParseIpUncached(s);
@@ -2426,3 +2429,4 @@ module.exports.FIELD_NAMES_SOURCE_EDITION = FIELD_NAMES_SOURCE_EDITION;
 module.exports.FIELD_NAMES_SOURCE_SYNTHETIC = FIELD_NAMES_SOURCE_SYNTHETIC;
 // 内部格式化器（FORMAT §10.5 统一契约）——导出仅供边界回归测试使用
 module.exports._formatNativeFloat = _formatNativeFloat;
+module.exports._parseMemoClear = () => { _parseMemo.clear(); _parseMemoPrev.clear(); };
