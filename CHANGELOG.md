@@ -17,6 +17,21 @@
 
 ---
 
+## [Unreleased] - 工程审查修复（未发版）
+
+### Fixed
+- **Go SDK**: 修复 `Reload()` 与 `Close()` 并发时快照复活竞态：Close 后槽位改用哨兵标记（不再回写 nil），发布路径改为 CAS——关闭后 Reload 发布必然失败并显式释放新快照的 mmap；新增确定性屏障回归测试与锤击测试（`TestReloadAfterCloseDoesNotResurrect` / `TestCloseVsReloadHammer`，-race 下运行）。查询路径仍为单次原子 Load，无锁无变。
+- **Python SDK / Node.js SDK**: IP 解析记忆表由「满载整体清空」改为两代有界轮换（generational FIFO）：当前代满 8K 条整体轮换为上代（O(1) 引用交换），上代命中即晋升——高基数流量下热点 IP 跨代存活，峰值内存不变（两代合计 16K 条）；Python 另对齐 Node.js：非法解析结果不再入缓存，杜绝负缓存污染。热路径命中开销零增加。
+- **Rust SDK**: 线程本地 GeoInfo 缓存表由整表预分配（≈2MB/线程）改为行体按需懒分配（基础表 128KB/线程，触及的行才分配 128B）：内存 ∝ 实际工作集而非线程数，热点负载下 64 线程不再放大到 ~128MB；行索引与命中行为不变。
+- **C SDK**: GeoInfo 解码缓存条目由「每条目 ~cnt+4 次 malloc/strdup」改为单块连续分配（entry + values[] + 字符串区 + pipe 区同块，构建期至多 3 次 realloc），`geo_cache_entry_destroy` 单次 free 整体回收；无锁 CAS 发布与指针生命周期契约不变。
+- **Java SDK**: `findBatch`/`findBatchFields` 改为整批只获取并固定一次快照（旧实现逐条 acquire/releasePin），逐条三态语义保持；批内共享同一快照视图（对齐 C/Go 批量语义）。
+
+### Performance
+- **Java SDK**: IPv6 Trie 热路径（`lookupV6Bytes`）机器字预读：纯 Trie 查询实测 39 → 35 ns/op（-10%，std_global 库热池+混合流微基准）。Go/C 同型改造经实测无收益（Go 噪声内持平；C 反而 22 → 26 ns/op），已回退不合并。
+- **Java SDK**: 批量路径单快照复用：混合负载实测约 3-5% 提升（收益主要在语义对齐，生命周期开销本就非主导）。
+
+---
+
 ## [2026-11-23] - v1.2.3 (全语言 Patch 版本发布)
 
 ### Changed

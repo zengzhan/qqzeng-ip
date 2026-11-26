@@ -107,7 +107,10 @@ func (b *Builder) Build() (*QzdbReader, error) {
 		return nil, err
 	}
 	r := &QzdbReader{}
-	r.installSnapshot(s)
+	if !r.publishSnapshot(s) {
+		releaseUnpublished(s)
+		return nil, newErr(ErrCodeInvalidParam, "reader is closed")
+	}
 	if b.warmup {
 		r.Warmup()
 	}

@@ -151,18 +151,34 @@ _HEX_DIGITS = '0123456789abcdefABCDEF'
 
 # IP 字符串解析记忆表（PERF）。真实业务里 IP 高度重复（日志/风控/网关），
 # 而解析是纯函数，命中即可省掉整段校验：实测重复语料下 620ns → ~30ns。
-# 有界：满则整体清空（摊销 O(1)），避免长驻进程无界增长；上限取 16K，
-# 单条约 150 字节，峰值约 2.5MB，且与既有 _geo_cache 的「有界缓存」设计一致。
+# 两代有界缓存（generational FIFO，替代旧「满则整体清空」）：当前代满 8192 条
+# 即整体轮换为上代（单次全局重绑定，O(1)，不清空不遍历）；上代命中即晋升回
+# 当前代——高基数流量下高频 IP 跨代存活、随机 IP 两代内消亡，峰值内存与旧
+# 实现一致（两代合计 16K 条，单条约 150 字节 ≈ 2.5MB）。当前代命中路径仍只有
+# 一次 dict.get，热路径零额外开销。
+# 非法解析（None）不入缓存：与 Node.js 一致，随机非法串无法污染缓存。
 # CPython 下 dict 读写受 GIL 保护；free-threaded（PEP 703）下 dict 本身线程安全，
-# 清空与写入不会撕裂，最坏情况是偶发未命中重算——不影响正确性。
-_PARSE_MEMO_CAP = 16384
-_parse_memo = {}
+# 代际轮换是单次全局重绑定（原子），最坏情况偶发未命中重算——不影响正确性。
+_PARSE_MEMO_CAP = 16384          # 两代合计上限（峰值内存不变）
+_PARSE_MEMO_GEN_CAP = _PARSE_MEMO_CAP // 2
+_parse_memo = {}                 # 当前代
+_parse_memo_prev = {}            # 上一代：命中即晋升，热点条目跨代存活
 _PARSE_MEMO_MISS = object()
 
 
 def _parse_memo_clear():
     """清空解析记忆表（长跑进程想主动回收这几 MB 时可调用）。"""
     _parse_memo.clear()
+    _parse_memo_prev.clear()
+
+
+def _parse_memo_insert(s, r):
+    """入当前代；满则先轮换（上代=旧当前代，新代从空开始），不逐条淘汰。"""
+    global _parse_memo, _parse_memo_prev
+    if len(_parse_memo) >= _PARSE_MEMO_GEN_CAP:
+        _parse_memo_prev = _parse_memo
+        _parse_memo = {}
+    _parse_memo[s] = r
 
 
 def _fast_parse_ip(s):
@@ -177,18 +193,19 @@ def _fast_parse_ip(s):
     n = len(s)
     if n == 0 or n > 45:
         return None
-    memo = _parse_memo
-    r = memo.get(s, _PARSE_MEMO_MISS)
+    r = _parse_memo.get(s, _PARSE_MEMO_MISS)
     if r is not _PARSE_MEMO_MISS:
+        return r
+    r = _parse_memo_prev.get(s, _PARSE_MEMO_MISS)
+    if r is not _PARSE_MEMO_MISS:
+        _parse_memo_insert(s, r)  # 上代命中：晋升，热点跨代存活
         return r
     if ':' not in s:
         r = _fast_parse_ipv4(s)
     else:
         r = _fast_parse_ipv6(s)
-    if len(memo) < _PARSE_MEMO_CAP:
-        memo[s] = r
-    else:
-        memo.clear()
+    if r is not None:            # 非法解析不入缓存（杜绝负缓存污染）
+        _parse_memo_insert(s, r)
     return r
 
 

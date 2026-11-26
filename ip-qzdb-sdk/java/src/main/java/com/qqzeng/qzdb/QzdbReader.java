@@ -1332,6 +1332,21 @@ public final class QzdbReader implements AutoCloseable {
     }
 
     private Optional<GeoInfo> findInternal(String ipStr, String[] fieldFilter) {
+        Snapshot snap = acquireSnapshot();
+        try {
+            return findOnSnapshot(snap, ipStr, fieldFilter);
+        } finally {
+            snap.releasePin();
+        }
+    }
+
+    /**
+     * 在已固定的快照上执行单条查询（校验 + 解析 + Trie + 解码）。
+     * 批量路径复用同一快照，避免每条重复 acquire/releasePin 生命周期操作。
+     * 三态语义与 {@link #find(String)} 完全一致：非法 IP 抛 {@link QzdbException}，
+     * 未命中返回 empty。
+     */
+    private static Optional<GeoInfo> findOnSnapshot(Snapshot snap, String ipStr, String[] fieldFilter) {
         if (ipStr == null || ipStr.isEmpty()) {
             throw new QzdbException(ErrorCode.INVALID_IP, "IP address string cannot be empty");
         }
@@ -1339,22 +1354,17 @@ public final class QzdbReader implements AutoCloseable {
         if (ip.isEmpty()) {
             throw new QzdbException(ErrorCode.INVALID_IP, "IP address string cannot be empty");
         }
-        Snapshot snap = acquireSnapshot();
-        try {
-            int rowId;
-            if (ip.indexOf(':') >= 0) {
-                byte[] bytes = V6_SCRATCH.get();
-                parseIPv6Into(ip, bytes);
-                rowId = isV4MappedBytes(bytes)
-                        ? lookupRowIdUintInternal(snap, v4FromMappedBytes(bytes))
-                        : lookupV6Bytes(snap, bytes);
-            } else {
-                rowId = lookupRowIdUintInternal(snap, parseIPv4Uint(ip));
-            }
-            return resolveRow(snap, rowId, fieldFilter);
-        } finally {
-            snap.releasePin();
+        int rowId;
+        if (ip.indexOf(':') >= 0) {
+            byte[] bytes = V6_SCRATCH.get();
+            parseIPv6Into(ip, bytes);
+            rowId = isV4MappedBytes(bytes)
+                    ? lookupRowIdUintInternal(snap, v4FromMappedBytes(bytes))
+                    : lookupV6Bytes(snap, bytes);
+        } else {
+            rowId = lookupRowIdUintInternal(snap, parseIPv4Uint(ip));
         }
+        return resolveRow(snap, rowId, fieldFilter);
     }
 
     /** rowId → IPRow → dimensionMask 选维 → GeoEntry 解包（所有 find* 变体的唯一汇聚路径）。 */
@@ -1392,41 +1402,46 @@ public final class QzdbReader implements AutoCloseable {
 
     /**
      * 批量顺序查询（SDK 内部不起线程池）。输入输出数组等长一一对应，逐条保留三态语义。
+     * 整批只获取并固定一次快照（旧实现逐条 acquire/release，重复生命周期开销）。
      *
      * @param ips IP 地址列表；null 返回空列表
      * @return 与输入等长的 {@link BatchResult} 列表
      */
     public List<BatchResult> findBatch(List<String> ips) {
         if (ips == null) return java.util.Collections.emptyList();
-        List<BatchResult> results = new ArrayList<>(ips.size());
-        for (String ip : ips) {
-            try {
-                Optional<GeoInfo> info = find(ip);
-                results.add(new BatchResult(ip, info, null));
-            } catch (QzdbException e) {
-                results.add(new BatchResult(ip, Optional.empty(), e));
-            }
-        }
-        return results;
+        return findBatchInternal(ips, null);
     }
 
     /**
-     * 批量字段投影查询。
+     * 批量字段投影查询（与 {@link #findBatch(List)} 共享单快照批量核心）。
      *
      * @param ips    IP 地址列表；null 返回空列表
-     * @param fields 要查询的字段名（归一化匹配）
+     * @param fields 要查询的字段名（归一化匹配）；null/空数组等价于 {@link #findBatch(List)}
      * @return 与输入等长的 {@link BatchResult} 列表
      */
     public List<BatchResult> findBatchFields(List<String> ips, String[] fields) {
         if (ips == null) return java.util.Collections.emptyList();
+        return findBatchInternal(ips, (fields == null || fields.length == 0) ? null : fields);
+    }
+
+    /**
+     * 批量核心：整批 pin 一次快照、逐条查询。批内共享同一快照视图（与 C/Go 批量
+     * 语义一致）；reader 在批中被 close/reload 不影响本批——引用计数保证快照存活。
+     * reader 已关闭时与单条查询行为一致：acquireSnapshot 抛 {@link IllegalStateException}。
+     */
+    private List<BatchResult> findBatchInternal(List<String> ips, String[] fieldFilter) {
         List<BatchResult> results = new ArrayList<>(ips.size());
-        for (String ip : ips) {
-            try {
-                Optional<GeoInfo> info = findFields(ip, fields);
-                results.add(new BatchResult(ip, info, null));
-            } catch (QzdbException e) {
-                results.add(new BatchResult(ip, Optional.empty(), e));
+        Snapshot snap = acquireSnapshot();
+        try {
+            for (String ip : ips) {
+                try {
+                    results.add(new BatchResult(ip, findOnSnapshot(snap, ip, fieldFilter), null));
+                } catch (QzdbException e) {
+                    results.add(new BatchResult(ip, Optional.empty(), e));
+                }
             }
+        } finally {
+            snap.releasePin();
         }
         return results;
     }
@@ -2111,10 +2126,18 @@ public final class QzdbReader implements AutoCloseable {
         long nOff = s.offV6Nodes;
         int nodeCount = s.v6NodeCount;
 
+        // 机器字预读（对齐 .NET ipHigh/ipLow 与 Node w0..w3）：每步由「数组加载 +
+        // 双移位」变为寄存器移位，语义逐位等价（BE 字、MSB 先行）。
+        int w0 = (ip16[0] & 0xFF) << 24 | (ip16[1] & 0xFF) << 16 | (ip16[2] & 0xFF) << 8 | (ip16[3] & 0xFF);
+        int w1 = (ip16[4] & 0xFF) << 24 | (ip16[5] & 0xFF) << 16 | (ip16[6] & 0xFF) << 8 | (ip16[7] & 0xFF);
+        int w2 = (ip16[8] & 0xFF) << 24 | (ip16[9] & 0xFF) << 16 | (ip16[10] & 0xFF) << 8 | (ip16[11] & 0xFF);
+        int w3 = (ip16[12] & 0xFF) << 24 | (ip16[13] & 0xFF) << 16 | (ip16[14] & 0xFF) << 8 | (ip16[15] & 0xFF);
+
         if (s.v6Node24) {
             for (int depth = jumpBits; depth < 128; depth++) {
                 if (idx >= nodeCount) return 0;
-                int bit = (ip16[depth >> 3] >>> (7 - (depth & 7))) & 1;
+                int word = depth < 32 ? w0 : depth < 64 ? w1 : depth < 96 ? w2 : w3;
+                int bit = (word >>> (31 - (depth & 31))) & 1;
                 int off = (int) (nOff + (long) idx * 6 + (bit == 0 ? 0 : 3));
                 int child = readU24(d, off);
                 if ((child & 0x800000) != 0) return child & SENTINEL_MASK_24;
@@ -2124,7 +2147,8 @@ public final class QzdbReader implements AutoCloseable {
         } else {
             for (int depth = jumpBits; depth < 128; depth++) {
                 if (idx >= nodeCount) return 0;
-                int bit = (ip16[depth >> 3] >>> (7 - (depth & 7))) & 1;
+                int word = depth < 32 ? w0 : depth < 64 ? w1 : depth < 96 ? w2 : w3;
+                int bit = (word >>> (31 - (depth & 31))) & 1;
                 int off = (int) (nOff + (long) idx * 8 + (bit == 0 ? 0 : 4));
                 int child = readU32(d, off);
                 if ((child & SENTINEL) != 0) return child & SENTINEL_MASK_31;

@@ -883,12 +883,7 @@ static void geo_cache_init(qzdb_reader_t* ctx) {
 }
 
 static void geo_cache_entry_destroy(qzdb_cache_entry_t* e) {
-    if (!e) return;
-    if (e->values) {
-        for (int k = 0; k < e->count; k++) free(e->values[k]);
-        free(e->values);
-    }
-    free(e->pipe);
+    /* 单块分配（values/pipe 均指向块内）：单次 free 整体回收。 */
     free(e);
 }
 
@@ -902,32 +897,71 @@ static void geo_cache_free(qzdb_reader_t* ctx) {
     ctx->geo_cache_cap = 0;
 }
 
-/* Decode (group, entry_id) into a fresh heap array. No cache interaction.
- * 栈帧瘦身（M1）：复用单个 512B 栈缓冲逐字段解码，避免 64×512B = 32 KB 栈帧在 musl/小栈线程溢出。 */
-static char** geo_cache_decode(qzdb_reader_t* ctx, int group, uint32_t entry_id, int* out_count) {
+/* Decode (group, entry_id) into a freshly built single-block cache entry.
+ * 单块连续分配：entry 结构 + values[] 指针数组 + 字符串区 + pipe 区同块内存。
+ * 旧实现每条目 ~cnt+4 次 malloc/strdup/realloc（指针数组 + 逐字段 strdup +
+ * entry + pipe 两次分配），填充期 allocator 开销与堆碎片随条目数放大；现在
+ * 字符串只解码一次，各段先记栈上偏移、末尾统一落指针，realloc 移动 base
+ * 无需修复指针，全生命周期至多三次 realloc，destroy 单次 free。
+ * pipe 始终建入块内（OOM 则整块放弃报 miss，回退无缓存路径，fail-closed）。
+ * 语义不变：构建到完整才返回，不做缓存交互。 */
+static qzdb_cache_entry_t* geo_cache_build(qzdb_reader_t* ctx, int group,
+                                           uint32_t entry_id, uint64_t key, int* out_count) {
     *out_count = 0;
     if (!ctx || group < 0 || group >= ctx->actual_groups || !ctx->group_field_counts) return NULL;
     int cnt = ctx->group_field_counts[group];
     if (cnt <= 0 || cnt > QZDB_MAX_FIELDS) return NULL;
-    char** pv = calloc((size_t)cnt, sizeof(char*));
-    if (!pv) return NULL;
+
+    size_t hdr = sizeof(qzdb_cache_entry_t) + (size_t)cnt * sizeof(char*);
+    size_t acap = 1024;                    /* arena 初始估算：典型条目 ~300B */
+    char* base = malloc(hdr + acap);
+    if (!base) return NULL;
+    uint32_t offs[QZDB_MAX_FIELDS];        /* 各字段串在 arena 内偏移（栈上，realloc 不受影响） */
     char buf[QZDB_VALUE_BUF_SIZE];
+    size_t aused = 0, pipe_need = (size_t)(cnt - 1) + 1;   /* 分隔符 + NUL */
     for (int i = 0; i < cnt; i++) {
         char* val = NULL;
         if (decode_geo_field_buf(ctx, entry_id, group, i, buf, QZDB_VALUE_BUF_SIZE, &val) != QZDB_OK) {
-            for (int k = 0; k < i; k++) free(pv[k]);
-            free(pv);
+            free(base);
             return NULL;
         }
-        pv[i] = strdup(val ? val : "");
-        if (!pv[i]) {   /* OOM mid-way: unwind, report miss */
-            for (int k = 0; k < i; k++) free(pv[k]);
-            free(pv);
-            return NULL;
+        size_t l = strlen(val ? val : "") + 1;
+        pipe_need += l - 1;
+        if (aused + l > acap) {
+            while (aused + l > acap) acap <<= 1;
+            char* grown = realloc(base, hdr + acap);
+            if (!grown) { free(base); return NULL; }
+            base = grown;
         }
+        offs[i] = (uint32_t)aused;
+        memcpy(base + hdr + aused, val ? val : "", l);
+        aused += l;
     }
+    if (aused + pipe_need > acap) {
+        char* grown = realloc(base, hdr + aused + pipe_need);
+        if (!grown) { free(base); return NULL; }
+        base = grown;
+    }
+    size_t pipe_off = aused, pos = aused;
+    for (int i = 0; i < cnt; i++) {       /* to_pipe：字段串已就位，非重叠拷贝 */
+        if (i > 0) base[hdr + pos++] = '|';
+        size_t l = strlen(base + hdr + offs[i]);
+        memcpy(base + hdr + pos, base + hdr + offs[i], l);
+        pos += l;
+    }
+    base[hdr + pos] = '\0';
+
+    /* 收紧到实际大小（失败无妨，保留略大块）；随后统一落指针。 */
+    char* tight = realloc(base, hdr + aused + pipe_need);
+    if (tight) base = tight;
+    qzdb_cache_entry_t* e = (qzdb_cache_entry_t*)base;
+    e->key = key;
+    e->count = cnt;
+    e->values = (char**)(base + sizeof(qzdb_cache_entry_t));
+    for (int i = 0; i < cnt; i++) e->values[i] = base + hdr + offs[i];
+    e->pipe = base + hdr + pipe_off;
     *out_count = cnt;
-    return pv;
+    return e;
 }
 
 /*
@@ -977,37 +1011,8 @@ static char** geo_cache_lookup(qzdb_reader_t* ctx, int group, uint32_t entry_id,
     if (free_idx == UINT32_MAX) return NULL;   /* window full — never evict */
 
     int cnt = 0;
-    char** pv = geo_cache_decode(ctx, group, entry_id, &cnt);
-    if (!pv) return NULL;
-    qzdb_cache_entry_t* e = malloc(sizeof(*e));
-    if (!e) {
-        for (int k = 0; k < cnt; k++) free(pv[k]);
-        free(pv);
-        return NULL;
-    }
-    e->key = key; e->values = pv; e->count = cnt;
-    /* 解码期一次性预编码 to_pipe（qzdb_find_str 快路径直拷）。OOM 降级为
-     * NULL：快路径探测到 NULL 即回退逐字段拼接慢路径，行为不变。 */
-    char* pipe = malloc(1);
-    if (pipe) {
-        size_t need = 1, pos = 0;
-        for (int k = 0; k < cnt; k++) need += strlen(pv[k]) + 1;
-        char* grown = realloc(pipe, need);
-        if (grown) {
-            pipe = grown;
-            for (int k = 0; k < cnt; k++) {
-                if (k > 0) pipe[pos++] = '|';
-                size_t l = strlen(pv[k]);
-                memcpy(pipe + pos, pv[k], l);
-                pos += l;
-            }
-            pipe[pos] = '\0';
-        } else {
-            free(pipe);
-            pipe = NULL;
-        }
-    }
-    e->pipe = pipe;
+    qzdb_cache_entry_t* e = geo_cache_build(ctx, group, entry_id, key, &cnt);
+    if (!e) return NULL;
 
     qzdb_cache_entry_t* expected = NULL;
     if (__atomic_compare_exchange_n(&ctx->geo_cache[free_idx], &expected, e,

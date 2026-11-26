@@ -67,8 +67,9 @@ typedef struct {
  */
 typedef struct qzdb_cache_entry {
     uint64_t key;     /* (group << 40) | entry_id */
-    char**   values;  /* count heap strings, alive for the snapshot's lifetime */
-    char*    pipe;    /* 预编码的 to_pipe 文本（values 以 '|' 连接），qzdb_find_str 快路径直拷；NULL = 未建（OOM 降级走慢路径） */
+    char**   values;  /* count 个字段串指针（单块分配：与 pipe/字符串区同一块内存，
+                       * geo_cache_entry_destroy 单次 free 整体回收；字符串在快照生命周期内有效） */
+    char*    pipe;    /* 预编码的 to_pipe 文本（values 以 '|' 连接），qzdb_find_str 快路径直拷 */
     int      count;
 } qzdb_cache_entry_t;
 

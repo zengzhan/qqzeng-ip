@@ -2092,25 +2092,43 @@ function _fastParseIPv4(s) {
 
 // IP 字符串解析记忆表（PERF）。真实业务里 IP 高度重复（日志 / 风控 / 网关），
 // 而解析是纯函数，命中即跳过整段校验与构造：实测 75ns → 12.6ns。
-// 有界：满则整体清空（摊销 O(1)），避免长驻进程无界增长；上限 16K 条。
+// 两代有界缓存（generational FIFO，替代旧「满则整体清空」）：当前代满 8K 条即
+// 整体轮换为上代（单次引用交换，O(1)，不清空不遍历）；上代命中即晋升回当前
+// 代——高基数流量下高频 IP 跨代存活、随机 IP 两代内消亡，峰值内存与旧实现
+// 一致（两代合计 16K 条）。当前代命中路径仍只有一次 Map.get，热路径零额外开销。
+// 非法解析不入缓存（原有语义保持），随机非法串无法污染缓存。
 // 记录以 Object.freeze 冻结后才入表：parseIp 是公开导出（QzdbReader.parseIp），
 // 命中时返回的是**同一个共享对象**，冻结可挡住外部改写 .v4 / .v6 污染缓存
 // （实测 freeze 开销在噪声内，约 0~2%）。
 const _PARSE_MEMO_CAP = 16384;
-const _parseMemo = new Map();
+const _PARSE_MEMO_GEN_CAP = _PARSE_MEMO_CAP >>> 1;
+let _parseMemo = new Map(); // 当前代
+let _parseMemoPrev = new Map(); // 上一代：命中即晋升，热点条目跨代存活
+
+function _parseMemoInsert(s, rec) {
+  if (_parseMemo.size >= _PARSE_MEMO_GEN_CAP) {
+    _parseMemoPrev = _parseMemo; // 代际轮换：旧当前代成为上代，不清空不遍历
+    _parseMemo = new Map();
+  }
+  _parseMemo.set(s, rec);
+}
 
 function _fastParseIpInternal(ip) {
   if (typeof ip !== 'string') return null;
   const s = ip;
   const n = s.length;
   if (n === 0 || n > 45) return null;
-  const cached = _parseMemo.get(s);
+  let cached = _parseMemo.get(s);
   if (cached !== undefined) return cached;
+  cached = _parseMemoPrev.get(s);
+  if (cached !== undefined) {
+    _parseMemoInsert(s, cached); // 上代命中：晋升，热点跨代存活
+    return cached;
+  }
   const rec = _fastParseIpUncached(s);
   if (rec !== null) {
     const frozen = Object.freeze(rec);
-    if (_parseMemo.size < _PARSE_MEMO_CAP) _parseMemo.set(s, frozen);
-    else _parseMemo.clear();
+    _parseMemoInsert(s, frozen);
     return frozen;
   }
   return null;

@@ -39,7 +39,7 @@ pub use bitmask::IpAttrFlags;
 const SENTINEL: u32 = 0x80000000;
 const SENTINEL_MASK_31: u32 = 0x7FFFFFFF;
 
-/// GeoInfo 线程本地解码缓存（4 路组相联，每线程一份，槽位表懒分配）。
+/// GeoInfo 线程本地解码缓存（4 路组相联，每线程一份，行体按需懒分配）。
 /// 慢速命中路径全在本核私有内存，快照/共享状态零写入——多线程目标是
 /// 纯读扩展（对齐 C/Go/C# 的 GC/指针语义）。
 ///
@@ -54,7 +54,6 @@ const LOCAL_GEO_LINES: usize = 1 << 14;
 #[cfg(target_arch = "wasm32")]
 const LOCAL_GEO_LINES: usize = 1 << 10;
 const LOCAL_GEO_WAYS: usize = 4;
-const LOCAL_GEO_SLOTS: usize = LOCAL_GEO_LINES * LOCAL_GEO_WAYS;
 
 /// 快照代次：进程内单调递增，作为线程本地缓存键的前半段。
 /// reload/重建出的新快照拿到新 generation，旧代缓存项永不复用（杜绝地址 ABA。
@@ -1596,17 +1595,26 @@ struct LocalGeoSlot {
     val: Arc<GeoInfo>,
 }
 
+/// 一行的 4 个槽位连续存放（组相联探测与替换都在行内完成）。
+struct LocalGeoLine {
+    slots: [Option<LocalGeoSlot>; LOCAL_GEO_WAYS],
+}
+
 struct LocalGeoTable {
-    slots: Box<[Option<LocalGeoSlot>]>, // len = LOCAL_GEO_LINES * LOCAL_GEO_WAYS
+    /// 行体按需懒分配：基础表只有 LINES 个指针（16K × 8B ≈ 128KB/线程，
+    /// wasm 8KB），触及的行才分配 128B 行体——内存 ∝ 实际工作集而非线程数：
+    /// 热点负载（少量 entry 高频复用）每线程仅几 KB，64 线程全热点不再
+    /// 放大到 ~128MB；随机全表负载上限 ≈ 128KB + LINES×128B ≈ 2.2MB，
+    /// 与旧整表预分配 ~2MB 同量级。行索引掩码不变，命中行为与旧版一致。
+    lines: Box<[Option<Box<LocalGeoLine>>]>, // len = LOCAL_GEO_LINES
     /// 轮转替换游标：miss 替换 victim 起步路（随机负载下等价随机替换，足够）。
     rot: u32,
 }
 
 thread_local! {
     static LOCAL_GEO: RefCell<LocalGeoTable> = {
-        // 大槽表按线程懒分配：16K 行 × 4 路 × 32B ≈ 2MB 表体，访问一次后驻留。
         RefCell::new(LocalGeoTable {
-            slots: (0..LOCAL_GEO_SLOTS).map(|_| None).collect::<Vec<_>>().into_boxed_slice(),
+            lines: (0..LOCAL_GEO_LINES).map(|_| None).collect::<Vec<_>>().into_boxed_slice(),
             rot: 0,
         })
     };
@@ -1633,10 +1641,10 @@ fn geo_local_lookup(
     entry: u32,
     build: impl FnOnce() -> Option<Arc<GeoInfo>>,
 ) -> Option<Arc<GeoInfo>> {
-    let line = local_geo_line(entry) * LOCAL_GEO_WAYS;
+    let li = local_geo_line(entry);
     LOCAL_GEO.with_borrow_mut(|t| {
-        for w in 0..LOCAL_GEO_WAYS {
-            if let Some(slot) = &t.slots[line + w] {
+        if let Some(line) = &t.lines[li] {
+            for slot in line.slots.iter().flatten() {
                 if slot.generation == generation && slot.entry == entry {
                     return Some(Arc::clone(&slot.val));
                 }
@@ -1645,18 +1653,29 @@ fn geo_local_lookup(
         let built = build()?;
         let rot = (t.rot & (LOCAL_GEO_WAYS as u32 - 1)) as usize;
         t.rot = t.rot.wrapping_add(1);
+        let line = t.lines[li].get_or_insert_with(|| {
+            Box::new(LocalGeoLine {
+                slots: std::array::from_fn(|_| None),
+            })
+        });
         let mut victim = rot;
         for w in 0..LOCAL_GEO_WAYS {
-            if t.slots[line + w].as_ref().is_none_or(|s| s.generation != generation) {
+            if line.slots[w]
+                .as_ref()
+                .is_none_or(|s| s.generation != generation)
+            {
                 victim = w;
                 break;
             }
         }
-        t.slots[line + victim] = Some(LocalGeoSlot { generation, entry, val: Arc::clone(&built) });
+        line.slots[victim] = Some(LocalGeoSlot {
+            generation,
+            entry,
+            val: Arc::clone(&built),
+        });
         Some(built)
     })
 }
-
 
 pub struct SnapshotInner {
     data: DataStorage,

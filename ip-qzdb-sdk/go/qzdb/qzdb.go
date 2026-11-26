@@ -188,6 +188,10 @@ type Snapshot struct {
 	geoCache *geoCache
 }
 
+// closedSnap 哨兵：Close 后占据 snap 槽位，使 publishSnapshot 的 CAS 必然失败——
+// Close 与 Reload 并发时快照不可复活（旧实现 Swap(nil) 后 Reload 仍可重新发布）。
+var closedSnap = new(Snapshot)
+
 // QzdbReader 是面向用户的查询入口。内部仅持有一个原子指针指向当前快照。
 type QzdbReader struct {
 	snap atomic.Pointer[Snapshot]
@@ -1312,16 +1316,38 @@ func formatFloat6(f float64) string {
 func (r *QzdbReader) snapshot() *Snapshot {
 	// 最终一致性：读者只要能 Load 到非 nil 指针，该快照就因本引用保持可达，
 	// 其 finalizer（munmap）在读者放弃引用前不可能运行。
-	return r.snap.Load()
+	// closedSnap 哨兵在此翻译为 nil：查询路径保持一次原子 Load、无锁。
+	if s := r.snap.Load(); s != closedSnap {
+		return s
+	}
+	return nil
 }
 
-// installSnapshot 注册 finalizer 并原子替换快照；被卸载的旧快照在最后一个
-// 引用消失后由 GC 释放 mmap（无引用计数、无锁）。
-func (r *QzdbReader) installSnapshot(s *Snapshot) {
+// publishSnapshot 注册 finalizer 并以 CAS 发布快照：槽位为 closedSnap（已关闭）
+// 时拒绝发布，Close/Reload 并发时不可复活；并发 Reload 间为后发布者胜。
+// 返回 false 表示 s 从未对外可见，调用方可显式释放其 mmap（releaseUnpublished）。
+func (r *QzdbReader) publishSnapshot(s *Snapshot) bool {
 	if s != nil && s.release != nil {
 		runtime.SetFinalizer(s, func(s *Snapshot) { s.release() })
 	}
-	r.snap.Swap(s)
+	for {
+		cur := r.snap.Load()
+		if cur == closedSnap {
+			return false
+		}
+		if r.snap.CompareAndSwap(cur, s) {
+			return true
+		}
+	}
+}
+
+// releaseUnpublished 释放一个从未成功发布的快照：取消 finalizer 后显式 munmap。
+// 无人能持有其引用，直接释放安全；字节加载的快照 release 为 nil，无事可做。
+func releaseUnpublished(s *Snapshot) {
+	if s != nil && s.release != nil {
+		runtime.SetFinalizer(s, nil)
+		s.release()
+	}
 }
 
 // Find 查询 IP 字符串；未命中或非法 IP 返回 (nil, nil)（契约 §4）。
@@ -1737,14 +1763,19 @@ func OpenBufferNoCopy(data []byte, groupIndex int, verifyCrc bool) (*QzdbReader,
 	return NewBuilderBytesNoCopy(data).GroupIndex(groupIndex).VerifyCRC(verifyCrc).Build()
 }
 
-// Close 卸载当前快照（幂等；关闭后查询安全失败）。mmap 的实际释放由
+// reloadPublishGate 测试专用：在 Reload/ReloadBuffer 发布前注入屏障，确定性制造
+// 「Reload 构建 → Close → 发布」交错；生产恒为 nil，零开销。
+var reloadPublishGate func()
+
+// Close 卸载当前快照（幂等；关闭后查询安全失败）。槽位改为 closedSnap 哨兵，
+// 此后 publishSnapshot 的 CAS 必然失败——关闭态不可逆。mmap 的实际释放由
 // GC finalizer 在最后一个引用消失后执行。
 func (r *QzdbReader) Close() error {
-	r.snap.Swap(nil)
+	r.snap.Swap(closedSnap)
 	return nil
 }
 
-// Reload 原子热替换数据文件（强制 CRC，失败保留旧快照）。
+// Reload 原子热替换数据文件（强制 CRC，失败保留旧快照；已关闭则拒绝发布）。
 func (r *QzdbReader) Reload(path string) error {
 	cur := r.snapshot()
 	if cur == nil {
@@ -1755,11 +1786,17 @@ func (r *QzdbReader) Reload(path string) error {
 		return err // 旧快照仍在位，继续服务
 	}
 	ns.Warmup()
-	r.installSnapshot(ns)
+	if reloadPublishGate != nil {
+		reloadPublishGate()
+	}
+	if !r.publishSnapshot(ns) {
+		releaseUnpublished(ns) // Close 后不可复活：从未发布的映射显式归还，不等 GC
+		return newErr(ErrCodeInvalidParam, "reader is closed")
+	}
 	return nil
 }
 
-// ReloadBuffer 原子热替换内存字节（强制 CRC，失败保留旧快照）。
+// ReloadBuffer 原子热替换内存字节（强制 CRC，失败保留旧快照；已关闭则拒绝发布）。
 func (r *QzdbReader) ReloadBuffer(b []byte) error {
 	cur := r.snapshot()
 	if cur == nil {
@@ -1770,7 +1807,13 @@ func (r *QzdbReader) ReloadBuffer(b []byte) error {
 		return err // 旧快照仍在位，继续服务
 	}
 	ns.Warmup()
-	r.installSnapshot(ns)
+	if reloadPublishGate != nil {
+		reloadPublishGate()
+	}
+	if !r.publishSnapshot(ns) {
+		releaseUnpublished(ns)
+		return newErr(ErrCodeInvalidParam, "reader is closed")
+	}
 	return nil
 }
 
