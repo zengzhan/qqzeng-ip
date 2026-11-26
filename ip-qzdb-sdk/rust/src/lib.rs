@@ -4270,14 +4270,19 @@ impl QzdbReader {
         let ip_str = ip.to_string();
         // 契约 §4：批量路径必须保留「命中 / 未命中 / 非法 IP」三态，
         // 非法 IP 不得被归并到未命中（调用方据此审计输入质量）。
-        if parse_ip(ip).is_none() {
-            return BatchResult {
-                ip: ip_str,
-                geo_info: None,
-                error: Some(format!("invalid IP address: {:?}", ip)),
-            };
-        }
-        match self.find(ip) {
+        // 与 batch_one_fields 一致：只解析一次，复用 parsed 走 find_parsed，
+        // 避免「判空 parse_ip + find 内再 parse_ip」的双重解析。
+        let parsed = match parse_ip(ip) {
+            Some(parsed) => parsed,
+            None => {
+                return BatchResult {
+                    ip: ip_str,
+                    geo_info: None,
+                    error: Some(format!("invalid IP address: {:?}", ip)),
+                };
+            }
+        };
+        match self.find_parsed(&parsed) {
             Some(g) => BatchResult {
                 ip: ip_str,
                 geo_info: Some(g),

@@ -1587,7 +1587,12 @@ class QzdbReader {
 
   find(ipStr) {
     if (!ipStr) return null;
-    return this._findParsed(_fastParseIpInternal(ipStr));
+    if (_memoCooldown > 0 && typeof ipStr === 'string' && ipStr.indexOf(':') < 0) {
+      _memoCooldown--;
+      const v4 = _fastParseIPv4(ipStr);
+      return v4 === null ? null : this._findUintParsed(v4);
+    }
+    return this._findParsed(_fastParseIpForLookup(ipStr));
   }
 
   findUint(ipInt) {
@@ -1711,9 +1716,13 @@ class QzdbReader {
   // 低级行号（§5）
   // -------------------------------------------------------------------------
   lookupRowId(ipStr) {
-    if (!ipStr) return 0;
-    if (this._closed) return 0;
-    const result = _fastParseIpInternal(ipStr);
+    if (!ipStr || this._closed) return 0;
+    if (_memoCooldown > 0 && typeof ipStr === 'string' && ipStr.indexOf(':') < 0) {
+      _memoCooldown--;
+      const v4 = _fastParseIPv4(ipStr);
+      return v4 === null ? 0 : this.lookupRowIdUint(v4);
+    }
+    const result = _fastParseIpForLookup(ipStr);
     if (!result) return 0;
     if (result.v4 !== null) return this.lookupRowIdUint(result.v4);
     if (!this._hasV6) return 0;
@@ -2102,8 +2111,13 @@ function _fastParseIPv4(s) {
 // （实测 freeze 开销在噪声内，约 0~2%）。
 const _PARSE_MEMO_CAP = 16384;
 const _PARSE_MEMO_GEN_CAP = _PARSE_MEMO_CAP >>> 1;
+const _MEMO_PROBE_WINDOW = 16384;
+const _MEMO_COOLDOWN_CALLS = 32768;
 let _parseMemo = new Map(); // 当前代
 let _parseMemoPrev = new Map(); // 上一代：命中即晋升，热点条目跨代存活
+let _memoWindowTotal = 0;
+let _memoWindowHits = 0;
+let _memoCooldown = 0;
 
 function _parseMemoInsert(s, rec) {
   if (_parseMemo.size >= _PARSE_MEMO_GEN_CAP) {
@@ -2119,14 +2133,35 @@ function _fastParseIpInternal(ip) {
   const n = s.length;
   if (n === 0 || n > 45) return null;
   let cached = _parseMemo.get(s);
-  if (cached !== undefined) return cached;
+  if (cached !== undefined) {
+    if (_parseMemoPrev.size > 0) {
+      _memoWindowHits++;
+      _memoWindowTotal++;
+    }
+    return cached;
+  }
   cached = _parseMemoPrev.get(s);
   if (cached !== undefined) {
+    _memoWindowHits++;
+    _memoWindowTotal++;
     // 仅当当前代尚有空位时才晋升，绝不在上代命中时触发整代轮换（防 A/B 8192 交替全灭）。
     if (_parseMemo.size < _PARSE_MEMO_GEN_CAP) {
       _parseMemo.set(s, cached);
     }
     return cached;
+  }
+  if (_memoCooldown > 0) {
+    _memoCooldown--;
+    return _fastParseIpUncached(s);
+  }
+  if (_parseMemoPrev.size > 0 && ++_memoWindowTotal >= _MEMO_PROBE_WINDOW) {
+    const lowHit = _memoWindowHits < (_MEMO_PROBE_WINDOW >>> 4); // < 6.25% 命中率
+    _memoWindowTotal = 0;
+    _memoWindowHits = 0;
+    if (lowHit) {
+      _memoCooldown = _MEMO_COOLDOWN_CALLS;
+      return _fastParseIpUncached(s);
+    }
   }
   const rec = _fastParseIpUncached(s);
   if (rec !== null) {
@@ -2135,6 +2170,15 @@ function _fastParseIpInternal(ip) {
     return frozen;
   }
   return null;
+}
+
+function _fastParseIpForLookup(ip) {
+  if (_memoCooldown > 0) {
+    _memoCooldown--;
+    if (typeof ip !== 'string' || ip.length === 0 || ip.length > 45) return null;
+    return _fastParseIpUncached(ip);
+  }
+  return _fastParseIpInternal(ip);
 }
 
 function fastParseIp(ip) {
@@ -2429,4 +2473,10 @@ module.exports.FIELD_NAMES_SOURCE_EDITION = FIELD_NAMES_SOURCE_EDITION;
 module.exports.FIELD_NAMES_SOURCE_SYNTHETIC = FIELD_NAMES_SOURCE_SYNTHETIC;
 // 内部格式化器（FORMAT §10.5 统一契约）——导出仅供边界回归测试使用
 module.exports._formatNativeFloat = _formatNativeFloat;
-module.exports._parseMemoClear = () => { _parseMemo.clear(); _parseMemoPrev.clear(); };
+module.exports._parseMemoClear = () => {
+  _parseMemo.clear();
+  _parseMemoPrev.clear();
+  _memoWindowTotal = 0;
+  _memoWindowHits = 0;
+  _memoCooldown = 0;
+};

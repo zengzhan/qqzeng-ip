@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"unsafe"
 )
 
 // SENTINEL 高位哨兵位（32 位节点）。
@@ -869,6 +870,11 @@ func (s *Snapshot) parsePools() error {
 				continue
 			}
 			strs := make([]string, count)
+			var arena []byte
+			if tail > 0 {
+				arena = make([]byte, tail)
+				copy(arena, d[strBase:strBase+tail])
+			}
 			var prevEnd uint32
 			for idx := uint32(0); idx < count; idx++ {
 				start := offsets[idx]
@@ -878,7 +884,8 @@ func (s *Snapshot) parsePools() error {
 				}
 				prevEnd = end
 				if end > start {
-					strs[idx] = string(d[strBase+uint64(start) : strBase+uint64(end)])
+					// arena 为 Go 堆上独立 []byte（不依赖 mmap），unsafe.String 零拷贝共享且 GC 安全。
+					strs[idx] = unsafe.String(&arena[start], end-start)
 				}
 			}
 			poolCursor = strBase + tail
@@ -1042,7 +1049,8 @@ func (s *Snapshot) trieWalkV4(ip uint32) (uint32, error) {
 		return 0, nil
 	}
 	// ip>>16 范围 [0, 2^16)，索引落在 parseHeader 已校验的 [offV4Jump, offV4Jump+65536*4) 内，直接寻址。
-	ptr := binary.LittleEndian.Uint32(s.data[s.offV4Jump+uint64(ip>>16)*4:])
+	d := s.data
+	ptr := binary.LittleEndian.Uint32(d[s.offV4Jump+uint64(ip>>16)*4:])
 	if ptr == 0 {
 		return 0, nil
 	}
@@ -1051,16 +1059,39 @@ func (s *Snapshot) trieWalkV4(ip uint32) (uint32, error) {
 	}
 	idx := ptr & SENTINEL_MASK_31
 	suffix := (ip & 0xFFFF) << 16
-	mask := s.nodeMask(true)
+	nodeCount := s.v4NodeCount
+	offNodes := s.offV4Nodes
+	if s.v4Node24 {
+		for steps := 0; steps < maxTrieWalkSteps; steps++ {
+			if idx >= nodeCount {
+				return 0, nil
+			}
+			off := offNodes + uint64(idx)*6 + uint64((suffix>>31)&1)*3
+			child := uint32(d[off]) | uint32(d[off+1])<<8 | uint32(d[off+2])<<16
+			if child == 0 {
+				return 0, nil
+			}
+			if child&0x800000 != 0 {
+				return child & SENTINEL_MASK_24, nil
+			}
+			idx = child & SENTINEL_MASK_24
+			suffix <<= 1
+		}
+		return 0, ErrCorrupted
+	}
 	for steps := 0; steps < maxTrieWalkSteps; steps++ {
-		child := s.readV4Child(idx, (suffix>>31)&1)
+		if idx >= nodeCount {
+			return 0, nil
+		}
+		off := offNodes + uint64(idx)*8 + uint64((suffix>>31)&1)*4
+		child := binary.LittleEndian.Uint32(d[off:])
 		if child == 0 {
 			return 0, nil
 		}
-		if s.isLeaf(child, true) {
-			return s.leafValue(child, true), nil
+		if child&SENTINEL != 0 {
+			return child & SENTINEL_MASK_31, nil
 		}
-		idx = child & mask
+		idx = child & SENTINEL_MASK_31
 		suffix <<= 1
 	}
 	return 0, ErrCorrupted
@@ -1071,7 +1102,8 @@ func (s *Snapshot) trieWalkV6(ip [16]byte) (uint32, error) {
 		return 0, nil
 	}
 	// readV6Prefix 范围 [0, 2^v6JumpBits)，索引落在 parseHeader 已校验的 [offV6Jump, offV6Jump+(1<<bits)*4) 内，直接寻址。
-	ptr := binary.LittleEndian.Uint32(s.data[s.offV6Jump+uint64(readV6Prefix(ip, s.v6JumpBits))*4:])
+	d := s.data
+	ptr := binary.LittleEndian.Uint32(d[s.offV6Jump+uint64(readV6Prefix(ip, s.v6JumpBits))*4:])
 	if ptr == 0 {
 		return 0, nil
 	}
@@ -1079,36 +1111,53 @@ func (s *Snapshot) trieWalkV6(ip [16]byte) (uint32, error) {
 		return ptr & SENTINEL_MASK_31, nil
 	}
 	idx := ptr & SENTINEL_MASK_31
-	mask := s.nodeMask(false)
+	nodeCount := s.v6NodeCount
+	offNodes := s.offV6Nodes
+	if s.v6Node24 {
+		for depth := s.v6JumpBits; depth < 128; depth++ {
+			if idx >= nodeCount {
+				return 0, nil
+			}
+			bit := uint32((ip[depth>>3] >> (7 - uint(depth&7))) & 1)
+			off := offNodes + uint64(idx)*6 + uint64(bit)*3
+			child := uint32(d[off]) | uint32(d[off+1])<<8 | uint32(d[off+2])<<16
+			if child == 0 {
+				return 0, nil
+			}
+			if child&0x800000 != 0 {
+				return child & SENTINEL_MASK_24, nil
+			}
+			idx = child & SENTINEL_MASK_24
+		}
+		return 0, ErrCorrupted
+	}
 	for depth := s.v6JumpBits; depth < 128; depth++ {
-		child := s.readV6Child(idx, uint32((ip[depth>>3]>>(7-uint(depth&7)))&1))
+		if idx >= nodeCount {
+			return 0, nil
+		}
+		bit := uint32((ip[depth>>3] >> (7 - uint(depth&7))) & 1)
+		off := offNodes + uint64(idx)*8 + uint64(bit)*4
+		child := binary.LittleEndian.Uint32(d[off:])
 		if child == 0 {
 			return 0, nil
 		}
-		if s.isLeaf(child, false) {
-			return s.leafValue(child, false), nil
+		if child&SENTINEL != 0 {
+			return child & SENTINEL_MASK_31, nil
 		}
-		idx = child & mask
+		idx = child & SENTINEL_MASK_31
 	}
 	// 128 位全部消费完仍未命中叶子：合法 Patricia 树最后一层必然以叶子
 	// 或空子结束，走到这里说明链路退化/畸形，按 V4 同款语义 fail-closed。
 	return 0, ErrCorrupted
 }
 
-// readV6Prefix 提取 IPv6 地址高 bits 位作为跳表索引。
+// readV6Prefix 提取 IPv6 地址高 bits 位作为跳表索引（v6JumpBits 恒在 [8, 20]）。
 func readV6Prefix(ip [16]byte, bits int) int {
-	if bits <= 0 {
+	if bits <= 0 || bits > 32 {
 		return 0
 	}
-	if bits <= 32 {
-		hi32 := uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
-		return int(hi32 >> (32 - bits))
-	}
-	val := 0
-	for i := 0; i < bits; i++ {
-		val = (val << 1) | int((ip[i>>3]>>(7-uint(i&7)))&1)
-	}
-	return val
+	hi32 := uint32(ip[0])<<24 | uint32(ip[1])<<16 | uint32(ip[2])<<8 | uint32(ip[3])
+	return int(hi32 >> (32 - bits))
 }
 
 // ---------- IPRow / GeoEntry 解析 ----------

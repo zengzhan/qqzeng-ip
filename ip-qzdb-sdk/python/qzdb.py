@@ -797,9 +797,7 @@ def _on_snapshot(fn):
         def wrapper(self, a):
             snap = self._snap
             target = snap if snap is not None else self
-            lock = getattr(target, '_pin_lock', None)
-            if lock is None:
-                return fn(target, a)
+            lock = target._pin_lock
             with lock:
                 if target._closed:
                     return fn(target, a)
@@ -807,15 +805,17 @@ def _on_snapshot(fn):
             try:
                 return fn(target, a)
             finally:
-                target._pin_exit()
+                with lock:
+                    target._active_readers -= 1
+                    should_release = target._pending_close and target._active_readers == 0
+                if should_release:
+                    QzdbReader._release(target)
     elif nargs == 3:                 # self + 2（find_fields 的 field_names 带默认值）
         @functools.wraps(fn)
         def wrapper(self, a, b=None):
             snap = self._snap
             target = snap if snap is not None else self
-            lock = getattr(target, '_pin_lock', None)
-            if lock is None:
-                return fn(target, a, b)
+            lock = target._pin_lock
             with lock:
                 if target._closed:
                     return fn(target, a, b)
@@ -823,15 +823,17 @@ def _on_snapshot(fn):
             try:
                 return fn(target, a, b)
             finally:
-                target._pin_exit()
+                with lock:
+                    target._active_readers -= 1
+                    should_release = target._pending_close and target._active_readers == 0
+                if should_release:
+                    QzdbReader._release(target)
     else:                            # 兜底：将来新增更宽签名的入口
         @functools.wraps(fn)
         def wrapper(self, *args, **kwargs):
             snap = self._snap
             target = snap if snap is not None else self
-            lock = getattr(target, '_pin_lock', None)
-            if lock is None:
-                return fn(target, *args, **kwargs)
+            lock = target._pin_lock
             with lock:
                 if target._closed:
                     return fn(target, *args, **kwargs)
@@ -839,7 +841,11 @@ def _on_snapshot(fn):
             try:
                 return fn(target, *args, **kwargs)
             finally:
-                target._pin_exit()
+                with lock:
+                    target._active_readers -= 1
+                    should_release = target._pending_close and target._active_readers == 0
+                if should_release:
+                    QzdbReader._release(target)
     return wrapper
 
 
@@ -1568,11 +1574,11 @@ class QzdbReader:
                 chk(g_start, self._group_entry_counts[g] * self._group_strides[g], f'group_{g}_entries')
 
     def _build_trie_arrays(self):
-        """把跳表与 Trie 节点装入 C 连续 array('I')，热路径免 struct.unpack_from（约快 2.3-2.8x）。"""
+        """把跳表与 Trie 节点装入 C 连续 array('I')，热路径免 struct.unpack_from。"""
         d = self._data
         mv = memoryview(d)
         need_swap = sys.byteorder != 'little'
-        max_nodes = 4_000_000
+        max_nodes = 16_000_000
 
         def _load_u32_arr(off, count):
             arr = array.array('I')
@@ -1582,21 +1588,30 @@ class QzdbReader:
             return arr
 
         def _load_nodes_arr(off, count, node_24):
-            if count <= 0 or count > max_nodes or off <= 0:
+            if count <= 0 or off <= 0:
+                return None
+            if count > max_nodes:
+                import warnings
+                warnings.warn(
+                    f'qzdb: node count {count} exceeds max_nodes={max_nodes}; falling back to slower raw reader',
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
                 return None
             if not node_24:
                 return _load_u32_arr(off, count * 2)
-            # 24-bit packed nodes (6 bytes = 2x 24-bit LE) -> normalized uint32 array('I')
-            # with 24-bit sentinel 0x800000 promoted to 0x80000000.
+            # 24-bit packed nodes (6 bytes = 2x 24-bit LE) -> uint32 array('I') via
+            # C-level slice shuffle (~10x faster than Python loop). Sentinel remains
+            # at bit 23 (0x800000); walkers select sentinel/mask from _v*_node_24.
             raw = mv[off:off + count * 6]
-            arr = array.array('I', [0]) * (count * 2)
-            o = 0
-            for i in range(count * 2):
-                v = raw[o] | (raw[o + 1] << 8) | (raw[o + 2] << 16)
-                if v & 0x800000:
-                    v = (v & 0x7FFFFF) | 0x80000000
-                arr[i] = v
-                o += 3
+            out = bytearray(count * 8)
+            out[0::4] = raw[0::3]
+            out[1::4] = raw[1::3]
+            out[2::4] = raw[2::3]
+            arr = array.array('I')
+            arr.frombytes(out)
+            if need_swap:
+                arr.byteswap()
             return arr
 
         if self._has_v4 and self._off_v4_jump > 0:
@@ -1861,16 +1876,21 @@ class QzdbReader:
                 return ptr & 0x7FFFFFFF
             idx = ptr
             suffix = (ip_int & 0xFFFF) << 16
-            for _ in range(16):
-                if idx >= v4_node_count:
-                    return 0
-                child = nodes[(idx << 1) | ((suffix >> 31) & 1)]
-                if child & 0x80000000:
-                    return child & 0x7FFFFFFF
-                if child == 0:
-                    return 0
-                idx = child
-                suffix <<= 1
+            if self._v4_node_24:
+                sentinel, mask = 0x800000, 0x7FFFFF
+            else:
+                sentinel, mask = 0x80000000, 0x7FFFFFFF
+            try:
+                for _ in range(16):
+                    child = nodes[(idx << 1) | ((suffix >> 31) & 1)]
+                    if child & sentinel:
+                        return child & mask
+                    if child == 0:
+                        return 0
+                    idx = child
+                    suffix <<= 1
+            except IndexError:
+                return 0
             return 0
 
         d = self._data
@@ -2074,15 +2094,20 @@ class QzdbReader:
             if ptr & 0x80000000:
                 return ptr & 0x7FFFFFFF
             idx = ptr
-            for depth in range(jump_bits, 128):
-                if idx >= v6_node_count:
-                    return 0
-                child = nodes[(idx << 1) | ((ip_bytes[depth >> 3] >> (7 - (depth & 7))) & 1)]
-                if child & 0x80000000:
-                    return child & 0x7FFFFFFF
-                if child == 0:
-                    return 0
-                idx = child
+            if self._v6_node_24:
+                sentinel, mask = 0x800000, 0x7FFFFF
+            else:
+                sentinel, mask = 0x80000000, 0x7FFFFFFF
+            try:
+                for depth in range(jump_bits, 128):
+                    child = nodes[(idx << 1) | ((ip_bytes[depth >> 3] >> (7 - (depth & 7))) & 1)]
+                    if child & sentinel:
+                        return child & mask
+                    if child == 0:
+                        return 0
+                    idx = child
+            except IndexError:
+                return 0
             return 0
 
         d = self._data
@@ -2127,8 +2152,7 @@ class QzdbReader:
 
     # ── find / lookup ────────────────────────────────────────────────
 
-    @_on_snapshot
-    def find(self, ip_str):
+    def _find_unlocked(self, ip_str):
         if self._closed:
             return None
         if not ip_str:
@@ -2142,6 +2166,10 @@ class QzdbReader:
         if not self._has_v6:
             return None
         return self._find_v6_bytes(v6)
+
+    @_on_snapshot
+    def find(self, ip_str):
+        return self._find_unlocked(ip_str)
 
     def _find_uint(self, ip_int):
         if not self._has_v4:
@@ -2268,23 +2296,11 @@ class QzdbReader:
             resolved_names.append(self._field_names[i] if i < len(self._field_names) else f'field_{i}')
         return values, resolved_names
 
-    @_on_snapshot
-    def find_fields(self, ip_str, field_names=None):
-        """Field-projection query (API contract §9.6, aligned to Java golden).
-
-        Resolves **only** the requested fields directly from the geo entry —
-        no full-field decode (Go/Java/C#/C projection parity). Requested
-        fields keep the requested order (duplicates kept); unknown fields
-        yield ``''`` at their position (input/output length parity);
-        all-unknown still returns a GeoInfo. Invalid IP raises ``QzdbError``
-        (same as ``find``)， so ``find_batch_fields`` can keep the
-        invalid/miss tri-state (§4). Returns ``None`` only when the IP itself
-        is not found.
-        """
+    def _find_fields_unlocked(self, ip_str, field_names=None):
         if self._closed:
             return None
         if field_names is None:
-            return self.find(ip_str)
+            return self._find_unlocked(ip_str)
         if not ip_str:
             raise QzdbError(f'invalid IP address: {ip_str!r}', QzdbError.INVALID_PARAM)
         parsed = _fast_parse_ip(ip_str)
@@ -2322,6 +2338,21 @@ class QzdbReader:
                          if source_index in self._float_field_indices}
         return GeoInfo(values=values, field_names=list(field_names),
                        float_indices=float_indices)
+
+    @_on_snapshot
+    def find_fields(self, ip_str, field_names=None):
+        """Field-projection query (API contract §9.6, aligned to Java golden).
+
+        Resolves **only** the requested fields directly from the geo entry —
+        no full-field decode (Go/Java/C#/C projection parity). Requested
+        fields keep the requested order (duplicates kept); unknown fields
+        yield ``''`` at their position (input/output length parity);
+        all-unknown still returns a GeoInfo. Invalid IP raises ``QzdbError``
+        (same as ``find``)， so ``find_batch_fields`` can keep the
+        invalid/miss tri-state (§4). Returns ``None`` only when the IP itself
+        is not found.
+        """
+        return self._find_fields_unlocked(ip_str, field_names)
 
     # ── lookup row id / ids ──────────────────────────────────────────
 
@@ -2408,13 +2439,14 @@ class QzdbReader:
             ptr = jump[(ip_int >> 16) & 0xFFFF]
             if ptr == 0:
                 return 0, 0
+            sentinel = 0x800000 if self._v4_node_24 else 0x80000000
             if ptr & 0x80000000:
                 idx, n = 0, 16
                 for depth in range(16):
                     if idx >= v4_node_count:
                         break
                     child = nodes[(idx << 1) | ((ip_int >> (31 - depth)) & 1)]
-                    if child & 0x80000000:
+                    if child & sentinel:
                         n = depth + 1
                         break
                     if child == 0:
@@ -2422,13 +2454,14 @@ class QzdbReader:
                     idx = child
                 return ptr & 0x7FFFFFFF, n
             idx = ptr
+            mask = 0x7FFFFF if self._v4_node_24 else 0x7FFFFFFF
             suffix = (ip_int & 0xFFFF) << 16
             for step in range(1, 17):
                 if idx >= v4_node_count:
                     return 0, 0
                 child = nodes[(idx << 1) | ((suffix >> 31) & 1)]
-                if child & 0x80000000:
-                    return child & 0x7FFFFFFF, 16 + step
+                if child & sentinel:
+                    return child & mask, 16 + step
                 if child == 0:
                     return 0, 0
                 idx = child
@@ -2483,13 +2516,14 @@ class QzdbReader:
             ptr = jump[idx_jump]
             if ptr == 0:
                 return 0, 0
+            sentinel = 0x800000 if self._v6_node_24 else 0x80000000
             if ptr & 0x80000000:
                 idx, n = 0, jump_bits
                 for depth in range(jump_bits):
                     if idx >= v6_node_count:
                         break
                     child = nodes[(idx << 1) | ((ip_int >> (127 - depth)) & 1)]
-                    if child & 0x80000000:
+                    if child & sentinel:
                         n = depth + 1
                         break
                     if child == 0:
@@ -2497,12 +2531,13 @@ class QzdbReader:
                     idx = child
                 return ptr & 0x7FFFFFFF, n
             idx = ptr
+            mask = 0x7FFFFF if self._v6_node_24 else 0x7FFFFFFF
             for depth in range(jump_bits, 128):
                 if idx >= v6_node_count:
                     return 0, 0
                 child = nodes[(idx << 1) | ((ip_int >> (127 - depth)) & 1)]
-                if child & 0x80000000:
-                    return child & 0x7FFFFFFF, depth + 1
+                if child & sentinel:
+                    return child & mask, depth + 1
                 if child == 0:
                     return 0, 0
                 idx = child
@@ -2648,31 +2683,83 @@ class QzdbReader:
     # ── batch / stream (API contract §5) ───────────────────────────
 
     def find_batch(self, ips):
-        """Batch lookup. Per-item three-state semantics preserved; no thread pool.
+        """Batch lookup. Per-item three-state semantics preserved; single pin per batch.
 
         ``error`` is populated with a ``QzdbError`` when an input is invalid
         (API contract §8.2), while a clean miss leaves ``error`` as ``None``.
         """
-        results = []
-        for ip in ips:
-            try:
-                gi = self.find(ip)
-            except QzdbError as e:
-                results.append(BatchResult(ip, None, e))
-                continue
-            results.append(BatchResult(ip, gi, None))
-        return results
+        if type(self) is not QzdbReader or 'find' in self.__dict__ or QzdbReader.find is not _QZDB_READER_FIND:
+            results = []
+            for ip in ips:
+                try:
+                    gi = self.find(ip)
+                except QzdbError as e:
+                    results.append(BatchResult(ip, None, e))
+                    continue
+                results.append(BatchResult(ip, gi, None))
+            return results
+        snap = self._snap
+        target = snap if snap is not None else self
+        lock = target._pin_lock
+        with lock:
+            if target._closed:
+                return [BatchResult(ip, None, None) for ip in ips]
+            target._active_readers += 1
+        try:
+            results = []
+            append = results.append
+            find_u = target._find_unlocked
+            for ip in ips:
+                try:
+                    gi = find_u(ip)
+                except QzdbError as e:
+                    append(BatchResult(ip, None, e))
+                    continue
+                append(BatchResult(ip, gi, None))
+            return results
+        finally:
+            with lock:
+                target._active_readers -= 1
+                should_release = target._pending_close and target._active_readers == 0
+            if should_release:
+                QzdbReader._release(target)
 
     def find_batch_fields(self, ips, fields):
-        results = []
-        for ip in ips:
-            try:
-                gi = self.find_fields(ip, fields)
-            except QzdbError as e:
-                results.append(BatchResult(ip, None, e))
-                continue
-            results.append(BatchResult(ip, gi, None))
-        return results
+        if type(self) is not QzdbReader or 'find_fields' in self.__dict__ or QzdbReader.find_fields is not _QZDB_READER_FIND_FIELDS:
+            results = []
+            for ip in ips:
+                try:
+                    gi = self.find_fields(ip, fields)
+                except QzdbError as e:
+                    results.append(BatchResult(ip, None, e))
+                    continue
+                results.append(BatchResult(ip, gi, None))
+            return results
+        snap = self._snap
+        target = snap if snap is not None else self
+        lock = target._pin_lock
+        with lock:
+            if target._closed:
+                return [BatchResult(ip, None, None) for ip in ips]
+            target._active_readers += 1
+        try:
+            results = []
+            append = results.append
+            find_fu = target._find_fields_unlocked
+            for ip in ips:
+                try:
+                    gi = find_fu(ip, fields)
+                except QzdbError as e:
+                    append(BatchResult(ip, None, e))
+                    continue
+                append(BatchResult(ip, gi, None))
+            return results
+        finally:
+            with lock:
+                target._active_readers -= 1
+                should_release = target._pending_close and target._active_readers == 0
+            if should_release:
+                QzdbReader._release(target)
 
     def find_stream(self, ips):
         """Three-state lazy stream — alias of :meth:`find_iter` (API contract §8.4).
@@ -2689,13 +2776,39 @@ class QzdbReader:
         Yields a :class:`BatchResult` per input IP, preserving the
         found / not-found / invalid-input distinction via ``geo_info`` / ``error``.
         """
-        for ip in ips:
-            try:
-                gi = self.find(ip)
-            except QzdbError as e:
-                yield BatchResult(ip, None, e)
-                continue
-            yield BatchResult(ip, gi, None)
+        if type(self) is not QzdbReader or 'find' in self.__dict__ or QzdbReader.find is not _QZDB_READER_FIND:
+            for ip in ips:
+                try:
+                    gi = self.find(ip)
+                except QzdbError as e:
+                    yield BatchResult(ip, None, e)
+                    continue
+                yield BatchResult(ip, gi, None)
+            return
+        snap = self._snap
+        target = snap if snap is not None else self
+        lock = target._pin_lock
+        with lock:
+            if target._closed:
+                for ip in ips:
+                    yield BatchResult(ip, None, None)
+                return
+            target._active_readers += 1
+        try:
+            find_u = target._find_unlocked
+            for ip in ips:
+                try:
+                    gi = find_u(ip)
+                except QzdbError as e:
+                    yield BatchResult(ip, None, e)
+                    continue
+                yield BatchResult(ip, gi, None)
+        finally:
+            with lock:
+                target._active_readers -= 1
+                should_release = target._pending_close and target._active_readers == 0
+            if should_release:
+                QzdbReader._release(target)
 
     # ── metadata introspection (API contract §5) ───────────────────
 
@@ -2807,6 +2920,8 @@ class QzdbReader:
 
 
 _QZDB_READER_FIND_V6_BYTES = QzdbReader.find_v6_bytes
+_QZDB_READER_FIND = QzdbReader.find
+_QZDB_READER_FIND_FIELDS = QzdbReader.find_fields
 
 
 # Named result of lookup_ids() — a tuple subclass (API contract appendix A.5).

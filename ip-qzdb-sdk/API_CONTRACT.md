@@ -112,7 +112,7 @@ Go/Rust/C# 经 batch 二进制 `--cidr` 模式)+ `ip-qzdb-sdk/cross_lang_verify.
 |---|------|------|------|
 | 1 | **跳表哨兵语义** | 跳表条目带 SENTINEL = 终止叶子，`find`/`lookup_row_id` 直接返回低 31 位 row_id；CIDR 反查需前缀长度，**必须从根重走求真实前缀**（跳表深度不是真实前缀，短范围行挂在 trie 浅层；全 8 语言一致实现） | FORMAT §4 SearchV4/V6 + 8 语言 cross_api 对拍（2026-09-02 裁决，Rust/PHP/Python 已对齐；回归测试 `jump_sentinel_test*` / rust `v6_cidr_jump_sentinel_reports_true_prefix`） |
 | 2 | **IP 前后空白字符** | Java `trim()` 接受 `" 1.2.3.4 "`；Go/Node 显式拒绝。**保留现状**，Java 为 golden；Go/Node 的严格口径为 SSRF 防护场景的推荐实现 | 2026-09-02 审查登记 |
-| 3 | **IP 字符串解析口径** | 非法 IP：托管语言（Java/C#）抛 `InvalidIp`；Go/Node/PHP/Rust 返回 null/零值。单条口径随语言，**批量路径三态为强制**（§二.3） | 契约 §二 |
+| 3 | **IP 字符串解析口径** | 非法 IP：Java/C# 抛 `InvalidIp`、Python `find`/`find_fields` 抛 `QzdbError(INVALID_PARAM)`；Go/Node/PHP/Rust 返回 null/零值。单条口径随语言，**批量路径三态为强制**（§二.3） | 契约 §二 |
 | 4 | **`getScope()` / `scope`** | 当前格式无 scope 字段，8 语言一律返回 `""`。`"cn"\|"global"` 为格式迁移后的目标契约（见 QZDB_SDK_API.md 前置依赖注记） | 2026-09-02 裁决 |
 | 5 | **dimensionMask 双位置位**（畸形文件） | 按 `0x02(asn) → 0x04(usage) → 0x01(geo)` 优先级链选维（Java 语义）；Go 已对齐计划中，合法文件不受影响 | 2026-09-02 审查登记 |
 | 6 | **快照生命周期（Go）** | refCount 引用计数已由 `runtime.SetFinalizer` + GC 可达性托管：读者持引用即免 munmap，查询路径仅一次 atomic Load | 2026-09 实现（`-race` 全绿背书） |
