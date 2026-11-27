@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # 幂等保护：本仓库是多语言 monorepo，tag `v[0-9]*` 会同时触发 PyPI / Maven /
       # crates.io 三个发布。一旦因补打 tag、重推 tag、workflow 重跑等原因再次触发，
