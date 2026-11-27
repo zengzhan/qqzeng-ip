@@ -101,7 +101,7 @@
 
   <!-- System.IO.Hashing 包含 Crc32，未内置于各目标框架的共享运行时框架中，需显式引用。 -->
   <ItemGroup>
-    <PackageReference Include="System.IO.Hashing" Version="8.0.0" />
+    <PackageReference Include="System.IO.Hashing" Version="11.0.0" />
   </ItemGroup>
 
 </Project>
